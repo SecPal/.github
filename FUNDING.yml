@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# This is the funding file for the SecPal project.
+# Please consider supporting us to help us continue our work.
+
+github: [YourGitHubUsername] # Replace with your GitHub username or organization
+# patreon: # Replace with your Patreon username
+# open_collective: # Replace with your Open Collective username
+# ko_fi: # Replace with your Ko-fi username
+# tidelift: # Replace with your Tidelift platform/package name
+# community_bridge: # Replace with your Community Bridge project name
+# liberapay: # Replace with your Liberapay username
+# issuehunt: # Replace with your IssueHunt username
+custom: ['https://www.paypal.me/YourPayPalUsername'] # Replace with your custom funding link
