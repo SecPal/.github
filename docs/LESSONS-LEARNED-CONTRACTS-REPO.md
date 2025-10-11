@@ -545,6 +545,8 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 gh pr view <PR> --comments
 
 # 2. Check for inline code review comments
+# Note: Replace <owner>, <repo>, and <PR> with actual values
+# Requires GitHub authentication (gh auth login)
 gh api repos/<owner>/<repo>/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, body: .body}'
 
 # 3. Address ALL comments:
@@ -563,7 +565,7 @@ gh pr merge <PR> --squash --delete-branch
 - Ignoring comments creates technical debt and follow-up work
 - Solo maintainer doesn't mean solo reviewer - bots count!
 
-**Key insight**: "Wenn Du schon einen Review durchführst, auch wenn keine Pflicht, weil alleine, sollten wir diese Informationen in jedem Fall beachten!"
+**Key insight**: "If you are conducting a review—even if it's not required, because you are working alone—you should always pay attention to this information!"
 
 ### Action for Future Repos
 
