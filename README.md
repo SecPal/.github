@@ -60,7 +60,8 @@ The following workflows are **templates** that assume a monorepo structure with 
 │   ├── security.yml        # Template: Security scanning
 │   ├── dependency-review.yml # Template: Dependency review
 │   ├── labeler.yml         # Template: Auto-label PRs
-│   └── stale.yml           # Template: Stale issue management
+│   ├── stale.yml           # Template: Stale issue management
+│   └── release.yml         # Template: Release automation
 ├── BRANCH_PROTECTION.md     # Branch protection rules
 ├── branch-protection-*.json # Branch protection configs
 ├── CODE_OF_CONDUCT.md      # Community code of conduct
