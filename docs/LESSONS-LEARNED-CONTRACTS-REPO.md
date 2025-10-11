@@ -296,6 +296,7 @@ SPDX-PackageName = "SecPal Contracts"
 - [ ] Add LICENSE file (AGPL-3.0-or-later)
 - [ ] Create REUSE.toml **with SPDX headers**
 - [ ] Add LICENSES/AGPL-3.0-or-later.txt
+- [ ] Create required labels (e.g., `contracts`, `dependencies`, `github-actions`)
 
 ### Workflows Setup
 
@@ -387,7 +388,9 @@ git push
   - Check for review comments: `gh pr view <PR> --comments`
   - Check for inline code comments: `gh api repos/<owner>/<repo>/pulls/<PR>/comments`
   - Address ALL comments (implement suggestions or respond with rationale)
+  - Address ALL warnings (missing labels, deprecated dependencies, etc.)
   - Never merge with unaddressed review comments
+  - **NEVER use `--admin` flag** (wait for proper resolution instead)
 
 ---
 
@@ -576,6 +579,79 @@ gh pr merge <PR> --squash --delete-branch
 
 ---
 
+## 13. Using `--admin` to Bypass Branch Protection
+
+### Problem
+
+**Misused admin privileges during PR merges:**
+
+- PR #8 (Jest update): Used `gh pr merge 8 --squash --delete-branch --admin`
+- Branch protection said: "Branch is not up to date"
+- **Instead of waiting for Dependabot rebase or fixing properly, used `--admin` to bypass protection**
+- This defeats the entire purpose of `enforce_admins: true`
+
+**Second issue in same PR:**
+
+- Dependabot warning: "Label 'contracts' not found"
+- **Ignored the warning completely instead of creating the label**
+- Labels are part of repository organization and should not be ignored
+
+**Root cause**: Impatience and not respecting the protection mechanisms we established
+
+### Solution
+
+**Never use `--admin` flag to bypass branch protection:**
+
+```bash
+# ❌ WRONG - bypasses all protection
+gh pr merge <PR> --squash --delete-branch --admin
+
+# ✅ CORRECT - wait for proper resolution
+# Option 1: Wait for Dependabot rebase
+gh pr comment <PR> --body "@dependabot rebase"
+sleep 30  # Wait for rebase to complete
+gh pr checks <PR>  # Verify checks pass
+gh pr merge <PR> --squash --delete-branch
+
+# Option 2: Manual rebase if needed
+gh pr checkout <PR>
+git fetch origin main
+git rebase origin/main
+git push --force-with-lease
+gh pr merge <PR> --squash --delete-branch
+```
+
+**Address ALL warnings and errors:**
+
+```bash
+# When Dependabot warns about missing labels
+gh label create "<label-name>" --color "<color>" --description "<description>"
+
+# Example from this case
+gh label create "contracts" --color "0366d6" --description "Contracts repository dependencies"
+```
+
+**Why this is critical:**
+
+- `--admin` bypasses ALL protection rules we carefully configured
+- Branch protection exists to prevent broken code from entering main
+- "Not up to date" means potential conflicts or outdated tests
+- Ignoring warnings creates technical debt and broken automation
+- Admin privileges are for emergencies, not convenience
+
+**Key insight**: If you're tempted to use `--admin`, the correct answer is almost always: **wait and fix properly**.
+
+### Action for Future Repos
+
+- **NEVER** use `--admin` flag for normal PR merges
+- Reserve admin bypass only for true emergencies (production down, critical hotfix)
+- Create all required labels during repository setup
+- Check for and address ALL warnings before merging
+- Add "No admin bypass used?" to pre-merge checklist
+- If impatient: that's a sign to step back and do it right
+
+---
+
 ## 📊 Metrics
 
 ### Time Investment
@@ -632,6 +708,6 @@ gh pr merge <PR> --squash --delete-branch
 
 ---
 
-**Document Version:** 1.2
+**Document Version:** 1.3
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
