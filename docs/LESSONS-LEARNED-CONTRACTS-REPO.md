@@ -381,6 +381,14 @@ git push
   - Branch protection blocks merge until checks pass
 - [ ] Test Dependabot PR (wait for first automated PR or create manual test)
 
+### PR Review Process
+
+- [ ] **Before merging ANY PR:**
+  - Check for review comments: `gh pr view <PR> --comments`
+  - Check for inline code comments: `gh api repos/<owner>/<repo>/pulls/<PR>/comments`
+  - Address ALL comments (implement suggestions or respond with rationale)
+  - Never merge with unaddressed review comments
+
 ---
 
 ## 🔧 Files to Update in .github Repository
@@ -514,6 +522,58 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 
 ---
 
+## 12. Ignoring Code Review Comments
+
+### Problem
+
+**Merged PRs without reading review comments:**
+
+- PR #2: Merged with 2 Copilot review suggestions unaddressed
+  - Suggestion 1 (line 523): Unclear terminology "Additional PRs"
+  - Suggestion 2 (line 356): Missing cross-references to script definitions
+- Only discovered after merge when user pointed it out
+- Had to create follow-up PR #3 to address the suggestions
+
+**Root cause**: No systematic check for review comments before merging
+
+### Solution
+
+**Mandatory PR Review Workflow before merging:**
+
+```bash
+# 1. Check for review comments (even from bots)
+gh pr view <PR> --comments
+
+# 2. Check for inline code review comments
+gh api repos/<owner>/<repo>/pulls/<PR>/comments --jq '.[] | {path: .path, line: .line, body: .body}'
+
+# 3. Address ALL comments:
+#    - Implement suggestions
+#    - Respond with rationale if declining
+#    - Never ignore comments
+
+# 4. Only merge after all comments addressed
+gh pr merge <PR> --squash --delete-branch
+```
+
+**Why this is critical:**
+
+- Review comments (even automated ones) provide valuable feedback
+- Copilot suggestions often catch clarity issues or best practices
+- Ignoring comments creates technical debt and follow-up work
+- Solo maintainer doesn't mean solo reviewer - bots count!
+
+**Key insight**: "Wenn Du schon einen Review durchführst, auch wenn keine Pflicht, weil alleine, sollten wir diese Informationen in jedem Fall beachten!"
+
+### Action for Future Repos
+
+- Always check for review comments before merging
+- Add "Review comments addressed?" to pre-merge checklist
+- Treat bot reviews with same importance as human reviews
+- Document review comment handling in CONTRIBUTING.md
+
+---
+
 ## 📊 Metrics
 
 ### Time Investment
@@ -570,6 +630,6 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 
 ---
 
-**Document Version:** 1.1
+**Document Version:** 1.2
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
