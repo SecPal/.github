@@ -72,12 +72,33 @@ All GitHub configuration files have been created with SPDX headers and are REUSE
 - Stale issue/PR management
 - Automated releases on tags
 
+## Important Notes
+
+### Repository Structure
+
+SecPal uses **separate repositories** for each component:
+
+- `SecPal/api` - Laravel Backend
+- `SecPal/frontend` - Frontend Application
+- `SecPal/contracts` - TypeScript Contracts
+- `SecPal/.github` - Shared GitHub Configuration (this repository)
+
+### Workflows
+
+The workflows in this repository assume a **monorepo structure** with working directories (`./frontend`, `./api`, `./contracts`).
+
+**Action Required**: Copy workflows to individual repositories and remove `working-directory` settings, or adjust them if you use a different structure.
+
+### Branch Protection
+
+Branch protection commands in `BRANCH_PROTECTION.md` should be applied to each component repository (api, frontend, contracts) individually, not to this `.github` repository.
+
 ## Next Steps
 
-1. Review FUNDING.yml and add payment information
-2. Adjust CODEOWNERS team names if needed
-3. Create repository on GitHub
-4. Push code and apply branch protection
-5. Create labels for automation
+1. **Copy workflows** to individual repositories (api, frontend, contracts) and adjust paths
+2. **Copy issue templates** to repositories where issues will be created
+3. Review FUNDING.yml and add payment information
+4. Apply branch protection to main branches of component repositories
+5. Create labels in each repository for automation
 
 For detailed information, see the individual documentation files.

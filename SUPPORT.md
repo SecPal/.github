@@ -23,27 +23,23 @@ For general questions, discussions, and community support:
   - Ideas - Share and discuss feature ideas
   - Show and Tell - Share what you've built with SecPal
 
-## Bug Reports
+### Bug Reports
 
-If you've found a bug, please:
+If you've encountered a bug, create an issue in the appropriate repository:
 
-1. Check if it's already reported in [Issues](https://github.com/SecPal/SecPal/issues)
-2. If not, [create a new bug report](https://github.com/SecPal/SecPal/issues/new?template=bug_report.md)
+- **API bugs**: [SecPal/api/issues](https://github.com/SecPal/api/issues)
+- **Frontend bugs**: [SecPal/frontend/issues](https://github.com/SecPal/frontend/issues)
+- **Contracts bugs**: [SecPal/contracts/issues](https://github.com/SecPal/contracts/issues)
 
-## Feature Requests
+### Feature Requests
 
-To request a new feature:
-
-1. Check if it's already requested in [Issues](https://github.com/SecPal/SecPal/issues)
-2. If not, [create a feature request](https://github.com/SecPal/SecPal/issues/new?template=feature_request.md)
+Have an idea for a new feature? Create a feature request in the relevant repository using the issue templates.
 
 ## Security Issues
 
 **Do not report security vulnerabilities as public issues!**
 
-Please report security vulnerabilities through:
-
-- [GitHub Security Advisories](https://github.com/SecPal/SecPal/security/advisories/new)
+Please report security vulnerabilities to: **security@sepal.app**
 
 See our [Security Policy](SECURITY.md) for more details.
 

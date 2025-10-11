@@ -23,10 +23,7 @@ We take all security bugs in SecPal seriously. Thank you for improving the secur
 
 **Please do not report security vulnerabilities through public GitHub issues!**
 
-To report a security vulnerability, please use one of the following methods:
-
-1. **GitHub Security Advisory** (Preferred): [Report a Vulnerability](https://github.com/SecPal/SecPal/security/advisories/new)
-2. **Email**: security@sepal.app
+To report a security vulnerability, please email: **security@sepal.app**
 
 ### What to Include
 

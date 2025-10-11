@@ -1,41 +1,24 @@
 # SPDX-FileCopyrightText: 2025 SecPal Contributors
-
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-# Code Owners for SecPal
+# Code Owners for SecPal/.github Repository
+#
+# This file defines code ownership for the shared GitHub configuration repository.
+# Each component repository (api, frontend, contracts) should have its own CODEOWNERS file.
 
-# Default owners for everything in the repo
+# Default: All files owned by maintainers
+* @SecPal/maintainers
 
-- @SecPal/maintainers
+# Workflows - require maintainer review
+/workflows/ @SecPal/maintainers
 
-# Frontend
-
-/frontend/ @SecPal/frontend-team
-
-# API/Backend
-
-/api/ @SecPal/backend-team
-
-# Contracts
-
-/contracts/ @SecPal/contracts-team
+# Security-related files
+/SECURITY.md @SecPal/maintainers
+/workflows/security.yml @SecPal/maintainers
 
 # Documentation
+*.md @SecPal/maintainers
 
-/docs/ @SecPal/maintainers
-\*.md @SecPal/maintainers
-
-# CI/CD and GitHub configuration
-
-/.github/ @SecPal/maintainers
-
-# Security-sensitive files
-
-/SECURITY.md @SecPal/security-team
-/.github/workflows/security.yml @SecPal/security-team
-
-# License and legal
-
-/LICENSE @SecPal/maintainers
+# License and compliance files
 /LICENSES/ @SecPal/maintainers
 /.reuse/ @SecPal/maintainers

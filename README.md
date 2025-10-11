@@ -5,7 +5,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # SecPal GitHub Configuration
 
-This directory contains all GitHub-specific configuration and templates for the SecPal project.
+This repository contains all GitHub-specific configuration and templates for the SecPal project.
+
+## ⚠️ Important: Repository Structure
+
+SecPal uses **separate repositories** for each component:
+
+- `SecPal/api` - Laravel Backend
+- `SecPal/frontend` - Frontend Application
+- `SecPal/contracts` - TypeScript Contracts
+- `SecPal/.github` - Shared GitHub Configuration (this repository)
+
+**Workflows** in this repository are templates that assume a monorepo structure. You need to copy them to individual repositories and adjust the `working-directory` paths accordingly.
 
 ## 📁 Structure
 
@@ -74,23 +85,16 @@ All pull requests must pass the following checks:
 
 The `main` branch is protected with:
 
-- **2 required reviewers**
+- **No review requirements** (single maintainer)
 - **Signed commits only**
 - **All CI checks must pass**
 - **Linear history** (no merge commits)
 - **No force pushes**
 - **No direct commits** (PR only)
 
-See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for complete rules.
+See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for complete rules and setup instructions.
 
-### Setting Up Protection
-
-```bash
-# Apply main branch protection
-gh api repos/SecPal/SecPal/branches/main/protection \
-  --method PUT \
-  --input .github/branch-protection-main.json
-```
+**Note**: Branch protection should be applied to each repository individually (api, frontend, contracts), not to the `.github` repository itself.
 
 ## 📝 Issue & PR Templates
 
@@ -137,7 +141,7 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guideli
 Security is critical for SecPal. Please:
 
 - Read our [Security Policy](SECURITY.md)
-- Report vulnerabilities via [GitHub Security Advisories](https://github.com/SecPal/SecPal/security/advisories/new)
+- Report vulnerabilities to **security@sepal.app**
 - **Never** report security issues publicly
 
 ## 📄 License
@@ -156,17 +160,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 Need help? Check out:
 
 - [Support Documentation](SUPPORT.md)
-- [GitHub Discussions](https://github.com/SecPal/SecPal/discussions)
-- [Issue Tracker](https://github.com/SecPal/SecPal/issues)
+- Issue trackers in individual repositories:
+  - [API Issues](https://github.com/SecPal/api/issues)
+  - [Frontend Issues](https://github.com/SecPal/frontend/issues)
+  - [Contracts Issues](https://github.com/SecPal/contracts/issues)
 
 ## 📊 Status Badges
 
-Add these to your README:
+Add these to your repository READMEs (replace `REPO` with `api`, `frontend`, or `contracts`):
 
 ```markdown
-[![Tests](https://github.com/SecPal/SecPal/workflows/Tests/badge.svg)](https://github.com/SecPal/SecPal/actions/workflows/tests.yml)
-[![REUSE status](https://api.reuse.software/badge/github.com/SecPal/SecPal)](https://api.reuse.software/info/github.com/SecPal/SecPal)
-[![Security](https://github.com/SecPal/SecPal/workflows/Security%20Scanning/badge.svg)](https://github.com/SecPal/SecPal/actions/workflows/security.yml)
+[![Tests](https://github.com/SecPal/REPO/workflows/Tests/badge.svg)](https://github.com/SecPal/REPO/actions/workflows/tests.yml)
+[![REUSE status](https://api.reuse.software/badge/github.com/SecPal/REPO)](https://api.reuse.software/info/github.com/SecPal/REPO)
+[![Security](https://github.com/SecPal/REPO/workflows/Security%20Scanning/badge.svg)](https://github.com/SecPal/REPO/actions/workflows/security.yml)
 ```
 
 ## 🔧 Maintenance

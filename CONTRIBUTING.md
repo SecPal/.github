@@ -27,8 +27,11 @@ This project and everyone participating in it is governed by our [Code of Conduc
 
 ### Where do I go from here?
 
-1. **Check existing issues**: Look through [existing issues](https://github.com/SecPal/SecPal/issues) to see if your bug/feature has already been reported
-2. **Create an issue**: If not, [create a new issue](https://github.com/SecPal/SecPal/issues/new/choose) to discuss your idea or bug
+1. **Check existing issues**: Look through existing issues in the relevant repository:
+   - [API Issues](https://github.com/SecPal/api/issues)
+   - [Frontend Issues](https://github.com/SecPal/frontend/issues)
+   - [Contracts Issues](https://github.com/SecPal/contracts/issues)
+2. **Create an issue**: If not found, create a new issue in the appropriate repository
 3. **Get feedback**: Wait for maintainer feedback before starting significant work
 
 ### Types of Contributions
@@ -55,14 +58,23 @@ We welcome:
 ### Local Setup
 
 ```bash
-# Clone your fork
-git clone https://github.com/YOUR_USERNAME/SecPal.git
-cd SecPal
+# Clone the repositories you want to work on
+git clone https://github.com/YOUR_USERNAME/api.git SecPal-api
+git clone https://github.com/YOUR_USERNAME/frontend.git SecPal-frontend
+git clone https://github.com/YOUR_USERNAME/contracts.git SecPal-contracts
 
-# Add upstream remote
-git remote add upstream https://github.com/SecPal/SecPal.git
+# Add upstream remotes
+cd SecPal-api
+git remote add upstream https://github.com/SecPal/api.git
 
-# Start DDEV
+cd ../SecPal-frontend
+git remote add upstream https://github.com/SecPal/frontend.git
+
+cd ../SecPal-contracts
+git remote add upstream https://github.com/SecPal/contracts.git
+
+# Start DDEV (from the api directory)
+cd ../SecPal-api
 ddev start
 
 # Install frontend dependencies
@@ -324,9 +336,11 @@ When adding dependencies, verify they are compatible with AGPL-3.0-or-later:
 
 ## 🆘 Getting Help
 
-- 💬 [GitHub Discussions](https://github.com/SecPal/SecPal/discussions)
-- 📖 [Documentation](../docs/)
-- 🐛 [Issue Tracker](https://github.com/SecPal/SecPal/issues)
+- � Check the [SUPPORT.md](SUPPORT.md) for support resources
+- 🐛 Issue Trackers:
+  - [API Issues](https://github.com/SecPal/api/issues)
+  - [Frontend Issues](https://github.com/SecPal/frontend/issues)
+  - [Contracts Issues](https://github.com/SecPal/contracts/issues)
 
 ## 🎉 Thank You!
 
