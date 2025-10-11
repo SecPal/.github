@@ -1,0 +1,19 @@
+{
+  "name": "@secpal/github-config",
+  "version": "1.0.0",
+  "description": "GitHub configuration and templates for SecPal organization",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "author": "SecPal Contributors",
+  "scripts": {
+    "format": "npx prettier --write \"**/*.{yaml,yml,json,md}\"",
+    "format:check": "npx prettier --check \"**/*.{yaml,yml,json,md}\"",
+    "lint": "reuse lint"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

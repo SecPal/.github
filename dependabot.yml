@@ -4,16 +4,16 @@
 version: 2
 updates:
   # GitHub Actions for this repository
-  - package-ecosystem: 'github-actions'
-    directory: '/'
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: 'weekly'
-      day: 'friday'
-      time: '09:00'
-      timezone: 'Europe/Berlin'
+      interval: "weekly"
+      day: "friday"
+      time: "09:00"
+      timezone: "Europe/Berlin"
     commit-message:
-      prefix: 'chore(deps)'
-      include: 'scope'
+      prefix: "chore(deps)"
+      include: "scope"
     labels:
-      - 'dependencies'
-      - 'github-actions'
+      - "dependencies"
+      - "github-actions"
