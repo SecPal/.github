@@ -311,6 +311,50 @@ SPDX-PackageName = "SecPal Contracts"
 - [ ] For other: Commit respective lock files
 - [ ] Run `npm audit` / equivalent security check
 - [ ] Update deprecated dependencies
+- [ ] Add `ci` and `check` npm scripts to package.json
+
+### Pre-Commit Workflow (CRITICAL)
+
+**MANDATORY steps before EVERY commit - NO EXCEPTIONS:**
+
+```bash
+# 1. Check current status
+git status
+
+# 2. Review all changes - ensure ALL are intentional
+git diff
+
+# 3. Run full test suite
+npm run check  # or equivalent (test, validate, format:check, build)
+
+# 4. Check status again - did tests modify files?
+git status
+
+# 5. If tests changed files: review and stage them
+git diff
+git add <modified-files>
+
+# 6. Commit with signed commit
+git commit -S -m "..."
+
+# 7. FINAL CHECK - must be clean before push
+git status
+
+# 8. Only push if working tree is clean
+git push
+```
+
+**Why this is critical:**
+
+- PR #6: Pushed without running `format:check` → CI failed on prettier
+- PR #10: Ran `npm install` but didn't check `git status` → uncommitted `package-lock.json`
+- **Pattern**: Repeatedly pushing incomplete changes breaks CI and wastes time
+
+**Solution:**
+
+- Added `npm run check` script (fast local validation)
+- Added `npm run ci` script (full CI pipeline with `npm ci`)
+- This workflow is **non-negotiable** for all commits
 
 ### Branch Protection
 
@@ -420,13 +464,64 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 
 ---
 
+---
+
+## 11. Inconsistent Pre-Commit Validation
+
+### Problem
+
+**Repeated pattern of incomplete commits:**
+
+- PR #6: Committed without running `npm run format:check`
+  - Result: CI failed on prettier check
+  - Had to create follow-up commit to fix formatting
+- PR #10: Ran `npm install` but didn't check `git status`
+  - Result: Uncommitted `package-lock.json` left behind
+  - Had to create follow-up commit after push
+
+**Root cause**: No systematic workflow for validating changes before commit
+
+### Solution
+
+**Created two npm scripts:**
+
+```json
+{
+  "scripts": {
+    "check": "npm test && npm run validate && npm run format:check && npm run build",
+    "ci": "npm ci && npm test && npm run validate && npm run format:check && npm run build"
+  }
+}
+```
+
+**Mandatory Pre-Commit Workflow** (see Checklist section above):
+
+1. `git status` - what changed?
+2. `git diff` - are all changes intentional?
+3. `npm run check` - do all tests pass?
+4. `git status` - did tests modify files?
+5. Review and stage any test-modified files
+6. `git commit -S`
+7. `git status` - working tree clean?
+8. `git push` - only if clean
+
+### Action for Future Repos
+
+- Include `check` and `ci` scripts in package.json template
+- Document pre-commit workflow in README
+- Consider adding git pre-commit hooks (optional)
+- Update .github repo templates with these scripts
+
+---
+
 ## 📊 Metrics
 
 ### Time Investment
 
 - Initial setup: ~1 hour
 - Debugging and fixes: ~3 hours
-- Total: ~4 hours for first repository
+- Additional PRs (scripts, workflow): ~1 hour
+- Total: ~5 hours for first repository
 
 ### Expected Time for Next Repos
 
@@ -475,6 +570,6 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2025-10-11
+**Document Version:** 1.1
+**Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
