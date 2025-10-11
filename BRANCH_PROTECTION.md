@@ -56,18 +56,38 @@ Same as main branch
 
 ## Setting up Branch Protection
 
-To configure these rules via GitHub CLI:
+To configure these rules via GitHub CLI, **replace `REPO` with your actual repository name** (e.g., `api`, `frontend`, `contracts`):
 
 ```bash
 # For main branch
-gh api repos/SecPal/SecPal/branches/main/protection \
+gh api repos/SecPal/REPO/branches/main/protection \
   --method PUT \
   --input branch-protection-main.json
 
-# For develop branch
-gh api repos/SecPal/SecPal/branches/develop/protection \
+# For develop branch (if it exists)
+gh api repos/SecPal/REPO/branches/develop/protection \
   --method PUT \
   --input branch-protection-develop.json
 ```
+
+**Examples:**
+```bash
+# Apply to API repository
+gh api repos/SecPal/api/branches/main/protection \
+  --method PUT \
+  --input branch-protection-main.json
+
+# Apply to frontend repository
+gh api repos/SecPal/frontend/branches/main/protection \
+  --method PUT \
+  --input branch-protection-main.json
+
+# Apply to contracts repository
+gh api repos/SecPal/contracts/branches/main/protection \
+  --method PUT \
+  --input branch-protection-main.json
+```
+
+**Note**: The `.github` repository itself typically doesn't need these protections as it contains only configuration files.
 
 See the JSON configuration files in this directory for the exact settings.

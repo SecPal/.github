@@ -11,8 +11,9 @@ We are committed to ensuring the security of SecPal. Below are the versions of o
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
-| < 1.0   | :x:                |
+| 0.x.x   | :white_check_mark: |
+
+**Note**: SecPal is currently in early development (pre-1.0). We are starting with version 0.0.1 and will provide security updates for the latest 0.x.x release.
 
 ## Reporting a Vulnerability
 
@@ -42,11 +43,11 @@ Please include the requested information listed below (as much as you can provid
 
 ### Response Timeline
 
-You should receive a response within **24 hours**. If for some reason you do not receive a response within this timeframe, please follow up to ensure we received your original message.
+You should receive a response within **72 hours** (3 business days). If for some reason you do not receive a response within this timeframe, please follow up to ensure we received your original message.
 
 Our security team will:
 
-1. **Acknowledge** your report within 24 hours
+1. **Acknowledge** your report within 72 hours
 2. **Investigate** and validate the vulnerability
 3. **Provide an estimated timeline** for a fix
 4. **Keep you informed** of progress
