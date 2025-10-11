@@ -352,8 +352,8 @@ git push
 
 **Solution:**
 
-- Added `npm run check` script (fast local validation)
-- Added `npm run ci` script (full CI pipeline with `npm ci`)
+- Added `npm run check` script (fast local validation) - see Issue #11 below for script definitions
+- Added `npm run ci` script (full CI pipeline with `npm ci`) - see Issue #11 below for script definitions
 - This workflow is **non-negotiable** for all commits
 
 ### Branch Protection
@@ -520,7 +520,7 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 
 - Initial setup: ~1 hour
 - Debugging and fixes: ~3 hours
-- Additional PRs (scripts, workflow): ~1 hour
+- Documentation and workflow improvements: ~1 hour
 - Total: ~5 hours for first repository
 
 ### Expected Time for Next Repos
