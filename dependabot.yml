@@ -3,64 +3,17 @@
 
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  # GitHub Actions for this repository
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "friday"
-      time: "09:00"
-      timezone: "Europe/Berlin"
+      interval: 'weekly'
+      day: 'friday'
+      time: '09:00'
+      timezone: 'Europe/Berlin'
     commit-message:
-      prefix: "chore(deps)"
-      include: "scope"
+      prefix: 'chore(deps)'
+      include: 'scope'
     labels:
-      - "dependencies"
-      - "github-actions"
-
-  - package-ecosystem: "npm"
-    directory: "/frontend"
-    schedule:
-      interval: "weekly"
-      day: "friday"
-      time: "09:00"
-      timezone: "Europe/Berlin"
-    commit-message:
-      prefix: "chore(deps)"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "frontend"
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
-
-  - package-ecosystem: "npm"
-    directory: "/contracts"
-    schedule:
-      interval: "weekly"
-      day: "friday"
-      time: "09:00"
-      timezone: "Europe/Berlin"
-    commit-message:
-      prefix: "chore(deps)"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "contracts"
-
-  - package-ecosystem: "composer"
-    directory: "/api"
-    schedule:
-      interval: "weekly"
-      day: "friday"
-      time: "09:00"
-      timezone: "Europe/Berlin"
-    commit-message:
-      prefix: "chore(deps)"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "api"
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
+      - 'dependencies'
+      - 'github-actions'
