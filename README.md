@@ -16,7 +16,30 @@ SecPal uses **separate repositories** for each component:
 - `SecPal/contracts` - TypeScript Contracts
 - `SecPal/.github` - Shared GitHub Configuration (this repository)
 
-**Workflows** in this repository are templates that assume a monorepo structure. You need to copy them to individual repositories and adjust the `working-directory` paths accordingly.
+## 🏗️ Workflows: Templates vs Active
+
+This repository contains **two types** of workflows:
+
+### Active Workflows (for this `.github` repository)
+
+- ✅ `config-checks.yml` - Prettier formatting and REUSE compliance for configuration files
+
+### Template Workflows (for other repositories)
+
+The following workflows are **templates** that assume a monorepo structure with `./frontend`, `./api`, `./contracts` directories. **Copy them to individual repositories** and adjust the `working-directory` paths accordingly:
+
+- `tests.yml` - Template for frontend/API/contracts tests
+- `format.yml` - Template for Prettier (frontend) and Pint (API) formatting
+- `reuse.yml` - Template for REUSE compliance (works without changes)
+- `license-check.yml` - Template for license compatibility checks
+- `signed-commits.yml` - Template for signed commit verification
+- `security.yml` - Template for security scanning
+- `dependency-review.yml` - Template for dependency review
+- `labeler.yml` - Template for auto-labeling PRs
+- `stale.yml` - Template for stale issue management
+- `release.yml` - Template for release automation
+
+**Example:** To use `tests.yml` in the `contracts` repository, remove the `working-directory: ./contracts` line since the repo root is the contracts directory.
 
 ## 📁 Structure
 
@@ -28,15 +51,16 @@ SecPal uses **separate repositories** for each component:
 │   ├── documentation.yml    # Documentation issue template
 │   └── config.yml           # Issue template configuration
 ├── workflows/               # GitHub Actions workflows
-│   ├── tests.yml           # Test suite
-│   ├── format.yml          # Code formatting checks
-│   ├── reuse.yml           # REUSE compliance check
-│   ├── license-check.yml   # License compatibility check
-│   ├── signed-commits.yml  # Verify signed commits
-│   ├── security.yml        # Security scanning
-│   ├── dependency-review.yml # Dependency review
-│   ├── labeler.yml         # Auto-label PRs
-│   └── stale.yml           # Stale issue management
+│   ├── config-checks.yml   # Active: Checks for this repo (Prettier, REUSE)
+│   ├── tests.yml           # Template: Test suite
+│   ├── format.yml          # Template: Code formatting checks
+│   ├── reuse.yml           # Template: REUSE compliance check
+│   ├── license-check.yml   # Template: License compatibility check
+│   ├── signed-commits.yml  # Template: Verify signed commits
+│   ├── security.yml        # Template: Security scanning
+│   ├── dependency-review.yml # Template: Dependency review
+│   ├── labeler.yml         # Template: Auto-label PRs
+│   └── stale.yml           # Template: Stale issue management
 ├── BRANCH_PROTECTION.md     # Branch protection rules
 ├── branch-protection-*.json # Branch protection configs
 ├── CODE_OF_CONDUCT.md      # Community code of conduct
@@ -94,7 +118,7 @@ The `main` branch is protected with:
 
 See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for complete rules and setup instructions.
 
-**Note**: Branch protection should be applied to each repository individually (api, frontend, contracts), not to the `.github` repository itself.
+**Note**: Branch protection is applied to each repository individually (api, frontend, contracts, .github).
 
 ## 📝 Issue & PR Templates
 
