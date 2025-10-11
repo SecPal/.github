@@ -1,6 +1,5 @@
-# SPDX-FileCopyrightText: 2025 SecPal Contributors
-
-# SPDX-License-Identifier: AGPL-3.0-or-later
+<!-- SPDX-FileCopyrightText: 2025 SecPal Contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 
 # Branch Protection Rules
 
@@ -71,6 +70,7 @@ gh api repos/SecPal/REPO/branches/develop/protection \
 ```
 
 **Examples:**
+
 ```bash
 # Apply to API repository
 gh api repos/SecPal/api/branches/main/protection \
