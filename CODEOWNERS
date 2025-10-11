@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Code Owners for SecPal
+
+# Default owners for everything in the repo
+
+- @SecPal/maintainers
+
+# Frontend
+
+/frontend/ @SecPal/frontend-team
+
+# API/Backend
+
+/api/ @SecPal/backend-team
+
+# Contracts
+
+/contracts/ @SecPal/contracts-team
+
+# Documentation
+
+/docs/ @SecPal/maintainers
+\*.md @SecPal/maintainers
+
+# CI/CD and GitHub configuration
+
+/.github/ @SecPal/maintainers
+
+# Security-sensitive files
+
+/SECURITY.md @SecPal/security-team
+/.github/workflows/security.yml @SecPal/security-team
+
+# License and legal
+
+/LICENSE @SecPal/maintainers
+/LICENSES/ @SecPal/maintainers
+/.reuse/ @SecPal/maintainers

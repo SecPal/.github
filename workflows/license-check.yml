@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: License Compatibility Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  check-npm-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install license-checker
+        run: npm install -g license-checker
+
+      - name: Check Frontend Licenses
+        working-directory: ./frontend
+        run: |
+          npm ci
+          license-checker --production --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;WTFPL;Python-2.0" --summary
+
+      - name: Check Contracts Licenses
+        working-directory: ./contracts
+        run: |
+          npm ci
+          license-checker --production --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;WTFPL;Python-2.0" --summary
+
+  check-composer-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+
+      - name: Install dependencies
+        working-directory: ./api
+        run: composer install --prefer-dist --no-progress
+
+      - name: Install composer-license-checker
+        run: composer global require dominikb/composer-license-checker
+
+      - name: Check Composer Licenses
+        working-directory: ./api
+        run: |
+          composer licenses --format=json > licenses.json
+          # Check for compatible licenses with AGPL-3.0-or-later
+          # Compatible: AGPL-3.0, GPL-3.0, LGPL-3.0, MIT, BSD, Apache-2.0
+          if grep -q "proprietary\|UNLICENSED" licenses.json; then
+            echo "Found incompatible licenses!"
+            cat licenses.json
+            exit 1
+          fi

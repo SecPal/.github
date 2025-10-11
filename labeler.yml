@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Labeler Configuration
+# Automatically label PRs based on changed files
+
+api:
+  - changed-files:
+      - any-glob-to-any-file: "api/**/*"
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file: "frontend/**/*"
+
+contracts:
+  - changed-files:
+      - any-glob-to-any-file: "contracts/**/*"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**/*"
+
+ci-cd:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**/*"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/package.json"
+          - "**/package-lock.json"
+          - "**/composer.json"
+          - "**/composer.lock"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*test*"
+          - "**/*Test*"
+          - "**/*.spec.*"
+          - "**/*.test.*"
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "SECURITY.md"
+          - ".github/workflows/security.yml"

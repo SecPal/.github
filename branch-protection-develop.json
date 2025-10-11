@@ -1,0 +1,24 @@
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Tests / frontend-tests",
+      "Tests / api-tests",
+      "Tests / contracts-tests",
+      "Code Formatting / prettier",
+      "Code Formatting / pint",
+      "REUSE Compliance Check / reuse",
+      "License Compatibility Check / check-npm-licenses",
+      "License Compatibility Check / check-composer-licenses"
+    ]
+  },
+  "required_pull_request_reviews": null,
+  "enforce_admins": false,
+  "required_linear_history": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_signatures": true,
+  "lock_branch": false,
+  "allow_fork_syncing": true,
+  "restrictions": null
+}

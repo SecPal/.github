@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: SecPal GitHub Configuration
+Upstream-Contact: SecPal Contributors
+Source: https://github.com/SecPal/.github
+
+Files: .gitignore branch-protection-*.json labeler.yml _config.yml
+Copyright: 2025 SecPal Contributors
+License: AGPL-3.0-or-later

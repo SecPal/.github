@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Verify Signed Commits
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  verify-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify all commits are signed
+        run: |
+          # Get all commits in the PR
+          COMMITS=$(git log --format="%H" origin/${{ github.base_ref }}..${{ github.sha }})
+
+          # Check each commit
+          UNSIGNED_COMMITS=""
+          for commit in $COMMITS; do
+            # Check if commit is signed (has a valid signature)
+            if ! git verify-commit $commit 2>/dev/null; then
+              UNSIGNED_COMMITS="$UNSIGNED_COMMITS\n$commit"
+            fi
+          done
+
+          # If there are unsigned commits, fail the check
+          if [ -n "$UNSIGNED_COMMITS" ]; then
+            echo "❌ The following commits are not signed:"
+            echo -e "$UNSIGNED_COMMITS"
+            echo ""
+            echo "Please sign all commits with GPG/SSH keys."
+            echo "See: https://docs.github.com/en/authentication/managing-commit-signature-verification"
+            exit 1
+          fi
+
+          echo "✅ All commits are properly signed!"

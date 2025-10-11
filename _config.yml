@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# GitHub Pages configuration for SecPal documentation
+theme: jekyll-theme-minimal
+title: SecPal
+description: Digital logbook for private security services in Germany

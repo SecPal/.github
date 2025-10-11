@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -7,6 +10,12 @@ updates:
       day: "friday"
       time: "09:00"
       timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
 
   - package-ecosystem: "npm"
     directory: "/frontend"
@@ -15,6 +24,29 @@ updates:
       day: "friday"
       time: "09:00"
       timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "frontend"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "npm"
+    directory: "/contracts"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "09:00"
+      timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "contracts"
 
   - package-ecosystem: "composer"
     directory: "/api"
@@ -23,3 +55,12 @@ updates:
       day: "friday"
       time: "09:00"
       timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "api"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
