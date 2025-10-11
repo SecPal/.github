@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: License Compatibility Check
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  check-npm-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install license-checker
+        run: npm install -g license-checker
+
+      - name: Check licenses
+        run: |
+          echo "Checking npm package licenses for AGPL-3.0-or-later compatibility..."
+          license-checker --production --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;GPL-3.0;LGPL-3.0;AGPL-3.0" --summary

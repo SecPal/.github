@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Verify Signed Commits
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  verify-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify all commits are signed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Skip verification for Dependabot PRs
+          if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
+            echo "✅ Skipping signature verification for Dependabot"
+            exit 0
+          fi
+
+          # Get all commits in the PR via GitHub API
+          commits=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits --jq '.[].sha')
+
+          echo "Verifying commits in PR #${{ github.event.pull_request.number }}..."
+
+          unsigned_commits=()
+
+          for commit in $commits; do
+            # Check if commit is signed
+            verification=$(gh api repos/${{ github.repository }}/commits/$commit --jq '.commit.verification.verified')
+
+            if [[ "$verification" != "true" ]]; then
+              commit_msg=$(gh api repos/${{ github.repository }}/commits/$commit --jq '.commit.message' | head -n1)
+              unsigned_commits+=("$commit: $commit_msg")
+            fi
+          done
+
+          if [ ${#unsigned_commits[@]} -gt 0 ]; then
+            echo "❌ Found ${#unsigned_commits[@]} unsigned commit(s):"
+            printf '%s\n' "${unsigned_commits[@]}"
+            exit 1
+          fi
+
+          echo "✅ All commits in this PR are signed"
