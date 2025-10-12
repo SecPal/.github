@@ -721,14 +721,15 @@ gh label create "contracts" --color "0366d6" --description "Contracts repository
 
 After implementing security improvements in contracts (PR #11, #12), the `.github` repository was left with weaker security settings:
 
-| Setting | .github Repo | contracts Repo | Impact |
-|---------|--------------|----------------|--------|
-| **required_signatures** | ❌ false | ✅ true | Unsigned commits allowed in .github! |
-| **required_linear_history** | ❌ false | ✅ true | Merge commits allowed in .github! |
-| **actions-security check** | ❌ Missing | ✅ Present | No unpinned action detection |
-| **Action versions** | v4 (outdated) | v5 (current) | Using older, potentially vulnerable versions |
+| Setting                     | .github Repo  | contracts Repo | Impact                                       |
+| --------------------------- | ------------- | -------------- | -------------------------------------------- |
+| **required_signatures**     | ❌ false      | ✅ true        | Unsigned commits allowed in .github!         |
+| **required_linear_history** | ❌ false      | ✅ true        | Merge commits allowed in .github!            |
+| **actions-security check**  | ❌ Missing    | ✅ Present     | No unpinned action detection                 |
+| **Action versions**         | v4 (outdated) | v5 (current)   | Using older, potentially vulnerable versions |
 
-**Root cause:** 
+**Root cause:**
+
 - Applied security lessons to contracts repo but didn't sync back to .github
 - No systematic cross-repository security audit process
 - Documentation (branch-protection-main.json) didn't match actual settings
@@ -752,11 +753,12 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 **Applied fixes:**
 
 1. **GitHub API Changes** (immediate):
+
    ```bash
    # Enable required_signatures
    gh api -X POST repos/SecPal/.github/branches/main/protection/required_signatures
-   
-   # Enable required_linear_history  
+
+   # Enable required_linear_history
    gh api -X PUT repos/SecPal/.github/branches/main/protection --input protection.json
    ```
 
@@ -773,6 +775,7 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 ### Why This Is Critical
 
 **Security is only as strong as the weakest link:**
+
 - Having strict security in contracts but not in .github defeats the purpose
 - Unsigned commits in .github could modify workflows that run in other repos
 - Outdated actions may have known vulnerabilities
@@ -790,6 +793,7 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
    - [ ] Document in LESSONS-LEARNED
 
 2. **Monthly security audit:**
+
    ```bash
    # Check branch protection consistency
    for repo in .github contracts api frontend; do
@@ -797,10 +801,10 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
      gh api repos/SecPal/$repo/branches/main/protection \
        --jq '{enforce_admins, required_signatures, required_linear_history, required_checks: .required_status_checks.contexts}'
    done
-   
+
    # Check for outdated actions
    grep -r "actions/.*@v[0-9]" .github/workflows/ contracts/.github/workflows/
-   
+
    # Compare documentation vs reality
    diff branch-protection-main.json <(gh api repos/SecPal/<repo>/branches/main/protection --jq '.')
    ```
@@ -818,6 +822,7 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 ### Metrics
 
 **Time to discover and fix:**
+
 - Discovery: 30 minutes (security audit)
 - GitHub API fixes: 10 minutes
 - Workflow updates: 20 minutes
@@ -826,6 +831,7 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 - **Total: ~90 minutes**
 
 **Impact:**
+
 - 🔴 CRITICAL: Closed unsigned commit vulnerability in .github
 - 🔴 CRITICAL: Enforced linear history
 - 🟡 HIGH: Added unpinned action detection
