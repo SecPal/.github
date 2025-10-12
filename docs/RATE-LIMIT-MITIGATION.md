@@ -5,9 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # GitHub API Rate Limit Mitigation Strategy
 
-**Date:** 2025-10-12  
-**Status:** IMPLEMENTED (Option B) - Options A & C documented for future  
-**Related:** Review Comment #3 on PR #17, PREVENTION-STRATEGY.md:585  
+**Date:** 2025-10-12
+**Status:** IMPLEMENTED (Option B) - Options A & C documented for future
+**Related:** Review Comment #3 on PR #17, PREVENTION-STRATEGY.md:585
 **Decision:** Option B chosen for current scale (< 10 repos)
 
 ---
@@ -18,17 +18,17 @@ The original Weekly Configuration Audit workflow in `PREVENTION-STRATEGY.md` use
 
 ```yaml
 for repo in "${repos[@]}"; do
-  gh api repos/SecPal/$repo/contents/.license-policy.json
-  gh api repos/SecPal/$repo/contents/.github/workflows | while read workflow; do
-    gh api repos/SecPal/$repo/contents/.github/workflows/$workflow
-  done
+gh api repos/SecPal/$repo/contents/.license-policy.json
+gh api repos/SecPal/$repo/contents/.github/workflows | while read workflow; do
+gh api repos/SecPal/$repo/contents/.github/workflows/$workflow
+done
 done
 ```
 
 **Impact at Scale:**
 
-| Repos | API Calls/Week | Notes                                      |
-| ----- | -------------- | ------------------------------------------ |
+| Repos | API Calls/Week | Notes                                     |
+| ----- | -------------- | ----------------------------------------- |
 | 4     | ~28            | ✅ No problem (current state)             |
 | 10    | ~70            | ⚠️ Starts to add up                       |
 | 20    | ~140           | ❌ Problematic with other CI/CD workflows |
@@ -282,16 +282,16 @@ Consider Option C when:
 
 ## Decision Matrix
 
-| Criterion           | Option B (Clone) | Option A (GraphQL) | Option C (App) |
-| ------------------- | ---------------- | ------------------ | -------------- |
-| **API Calls/Week**  | 4                | 1                  | Variable       |
-| **Disk Space**      | ~200 MB          | 0                  | 0              |
-| **Setup Time**      | 10 min           | 30 min             | 2 hours        |
-| **Maintenance**     | Low              | Medium             | High           |
-| **Speed (4 repos)** | ~30 sec          | ~5 sec             | ~5 sec         |
-| **Speed (20 repos)**| ~2 min           | ~10 sec            | ~10 sec        |
-| **Max Scale**       | Unlimited        | 100 repos/query    | Unlimited      |
-| **Offline Capable** | ✅ Yes           | ❌ No              | ❌ No          |
+| Criterion            | Option B (Clone) | Option A (GraphQL) | Option C (App) |
+| -------------------- | ---------------- | ------------------ | -------------- |
+| **API Calls/Week**   | 4                | 1                  | Variable       |
+| **Disk Space**       | ~200 MB          | 0                  | 0              |
+| **Setup Time**       | 10 min           | 30 min             | 2 hours        |
+| **Maintenance**      | Low              | Medium             | High           |
+| **Speed (4 repos)**  | ~30 sec          | ~5 sec             | ~5 sec         |
+| **Speed (20 repos)** | ~2 min           | ~10 sec            | ~10 sec        |
+| **Max Scale**        | Unlimited        | 100 repos/query    | Unlimited      |
+| **Offline Capable**  | ✅ Yes           | ❌ No              | ❌ No          |
 
 **Recommendation Timeline:**
 
@@ -353,8 +353,8 @@ Track API usage to decide when to switch:
 
 ## Changelog
 
-| Date       | Change                                  | Author |
-| ---------- | --------------------------------------- | ------ |
-| 2025-10-12 | Created document, implemented Option B  | Agent  |
-| TBD        | Review after 10 repos milestone         | -      |
-| TBD        | Consider Option A if needed             | -      |
+| Date       | Change                                 | Author |
+| ---------- | -------------------------------------- | ------ |
+| 2025-10-12 | Created document, implemented Option B | Agent  |
+| TBD        | Review after 10 repos milestone        | -      |
+| TBD        | Consider Option A if needed            | -      |
