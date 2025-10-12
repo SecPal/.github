@@ -840,6 +840,72 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 
 ---
 
-**Document Version:** 1.4
+### 15. Configuration Centralization and Code Review Nitpicks
+
+**Problem:**
+
+- License policies hardcoded directly in workflow files
+- Makes maintenance difficult when policies need to change
+- Inconsistencies across multiple workflows and repositories
+- "Nitpick" review comments often ignored as "not critical"
+
+**Solution:**
+
+Create centralized configuration files for reusable settings:
+
+```json
+// .license-policy.json
+{
+  "allowedLicenses": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD", "CC0-1.0", "Unlicense"],
+  "deniedLicenses": ["GPL-2.0", "LGPL-2.0", "LGPL-2.1", "AGPL-1.0"],
+  "description": "License policy for AGPL-3.0-or-later compatibility"
+}
+```
+
+Load in workflows:
+
+```yaml
+- name: Load license policy
+  id: policy
+  run: |
+    ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
+    echo "allowed=$ALLOWED" >> $GITHUB_OUTPUT
+
+- name: Check licenses
+  run: |
+    license-checker --production --onlyAllow "${{ steps.policy.outputs.allowed }}" --summary
+```
+
+**Important Notes:**
+
+- **JSON and SPDX Headers:** JSON files cannot contain comments. Use REUSE.toml annotations:
+  ```toml
+  [[annotations]]
+  path = [".license-policy.json"]
+  SPDX-FileCopyrightText = "2025 SecPal Contributors"
+  SPDX-License-Identifier = "AGPL-3.0-or-later"
+  ```
+- **Prettier Formatting:** Always run `prettier --write` on new config files before committing to avoid CI failures
+- **Review Comments Matter:** Even "nitpick" comments can lead to significant maintainability improvements
+- **Systematic Approach:** Track and implement ALL review comments, not just critical ones
+
+**Benefits:**
+
+- ✅ Single source of truth for policies
+- ✅ Easy to update across all workflows
+- ✅ Better consistency across repositories
+- ✅ Reusable for future tools and scripts
+- ✅ Self-documenting with description field
+
+**Action for Future Repos:**
+
+- Extract all hardcoded configuration values into centralized files
+- Review ALL code review comments, including nitpicks
+- Use REUSE.toml for adding licenses to JSON/binary files
+- Always format configuration files with prettier before committing
+
+---
+
+**Document Version:** 1.5
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
