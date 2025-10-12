@@ -5,8 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Pull Request Structure and Merge Discipline
 
-**Date:** 2025-10-12  
-**Status:** GUIDELINE - Active  
+**Date:** 2025-10-12
+**Status:** GUIDELINE - Active
 **Context:** User feedback on PR scope and merge discipline
 
 ---
@@ -15,14 +15,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 **User Concern:**
 
-> "Wir sollten nicht die erstellten PR kritischer prüfen und vor dem Merge 'auditieren' und Kommentare beachten... Wir sollten auch sauberere / getrenntere / thematischere PR machen. Es ist natürlich möglich das Ändern eines Scriptes und dann Erweiterung der Dokumentation und gleichzeitig noch eine Änderung am Repo in einen PR zu werfen. Aber ist das sinnvoll?"
+> "We shouldn't only review PRs more critically and audit them before merge and pay attention to comments... We should also make cleaner / more separated / more thematic PRs. It's of course possible to throw a script change and then documentation extension and at the same time another repo change into one PR. But is that sensible?"
 
 **Core Issues:**
 
 1. **Mixed Concerns:** PRs combining workflows + scripts + documentation + config changes
 2. **Review Complexity:** Harder to review when multiple unrelated changes in one PR
 3. **Rollback Risk:** If one part has issues, must rollback everything
-4. **Merge Pressure:** "Und wenn wir hinterher wieder fünf PR aufmachen müssen um einen (übereilten) PR merge zu korrigieren..."
+4. **Merge Pressure:** "And if we afterwards have to open five PRs to correct one (hasty) PR merge..."
 
 ---
 
@@ -766,7 +766,7 @@ Does separating improve review quality?
 
 ---
 
-**Document Version:** 1.0  
-**Status:** GUIDELINE - Active  
-**Last Updated:** 2025-10-12  
+**Document Version:** 1.0
+**Status:** GUIDELINE - Active
+**Last Updated:** 2025-10-12
 **Next Review:** After 10 PRs, assess if guidelines are being followed

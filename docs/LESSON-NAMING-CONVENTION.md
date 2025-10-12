@@ -5,8 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Lesson Naming Convention
 
-**Date:** 2025-10-12  
-**Status:** PROPOSAL - Needs Decision  
+**Date:** 2025-10-12
+**Status:** PROPOSAL - Needs Decision
 **Context:** User feedback on PR# based numbering not being intuitive
 
 ---
@@ -20,7 +20,7 @@ Current lessons are numbered sequentially based on PR order:
 
 **User Concern:**
 
-> "Ich bin nicht sicher wie sinnvoll es ist, dass wir die Regeln nach den PR # benennen. Auf der einen Seite direkt zuordbar. Auf der anderen Seite, wenn weitere PR und evtl. Punkte dazu kommen... Intuitiv ist anders."
+> "I'm not sure how useful it is to name the rules by PR #. On one hand, directly traceable. On the other hand, when more PRs and possibly points are added... Not intuitive."
 
 **Core Issue:** Numbers alone don't convey meaning. New developer sees "Lesson #15" and has no idea what it's about without reading the full document.
 
@@ -236,8 +236,8 @@ Lesson #18 (DRY in Multi-Repo Architecture)
 ```markdown
 ## Lesson #15: Configuration Centralization
 
-**Origin:** `.github` PR #13 (2025-10-10)  
-**Category:** Configuration Management  
+**Origin:** `.github` PR #13 (2025-10-10)
+**Category:** Configuration Management
 **Impact:** All SecPal repositories
 
 ### Problem
@@ -399,9 +399,9 @@ docs/LESSONS-LEARNED-CONTRACTS-REPO.md:
 ```markdown
 ## Lesson #15: Configuration Centralization
 
-**Category:** Configuration Management  
-**Origin:** `.github` PR #13 (2025-10-10)  
-**Applies To:** All repositories  
+**Category:** Configuration Management
+**Origin:** `.github` PR #13 (2025-10-10)
+**Applies To:** All repositories
 **Status:** Active
 
 **Alternative Names:**
@@ -480,7 +480,7 @@ Lesson #23 [Config]: Script Centralization
 
 ---
 
-**Document Version:** 1.0  
-**Status:** PROPOSAL - Awaiting Decision  
-**Last Updated:** 2025-10-12  
+**Document Version:** 1.0
+**Status:** PROPOSAL - Awaiting Decision
+**Last Updated:** 2025-10-12
 **Next Action:** User decision on preferred option
