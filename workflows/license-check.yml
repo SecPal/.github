@@ -23,17 +23,23 @@ jobs:
       - name: Install license-checker
         run: npm install -g license-checker
 
+      - name: Load license policy
+        id: policy
+        run: |
+          ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
+          echo "allowed=$ALLOWED" >> $GITHUB_OUTPUT
+
       - name: Check Frontend Licenses
         working-directory: ./frontend
         run: |
           npm ci
-          license-checker --production --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;WTFPL;Python-2.0" --summary
+          license-checker --production --onlyAllow "${{ steps.policy.outputs.allowed }}" --summary
 
       - name: Check Contracts Licenses
         working-directory: ./contracts
         run: |
           npm ci
-          license-checker --production --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;CC0-1.0;Unlicense;WTFPL;Python-2.0" --summary
+          license-checker --production --onlyAllow "${{ steps.policy.outputs.allowed }}" --summary
 
   check-composer-licenses:
     runs-on: ubuntu-latest
