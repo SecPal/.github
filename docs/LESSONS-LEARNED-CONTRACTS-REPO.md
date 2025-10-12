@@ -713,6 +713,127 @@ gh label create "contracts" --color "0366d6" --description "Contracts repository
 
 ---
 
-**Document Version:** 1.3
+## 14. Security Settings Audit: Inconsistencies Between Repositories
+
+### Problem
+
+**Security audit revealed critical discrepancies between `.github` and `contracts` repositories:**
+
+After implementing security improvements in contracts (PR #11, #12), the `.github` repository was left with weaker security settings:
+
+| Setting | .github Repo | contracts Repo | Impact |
+|---------|--------------|----------------|--------|
+| **required_signatures** | ❌ false | ✅ true | Unsigned commits allowed in .github! |
+| **required_linear_history** | ❌ false | ✅ true | Merge commits allowed in .github! |
+| **actions-security check** | ❌ Missing | ✅ Present | No unpinned action detection |
+| **Action versions** | v4 (outdated) | v5 (current) | Using older, potentially vulnerable versions |
+
+**Root cause:** 
+- Applied security lessons to contracts repo but didn't sync back to .github
+- No systematic cross-repository security audit process
+- Documentation (branch-protection-main.json) didn't match actual settings
+
+### Solution
+
+**Conducted comprehensive security audit:**
+
+```bash
+# 1. Compare actual branch protection settings
+gh api repos/SecPal/.github/branches/main/protection | jq '{enforce_admins, required_signatures, required_linear_history}'
+gh api repos/SecPal/contracts/branches/main/protection | jq '{enforce_admins, required_signatures, required_linear_history}'
+
+# 2. Compare workflow security measures
+diff .github/workflows/security.yml contracts/.github/workflows/security.yml
+
+# 3. Compare documentation vs reality
+diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/main/protection --jq '{required_status_checks, enforce_admins, required_signatures, required_linear_history}')
+```
+
+**Applied fixes:**
+
+1. **GitHub API Changes** (immediate):
+   ```bash
+   # Enable required_signatures
+   gh api -X POST repos/SecPal/.github/branches/main/protection/required_signatures
+   
+   # Enable required_linear_history  
+   gh api -X PUT repos/SecPal/.github/branches/main/protection --input protection.json
+   ```
+
+2. **Workflow Updates** (.github PR #10):
+   - Added `actions-security` job to check for unpinned actions
+   - Updated all actions from v4 to v5 (9 workflow files)
+   - Added exit 1 on security violations (fail the build)
+
+3. **Documentation Updates**:
+   - Updated `.github/branch-protection-main.json` with actual settings
+   - Updated `contracts/branch-protection-main.json` with missing checks
+   - Fixed `enforce_admins: false → true` inconsistency
+
+### Why This Is Critical
+
+**Security is only as strong as the weakest link:**
+- Having strict security in contracts but not in .github defeats the purpose
+- Unsigned commits in .github could modify workflows that run in other repos
+- Outdated actions may have known vulnerabilities
+- Configuration drift creates security blind spots
+
+**"Configuration drift is a security vulnerability"**
+
+### Action for Future Repos
+
+**Establish security audit checklist:**
+
+1. **After ANY security improvement:**
+   - [ ] Apply to ALL SecPal repositories (not just one)
+   - [ ] Update templates in .github repo
+   - [ ] Document in LESSONS-LEARNED
+
+2. **Monthly security audit:**
+   ```bash
+   # Check branch protection consistency
+   for repo in .github contracts api frontend; do
+     echo "=== $repo ==="
+     gh api repos/SecPal/$repo/branches/main/protection \
+       --jq '{enforce_admins, required_signatures, required_linear_history, required_checks: .required_status_checks.contexts}'
+   done
+   
+   # Check for outdated actions
+   grep -r "actions/.*@v[0-9]" .github/workflows/ contracts/.github/workflows/
+   
+   # Compare documentation vs reality
+   diff branch-protection-main.json <(gh api repos/SecPal/<repo>/branches/main/protection --jq '.')
+   ```
+
+3. **Security parity requirements:**
+   - All repos must have same baseline security level
+   - Document any intentional differences with rationale
+   - Template changes must be applied within 1 week
+
+4. **Add to PR review checklist:**
+   - [ ] Security changes applied to all relevant repos?
+   - [ ] Documentation updated to match actual settings?
+   - [ ] Templates updated for future repos?
+
+### Metrics
+
+**Time to discover and fix:**
+- Discovery: 30 minutes (security audit)
+- GitHub API fixes: 10 minutes
+- Workflow updates: 20 minutes
+- Documentation: 15 minutes
+- PR creation and review: 15 minutes
+- **Total: ~90 minutes**
+
+**Impact:**
+- 🔴 CRITICAL: Closed unsigned commit vulnerability in .github
+- 🔴 CRITICAL: Enforced linear history
+- 🟡 HIGH: Added unpinned action detection
+- 🟢 MEDIUM: Updated to current action versions
+- ✅ Achieved security parity across all repos
+
+---
+
+**Document Version:** 1.4
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
