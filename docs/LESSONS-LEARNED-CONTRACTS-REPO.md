@@ -856,16 +856,7 @@ Create centralized configuration files for reusable settings:
 ```json
 // .license-policy.json
 {
-  "allowedLicenses": [
-    "MIT",
-    "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "0BSD",
-    "CC0-1.0",
-    "Unlicense"
-  ],
+  "allowedLicenses": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD", "CC0-1.0", "Unlicense"],
   "deniedLicenses": ["GPL-2.0", "LGPL-2.0", "LGPL-2.1", "AGPL-1.0"],
   "description": "License policy for AGPL-3.0-or-later compatibility"
 }
