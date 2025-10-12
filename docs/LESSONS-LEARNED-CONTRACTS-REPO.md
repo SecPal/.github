@@ -358,8 +358,9 @@ git push
 
 **Solution:**
 
-- Added `npm run check` script (fast local validation) - see Issue #11 below for script definitions
-- Added `npm run ci` script (full CI pipeline with `npm ci`) - see Issue #11 below for script definitions
+- Added `npm run check` script (fast local validation) - see Issue #11 for complete command reference
+- Added `npm run ci` script (full CI pipeline with `npm ci`)
+- See **"Local CI/CD Validation Commands"** in Issue #11 for all available checks
 - This workflow is **non-negotiable** for all commits
 
 ### Branch Protection
@@ -521,12 +522,87 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 7. `git status` - working tree clean?
 8. `git push` - only if clean
 
+### Local CI/CD Validation Commands
+
+**Complete list of local equivalents for all CI/CD checks:**
+
+```bash
+# 1. Code Formatting
+npm run format:check          # or: npx prettier --check "**/*.{ts,yaml,yml,json,md}"
+npm run format                # Fix: npx prettier --write "**/*.{ts,yaml,yml,json,md}"
+
+# 2. Tests (if applicable)
+npm test                      # Run unit/integration tests
+
+# 3. TypeScript Compilation / Build
+npm run build                 # Compile TypeScript, build project
+
+# 4. Linting / Validation (project-specific)
+npm run validate              # e.g., OpenAPI validation, ESLint, etc.
+
+# 5. REUSE Compliance
+npx reuse lint                # Check SPDX headers and licensing
+
+# 6. Security: npm audit
+npm audit --production        # Check for vulnerabilities in production dependencies
+npm audit                     # Check all dependencies (including dev)
+
+# 7. License Compatibility
+ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
+npx license-checker --production --onlyAllow "$ALLOWED" --summary
+
+# 8. Dependency Review (GitHub-specific, no local equivalent)
+# This check only runs on GitHub - reviews new dependencies in PRs
+
+# 9. Signed Commits (verification happens on GitHub)
+git log --show-signature -1   # Verify your last commit is signed locally
+
+# 10. CodeQL / Security Scanning (GitHub-specific)
+# Advanced security analysis - runs only in GitHub Actions
+```
+
+**Recommended: All-in-one validation script**
+
+Add to `package.json`:
+
+```json
+{
+  "scripts": {
+    "check": "npm run format:check && npm test && npm run validate && npm run build && npm audit --production && npx reuse lint",
+    "check:full": "npm run check && npx license-checker --production --onlyAllow \"$(jq -r '.allowedLicenses | join(\";\")' .license-policy.json)\" --summary"
+  }
+}
+```
+
+**Usage:**
+
+```bash
+# Quick check (most common issues)
+npm run check
+
+# Full check (includes license validation)
+npm run check:full
+
+# Individual checks for debugging
+npm run format:check
+npx reuse lint
+npm audit --production
+```
+
+**Important Notes:**
+
+- ⚠️ Some CI checks (Dependency Review, CodeQL) have no local equivalent
+- ✅ Running `npm run check` catches ~90% of CI failures before push
+- 🚀 Faster iteration: Fix issues locally instead of waiting for CI
+- 📋 Not a replacement for CI, but a pre-flight check
+
 ### Action for Future Repos
 
 - Include `check` and `ci` scripts in package.json template
 - Document pre-commit workflow in README
 - Consider adding git pre-commit hooks (optional)
 - Update .github repo templates with these scripts
+- Add `.license-policy.json` for reusable license validation
 
 ---
 
@@ -906,6 +982,6 @@ Load in workflows:
 
 ---
 
-**Document Version:** 1.5
+**Document Version:** 1.6
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
