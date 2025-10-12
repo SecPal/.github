@@ -982,6 +982,100 @@ Load in workflows:
 
 ---
 
-**Document Version:** 1.6
+### 16. Ignoring Review Comments (Again) - PR #14
+
+**Problem:**
+
+PR #14 was merged with **2 unaddressed Copilot review comments**:
+
+1. **Missing error handling** for `.license-policy.json`
+   - Code assumed file exists
+   - Would fail ungracefully if missing
+   - No conditional checking
+
+2. **Fragile npm script** with complex nested quotes
+   - `"check:full": "npm run check && npx license-checker ... \"$(jq -r ...)\" ..."`
+   - Hard to maintain and debug
+   - Prone to shell escaping errors
+   - Copilot suggested moving to separate script file
+
+**Root Cause:**
+
+- Rushing to merge without systematic review of ALL comments
+- Ignoring bot comments as "less important" than human reviews
+- **Repeating the same mistake from Lesson #12**
+
+**Solution:**
+
+Created PR #15 and #16 to address comments:
+
+```bash
+# scripts/check-licenses.sh
+#!/bin/bash
+set -e
+
+if [ ! -f .license-policy.json ]; then
+  echo "No .license-policy.json found, skipping license check."
+  exit 0
+fi
+
+ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
+npx license-checker --production --onlyAllow "$ALLOWED" --summary
+```
+
+Updated package.json recommendation:
+
+```json
+{
+  "scripts": {
+    "check:full": "npm run check && ./scripts/check-licenses.sh"
+  }
+}
+```
+
+**Important Notes:**
+
+- **EVERY review comment must be addressed** - no exceptions
+- Bot comments are equally important as human comments
+- Review comments must be resolved BEFORE merging
+- If consciously ignoring a comment:
+  1. Document the decision
+  2. Explain the reasoning
+  3. Reply to the comment on GitHub
+- **Never** include literal user feedback/questions in English documentation (e.g., "Gibt es in den learned lessons...")
+
+**Systematic Review Process:**
+
+Before merging ANY PR:
+
+1. Check for review comments: `gh pr view <number> --comments`
+2. Read ALL comments (human and bot)
+3. For each comment:
+   - [ ] Implement the suggestion, OR
+   - [ ] Document why it's being ignored (with justification)
+   - [ ] Reply to the comment on GitHub
+4. Verify all comments are addressed
+5. Only then: Merge
+
+**Benefits of Shell Scripts over Inline Commands:**
+
+✅ Better error handling (if/then/else)  
+✅ Easier to test independently  
+✅ No complex quote escaping  
+✅ Can be reused in CI and locally  
+✅ Easier to maintain and debug  
+✅ Can include SPDX headers
+
+**Action for Future:**
+
+- Add "Review ALL comments" to pre-merge checklist
+- Never merge with unaddressed comments
+- Treat bot comments with same priority as human reviews
+- Use separate script files for complex shell logic
+- Always translate user feedback to English before including in docs
+
+---
+
+**Document Version:** 1.7
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
