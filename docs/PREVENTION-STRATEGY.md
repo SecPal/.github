@@ -94,7 +94,13 @@ Phase 4: Scalability-Ready Architecture
 echo "🔍 Checking for Lesson #15 violations..."
 
 # Check for hardcoded license lists
-if git diff --cached -- '*.yml' '*.yaml' | grep -E "^\+.*deny-licenses:|^\+.*allow-licenses:" | grep -v ".license-policy.json" | grep -v "# Allow hardcoded"; then
+# Refactored for readability: break pipeline into intermediate steps
+DIFF_OUTPUT="$(git diff --cached -- '*.yml' '*.yaml')"
+LICENSE_LINES="$(echo "$DIFF_OUTPUT" | grep -E "^\+.*deny-licenses:|^\+.*allow-licenses:")"
+# Exclude changes to .license-policy.json and lines with # Allow hardcoded
+VIOLATIONS="$(echo "$LICENSE_LINES" | grep -v ".license-policy.json" | grep -v "# Allow hardcoded")"
+
+if [ -n "$VIOLATIONS" ]; then
   echo ""
   echo "❌ ERROR: Hardcoded licenses detected!"
   echo ""

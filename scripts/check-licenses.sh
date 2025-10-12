@@ -16,9 +16,15 @@ if ! command -v jq &> /dev/null; then
   exit 1
 fi
 
-# Validate JSON and extract allowedLicenses
-if ! jq -e '.allowedLicenses' .license-policy.json > /dev/null 2>&1; then
-  echo "Error: .license-policy.json is missing or malformed, or 'allowedLicenses' key is absent." >&2
+# Validate JSON is well-formed
+if ! jq empty .license-policy.json > /dev/null 2>&1; then
+  echo "Error: .license-policy.json is malformed (invalid JSON)." >&2
+  exit 1
+fi
+
+# Check for allowedLicenses key
+if ! jq -e 'has("allowedLicenses") and (.allowedLicenses != null)' .license-policy.json > /dev/null 2>&1; then
+  echo "Error: 'allowedLicenses' key is missing or null in .license-policy.json." >&2
   exit 1
 fi
 
