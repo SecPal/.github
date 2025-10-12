@@ -10,7 +10,7 @@ on:
     branches: [main, develop]
   schedule:
     # Run every Monday at 6:00 AM UTC
-    - cron: '0 6 * * 1'
+    - cron: "0 6 * * 1"
 
 permissions:
   security-events: write
@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ['javascript', 'php']
+        language: ["javascript", "php"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -44,14 +44,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        directory: ['frontend', 'contracts']
+        directory: ["frontend", "contracts"]
     steps:
       - uses: actions/checkout@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Run npm audit
         working-directory: ./${{ matrix.directory }}
@@ -68,7 +68,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: "8.4"
 
       - name: Install dependencies
         working-directory: ./api
