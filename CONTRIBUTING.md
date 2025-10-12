@@ -255,16 +255,96 @@ npm test
 
 ## 🚀 Submitting Changes
 
+### Pre-Commit Workflow (CRITICAL)
+
+**MANDATORY steps before EVERY commit - NO EXCEPTIONS:**
+
+```bash
+# 1. Check current status
+git status
+
+# 2. Review all changes - ensure ALL are intentional
+git diff
+
+# 3. Run local validation (see commands below)
+npm run check  # Quick validation
+# or
+npm run check:full  # Complete validation including licenses
+
+# 4. Check status again - did tests modify files?
+git status
+
+# 5. If tests changed files: review and stage them
+git diff
+git add <modified-files>
+
+# 6. Commit with signed commit
+git commit -S -m "type(scope): description"
+
+# 7. FINAL CHECK - must be clean before push
+git status
+
+# 8. Only push if working tree is clean
+git push
+```
+
+### Local CI/CD Validation Commands
+
+Run these **before every commit** to catch issues locally:
+
+```bash
+# Quick validation (most common checks)
+npm run format:check      # Code formatting
+npm test                  # Unit/integration tests
+npm run validate          # Linting, OpenAPI validation
+npm run build             # TypeScript compilation
+
+# Security & Compliance
+npm audit --production    # Dependency vulnerabilities
+npx reuse lint            # SPDX header compliance
+
+# License compatibility (if .license-policy.json exists)
+ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
+npx license-checker --production --onlyAllow "$ALLOWED" --summary
+```
+
+**Recommended: Add to `package.json`:**
+
+```json
+{
+  "scripts": {
+    "check": "npm run format:check && npm test && npm run validate && npm run build && npm audit --production && npx reuse lint",
+    "check:full": "npm run check && npx license-checker --production --onlyAllow \"$(jq -r '.allowedLicenses | join(\";\")' .license-policy.json)\" --summary"
+  }
+}
+```
+
+Then simply run:
+
+```bash
+npm run check       # Fast pre-commit validation
+npm run check:full  # Complete validation
+```
+
+**Why this matters:**
+
+- Catches ~90% of CI failures before push
+- Faster iteration - fix issues immediately
+- No waiting for CI to fail
+- Cleaner git history
+
+> 📚 **For detailed explanations and troubleshooting**, see [Lessons Learned](docs/LESSONS-LEARNED-CONTRACTS-REPO.md#11-inconsistent-pre-commit-validation)
+
 ### Before Submitting
 
 Ensure:
 
-- [ ] All tests pass locally
+- [ ] All tests pass locally (`npm run check`)
 - [ ] Code is formatted (Prettier/Pint)
-- [ ] Commits are signed
-- [ ] REUSE compliance (SPDX headers)
+- [ ] Commits are signed (`git log --show-signature -1`)
+- [ ] REUSE compliance (`npx reuse lint`)
 - [ ] Documentation is updated
-- [ ] No new security vulnerabilities
+- [ ] No new security vulnerabilities (`npm audit`)
 - [ ] License compatibility verified
 
 ### Create Pull Request
