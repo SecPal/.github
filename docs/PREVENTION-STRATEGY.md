@@ -556,50 +556,81 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Audit all SecPal repositories
+      - name: Setup audit workspace
+        run: |
+          mkdir -p /tmp/secpal-audit
+          mkdir -p audit-results
+
+      - name: Clone/update all repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "🔍 Starting weekly cross-repo audit..."
           echo "Date: $(date -I)"
           echo ""
 
-          mkdir -p audit-results
-
           # List of all SecPal repos
+          repos=("contracts" ".github" "api" "frontend")
+
+          cd /tmp/secpal-audit
+
+          for repo in "${repos[@]}"; do
+            if [ -d "$repo" ]; then
+              echo "📥 Updating $repo..."
+              git -C "$repo" pull -q origin main
+            else
+              echo "📦 Cloning $repo..."
+              gh repo clone "SecPal/$repo" "$repo" -- -q
+            fi
+          done
+
+      - name: Audit all SecPal repositories
+        run: |
+          cd /tmp/secpal-audit
           repos=("contracts" ".github" "api" "frontend")
 
           for repo in "${repos[@]}"; do
             echo "=== Auditing SecPal/$repo ==="
 
-            # 1. Check license policy exists
-            if gh api repos/SecPal/$repo/contents/.license-policy.json > /dev/null 2>&1; then
+            # 1. Check license policy exists (local file access)
+            if [ -f "$repo/.license-policy.json" ]; then
               echo "  ✅ Has .license-policy.json"
-              gh api repos/SecPal/$repo/contents/.license-policy.json --jq '.content' | base64 -d > audit-results/${repo}-policy.json
+              cp "$repo/.license-policy.json" "$GITHUB_WORKSPACE/audit-results/${repo}-policy.json"
+              jq -c '{allowed: .allowedLicenses | length, denied: .deniedLicenses | length}' "$repo/.license-policy.json"
             else
               echo "  ❌ Missing .license-policy.json"
             fi
 
-            # 2. Check action versions
-            echo "  📦 Action versions:"
-            gh api repos/SecPal/$repo/contents/.github/workflows --jq '.[] | select(.name | endswith(".yml")) | .name' | while read workflow; do
-              gh api repos/SecPal/$repo/contents/.github/workflows/$workflow --jq '.content' | base64 -d | grep -o 'actions/[^@]*@v[0-9]*' | sort -u || echo "    (none found)"
-            done
+            # 2. Check action versions (local grep)
+            if [ -d "$repo/.github/workflows" ]; then
+              echo "  📦 Action versions:"
+              grep -rh "uses:" "$repo/.github/workflows/" \
+                | grep -oE '[a-z-]+/[a-z-]+@v[0-9]+' \
+                | sort -u \
+                | sed 's/^/    - /' || echo "    (none found)"
+            fi
 
-            # 3. Check for hardcoded configs
+            # 3. Check for hardcoded configs (local grep)
             echo "  🔎 Checking for hardcoded configs..."
-            violations=$(gh api repos/SecPal/$repo/contents/.github/workflows --jq '.[] | select(.name | endswith(".yml")) | .name' | while read workflow; do
-              gh api repos/SecPal/$repo/contents/.github/workflows/$workflow --jq '.content' | base64 -d | grep -n "deny-licenses:\|allow-licenses:" | grep -v "steps.policy.outputs" || true
-            done)
+            if [ -d "$repo/.github/workflows" ]; then
+              violations=$(grep -rn "deny-licenses:\|allow-licenses:" "$repo/.github/workflows/" \
+                | grep -v "steps.policy.outputs" \
+                | grep -v "# Allow hardcoded" || true)
 
-            if [ -n "$violations" ]; then
-              echo "  ❌ Found hardcoded configs!"
-            else
-              echo "  ✅ No hardcoded configs"
+              if [ -n "$violations" ]; then
+                echo "  ❌ Found hardcoded configs!"
+                echo "$violations" | sed 's/^/    /'
+              else
+                echo "  ✅ No hardcoded configs"
+              fi
             fi
 
             echo ""
           done
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+      - name: Cleanup audit workspace
+        if: always()
+        run: rm -rf /tmp/secpal-audit
 
       - name: Compare license policies
         run: |
