@@ -303,9 +303,9 @@ npm run build             # TypeScript compilation
 npm audit --production    # Dependency vulnerabilities
 npx reuse lint            # SPDX header compliance
 
-# License compatibility (if .license-policy.json exists)
-ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
-npx license-checker --production --onlyAllow "$ALLOWED" --summary
+# License compatibility (requires .license-policy.json)
+# See scripts/check-licenses.sh for automated checking
+./scripts/check-licenses.sh
 ```
 
 **Recommended: Add to `package.json`:**
@@ -314,7 +314,7 @@ npx license-checker --production --onlyAllow "$ALLOWED" --summary
 {
   "scripts": {
     "check": "npm run format:check && npm test && npm run validate && npm run build && npm audit --production && npx reuse lint",
-    "check:full": "npm run check && npx license-checker --production --onlyAllow \"$(jq -r '.allowedLicenses | join(\";\")' .license-policy.json)\" --summary"
+    "check:full": "npm run check && ./scripts/check-licenses.sh"
   }
 }
 ```
