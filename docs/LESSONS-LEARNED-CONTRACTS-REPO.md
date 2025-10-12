@@ -1059,11 +1059,11 @@ Before merging ANY PR:
 
 **Benefits of Shell Scripts over Inline Commands:**
 
-✅ Better error handling (if/then/else)  
-✅ Easier to test independently  
-✅ No complex quote escaping  
-✅ Can be reused in CI and locally  
-✅ Easier to maintain and debug  
+✅ Better error handling (if/then/else)
+✅ Easier to test independently
+✅ No complex quote escaping
+✅ Can be reused in CI and locally
+✅ Easier to maintain and debug
 ✅ Can include SPDX headers
 
 **Action for Future:**
