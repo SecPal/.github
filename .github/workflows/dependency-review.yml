@@ -17,8 +17,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Load license policy
+        id: policy
+        run: |
+          if [ ! -f .license-policy.json ]; then
+            echo "Error: .license-policy.json not found!" >&2
+            exit 1
+          fi
+          DENIED=$(jq -r '.deniedLicenses | join(", ")' .license-policy.json)
+          if [ -z "$DENIED" ]; then
+            echo "Error: deniedLicenses is empty in .license-policy.json!" >&2
+            exit 1
+          fi
+          echo "denied=$DENIED" >> $GITHUB_OUTPUT
+
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: moderate
-          deny-licenses: "LGPL-2.0, LGPL-2.1, GPL-2.0, SSPL-1.0"
+          deny-licenses: ${{ steps.policy.outputs.denied }}

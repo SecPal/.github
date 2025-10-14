@@ -13,6 +13,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This document captures all issues encountered and solutions implemented during the setup of the `contracts` repository. These lessons should be applied to future SecPal repositories to avoid repeating the same problems.
 
+### Naming Convention
+
+**Format:** `Lesson #X (Descriptive Name)`
+
+All lessons use the hybrid naming convention (Option C):
+
+- **Number** (`#X`) provides unique ID and traceability
+- **Descriptive Name** provides meaning and searchability
+- **Always use both** in code comments and documentation
+
+Example: `Lesson #15 (Configuration Centralization)`
+
+See [LESSON-NAMING-CONVENTION.md](LESSON-NAMING-CONVENTION.md) for full guidelines.
+
 ---
 
 ## 🔴 Critical Issues Fixed
@@ -600,9 +614,42 @@ npm audit --production
 
 - Include `check` and `ci` scripts in package.json template
 - Document pre-commit workflow in README
-- Consider adding git pre-commit hooks (optional)
+- **Install pre-commit hook from template** (automated enforcement)
 - Update .github repo templates with these scripts
 - Add `.license-policy.json` for reusable license validation
+
+### Pre-Commit Hook (Automated Enforcement)
+
+**Implementation:** [.github/templates/hooks/pre-commit](../.github/templates/hooks/pre-commit)
+
+A pre-commit git hook enforces Lesson #17 automatically before every commit.
+
+**Installation:**
+
+```bash
+# From repository root
+cp .github/templates/hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+**What it checks:**
+
+1. **Whitespace errors** - Trailing spaces, wrong line endings
+2. **Code formatting** - Runs `npm run format:check` (Prettier)
+3. **Unstaged changes** - Catches formatter changes after `git add`
+
+**Why it matters:**
+
+- Prevents the exact violation that occurred on 2025-10-14
+- Created Lesson #17, then immediately violated it (didn't check formatting)
+- CI failed, had to fix and push again
+- Hook would have blocked the bad commit locally
+
+**Usage:**
+
+The hook runs automatically. If checks fail, commit is blocked with clear instructions.
+
+**See also:** [Hook Template README](../.github/templates/hooks/README.md)
 
 ---
 
@@ -916,7 +963,11 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 
 ---
 
-### 15. Configuration Centralization and Code Review Nitpicks
+### Lesson #15 (Configuration Centralization)
+
+**Also Known As:** Configuration Centralization and Code Review Nitpicks
+**Origin:** `.github` PR #13 (2025-10-10)
+**Category:** Configuration Management
 
 **Problem:**
 
@@ -982,7 +1033,11 @@ Load in workflows:
 
 ---
 
-### 16. Ignoring Review Comments (Again) - PR #14
+### Lesson #16 (Review Comment Discipline)
+
+**Also Known As:** Ignoring Review Comments (Again) - PR #14
+**Origin:** `.github` PR #14 (2025-10-11)
+**Category:** Code Review Process
 
 **Problem:**
 
@@ -1066,6 +1121,205 @@ Before merging ANY PR:
 ✅ Easier to maintain and debug
 ✅ Can include SPDX headers
 
+---
+
+### Lesson #17 (Git State Verification After Work Sessions)
+
+**Also Known As:** Post-Work Git Hygiene, Commit State Validation
+**Origin:** 2025-10-14 - Discovered during Lesson #15/16 naming convention implementation
+**Category:** Development Workflow, Version Control
+
+**Problem:**
+
+After completing a work session or task, uncommitted changes can remain:
+
+1. **Automatic Formatters:** Prettier, ESLint, or other tools run on save
+2. **Manual Edits:** User makes quick fixes during review
+3. **Partial Commits:** Some files staged but not committed
+4. **Forgotten Changes:** Work-in-progress left in working directory
+
+**Real Example (2025-10-14):**
+
+During Lesson Naming Convention implementation:
+
+- Modified 7 documentation files
+- Committed changes with `git commit -m "..."`
+- User noticed: "Es ist noch eine nicht commitete Datei / Änderung vorhanden"
+- Found: LESSONS-LEARNED-CONTRACTS-REPO.md had 1 uncommitted line (blank line added by formatter)
+- **Impact:** Incomplete state, risk of losing changes, inconsistent branch
+
+**Why This Happens:**
+
+- Formatters run after `git add` but before `git commit`
+- Multiple tools touching files (editor, linter, prettier)
+- Human forgets to check `git status` after completing work
+- Assumption that "everything is committed" without verification
+
+**Solution:**
+
+**Always run this checklist at the end of each work session:**
+
+```bash
+# 1. Check for uncommitted changes
+git status
+
+# 2. Check for unstaged changes
+git diff
+
+# 3. Check for staged but uncommitted changes
+git diff --cached
+
+# 4. Verify branch is synchronized with remote
+git status -sb  # Shows ahead/behind status
+
+# 5. List untracked files
+git ls-files --others --exclude-standard
+```
+
+**Pre-Push Checklist:**
+
+```bash
+#!/bin/bash
+# .github/scripts/pre-push-checklist.sh
+
+echo "🔍 Pre-Push Git State Verification"
+echo ""
+
+# Check for uncommitted changes
+if ! git diff-index --quiet HEAD --; then
+  echo "❌ ERROR: Uncommitted changes detected!"
+  echo ""
+  echo "Changed files:"
+  git diff-index --name-only HEAD
+  echo ""
+  echo "Run: git status"
+  exit 1
+fi
+
+# Check for untracked files
+untracked=$(git ls-files --others --exclude-standard)
+if [ -n "$untracked" ]; then
+  echo "⚠️  WARNING: Untracked files detected!"
+  echo ""
+  echo "$untracked"
+  echo ""
+  echo "Are these intentional? Consider .gitignore or git add"
+fi
+
+# Check if branch is ahead/behind remote
+git fetch origin -q
+LOCAL=$(git rev-parse @)
+REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
+BASE=$(git merge-base @ @{u} 2>/dev/null || echo "")
+
+if [ -z "$REMOTE" ]; then
+  echo "⚠️  No remote tracking branch set"
+elif [ "$LOCAL" = "$REMOTE" ]; then
+  echo "✅ Branch synchronized with remote"
+elif [ "$LOCAL" = "$BASE" ]; then
+  echo "⚠️  Remote has changes (need to pull)"
+elif [ "$REMOTE" = "$BASE" ]; then
+  echo "📤 Local commits not pushed (need to push)"
+else
+  echo "⚠️  Branches have diverged"
+fi
+
+echo ""
+echo "✅ Git state verification complete"
+```
+
+**Integration Points:**
+
+1. **Pre-commit Hook:**
+
+   ```bash
+   # .git/hooks/pre-commit
+   # Runs automatically before each commit
+   git diff --check  # Check for whitespace errors
+   ```
+
+2. **Pre-push Hook:**
+
+   ```bash
+   # .git/hooks/pre-push
+   # Runs automatically before each push
+   .github/scripts/pre-push-checklist.sh
+   ```
+
+3. **Manual Workflow:**
+
+   ```bash
+   # Add to your shell alias
+   alias gits='git status && echo "" && echo "Ahead/Behind:" && git status -sb'
+   ```
+
+4. **CI/CD Verification:**
+   ```yaml
+   # In GitHub Actions - verify working directory is clean
+   - name: Verify no uncommitted changes
+     run: |
+       if ! git diff-index --quiet HEAD --; then
+         echo "ERROR: Workflow created uncommitted changes!"
+         git status
+         git diff
+         exit 1
+       fi
+   ```
+
+**Best Practices:**
+
+1. **After Each Logical Step:**
+   - ✅ `git status` → Check state
+   - ✅ `git add -A` → Stage all changes (or selective)
+   - ✅ `git commit -S -m "..."` → Commit with message
+   - ✅ `git status` → Verify clean state
+   - ✅ `git push` → Push to remote
+
+2. **Before Switching Tasks:**
+   - ✅ Commit or stash all work-in-progress
+   - ✅ Verify clean working directory
+   - ✅ Push to remote for backup
+
+3. **After Automated Tool Runs:**
+   - ✅ Check if formatter/linter modified files
+   - ✅ Review changes with `git diff`
+   - ✅ Commit formatting changes separately
+
+4. **End of Work Session:**
+   - ✅ Run full checklist (see above)
+   - ✅ Push all commits
+   - ✅ Verify GitHub shows latest commit
+
+**Warning Signs:**
+
+🚨 **"Everything is committed"** without checking `git status`
+🚨 **Formatting on save** without verifying changes
+🚨 **Switching branches** with dirty working directory
+🚨 **Closing terminal** without pushing commits
+
+**Action for Future Work:**
+
+- Create `.github/scripts/pre-push-checklist.sh`
+- Document in CONTRIBUTING.md
+- Add to developer onboarding
+- Consider Git hooks for automation
+- Add CI check for clean working directory after workflow runs
+
+**Benefits:**
+
+✅ **No Lost Work:** All changes committed and pushed
+✅ **Clean State:** Working directory always clean
+✅ **Traceability:** Every change properly committed
+✅ **Team Sync:** Remote always up-to-date
+✅ **CI/CD Reliability:** No mysterious "works locally" issues
+
+**Related Lessons:**
+
+- Lesson #16 (Review Comment Discipline) - Both about thoroughness
+- Similar pattern: Check everything, not just what you think changed
+
+```
+
 **Action for Future:**
 
 - Add "Review ALL comments" to pre-merge checklist
@@ -1079,3 +1333,4 @@ Before merging ANY PR:
 **Document Version:** 1.7
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
+```
