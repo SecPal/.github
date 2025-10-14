@@ -1,0 +1,79 @@
+name: Reusable Dependency Review
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+on:
+  workflow_call:
+    inputs:
+      skip-dependabot-workflow-only:
+        description: "Skip dependency review for Dependabot workflow-only changes"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Optional: Dependabot workflow-only skip logic
+      - name: Check if GitHub Actions only changes
+        if: inputs.skip-dependabot-workflow-only && github.actor == 'dependabot[bot]'
+        id: check-files
+        run: |
+          files=$(gh pr view ${{ github.event.pull_request.number }} --json files -q '.files[].path')
+          all_workflows=true
+          while IFS= read -r file; do
+            if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+              all_workflows=false
+              break
+            fi
+          done <<< "$files"
+          echo "all_workflows=$all_workflows" >> $GITHUB_OUTPUT
+
+          if [ "$all_workflows" = "true" ]; then
+            echo "✅ Dependabot PR only affects workflows - skipping dependency review"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Shared license policy loading
+      - name: Load license policy
+        if: |
+          !inputs.skip-dependabot-workflow-only ||
+          steps.check-files.outputs.all_workflows != 'true' ||
+          github.actor != 'dependabot[bot]'
+        id: policy
+        run: |
+          if [ ! -f .license-policy.json ]; then
+            echo "❌ Error: .license-policy.json not found!" >&2
+            echo "Create this file to define allowed/denied licenses." >&2
+            exit 1
+          fi
+
+          DENIED=$(jq -r '.deniedLicenses | join(", ")' .license-policy.json)
+          if [ -z "$DENIED" ] || [ "$DENIED" = "null" ]; then
+            echo "❌ Error: deniedLicenses is empty or missing in .license-policy.json!" >&2
+            echo "Define at least one denied license." >&2
+            exit 1
+          fi
+
+          echo "denied=$DENIED" >> $GITHUB_OUTPUT
+          echo "✅ Loaded denied licenses: $DENIED"
+
+      # Shared dependency review
+      - name: Dependency Review
+        if: |
+          !inputs.skip-dependabot-workflow-only ||
+          steps.check-files.outputs.all_workflows != 'true' ||
+          github.actor != 'dependabot[bot]'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          deny-licenses: ${{ steps.policy.outputs.denied }}

@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable License Check
+
+on:
+  workflow_call:
+
+jobs:
+  check-licenses:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install jq
+        run: |
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+
+      - name: Run license check
+        run: |
+          if [ -x scripts/check-licenses.sh ]; then
+            ./scripts/check-licenses.sh
+          else
+            echo "❌ Error: scripts/check-licenses.sh not found or not executable!" >&2
+            echo "Sync scripts from .github templates:" >&2
+            echo "  curl -o scripts/check-licenses.sh https://raw.githubusercontent.com/SecPal/.github/main/.github/templates/scripts/check-licenses.sh" >&2
+            echo "  chmod +x scripts/check-licenses.sh" >&2
+            exit 1
+          fi
