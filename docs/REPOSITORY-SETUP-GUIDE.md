@@ -389,15 +389,17 @@ gh pr view <pr-number> --comments
 # Verify:
 # - Zero unresolved comments, OR
 # - All comments documented as addressed/wontfix
+# - This includes "low confidence" suggestions!
 
 # If comments exist:
-# 1. Read each comment carefully
+# 1. Read EVERY comment carefully (including low-confidence)
 # 2. Fix issues in new commits
 # 3. Push fixes
 # 4. Re-check: gh pr view <pr-number> --comments
 # 5. THEN merge
 
 # Never merge with unreviewed comments!
+# No exceptions - not even for "low confidence" comments!
 ```
 
 **Why this matters:**
@@ -405,6 +407,8 @@ gh pr view <pr-number> --comments
 - Copilot catches real bugs (escaped markdown, wrong paths, etc.)
 - CI passing ≠ Code is correct
 - Unreviewed comments = Technical debt
+- **"Low confidence" ≠ "Ignore"** - all suggestions must be reviewed
+- **High standards always** - no shortcuts, no exceptions
 - This is **Lesson #16**: Review Comment Discipline
 
 **Example from PR #18 incident:**

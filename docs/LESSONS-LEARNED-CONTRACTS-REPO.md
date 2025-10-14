@@ -1383,9 +1383,11 @@ gh pr view <pr-number> --comments
 
 1. **CI ≠ Quality:** Tests pass, but code can still have issues
 2. **Copilot Catches Real Bugs:** Not just style suggestions
-3. **Time Economics:** Fixing now < Fixing later + embarrassment
-4. **Professional Standards:** Public repos reflect on the team
-5. **Trust:** Users rely on documentation being correct
+3. **"Low Confidence" ≠ "Ignore":** Even suppressed comments must be reviewed
+4. **Time Economics:** Fixing now < Fixing later + embarrassment
+5. **Professional Standards:** Public repos reflect on the team
+6. **High Standards Always:** No shortcuts, no exceptions, no compromises
+7. **Trust:** Users rely on documentation being correct
 
 **Prevention Strategy:**
 
@@ -1425,16 +1427,20 @@ gh pr view <pr-number> --comments
 >
 > It's embarrassing if someone sees this!"
 
+> "Low confidence comments must also be addressed. We have high standards. Always!"
+
 **The Fix (PR #19):**
 
-- Fixed all 8 Copilot comments
+- Fixed all 8 Copilot comments from PR #18
+- Addressed 2 low-confidence comments in PR description (improved Markdown formatting)
 - Added REUSE check to pre-commit hook
 - Added Lesson #16 enforcement to REPOSITORY-SETUP-GUIDE.md
 - Added this meta-lesson to LESSONS-LEARNED
+- **Key Point:** Even "low confidence" comments were reviewed and fixed - no exceptions!
 
 **Key Takeaway:**
 
-**Process compliance is not optional.** Even when documenting how to follow processes, you must follow those processes. No exceptions. No shortcuts. Review ALL comments before merge.
+**Process compliance is not optional.** Even when documenting how to follow processes, you must follow those processes. No exceptions. No shortcuts. Review **ALL** comments before merge - including "low confidence" suggestions. High standards always.
 
 ---
 
