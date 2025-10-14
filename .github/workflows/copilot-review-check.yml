@@ -31,8 +31,8 @@ jobs:
           # Get all reviews
           reviews=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
 
-          # Check if Copilot has reviewed
-          copilot_review=$(echo "$reviews" | jq '[.[] | select(.user.login == "copilot-pull-request-reviewer")] | length')
+          # Check if Copilot has reviewed (matches both "copilot-pull-request-reviewer" and "copilot-pull-request-reviewer[bot]")
+          copilot_review=$(echo "$reviews" | jq '[.[] | select(.user.login | startswith("copilot-pull-request-reviewer"))] | length')
 
           if [ "$copilot_review" -eq 0 ]; then
             echo "status=no-review" >> $GITHUB_OUTPUT
