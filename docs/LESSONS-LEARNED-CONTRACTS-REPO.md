@@ -18,6 +18,7 @@ This document captures all issues encountered and solutions implemented during t
 **Format:** `Lesson #X (Descriptive Name)`
 
 All lessons use the hybrid naming convention (Option C):
+
 - **Number** (`#X`) provides unique ID and traceability
 - **Descriptive Name** provides meaning and searchability
 - **Always use both** in code comments and documentation
