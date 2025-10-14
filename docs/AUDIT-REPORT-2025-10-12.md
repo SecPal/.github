@@ -5,6 +5,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Comprehensive Code Audit Report
 
+<!-- NOTE: Date is hardcoded in filename and content for archival purposes.
+     For future audits, consider using a template or script to generate reports
+     with consistent date formatting (YYYY-MM-DD). -->
+
 **Date:** 2025-10-12
 **Scope:** All code and all 32 merged PRs across `.github` and `contracts` repositories
 **Purpose:** Systematic review with focus on Lessons #15 (Configuration Centralization) and #16 (Review Comment Discipline)

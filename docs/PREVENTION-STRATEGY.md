@@ -568,6 +568,9 @@ jobs:
           echo "🔍 Starting weekly cross-repo audit..."
           echo "Date: $(date -I)"
           echo ""
+          echo "ℹ️  Note: This audit uses local git operations to minimize API calls"
+          echo "   and avoid GitHub API rate limits."
+          echo ""
 
           # List of all SecPal repos
           repos=("contracts" ".github" "api" "frontend")

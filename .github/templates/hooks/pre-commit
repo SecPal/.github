@@ -31,8 +31,10 @@ echo "✅ No whitespace errors"
 echo ""
 
 # 2. Run Prettier formatting check (if package.json has format:check script)
-if [ -f "package.json" ] && grep -q '"format:check"' package.json; then
-  echo "🎨 Checking code formatting (Prettier)..."
+# Only run if relevant files are staged
+STAGED_FORMAT_FILES=$(git diff --cached --name-only | grep -E '\.(js|ts|json|jsx|tsx|md|yml|yaml)$|^package\.json$|^package-lock\.json$' || true)
+if [ -f "package.json" ] && grep -q '"format:check"' package.json && [ -n "$STAGED_FORMAT_FILES" ]; then
+  echo "🎨 Checking code formatting (Prettier) on staged files..."
   if ! npm run format:check --silent; then
     echo ""
     echo "❌ Code formatting check failed!"
