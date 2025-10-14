@@ -1238,22 +1238,39 @@ echo "✅ Git state verification complete"
    git diff --check  # Check for whitespace errors
    ```
 
-2. **Pre-push Hook:**
+2. **Post-Commit Check Script:**
 
    ```bash
-   # .git/hooks/pre-push
-   # Runs automatically before each push
-   .github/scripts/pre-push-checklist.sh
+   # Run after EVERY commit
+   ./scripts/post-commit-check.sh
+
+   # Checks:
+   # - No uncommitted changes
+   # - No untracked files
+   # - No unstaged changes
+   # - Branch sync status
    ```
 
-3. **Manual Workflow:**
+3. **Pre-Work Check Script:**
+
+   ```bash
+   # Run BEFORE starting new work
+   ./scripts/pre-work-check.sh
+
+   # Ensures:
+   # - Clean working directory
+   # - Main branch up-to-date
+   # - No merge conflicts from stale base
+   ```
+
+4. **Manual Workflow:**
 
    ```bash
    # Add to your shell alias
    alias gits='git status && echo "" && echo "Ahead/Behind:" && git status -sb'
    ```
 
-4. **CI/CD Verification:**
+5. **CI/CD Verification:**
    ```yaml
    # In GitHub Actions - verify working directory is clean
    - name: Verify no uncommitted changes
@@ -1297,13 +1314,12 @@ echo "✅ Git state verification complete"
 🚨 **Switching branches** with dirty working directory
 🚨 **Closing terminal** without pushing commits
 
-**Action for Future Work:**
+**Automated Scripts (Implemented):**
 
-- Create `.github/scripts/pre-push-checklist.sh`
-- Document in CONTRIBUTING.md
-- Add to developer onboarding
-- Consider Git hooks for automation
-- Add CI check for clean working directory after workflow runs
+- ✅ `.github/scripts/post-commit-check.sh` - Run after every commit
+- ✅ `.github/scripts/pre-work-check.sh` - Run before starting new work
+- ✅ Pre-commit hook - Automatic formatting/REUSE checks
+- 📋 TODO: Consider post-commit Git hook that runs script automatically
 
 **Benefits:**
 
@@ -1318,7 +1334,131 @@ echo "✅ Git state verification complete"
 - Lesson #16 (Review Comment Discipline) - Both about thoroughness
 - Similar pattern: Check everything, not just what you think changed
 
+---
+
+## 🚨 Meta-Lessons (Lessons About Following Lessons)
+
+### Lesson #16 Meta: Copilot Comments MUST Be Reviewed Before Merge
+
+**Also Known As:** PR Review Comment Enforcement, No-Exceptions Review Policy
+**Origin:** 2025-10-14 - PR #18 merged with 8 unreviewed Copilot comments
+**Category:** Process Violation, Quality Assurance
+
+**The Incident (PR #18):**
+
+- **PR Title:** "docs: add repository setup guides for future repos"
+- **Purpose:** Document how to enforce Lesson #17 in all repos
+- **Irony:** PR documents lessons while violating Lesson #16!
+- **What Happened:**
+  1. Created comprehensive guides (930+ lines)
+  2. REUSE CI failed (CC0-1.0 license missing)
+  3. Fixed REUSE, all 7 CI checks passed ✅
+  4. Merged immediately without checking comments ❌
+  5. User challenged: "Und Du hast doch wieder nicht die Comments geprüft, oder?"
+  6. Found: **8 unreviewed Copilot comments!**
+
+**The 8 Comments:**
+
+1-7. **Escaped Backticks (7 locations):** Markdown code blocks had `\`\`\`bash`instead of `` ```bash ``
+8. **Placeholder Path:**`/path/to/.github`should use`curl`command
+9. **chmod Position:**`chmod +x` inside EOF block instead of outside
+
+**Impact:**
+
+- 🐛 **Real Bugs:** Copy-paste from docs would fail
+- ⏰ **Time Waste:** Additional PR required to fix
+- 😳 **Embarrassment:** Public violation of documented lesson
+- 🔄 **Cycle:** More time spent fixing than if reviewed initially
+
+**Root Cause:**
+
+- ✅ CI passed → Assumed everything is fine
+- 🤖 Copilot comments seen as "optional suggestions"
+- ⚡ Speed prioritized over thoroughness
+- 📋 No checklist enforcing comment review
+
+**The Rule (NO EXCEPTIONS):**
+
+```bash
+# BEFORE every merge, MANDATORY:
+gh pr view <pr-number> --comments
+
+# Requirements:
+# - Zero unresolved comments, OR
+# - All comments documented with justification
+
+# If ANY comments exist:
+# 1. Read EVERY comment
+# 2. Fix issues OR document why ignored
+# 3. Push fixes
+# 4. Re-verify: gh pr view <pr-number> --comments
+# 5. ONLY THEN merge
 ```
+
+**Why This Is Non-Negotiable:**
+
+1. **CI ≠ Quality:** Tests pass, but code can still have issues
+2. **Copilot Catches Real Bugs:** Not just style suggestions
+3. **"Low Confidence" ≠ "Ignore":** Even suppressed comments must be reviewed
+4. **Time Economics:** Fixing now < Fixing later + embarrassment
+5. **Professional Standards:** Public repos reflect on the team
+6. **High Standards Always:** No shortcuts, no exceptions, no compromises
+7. **Trust:** Users rely on documentation being correct
+
+**Prevention Strategy:**
+
+1. **Pre-Merge Checklist:**
+
+   ```markdown
+   - [ ] All CI checks pass
+   - [ ] `gh pr view <n> --comments` shows 0 unresolved
+   - [ ] All comments addressed OR documented as wontfix
+   - [ ] Final review of changes
+   - [ ] THEN merge
+   ```
+
+2. **Workflow Automation (Future):**
+
+   ```yaml
+   # GitHub Action to block merge if unresolved comments exist
+   - name: Check for unresolved comments
+     run: |
+       COMMENTS=$(gh pr view ${{ github.event.pull_request.number }} --json comments --jq '.comments | length')
+       if [ "$COMMENTS" -gt 0 ]; then
+         echo "❌ Unresolved comments exist!"
+         exit 1
+       fi
+   ```
+
+3. **Repository Setup Guide:**
+   - Added Section 7: "PR Review Process (Lesson #16 Enforcement)"
+   - Explicit example from PR #18 incident
+   - Clear workflow to follow
+
+**User Feedback (Translated):**
+
+> "Copilot comments on PRs MUST be reviewed and properly addressed before EVERY merge, without exception!
+>
+> I don't want to waste valuable time checking and fixing later!
+>
+> It's embarrassing if someone sees this!"
+
+> "Low confidence comments must also be addressed. We have high standards. Always!"
+
+**The Fix (PR #19):**
+
+- Fixed all 8 Copilot comments from PR #18
+- Addressed 2 low-confidence comments in PR description (improved Markdown formatting)
+- Added REUSE check to pre-commit hook
+- Added Lesson #16 enforcement to REPOSITORY-SETUP-GUIDE.md
+- Added this meta-lesson to LESSONS-LEARNED
+- **Key Point:** Even "low confidence" comments were reviewed and fixed - no exceptions!
+
+**Key Takeaway:**
+
+**Process compliance is not optional.** Even when documenting how to follow processes, you must follow those processes. No exceptions. No shortcuts. Review **ALL** comments before merge - including "low confidence" suggestions. High standards always.
+
+---
 
 **Action for Future:**
 
@@ -1330,7 +1470,6 @@ echo "✅ Git state verification complete"
 
 ---
 
-**Document Version:** 1.7
-**Last Updated:** 2025-10-12
+**Document Version:** 1.8
+**Last Updated:** 2025-10-14
 **Author:** GitHub Copilot (AI Assistant) with human guidance
-```

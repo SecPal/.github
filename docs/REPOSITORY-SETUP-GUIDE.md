@@ -79,7 +79,14 @@ ls -lah .git/hooks/pre-commit
 
 - ✅ Prevents whitespace errors
 - ✅ Enforces code formatting (Prettier)
+- ✅ Verifies REUSE compliance (if reuse installed)
 - ✅ Catches unstaged changes (Lesson #17)
+
+**Install REUSE tool (recommended):**
+
+```bash
+pip install reuse
+```
 
 **See:** [Pre-Commit Hook Installation Guide](../.github/templates/hooks/INSTALLATION.md)
 
@@ -371,7 +378,49 @@ jobs:
 
 ---
 
-### 7. Branch Protection Rules
+### 7. PR Review Process (Lesson #16 Enforcement)
+
+**CRITICAL: Review ALL Copilot comments before merge!**
+
+```bash
+# BEFORE merging any PR, ALWAYS check comments:
+gh pr view <pr-number> --comments
+
+# Verify:
+# - Zero unresolved comments, OR
+# - All comments documented as addressed/wontfix
+# - This includes "low confidence" suggestions!
+
+# If comments exist:
+# 1. Read EVERY comment carefully (including low-confidence)
+# 2. Fix issues in new commits
+# 3. Push fixes
+# 4. Re-check: gh pr view <pr-number> --comments
+# 5. THEN merge
+
+# Never merge with unreviewed comments!
+# No exceptions - not even for "low confidence" comments!
+```
+
+**Why this matters:**
+
+- Copilot catches real bugs (escaped markdown, wrong paths, etc.)
+- CI passing ≠ Code is correct
+- Unreviewed comments = Technical debt
+- **"Low confidence" ≠ "Ignore"** - all suggestions must be reviewed
+- **High standards always** - no shortcuts, no exceptions
+- This is **Lesson #16**: Review Comment Discipline
+
+**Example from PR #18 incident:**
+
+- ❌ Merged with 8 unreviewed comments
+- 🐛 Found: Escaped backticks (7x), placeholder path, wrong chmod position
+- ⏰ Cost: Additional PR + time to fix
+- 😳 Embarrassment: Public violation of documented lesson
+
+---
+
+### 8. Branch Protection Rules
 
 ```bash
 # Set up branch protection for main
@@ -430,7 +479,7 @@ Or use the GitHub UI:
 
 ### 9. README.md Template
 
-```markdown
+````markdown
 <!--
 SPDX-FileCopyrightText: 2025 SecPal Contributors
 SPDX-License-Identifier: AGPL-3.0-or-later
@@ -448,15 +497,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## Installation
 
-\`\`\`bash
+```bash
 npm install
-\`\`\`
+```
+````
 
 ## Usage
 
-\`\`\`bash
+```bash
 npm run dev
-\`\`\`
+```
 
 ## Development
 
@@ -467,43 +517,34 @@ npm run dev
 
 ### Setup
 
-\`\`\`bash
-
+```bash
 # Clone repository
-
 git clone https://github.com/SecPal/<repo-name>.git
 cd <repo-name>
 
 # Install dependencies
-
 npm install
 
 # Install pre-commit hook (important!)
-
-cp /path/to/.github/.github/templates/hooks/pre-commit .git/hooks/pre-commit
+curl -o .git/hooks/pre-commit https://raw.githubusercontent.com/SecPal/.github/main/.github/templates/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
-\`\`\`
+```
 
 ### Code Quality
 
-\`\`\`bash
-
+```bash
 # Format code
-
 npm run format
 
 # Check formatting
-
 npm run format:check
 
 # Run tests
-
 npm test
 
 # Check license compatibility
-
 bash scripts/check-licenses.sh
-\`\`\`
+```
 
 ## Contributing
 
@@ -520,7 +561,8 @@ For comprehensive guidelines, audit findings, and lessons learned:
 - [Lessons Learned](https://github.com/SecPal/.github/blob/main/docs/LESSONS-LEARNED-CONTRACTS-REPO.md)
 - [Audit Report](https://github.com/SecPal/.github/blob/main/docs/AUDIT-REPORT-2025-10-12.md)
 - [Prevention Strategy](https://github.com/SecPal/.github/blob/main/docs/PREVENTION-STRATEGY.md)
-```
+
+````
 
 ---
 
@@ -534,7 +576,7 @@ npm install --save-dev @types/react @types/react-dom
 
 # Vite config
 npm create vite@latest . -- --template react-ts
-```
+````
 
 ### For Laravel Projects
 
@@ -621,9 +663,13 @@ git push origin main
 
 ## Changelog
 
-| Date       | Change                         | Author |
-| ---------- | ------------------------------ | ------ |
-| 2025-10-14 | Initial repository setup guide | Agent  |
+| Date       | Change                           | Author |
+| ---------- | -------------------------------- | ------ |
+| 2025-10-14 | Initial repository setup guide   | Agent  |
+| 2025-10-14 | Fixed escaped backticks (PR #18) | Agent  |
+| 2025-10-14 | Fixed placeholder path (PR #18)  | Agent  |
+| 2025-10-14 | Added Lesson #16 enforcement     | Agent  |
+| 2025-10-14 | Added REUSE to pre-commit hook   | Agent  |
 
 ---
 
