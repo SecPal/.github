@@ -38,8 +38,17 @@ jobs:
             echo "status=no-review" >> $GITHUB_OUTPUT
             echo "⚠️  No Copilot review found"
           else
-            echo "status=reviewed" >> $GITHUB_OUTPUT
-            echo "✅ Copilot review found"
+            # Check for low confidence comments in the most recent review
+            latest_review=$(echo "$reviews" | jq '[.[] | select(.user.login | startswith("copilot-pull-request-reviewer"))] | sort_by(.submitted_at) | last')
+            low_confidence=$(echo "$latest_review" | jq -r '.body' | grep -i "low confidence" || echo "")
+
+            if [ -n "$low_confidence" ]; then
+              echo "status=low-confidence" >> $GITHUB_OUTPUT
+              echo "⚠️  Copilot review found but with LOW CONFIDENCE - manual review required"
+            else
+              echo "status=reviewed" >> $GITHUB_OUTPUT
+              echo "✅ Copilot review found with normal confidence"
+            fi
           fi
 
       - name: Count open Copilot comments
@@ -78,9 +87,29 @@ jobs:
             echo "This PR requires a Copilot code review before merging."
             echo ""
             echo "To request a review:"
-            echo "  1. Comment '@copilot review' on the PR"
+            echo "  1. Go to the PR on GitHub web interface"
+            echo "  2. Comment '@copilot review' on the PR"
             echo ""
             echo "Wait ~60 seconds for the review to complete, then re-run this check."
+            echo ""
+            exit 1
+          fi
+
+          if [ "$REVIEW_STATUS" = "low-confidence" ]; then
+            echo "⚠️  BLOCKED: Copilot review has LOW CONFIDENCE"
+            echo ""
+            echo "Copilot suppressed comments due to low confidence in its analysis."
+            echo "This usually means:"
+            echo "  - The changes are too complex for automated review"
+            echo "  - Context is missing or unclear"
+            echo "  - Manual human review is strongly recommended"
+            echo ""
+            echo "Actions required:"
+            echo "  1. Review the suppressed comments in the Copilot review"
+            echo "  2. Address any legitimate concerns"
+            echo "  3. Request a new review after making changes"
+            echo "  4. If changes are minor/docs-only, you can override by adding"
+            echo "     '~~LOW-CONFIDENCE-ACCEPTED~~' to the PR description"
             echo ""
             exit 1
           fi
