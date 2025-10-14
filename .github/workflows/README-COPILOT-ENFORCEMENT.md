@@ -107,9 +107,9 @@ gh pr list --state all --json number,reviews,statusCheckRollup \
 
 ## Related
 
-- [Lesson #16: Review Comment Discipline](../../docs/LESSONS-LEARNED-CONTRACTS-REPO.md#lesson-16)
-- [PR Structure Guidelines](../../docs/PR-STRUCTURE-GUIDELINES.md)
-- [Copilot Review Process](../../docs/COPILOT-REVIEW-PROCESS.md) _(to be created)_
+- [Lesson #16: Review Comment Discipline](../docs/LESSONS-LEARNED-CONTRACTS-REPO.md#lesson-16)
+- [PR Structure Guidelines](../docs/PR-STRUCTURE-GUIDELINES.md)
+- [Copilot Review Process](../docs/COPILOT-REVIEW-PROCESS.md) _(to be created)_
 
 ## Maintenance
 

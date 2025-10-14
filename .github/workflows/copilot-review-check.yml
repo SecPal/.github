@@ -96,22 +96,29 @@ jobs:
           fi
 
           if [ "$REVIEW_STATUS" = "low-confidence" ]; then
-            echo "⚠️  BLOCKED: Copilot review has LOW CONFIDENCE"
-            echo ""
-            echo "Copilot suppressed comments due to low confidence in its analysis."
-            echo "This usually means:"
-            echo "  - The changes are too complex for automated review"
-            echo "  - Context is missing or unclear"
-            echo "  - Manual human review is strongly recommended"
-            echo ""
-            echo "Actions required:"
-            echo "  1. Review the suppressed comments in the Copilot review"
-            echo "  2. Address any legitimate concerns"
-            echo "  3. Request a new review after making changes"
-            echo "  4. If changes are minor/docs-only, you can override by adding"
-            echo "     '~~LOW-CONFIDENCE-ACCEPTED~~' to the PR description"
-            echo ""
-            exit 1
+            # Check if PR description contains override flag
+            pr_body=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} --jq '.body')
+            if echo "$pr_body" | grep -q "~~LOW-CONFIDENCE-ACCEPTED~~"; then
+              echo "⚠️  Low confidence detected but override flag found"
+              echo "✅ Proceeding with merge (~~LOW-CONFIDENCE-ACCEPTED~~ in PR description)"
+            else
+              echo "⚠️  BLOCKED: Copilot review has LOW CONFIDENCE"
+              echo ""
+              echo "Copilot suppressed comments due to low confidence in its analysis."
+              echo "This usually means:"
+              echo "  - The changes are too complex for automated review"
+              echo "  - Context is missing or unclear"
+              echo "  - Manual human review is strongly recommended"
+              echo ""
+              echo "Actions required:"
+              echo "  1. Review the suppressed comments in the Copilot review"
+              echo "  2. Address any legitimate concerns"
+              echo "  3. Request a new review after making changes"
+              echo "  4. If changes are minor/docs-only, you can override by adding"
+              echo "     '~~LOW-CONFIDENCE-ACCEPTED~~' to the PR description"
+              echo ""
+              exit 1
+            fi
           fi
 
           if [ "$OPEN_COMMENTS" -gt 0 ]; then
