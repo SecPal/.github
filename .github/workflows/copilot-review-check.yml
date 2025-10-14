@@ -63,9 +63,9 @@ jobs:
           comments=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments)
 
           # Count comments that:
-          # - Are from Copilot
+          # - Are from Copilot (review comments use "Copilot", reviews use "copilot-pull-request-reviewer[bot]")
           # - Don't start with ~~RESOLVED~~
-          open_comments=$(echo "$comments" | jq '[.[] | select(.user.login == "Copilot" and (.body | startswith("~~RESOLVED~~") | not))] | length')
+          open_comments=$(echo "$comments" | jq '[.[] | select((.user.login == "Copilot" or (.user.login | startswith("copilot-pull-request-reviewer"))) and (.body | startswith("~~RESOLVED~~") | not))] | length')
 
           echo "open_count=$open_comments" >> $GITHUB_OUTPUT
           echo "Found $open_comments unresolved Copilot comment(s)"
