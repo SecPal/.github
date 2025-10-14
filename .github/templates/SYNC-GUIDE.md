@@ -52,7 +52,7 @@ jobs:
 EOF
 
 git add .github/workflows/dependency-review.yml
-git commit -S -m "refactor: use reusable dependency-review workflow"
+git commit -m "refactor: use reusable dependency-review workflow"
 git push
 ```
 
@@ -87,7 +87,7 @@ git push
 3. **Commit & Push:**
    ```bash
    git add scripts/
-   git commit -S -m "chore: sync scripts from .github templates"
+   git commit -m "chore: sync scripts from .github templates"
    git push
    ```
 
