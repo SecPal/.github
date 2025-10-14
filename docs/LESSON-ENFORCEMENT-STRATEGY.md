@@ -276,6 +276,10 @@ jobs:
             | grep -v "steps.policy.outputs" \
             | grep -v "# Lesson #15: Allowed" || true)
 
+          # NOTE: This grep-based approach works but could be more robust with yq:
+          #   yq 'select(has("deny-licenses") or has("allow-licenses"))' workflow.yml
+          # Consider migration if YAML parsing becomes unreliable.
+
           if [ -n "$violations" ]; then
             echo "❌ LESSON #15 VIOLATION DETECTED"
             echo ""
