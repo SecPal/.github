@@ -425,12 +425,12 @@ Define **"standard workflow set"** for all SecPal repos:
 
 ### Issues by Type
 
-| Type                         | Count |
-| ---------------------------- | ----- |
-| Configuration (Lesson #15 - Configuration Centralization)   | 1     |
-| Review Comments (Lesson #16 - Review Comment Discipline) | 3     |
-| Error Handling               | 1     |
-| Consistency                  | 3     |
+| Type                                                      | Count |
+| --------------------------------------------------------- | ----- |
+| Configuration (Lesson #15 - Configuration Centralization) | 1     |
+| Review Comments (Lesson #16 - Review Comment Discipline)  | 3     |
+| Error Handling                                            | 1     |
+| Consistency                                               | 3     |
 
 ### Issues by Lesson
 

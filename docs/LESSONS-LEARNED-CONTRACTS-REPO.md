@@ -1108,6 +1108,7 @@ After completing a work session or task, uncommitted changes can remain:
 **Real Example (2025-10-14):**
 
 During Lesson Naming Convention implementation:
+
 - Modified 7 documentation files
 - Committed changes with `git commit -m "..."`
 - User noticed: "Es ist noch eine nicht commitete Datei / Änderung vorhanden"
@@ -1197,6 +1198,7 @@ echo "✅ Git state verification complete"
 **Integration Points:**
 
 1. **Pre-commit Hook:**
+
    ```bash
    # .git/hooks/pre-commit
    # Runs automatically before each commit
@@ -1204,6 +1206,7 @@ echo "✅ Git state verification complete"
    ```
 
 2. **Pre-push Hook:**
+
    ```bash
    # .git/hooks/pre-push
    # Runs automatically before each push
@@ -1211,6 +1214,7 @@ echo "✅ Git state verification complete"
    ```
 
 3. **Manual Workflow:**
+
    ```bash
    # Add to your shell alias
    alias gits='git status && echo "" && echo "Ahead/Behind:" && git status -sb'
@@ -1296,3 +1300,4 @@ echo "✅ Git state verification complete"
 **Document Version:** 1.7
 **Last Updated:** 2025-10-12
 **Author:** GitHub Copilot (AI Assistant) with human guidance
+```
