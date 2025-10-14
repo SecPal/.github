@@ -614,9 +614,42 @@ npm audit --production
 
 - Include `check` and `ci` scripts in package.json template
 - Document pre-commit workflow in README
-- Consider adding git pre-commit hooks (optional)
+- **Install pre-commit hook from template** (automated enforcement)
 - Update .github repo templates with these scripts
 - Add `.license-policy.json` for reusable license validation
+
+### Pre-Commit Hook (Automated Enforcement)
+
+**Implementation:** [.github/templates/hooks/pre-commit](../.github/templates/hooks/pre-commit)
+
+A pre-commit git hook enforces Lesson #17 automatically before every commit.
+
+**Installation:**
+
+```bash
+# From repository root
+cp .github/templates/hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+**What it checks:**
+
+1. **Whitespace errors** - Trailing spaces, wrong line endings
+2. **Code formatting** - Runs `npm run format:check` (Prettier)
+3. **Unstaged changes** - Catches formatter changes after `git add`
+
+**Why it matters:**
+
+- Prevents the exact violation that occurred on 2025-10-14
+- Created Lesson #17, then immediately violated it (didn't check formatting)
+- CI failed, had to fix and push again
+- Hook would have blocked the bad commit locally
+
+**Usage:**
+
+The hook runs automatically. If checks fail, commit is blocked with clear instructions.
+
+**See also:** [Hook Template README](../.github/templates/hooks/README.md)
 
 ---
 
