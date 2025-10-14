@@ -22,12 +22,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Optional: Dependabot workflow-only skip logic
+      # Optional: Dependabot workflow-only skip logic - Set flag
+      - name: Determine if should skip dependency review
+        id: should-skip
+        run: |
+          should_skip="false"
+          if [[ "${{ inputs.skip-dependabot-workflow-only }}" == "true" && "${{ github.actor }}" == "dependabot[bot]" && -n "${{ github.event.pull_request.number }}" ]]; then
+            should_skip="true"
+          fi
+          echo "should_skip=$should_skip" >> $GITHUB_OUTPUT
+          echo "Should skip dependency review: $should_skip"
+
       - name: Check if GitHub Actions only changes
-        if: inputs.skip-dependabot-workflow-only && github.actor == 'dependabot[bot]' && github.event.pull_request.number != ''
+        if: steps.should-skip.outputs.should_skip == 'true'
         id: check-files
         run: |
-          files=$(gh pr view ${{ github.event.pull_request.number }} --json files -q '.files[].path')
+          files=$(gh pr view "$PR_NUMBER" --json files -q '.files[].path')
           all_workflows=true
           while IFS= read -r file; do
             if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
@@ -42,13 +52,11 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
 
       # Shared license policy loading
       - name: Load license policy
-        if: |
-          !inputs.skip-dependabot-workflow-only ||
-          steps.check-files.outputs.all_workflows != 'true' ||
-          github.actor != 'dependabot[bot]'
+        if: steps.should-skip.outputs.should_skip != 'true' || steps.check-files.outputs.all_workflows != 'true'
         id: policy
         run: |
           if [ ! -f .license-policy.json ]; then
@@ -69,10 +77,7 @@ jobs:
 
       # Shared dependency review
       - name: Dependency Review
-        if: |
-          !inputs.skip-dependabot-workflow-only ||
-          steps.check-files.outputs.all_workflows != 'true' ||
-          github.actor != 'dependabot[bot]'
+        if: steps.should-skip.outputs.should_skip != 'true' || steps.check-files.outputs.all_workflows != 'true'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: moderate
