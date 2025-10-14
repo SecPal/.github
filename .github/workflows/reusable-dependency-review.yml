@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Reusable Dependency Review
+
+on:
+  workflow_call:
+    inputs:
+      skip-dependabot-workflow-only:
+        description: "Skip dependency review for Dependabot workflow-only changes"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Determine if dependency review should run
+      - name: Determine if should run dependency review
+        id: should-run
+        run: |
+          should_run="true"
+
+          # Check if skip logic is enabled
+          if [[ "${{ inputs.skip-dependabot-workflow-only }}" == "true" ]]; then
+            # Check if this is a Dependabot PR with PR number
+            if [[ "${{ github.actor }}" == "dependabot[bot]" && -n "${{ github.event.pull_request.number }}" ]]; then
+              echo "🤖 Dependabot PR detected, checking if only workflows changed..."
+
+              # Get PR files with error handling (gh CLI is pre-installed on GitHub runners)
+              if ! files=$(gh pr view "$PR_NUMBER" --json files -q '.files[].path' 2>gh_error.log); then
+                echo "⚠️  Failed to get PR files with gh CLI. Possible causes:"
+                echo "   - Missing 'pull-requests: read' permission"
+                echo "   - Network issues or GitHub API outage"
+                echo "   - Invalid PR number or PR not found"
+                echo "gh CLI error output:"
+                cat gh_error.log
+                echo "Running dependency review as fallback"
+                should_run="true"
+                echo "should_run=$should_run" >> $GITHUB_OUTPUT
+                echo "Final decision: should_run=$should_run"
+                exit 0
+              fi
+
+              # Check if files list is empty
+              if [ -z "$files" ]; then
+                echo "⚠️  No files found in PR - running dependency review"
+                should_run="true"
+                echo "should_run=$should_run" >> $GITHUB_OUTPUT
+                echo "Final decision: should_run=$should_run"
+                exit 0
+              fi
+
+              # Check if only .github/workflows/ files changed
+              all_workflows=true
+              while IFS= read -r file; do
+                if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+                  all_workflows=false
+                  break
+                fi
+              done <<< "$files"
+
+              if [ "$all_workflows" = "true" ]; then
+                should_run="false"
+                echo "✅ Only workflow files changed - skipping dependency review"
+              else
+                echo "📝 Non-workflow files changed - running dependency review"
+              fi
+            fi
+          fi
+
+          echo "should_run=$should_run" >> $GITHUB_OUTPUT
+          echo "Final decision: should_run=$should_run"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      # Shared license policy loading
+      - name: Load license policy
+        if: steps.should-run.outputs.should_run == 'true'
+        id: policy
+        run: |
+          if [ ! -f .license-policy.json ]; then
+            echo "❌ Error: .license-policy.json not found!" >&2
+            echo "Create this file to define allowed/denied licenses." >&2
+            exit 1
+          fi
+
+          DENIED=$(jq -r '.deniedLicenses | join(", ")' .license-policy.json)
+          if [ -z "$DENIED" ] || [ "$DENIED" = "null" ]; then
+            echo "❌ Error: deniedLicenses is empty or missing in .license-policy.json!" >&2
+            echo "Define at least one denied license." >&2
+            exit 1
+          fi
+
+          echo "denied=$DENIED" >> $GITHUB_OUTPUT
+          echo "✅ Loaded denied licenses: $DENIED"
+
+      # Shared dependency review
+      - name: Dependency Review
+        if: steps.should-run.outputs.should_run == 'true'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          deny-licenses: ${{ steps.policy.outputs.denied }}
