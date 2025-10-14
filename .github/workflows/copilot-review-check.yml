@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Copilot Review Enforcement
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+jobs:
+  check-copilot-review:
+    name: Verify Copilot Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      checks: write
+
+    steps:
+      - name: Check for Copilot review
+        id: check-review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "🤖 Checking for Copilot review on PR #$PR_NUMBER..."
+
+          # Get all reviews
+          reviews=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
+
+          # Check if Copilot has reviewed
+          copilot_review=$(echo "$reviews" | jq '[.[] | select(.user.login == "copilot-pull-request-reviewer")] | length')
+
+          if [ "$copilot_review" -eq 0 ]; then
+            echo "status=no-review" >> $GITHUB_OUTPUT
+            echo "⚠️  No Copilot review found"
+          else
+            echo "status=reviewed" >> $GITHUB_OUTPUT
+            echo "✅ Copilot review found"
+          fi
+
+      - name: Count open Copilot comments
+        id: count-comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "📊 Counting unresolved Copilot comments..."
+
+          # Get all PR review comments from Copilot
+          comments=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments)
+
+          # Count comments that:
+          # - Are from Copilot
+          # - Don't start with ~~RESOLVED~~
+          open_comments=$(echo "$comments" | jq '[.[] | select(.user.login == "Copilot" and (.body | startswith("~~RESOLVED~~") | not))] | length')
+
+          echo "open_count=$open_comments" >> $GITHUB_OUTPUT
+          echo "Found $open_comments unresolved Copilot comment(s)"
+
+      - name: Enforce Copilot review requirement
+        env:
+          REVIEW_STATUS: ${{ steps.check-review.outputs.status }}
+          OPEN_COMMENTS: ${{ steps.count-comments.outputs.open_count }}
+        run: |
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 Copilot Review Status"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+
+          if [ "$REVIEW_STATUS" = "no-review" ]; then
+            echo "❌ BLOCKED: No Copilot review found"
+            echo ""
+            echo "This PR requires a Copilot code review before merging."
+            echo ""
+            echo "To request a review:"
+            echo "  1. Comment '@copilot review' on the PR, OR"
+            echo "  2. Use GitHub CLI: gh api -X POST repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f event='COMMENT' -f body='@copilot review'"
+            echo ""
+            echo "Wait ~60 seconds for the review to complete, then re-run this check."
+            echo ""
+            exit 1
+          fi
+
+          if [ "$OPEN_COMMENTS" -gt 0 ]; then
+            echo "❌ BLOCKED: $OPEN_COMMENTS unresolved Copilot comment(s)"
+            echo ""
+            echo "All Copilot review comments must be addressed before merging."
+            echo ""
+            echo "To resolve comments:"
+            echo "  1. Fix the issues in your code"
+            echo "  2. Push your changes"
+            echo "  3. Request a new Copilot review to verify fixes"
+            echo ""
+            echo "If a comment is outdated or incorrect:"
+            echo "  - Edit the comment body to start with '~~RESOLVED~~'"
+            echo "  - Add explanation why it was resolved manually"
+            echo ""
+            echo "View comments: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}/files"
+            echo ""
+            exit 1
+          fi
+
+          echo "✅ PASSED: Copilot review complete with 0 open comments"
+          echo ""
+          echo "PR is ready for merge! 🎉"
+          echo ""
