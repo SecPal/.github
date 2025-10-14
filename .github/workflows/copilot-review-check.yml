@@ -50,7 +50,8 @@ jobs:
               echo "⚠️  Copilot review is OUTDATED (reviewed ${reviewed_commit:0:7}, current HEAD is ${HEAD_SHA:0:7})"
             else
               # Check for low confidence in the review body
-              low_confidence=$(echo "$latest_review" | jq -r '.body' | grep -i "low confidence" || echo "")
+              # Using 'grep || true' to ensure command always succeeds (even with set -e)
+              low_confidence=$(echo "$latest_review" | jq -r '.body' | grep -i "low confidence" || true)
 
               if [ -n "$low_confidence" ]; then
                 echo "status=low-confidence" >> $GITHUB_OUTPUT
@@ -123,10 +124,13 @@ jobs:
 
           if [ "$REVIEW_STATUS" = "low-confidence" ]; then
             # Check if PR description contains override flag
+            # Override pattern: ~~LOW-CONFIDENCE-ACCEPTED~~ (similar to ~~RESOLVED~~ for comments)
+            # Use case: Documentation-only changes or minor refactorings where low confidence is acceptable
             pr_body=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} --jq '.body')
-            if echo "$pr_body" | grep -q "~~LOW-CONFIDENCE-ACCEPTED~~"; then
+            LOW_CONFIDENCE_OVERRIDE="~~LOW-CONFIDENCE-ACCEPTED~~"
+            if echo "$pr_body" | grep -q "$LOW_CONFIDENCE_OVERRIDE"; then
               echo "⚠️  Low confidence detected but override flag found"
-              echo "✅ Proceeding with merge (~~LOW-CONFIDENCE-ACCEPTED~~ in PR description)"
+              echo "✅ Proceeding with merge ($LOW_CONFIDENCE_OVERRIDE in PR description)"
             else
               echo "⚠️  BLOCKED: Copilot review has LOW CONFIDENCE"
               echo ""
@@ -141,7 +145,7 @@ jobs:
               echo "  2. Address any legitimate concerns"
               echo "  3. Request a new review after making changes"
               echo "  4. If changes are minor/docs-only, you can override by adding"
-              echo "     '~~LOW-CONFIDENCE-ACCEPTED~~' to the PR description"
+              echo "     '$LOW_CONFIDENCE_OVERRIDE' to the PR description"
               echo ""
               exit 1
             fi
