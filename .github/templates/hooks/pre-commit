@@ -31,9 +31,27 @@ echo "✅ No whitespace errors"
 echo ""
 
 # 2. Run Prettier formatting check (if package.json has format:check script)
-# Only run if relevant files are staged
-STAGED_FORMAT_FILES=$(git diff --cached --name-only | grep -E '\.(js|ts|json|jsx|tsx|md|yml|yaml)$|^package\.json$|^package-lock\.json$' || true)
-if [ -f "package.json" ] && grep -q '"format:check"' package.json && [ -n "$STAGED_FORMAT_FILES" ]; then
+# Only run if relevant files are staged (performance optimization)
+FORMAT_FILE_PATTERN='\.(js|ts|json|jsx|tsx|md|yml|yaml)$|^package\.json$|^package-lock\.json$'
+STAGED_FORMAT_FILES=$(git diff --cached --name-only | grep -E "$FORMAT_FILE_PATTERN" || true)
+
+# Break complex condition into readable checks
+HAS_PACKAGE_JSON=false
+HAS_FORMAT_CHECK=false
+HAS_STAGED_FORMAT_FILES=false
+
+if [ -f "package.json" ]; then
+  HAS_PACKAGE_JSON=true
+  if grep -q '"format:check"' package.json 2>/dev/null; then
+    HAS_FORMAT_CHECK=true
+  fi
+fi
+
+if [ -n "$STAGED_FORMAT_FILES" ]; then
+  HAS_STAGED_FORMAT_FILES=true
+fi
+
+if [ "$HAS_PACKAGE_JSON" = true ] && [ "$HAS_FORMAT_CHECK" = true ] && [ "$HAS_STAGED_FORMAT_FILES" = true ]; then
   echo "🎨 Checking code formatting (Prettier) on staged files..."
   if ! npm run format:check --silent; then
     echo ""
