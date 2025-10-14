@@ -1238,22 +1238,39 @@ echo "✅ Git state verification complete"
    git diff --check  # Check for whitespace errors
    ```
 
-2. **Pre-push Hook:**
+2. **Post-Commit Check Script:**
 
    ```bash
-   # .git/hooks/pre-push
-   # Runs automatically before each push
-   .github/scripts/pre-push-checklist.sh
+   # Run after EVERY commit
+   ./scripts/post-commit-check.sh
+
+   # Checks:
+   # - No uncommitted changes
+   # - No untracked files
+   # - No unstaged changes
+   # - Branch sync status
    ```
 
-3. **Manual Workflow:**
+3. **Pre-Work Check Script:**
+
+   ```bash
+   # Run BEFORE starting new work
+   ./scripts/pre-work-check.sh
+
+   # Ensures:
+   # - Clean working directory
+   # - Main branch up-to-date
+   # - No merge conflicts from stale base
+   ```
+
+4. **Manual Workflow:**
 
    ```bash
    # Add to your shell alias
    alias gits='git status && echo "" && echo "Ahead/Behind:" && git status -sb'
    ```
 
-4. **CI/CD Verification:**
+5. **CI/CD Verification:**
    ```yaml
    # In GitHub Actions - verify working directory is clean
    - name: Verify no uncommitted changes
@@ -1297,13 +1314,12 @@ echo "✅ Git state verification complete"
 🚨 **Switching branches** with dirty working directory
 🚨 **Closing terminal** without pushing commits
 
-**Action for Future Work:**
+**Automated Scripts (Implemented):**
 
-- Create `.github/scripts/pre-push-checklist.sh`
-- Document in CONTRIBUTING.md
-- Add to developer onboarding
-- Consider Git hooks for automation
-- Add CI check for clean working directory after workflow runs
+- ✅ `.github/scripts/post-commit-check.sh` - Run after every commit
+- ✅ `.github/scripts/pre-work-check.sh` - Run before starting new work
+- ✅ Pre-commit hook - Automatic formatting/REUSE checks
+- 📋 TODO: Consider post-commit Git hook that runs script automatically
 
 **Benefits:**
 
