@@ -156,7 +156,7 @@ jobs:
           branch="sync/scripts-$(date +%s)"
           git checkout -b "$branch"
           git add scripts/
-          git commit -S -m "chore: sync shared scripts from .github templates
+          git commit -m "chore: sync shared scripts from .github templates
 
 Automated sync from SecPal/.github templates.
 

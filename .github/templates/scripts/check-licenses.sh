@@ -36,4 +36,30 @@ if [ -z "$ALLOWED" ]; then
   exit 1
 fi
 
-npx license-checker --production --onlyAllow "$ALLOWED" --summary
+# Check for package.json
+if [ ! -f package.json ]; then
+  echo "Error: No package.json found in the current directory. Please run this script from the root of your Node.js project." >&2
+  exit 1
+fi
+
+# Check for node_modules
+if [ ! -d node_modules ]; then
+  echo "Error: No node_modules directory found. Please run 'npm install' before checking licenses." >&2
+  exit 1
+fi
+
+# Run license-checker and handle errors
+OUTPUT=$(npx license-checker --production --onlyAllow "$ALLOWED" --summary 2>&1)
+STATUS=$?
+if [ $STATUS -ne 0 ]; then
+  echo "Error: license-checker failed."
+  echo "$OUTPUT"
+  echo ""
+  echo "Common reasons for failure:"
+  echo "  - One or more dependencies have licenses not listed in allowedLicenses."
+  echo "  - The project is misconfigured (e.g., missing package.json or node_modules)."
+  echo "  - license-checker is not installed or not working as expected."
+  exit $STATUS
+fi
+
+echo "$OUTPUT"

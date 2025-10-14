@@ -1,6 +1,6 @@
-name: Reusable Dependency Review
 # SPDX-FileCopyrightText: 2025 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
+name: Reusable Dependency Review
 
 on:
   workflow_call:
@@ -24,7 +24,7 @@ jobs:
 
       # Optional: Dependabot workflow-only skip logic
       - name: Check if GitHub Actions only changes
-        if: inputs.skip-dependabot-workflow-only && github.actor == 'dependabot[bot]'
+        if: inputs.skip-dependabot-workflow-only && github.actor == 'dependabot[bot]' && github.event.pull_request.number != ''
         id: check-files
         run: |
           files=$(gh pr view ${{ github.event.pull_request.number }} --json files -q '.files[].path')
