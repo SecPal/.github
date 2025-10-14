@@ -42,7 +42,7 @@ HAS_STAGED_FORMAT_FILES=false
 
 if [ -f "package.json" ]; then
   HAS_PACKAGE_JSON=true
-  if grep -q '"format:check"' package.json 2>/dev/null; then
+  if grep -q '"format:check"[[:space:]]*:' package.json 2>/dev/null; then
     HAS_FORMAT_CHECK=true
   fi
 fi
