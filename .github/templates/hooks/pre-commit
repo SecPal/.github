@@ -9,8 +9,9 @@
 #   chmod +x .git/hooks/pre-commit
 #
 # This hook enforces Lesson #17 (Git State Verification) by:
-# - Checking code formatting (Prettier)
 # - Detecting whitespace errors
+# - Checking code formatting (Prettier)
+# - Verifying REUSE compliance
 # - Catching formatter-induced changes after git add
 
 set -e
@@ -48,7 +49,32 @@ if [ -f "package.json" ] && grep -q '"format:check"' package.json; then
   echo ""
 fi
 
-# 3. Check for unstaged changes (formatter detection)
+# 3. Check REUSE compliance (if reuse tool is installed)
+if command -v reuse &> /dev/null; then
+  echo "📋 Checking REUSE compliance..."
+  if ! reuse lint > /dev/null 2>&1; then
+    echo ""
+    echo "❌ REUSE compliance check failed!"
+    echo ""
+    echo "Run this to see details:"
+    echo "  reuse lint"
+    echo ""
+    echo "Common fixes:"
+    echo "  - Add SPDX headers to new files"
+    echo "  - Download missing licenses: reuse download <license>"
+    echo "  - Check REUSE.toml annotations"
+    echo ""
+    exit 1
+  fi
+  echo "✅ REUSE compliant"
+  echo ""
+else
+  echo "⚠️  REUSE tool not installed - skipping compliance check"
+  echo "   Install: pip install reuse"
+  echo ""
+fi
+
+# 4. Check for unstaged changes (formatter detection)
 echo "🔎 Checking for unstaged changes (formatter detection)..."
 if ! git diff --quiet; then
   echo ""

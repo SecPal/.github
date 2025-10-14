@@ -63,7 +63,14 @@ rm test.txt
 - Ensures all files match Prettier configuration
 - Blocks commit if formatting would change files
 
-### Check 3: Unstaged Changes
+### Check 3: REUSE Compliance
+
+- **NEW!** Runs `reuse lint` if tool is installed
+- Catches missing SPDX headers early (< 8 sec total)
+- Prevents CI failures like the CC0-1.0 issue
+- Optional: Install with `pip install reuse`
+
+### Check 4: Unstaged Changes
 
 - **The critical check for Lesson #17!**
 - Detects if formatters ran after `git add`
@@ -216,6 +223,16 @@ chmod +x .git/hooks/pre-commit
 # Install Node.js or skip formatting check by commenting out that section
 ```
 
+### "reuse: command not found"?
+
+```bash
+# REUSE tool is optional but recommended
+# Install with:
+pip install reuse
+
+# Or skip REUSE check (will still run in CI)
+```
+
 ### Hook blocks valid commit?
 
 ```bash
@@ -223,6 +240,7 @@ chmod +x .git/hooks/pre-commit
 git status        # Unstaged changes?
 git diff          # What changed?
 npm run format    # Fix formatting
+reuse lint        # Check REUSE compliance
 git add -A        # Stage fixes
 git commit        # Try again
 ```
@@ -296,6 +314,7 @@ rm test.txt
 | 2025-10-14 | Created installation guide       | Agent  |
 | 2025-10-14 | Added Laravel/PHP support notes  | Agent  |
 | 2025-10-14 | Added Python/Go adaptation notes | Agent  |
+| 2025-10-14 | Added REUSE compliance check     | Agent  |
 
 ---
 
