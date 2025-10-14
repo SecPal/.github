@@ -25,51 +25,46 @@ jobs:
       # Determine if dependency review should run
       - name: Determine if should run dependency review
         id: should-run
+        if: ${{ inputs.skip-dependabot-workflow-only == true }}
         run: |
           should_run="true"
 
-          # Check if skip logic is enabled
-          if [[ "${{ inputs.skip-dependabot-workflow-only }}" == "true" ]]; then
-            # Check if this is a Dependabot PR
-            if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
-              # Check if PR number is available
-              if [[ -n "${{ github.event.pull_request.number }}" ]]; then
-                echo "🤖 Dependabot PR detected, checking if only workflows changed..."
+          # Check if this is a Dependabot PR with PR number
+          if [[ "${{ github.actor }}" == "dependabot[bot]" && -n "${{ github.event.pull_request.number }}" ]]; then
+            echo "🤖 Dependabot PR detected, checking if only workflows changed..."
 
-                # Get PR files with error handling
-                if ! files=$(gh pr view "$PR_NUMBER" --json files -q '.files[].path' 2>/dev/null); then
-                  echo "⚠️  Failed to get PR files - running dependency review as fallback"
-                  should_run="true"
-                  echo "should_run=$should_run" >> $GITHUB_OUTPUT
-                  echo "Final decision: should_run=$should_run"
-                  exit 0
-                fi
+            # Get PR files with error handling (gh CLI is pre-installed on GitHub runners)
+            if ! files=$(gh pr view "$PR_NUMBER" --json files -q '.files[].path' 2>/dev/null); then
+              echo "⚠️  Failed to get PR files - running dependency review as fallback"
+              should_run="true"
+              echo "should_run=$should_run" >> $GITHUB_OUTPUT
+              echo "Final decision: should_run=$should_run"
+              exit 0
+            fi
 
-                # Check if files list is empty
-                if [ -z "$files" ]; then
-                  echo "⚠️  No files found in PR - running dependency review"
-                  should_run="true"
-                  echo "should_run=$should_run" >> $GITHUB_OUTPUT
-                  echo "Final decision: should_run=$should_run"
-                  exit 0
-                fi
+            # Check if files list is empty
+            if [ -z "$files" ]; then
+              echo "⚠️  No files found in PR - running dependency review"
+              should_run="true"
+              echo "should_run=$should_run" >> $GITHUB_OUTPUT
+              echo "Final decision: should_run=$should_run"
+              exit 0
+            fi
 
-                # Check if only .github/workflows/ files changed
-                all_workflows=true
-                while IFS= read -r file; do
-                  if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
-                    all_workflows=false
-                    break
-                  fi
-                done <<< "$files"
-
-                if [ "$all_workflows" = "true" ]; then
-                  should_run="false"
-                  echo "✅ Only workflow files changed - skipping dependency review"
-                else
-                  echo "📝 Non-workflow files changed - running dependency review"
-                fi
+            # Check if only .github/workflows/ files changed
+            all_workflows=true
+            while IFS= read -r file; do
+              if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+                all_workflows=false
+                break
               fi
+            done <<< "$files"
+
+            if [ "$all_workflows" = "true" ]; then
+              should_run="false"
+              echo "✅ Only workflow files changed - skipping dependency review"
+            else
+              echo "📝 Non-workflow files changed - running dependency review"
             fi
           fi
 

@@ -16,7 +16,7 @@ echo ""
 
 # 1. Check for uncommitted changes
 echo "📝 Checking for uncommitted changes..."
-if ! git diff-index --quiet HEAD --; then
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
   echo ""
   echo "❌ UNCOMMITTED CHANGES DETECTED!"
   echo ""

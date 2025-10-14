@@ -23,12 +23,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install jq
-        run: |
-          if ! command -v jq &> /dev/null; then
-            sudo apt-get update && sudo apt-get install -y jq
-          fi
-
       - name: Run license check
         run: |
           if [ -x scripts/check-licenses.sh ]; then

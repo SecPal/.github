@@ -44,7 +44,7 @@ git fetch origin main --quiet
 if [ "$CURRENT_BRANCH" != "main" ]; then
   echo "  Current branch: $CURRENT_BRANCH"
   echo "  Switching to main..."
-  git checkout main --quiet
+  git checkout -B main origin/main --quiet
 fi
 
 # Check if main needs update

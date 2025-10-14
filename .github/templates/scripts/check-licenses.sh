@@ -48,15 +48,20 @@ if [ ! -d node_modules ]; then
   exit 1
 fi
 
-# Check if license-checker is installed and resolve absolute path for security
+# Check if license-checker is installed
 if [ ! -x node_modules/.bin/license-checker ]; then
   echo "Error: license-checker not found in node_modules/.bin/" >&2
   echo "Please install it: npm install --save-dev license-checker" >&2
   exit 1
 fi
 
-# Resolve absolute path to license-checker for security
-LICENSE_CHECKER_BIN="$(realpath node_modules/.bin/license-checker)"
+# Resolve absolute path for security (portable: readlink -f with fallback to pwd)
+if command -v readlink >/dev/null 2>&1 && readlink -f node_modules/.bin/license-checker >/dev/null 2>&1; then
+  LICENSE_CHECKER_BIN="$(readlink -f node_modules/.bin/license-checker)"
+else
+  # Fallback for systems without readlink -f (e.g., macOS)
+  LICENSE_CHECKER_BIN="$(pwd)/node_modules/.bin/license-checker"
+fi
 
 # Run license-checker and handle errors (use local installation for security)
 OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --summary 2>&1)
