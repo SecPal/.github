@@ -90,7 +90,7 @@ Comprehensive audit report including:
 
 **Key Findings:**
 
-- 2 repos with Lesson #15 violations ✅ Fixed
+- 2 repos with Lesson #15 (Configuration Centralization) violations ✅ Fixed
 - 3 PRs with unaddressed review comments (Lesson #16)
 - 11 total PRs requiring systematic review
 - Multiple version/policy inconsistencies
@@ -266,7 +266,7 @@ Three decisions needed:
 ### Lessons Reinforced
 
 - ✅ **Lesson #15:** Now enforced by dynamic config loading
-- ✅ **Lesson #16:** Documented violations, prevention strategy ready
+- ✅ **Lesson #16 (Review Comment Discipline):** Documented violations, prevention strategy ready
 - 📝 **Lesson #17:** Framework for systematic audits (to be formalized)
 
 ---

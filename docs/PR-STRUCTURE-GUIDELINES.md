@@ -375,7 +375,7 @@ Before creating PR, ask:
 **What We Did (Single PR):**
 
 ```
-PR #17: Audit 2025-10-12 - Lesson #15 Compliance + Documentation
+PR #17: Audit 2025-10-12 - Lesson #15 (Configuration Centralization) Compliance + Documentation
 
 Changes:
 - .github/workflows/dependency-review.yml (dynamic loading)
@@ -406,7 +406,7 @@ PR #19: docs: audit report and prevention strategy
 #### Option B: Separate by Urgency
 
 ```
-PR #17 (URGENT): fix: critical Lesson #15 violations
+PR #17 (URGENT): fix: critical Lesson #15 (Configuration Centralization) violations
   - dependency-review.yml
   - check-licenses.sh
   - Tag: needs-immediate-merge
@@ -423,7 +423,7 @@ PR #17: Audit 2025-10-12 Results - Fixes + Documentation
 
 Description organized by concern:
 
-## 1. Critical Fix: Lesson #15 Compliance
+## 1. Critical Fix: Lesson #15 (Configuration Centralization) Compliance
 - .github/workflows/dependency-review.yml
 - Rationale: Hardcoded config violates lesson
 
@@ -667,7 +667,7 @@ Depends on: PR #A (needs correct policy file to test)
 ```
 Title: fix: implement dynamic config loading in workflow
 Files: .github/workflows/dependency-review.yml
-Why: Lesson #15 enforcement
+Why: Lesson #15 (Configuration Centralization) enforcement
 Depends on: PR #A (needs correct policy format)
 ```
 
@@ -760,7 +760,7 @@ Does separating improve review quality?
 
 ## Related Documents
 
-- **Lesson #16:** Review Comment Discipline
+- **Lesson #16 (Review Comment Discipline):** Review Comment Discipline
 - **CONTRIBUTING.md:** General contribution guidelines
 - **CODE_REVIEW_GUIDE.md:** Detailed review practices
 

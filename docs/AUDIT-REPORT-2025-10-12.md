@@ -18,8 +18,8 @@ A comprehensive audit of the SecPal codebase revealed **multiple critical violat
 
 ### Key Findings
 
-- **🚨 CRITICAL:** 2 repositories with Lesson #15 violations (hardcoded configuration)
-- **🚨 CRITICAL:** 3 PRs with unaddressed review comments (Lesson #16 violations)
+- **🚨 CRITICAL:** 2 repositories with Lesson #15 (Configuration Centralization) violations
+- **🚨 CRITICAL:** 3 PRs with unaddressed review comments (Lesson #16 - Review Comment Discipline violations)
 - **⚠️ HIGH:** 11 total PRs with review comments requiring systematic review
 - **⚠️ HIGH:** Missing error handling in scripts (despite review comments)
 - **⚠️ MEDIUM:** Action version inconsistencies between repositories
@@ -31,11 +31,11 @@ A comprehensive audit of the SecPal codebase revealed **multiple critical violat
 
 ## 🚨 Critical Findings
 
-### 1. Lesson #15 Violation: Hardcoded Deny-Licenses
+### 1. Lesson #15 (Configuration Centralization) Violation: Hardcoded Deny-Licenses
 
 **Severity:** CRITICAL
 **Status:** ✅ FIXED (2025-10-12)
-**Lesson Violated:** #15 - Configuration Centralization
+**Lesson Violated:** #15 (Configuration Centralization)
 
 #### Problem
 
@@ -55,7 +55,7 @@ deny-licenses: GPL-2.0, LGPL-2.0, LGPL-2.1, AGPL-1.0
 
 #### Impact
 
-- Direct contradiction of Lesson #15 principles
+- Direct contradiction of Lesson #15 (Configuration Centralization) principles
 - Three different license lists across the codebase:
   - `.github/.license-policy.json`: `[GPL-2.0, LGPL-2.0, LGPL-2.1, AGPL-1.0]`
   - `.github/dependency-review.yml`: `[LGPL-2.0, LGPL-2.1, GPL-2.0, SSPL-1.0]` (includes SSPL-1.0!)
@@ -100,7 +100,7 @@ Updated both `dependency-review.yml` files to dynamically read from `.license-po
 
 ---
 
-### 2. Lesson #16 Violation: Unaddressed Review Comments in PR #14 (contracts)
+### 2. Lesson #16 (Review Comment Discipline) Violation: Unaddressed Review Comments in PR #14 (contracts)
 
 **Severity:** CRITICAL
 **Status:** ✅ FIXED (2025-10-12)
@@ -120,17 +120,17 @@ Updated both `dependency-review.yml` files to dynamically read from `.license-po
 
 #### Impact
 
-- Second violation of Lesson #16 (first was `.github` PR #14, which led to creation of Lesson #16)
+- Second violation of Lesson #16 (Review Comment Discipline) (first was `.github` PR #14, which led to creation of Lesson #16 (Review Comment Discipline))
 - Inconsistent SPDX identifiers in production
-- PR #14 was supposed to implement Lesson #15 but violated Lesson #16 in the process
+- PR #14 was supposed to implement Lesson #15 (Configuration Centralization) but violated Lesson #16 (Review Comment Discipline) in the process
 - Pattern of ignoring bot review comments despite documented importance
 
 #### Historical Context
 
 This is **particularly serious** because:
 
-1. Lesson #16 was created specifically to prevent this (after `.github` PR #14)
-2. `contracts` PR #14 was merged **after** Lesson #16 was documented
+1. Lesson #16 (Review Comment Discipline) was created specifically to prevent this (after `.github` PR #14)
+2. `contracts` PR #14 was merged **after** Lesson #16 (Review Comment Discipline) was documented
 3. Shows pattern isn't being followed even after explicit documentation
 
 #### Resolution
@@ -242,7 +242,7 @@ Out of 32 total merged PRs, **11 PRs (34%) received Copilot review comments**:
 - PR #9: 2 comments
 - PR #11: 1 comment (error handling - ADDRESSED above)
 - PR #12: 2 comments
-- **PR #14: 2 comments (DOCUMENTED as Lesson #16 failure, later fixed in PR #15)**
+- **PR #14: 2 comments (DOCUMENTED as Lesson #16 (Review Comment Discipline) failure, later fixed in PR #15)**
 
 **contracts Repository:**
 
@@ -427,8 +427,8 @@ Define **"standard workflow set"** for all SecPal repos:
 
 | Type                         | Count |
 | ---------------------------- | ----- |
-| Configuration (Lesson #15)   | 1     |
-| Review Comments (Lesson #16) | 3     |
+| Configuration (Lesson #15 - Configuration Centralization)   | 1     |
+| Review Comments (Lesson #16 - Review Comment Discipline) | 3     |
 | Error Handling               | 1     |
 | Consistency                  | 3     |
 
@@ -450,7 +450,7 @@ This audit was conducted using the following systematic approach:
 
 1. Listed all workflow files in both repositories
 2. Read and analyzed each workflow for:
-   - Hardcoded configuration values (Lesson #15)
+   - Hardcoded configuration values (Lesson #15 - Configuration Centralization)
    - Consistency between repos
    - Security best practices
    - Error handling
@@ -472,7 +472,7 @@ This audit was conducted using the following systematic approach:
 ### Phase 4: Script Audit
 
 1. Reviewed shell scripts for error handling
-2. Verified Lesson #15 compliance (config usage)
+2. Verified Lesson #15 (Configuration Centralization) compliance (config usage)
 3. Cross-referenced with review comments
 4. Tested edge cases (missing files, malformed JSON)
 
@@ -496,11 +496,11 @@ This audit was conducted using the following systematic approach:
 
 ### Short Term (Next 1-2 Weeks)
 
-- [ ] Systematically review all 11 PRs with comments for Lesson #16 compliance
+- [ ] Systematically review all 11 PRs with comments for Lesson #16 (Review Comment Discipline) compliance
 - [ ] Decide on license policy differences (WTFPL, GPL-3.0, SSPL-1.0)
 - [ ] Decide on Node.js action version standardization (v4 vs v5)
 - [ ] Create LICENSE-POLICY-DECISIONS.md document
-- [ ] Update Lesson #16 documentation with contracts PR #14 case
+- [ ] Update Lesson #16 (Review Comment Discipline) documentation with contracts PR #14 case
 - [ ] Create Lesson #17 - Systematic Code Audits (see companion doc)
 
 ### Medium Term (Next 1-2 Months)
@@ -525,8 +525,8 @@ This audit was conducted using the following systematic approach:
 ### Meta-Lesson: The Audit Itself Reveals Process Gaps
 
 1. **Even with documented lessons, violations occur**
-   - Having Lesson #15 didn't prevent hardcoded licenses
-   - Having Lesson #16 didn't prevent PR #14 (contracts) violations
+   - Having Lesson #15 (Configuration Centralization) didn't prevent hardcoded licenses
+   - Having Lesson #16 (Review Comment Discipline) didn't prevent PR #14 (contracts) violations
    - **Insight:** Documentation alone is insufficient
 
 2. **Review comments are systematically undervalued**
@@ -557,7 +557,7 @@ See companion document: `LESSON-17-SYSTEMATIC-AUDITS.md`
 
 - **Lessons Learned:** `docs/LESSONS-LEARNED-CONTRACTS-REPO.md`
   - Lesson #15: Configuration Centralization (Line 872)
-  - Lesson #16: Review Comment Discipline (Line 1011)
+  - Lesson #16 (Review Comment Discipline): Review Comment Discipline (Line 1011)
 - **Prevention Strategy:** `docs/PREVENTION-STRATEGY.md` (companion to this report)
 - **Lesson #17:** `docs/LESSON-17-SYSTEMATIC-AUDITS.md` (to be created)
 

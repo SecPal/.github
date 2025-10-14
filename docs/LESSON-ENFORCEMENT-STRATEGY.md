@@ -267,7 +267,7 @@ jobs:
       - uses: actions/checkout@v5
 
       # Lesson #15: Configuration Centralization
-      - name: Check Lesson #15 Compliance
+      - name: Check Lesson #15 (Configuration Centralization) Compliance
         run: |
           echo "🔍 Checking Lesson #15 (Configuration Centralization)..."
 
@@ -287,7 +287,7 @@ jobs:
 
           echo "✅ Lesson #15: Compliant"
 
-      # Lesson #16: Review Comment Discipline
+      # Lesson #16 (Review Comment Discipline): Review Comment Discipline
       # (Implemented via GitHub Action above)
 
       # Lesson #17: DRY Compliance
@@ -423,7 +423,7 @@ deny[msg] {
   )
 }
 
-# Lesson #16: Require resolved comments
+# Lesson #16 (Review Comment Discipline): Require resolved comments
 deny[msg] {
   input.pr.unresolved_comment_count > 0
 
@@ -486,7 +486,7 @@ Need help? Ask in [Discussions](https://github.com/SecPal/.github/discussions)
   - [ ] Review example: `.github` PR #17
   - [ ] Try exercise: Convert hardcoded config in test repo
 
-- [ ] Lesson #16: Review Comment Discipline
+- [ ] Lesson #16 (Review Comment Discipline): Review Comment Discipline
   - [ ] Read documentation
   - [ ] Understand bot comments = human comments
   - [ ] Try exercise: Practice resolving conversations

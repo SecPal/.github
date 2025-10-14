@@ -6,8 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 # Lesson Naming Convention
 
 **Date:** 2025-10-12
-**Status:** PROPOSAL - Needs Decision
+**Status:** ✅ APPROVED - Option C (Hybrid) - Implemented 2025-10-14
 **Context:** User feedback on PR# based numbering not being intuitive
+**Decision:** Use format `Lesson #X (Descriptive Name)` in all references
 
 ---
 
@@ -16,7 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 Current lessons are numbered sequentially based on PR order:
 
 - Lesson #15: Configuration Centralization (from `.github` PR #13)
-- Lesson #16: Review Comment Discipline (from `.github` PR #14)
+- Lesson #16 (Review Comment Discipline): Review Comment Discipline (from `.github` PR #14)
 
 **User Concern:**
 
@@ -52,7 +53,7 @@ Current lessons are numbered sequentially based on PR order:
 
 ```
 Lesson #15: Configuration Centralization
-Lesson #16: Review Comment Discipline
+Lesson #16 (Review Comment Discipline): Review Comment Discipline
 Lesson #17: Systematic Code Audits
 ```
 
@@ -391,7 +392,7 @@ deny-licenses: ${{ steps.policy.outputs.denied }}
 ```
 docs/LESSONS-LEARNED-CONTRACTS-REPO.md:
   - Lesson #15: Configuration Centralization (Line 872)
-  - Lesson #16: Review Comment Discipline (Line 1011)
+  - Lesson #16 (Review Comment Discipline): Review Comment Discipline (Line 1011)
 ```
 
 ### After Migration
@@ -454,21 +455,18 @@ Lesson #23 [Config]: Script Centralization
 
 ---
 
-## Decision Required
+## ✅ Decision: Option C (Hybrid) - APPROVED
 
-**Please decide:**
+**Decided:** 2025-10-14
+**User Confirmation:** "Ich denke auch, dass Option C die beste Wahl sein wird."
 
-1. ✅ **Option C (Hybrid)** - Number + Name always together
-2. ⬜ **Option B (Pure Names)** - No numbers, just descriptive names
-3. ⬜ **Option D (Semantic)** - Category-based namespacing
-4. ⬜ **Other** - Propose alternative system
+**Implementation Status:**
 
-**Once decided:**
-
-- Update LESSONS-LEARNED.md with convention
-- Add to CONTRIBUTING.md
-- Update all existing references in codebase
-- Add to PR template
+- [x] Update LESSON-NAMING-CONVENTION.md status to APPROVED
+- [x] Update LESSONS-LEARNED.md with convention
+- [x] Update all existing references in codebase
+- [x] Add to CONTRIBUTING.md
+- [x] Add to PR template
 
 ---
 

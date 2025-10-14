@@ -27,7 +27,7 @@ This document provides a **comprehensive, scalable prevention strategy** to elim
 1. **Manual Synchronization is Error-Prone**
    - Workflows created before `.license-policy.json` were never updated
    - Human memory fails when policies change
-   - **Evidence:** Lesson #15 violations in both repos
+   - **Evidence:** Lesson #15 (Configuration Centralization) violations in both repos
 
 2. **Review Comments Get Deprioritized**
    - Comments marked [nitpick] are treated as optional
@@ -80,7 +80,7 @@ Phase 4: Scalability-Ready Architecture
 **Goal:** Make hardcoded configuration **technically impossible**
 **Timeline:** Weeks 1-2 (Quick Wins)
 **Complexity:** Low
-**Impact:** HIGH - Eliminates entire class of Lesson #15 violations
+**Impact:** HIGH - Eliminates entire class of Lesson #15 (Configuration Centralization) violations
 
 ### 1.1 Pre-Commit Hook for Hardcoded Values
 
@@ -91,7 +91,7 @@ Phase 4: Scalability-Ready Architecture
 # SPDX-FileCopyrightText: 2025 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-echo "🔍 Checking for Lesson #15 violations..."
+echo "🔍 Checking for Lesson #15 (Configuration Centralization) violations..."
 
 # Check for hardcoded license lists
 # Refactored for readability: break pipeline into intermediate steps
@@ -342,7 +342,7 @@ jobs:
           echo ""
           echo "⚠️  This PR has ${{ steps.count.outputs.found }} review comment(s)"
           echo ""
-          echo "Per Lesson #16: Review Comment Discipline"
+          echo "Per Lesson #16 (Review Comment Discipline): Review Comment Discipline"
           echo ""
           echo "All review comments must be addressed before merge:"
           echo "  1. Implement the suggestion, OR"
@@ -394,7 +394,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # 1. Lesson #16: Check review comments
+      # 1. Lesson #16 (Review Comment Discipline): Check review comments
       - name: Verify no unaddressed comments
         run: |
           echo "📋 Checking Lesson #16 compliance..."
@@ -710,7 +710,7 @@ cat > dashboard/index.html <<'EOF'
   <h2>Lesson #15: Configuration Centralization</h2>
   <div id="lesson15"></div>
 
-  <h2>Lesson #16: Review Comment Discipline</h2>
+  <h2>Lesson #16 (Review Comment Discipline): Review Comment Discipline</h2>
   <div id="lesson16"></div>
 
   <h2>Action Version Matrix</h2>
@@ -1094,7 +1094,7 @@ Every violation is an opportunity to strengthen prevention.
 
 - **Audit Report:** `AUDIT-REPORT-2025-10-12.md` (findings that led to this strategy)
 - **Lesson #15:** Configuration Centralization (Line 872 in LESSONS-LEARNED)
-- **Lesson #16:** Review Comment Discipline (Line 1011 in LESSONS-LEARNED)
+- **Lesson #16 (Review Comment Discipline):** Review Comment Discipline (Line 1011 in LESSONS-LEARNED)
 - **Lesson #17:** Systematic Code Audits (to be created)
 
 ---

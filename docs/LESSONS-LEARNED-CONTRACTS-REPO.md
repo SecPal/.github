@@ -13,6 +13,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This document captures all issues encountered and solutions implemented during the setup of the `contracts` repository. These lessons should be applied to future SecPal repositories to avoid repeating the same problems.
 
+### Naming Convention
+
+**Format:** `Lesson #X (Descriptive Name)`
+
+All lessons use the hybrid naming convention (Option C):
+- **Number** (`#X`) provides unique ID and traceability
+- **Descriptive Name** provides meaning and searchability
+- **Always use both** in code comments and documentation
+
+Example: `Lesson #15 (Configuration Centralization)`
+
+See [LESSON-NAMING-CONVENTION.md](LESSON-NAMING-CONVENTION.md) for full guidelines.
+
 ---
 
 ## 🔴 Critical Issues Fixed
@@ -916,7 +929,11 @@ diff .github/branch-protection-main.json <(gh api repos/SecPal/.github/branches/
 
 ---
 
-### 15. Configuration Centralization and Code Review Nitpicks
+### Lesson #15 (Configuration Centralization)
+
+**Also Known As:** Configuration Centralization and Code Review Nitpicks
+**Origin:** `.github` PR #13 (2025-10-10)
+**Category:** Configuration Management
 
 **Problem:**
 
@@ -982,7 +999,11 @@ Load in workflows:
 
 ---
 
-### 16. Ignoring Review Comments (Again) - PR #14
+### Lesson #16 (Review Comment Discipline)
+
+**Also Known As:** Ignoring Review Comments (Again) - PR #14
+**Origin:** `.github` PR #14 (2025-10-11)
+**Category:** Code Review Process
 
 **Problem:**
 
