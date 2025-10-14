@@ -48,15 +48,18 @@ if [ ! -d node_modules ]; then
   exit 1
 fi
 
-# Check if license-checker is installed
+# Check if license-checker is installed and resolve absolute path for security
 if [ ! -x node_modules/.bin/license-checker ]; then
   echo "Error: license-checker not found in node_modules/.bin/" >&2
   echo "Please install it: npm install --save-dev license-checker" >&2
   exit 1
 fi
 
+# Resolve absolute path to license-checker for security
+LICENSE_CHECKER_BIN="$(realpath node_modules/.bin/license-checker)"
+
 # Run license-checker and handle errors (use local installation for security)
-OUTPUT=$(./node_modules/.bin/license-checker --production --onlyAllow "$ALLOWED" --summary 2>&1)
+OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --summary 2>&1)
 STATUS=$?
 if [ $STATUS -ne 0 ]; then
   echo "Error: license-checker failed."
