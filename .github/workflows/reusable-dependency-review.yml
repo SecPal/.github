@@ -22,41 +22,43 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Optional: Dependabot workflow-only skip logic - Set flag
-      - name: Determine if should skip dependency review
-        id: should-skip
+      # Determine if dependency review should run
+      - name: Determine if should run dependency review
+        id: should-run
         run: |
-          should_skip="false"
+          should_run="true"
+
+          # Check if skip logic is enabled and this is a Dependabot PR
           if [[ "${{ inputs.skip-dependabot-workflow-only }}" == "true" && "${{ github.actor }}" == "dependabot[bot]" && -n "${{ github.event.pull_request.number }}" ]]; then
-            should_skip="true"
-          fi
-          echo "should_skip=$should_skip" >> $GITHUB_OUTPUT
-          echo "Should skip dependency review: $should_skip"
+            echo "🤖 Dependabot PR detected, checking if only workflows changed..."
 
-      - name: Check if GitHub Actions only changes
-        if: steps.should-skip.outputs.should_skip == 'true'
-        id: check-files
-        run: |
-          files=$(gh pr view "$PR_NUMBER" --json files -q '.files[].path')
-          all_workflows=true
-          while IFS= read -r file; do
-            if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
-              all_workflows=false
-              break
+            # Check if only .github/workflows/ files changed
+            files=$(gh pr view "$PR_NUMBER" --json files -q '.files[].path')
+            all_workflows=true
+            while IFS= read -r file; do
+              if [[ ! "$file" =~ ^\.github/workflows/ ]]; then
+                all_workflows=false
+                break
+              fi
+            done <<< "$files"
+
+            if [ "$all_workflows" = "true" ]; then
+              should_run="false"
+              echo "✅ Only workflow files changed - skipping dependency review"
+            else
+              echo "📝 Non-workflow files changed - running dependency review"
             fi
-          done <<< "$files"
-          echo "all_workflows=$all_workflows" >> $GITHUB_OUTPUT
-
-          if [ "$all_workflows" = "true" ]; then
-            echo "✅ Dependabot PR only affects workflows - skipping dependency review"
           fi
+
+          echo "should_run=$should_run" >> $GITHUB_OUTPUT
+          echo "Final decision: should_run=$should_run"
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
 
       # Shared license policy loading
       - name: Load license policy
-        if: steps.should-skip.outputs.should_skip != 'true' || steps.check-files.outputs.all_workflows != 'true'
+        if: steps.should-run.outputs.should_run == 'true'
         id: policy
         run: |
           if [ ! -f .license-policy.json ]; then
@@ -77,7 +79,7 @@ jobs:
 
       # Shared dependency review
       - name: Dependency Review
-        if: steps.should-skip.outputs.should_skip != 'true' || steps.check-files.outputs.all_workflows != 'true'
+        if: steps.should-run.outputs.should_run == 'true'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: moderate

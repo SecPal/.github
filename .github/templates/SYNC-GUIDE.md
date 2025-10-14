@@ -156,14 +156,18 @@ jobs:
           branch="sync/scripts-$(date +%s)"
           git checkout -b "$branch"
           git add scripts/
-          git commit -m "chore: sync shared scripts from .github templates
 
-Automated sync from SecPal/.github templates.
+          # Use heredoc for multi-line commit message to avoid shell parsing issues
+          git commit -F- <<EOF
+          chore: sync shared scripts from .github templates
 
-Scripts updated:
-$(git diff --name-only HEAD~1 scripts/ | sed 's/^/- /')
+          Automated sync from SecPal/.github templates.
 
-Source: https://github.com/SecPal/.github/tree/main/.github/templates/scripts"
+          Scripts updated:
+          $(git diff --name-only HEAD~1 scripts/ | sed 's/^/- /')
+
+          Source: https://github.com/SecPal/.github/tree/main/.github/templates/scripts
+          EOF
 
           git push origin "$branch"
 
