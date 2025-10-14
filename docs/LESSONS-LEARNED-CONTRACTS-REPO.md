@@ -1088,6 +1088,201 @@ Before merging ANY PR:
 ✅ Easier to maintain and debug
 ✅ Can include SPDX headers
 
+---
+
+### Lesson #17 (Git State Verification After Work Sessions)
+
+**Also Known As:** Post-Work Git Hygiene, Commit State Validation
+**Origin:** 2025-10-14 - Discovered during Lesson #15/16 naming convention implementation
+**Category:** Development Workflow, Version Control
+
+**Problem:**
+
+After completing a work session or task, uncommitted changes can remain:
+
+1. **Automatic Formatters:** Prettier, ESLint, or other tools run on save
+2. **Manual Edits:** User makes quick fixes during review
+3. **Partial Commits:** Some files staged but not committed
+4. **Forgotten Changes:** Work-in-progress left in working directory
+
+**Real Example (2025-10-14):**
+
+During Lesson Naming Convention implementation:
+- Modified 7 documentation files
+- Committed changes with `git commit -m "..."`
+- User noticed: "Es ist noch eine nicht commitete Datei / Änderung vorhanden"
+- Found: LESSONS-LEARNED-CONTRACTS-REPO.md had 1 uncommitted line (blank line added by formatter)
+- **Impact:** Incomplete state, risk of losing changes, inconsistent branch
+
+**Why This Happens:**
+
+- Formatters run after `git add` but before `git commit`
+- Multiple tools touching files (editor, linter, prettier)
+- Human forgets to check `git status` after completing work
+- Assumption that "everything is committed" without verification
+
+**Solution:**
+
+**Always run this checklist at the end of each work session:**
+
+```bash
+# 1. Check for uncommitted changes
+git status
+
+# 2. Check for unstaged changes
+git diff
+
+# 3. Check for staged but uncommitted changes
+git diff --cached
+
+# 4. Verify branch is synchronized with remote
+git status -sb  # Shows ahead/behind status
+
+# 5. List untracked files
+git ls-files --others --exclude-standard
+```
+
+**Pre-Push Checklist:**
+
+```bash
+#!/bin/bash
+# .github/scripts/pre-push-checklist.sh
+
+echo "🔍 Pre-Push Git State Verification"
+echo ""
+
+# Check for uncommitted changes
+if ! git diff-index --quiet HEAD --; then
+  echo "❌ ERROR: Uncommitted changes detected!"
+  echo ""
+  echo "Changed files:"
+  git diff-index --name-only HEAD
+  echo ""
+  echo "Run: git status"
+  exit 1
+fi
+
+# Check for untracked files
+untracked=$(git ls-files --others --exclude-standard)
+if [ -n "$untracked" ]; then
+  echo "⚠️  WARNING: Untracked files detected!"
+  echo ""
+  echo "$untracked"
+  echo ""
+  echo "Are these intentional? Consider .gitignore or git add"
+fi
+
+# Check if branch is ahead/behind remote
+git fetch origin -q
+LOCAL=$(git rev-parse @)
+REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
+BASE=$(git merge-base @ @{u} 2>/dev/null || echo "")
+
+if [ -z "$REMOTE" ]; then
+  echo "⚠️  No remote tracking branch set"
+elif [ "$LOCAL" = "$REMOTE" ]; then
+  echo "✅ Branch synchronized with remote"
+elif [ "$LOCAL" = "$BASE" ]; then
+  echo "⚠️  Remote has changes (need to pull)"
+elif [ "$REMOTE" = "$BASE" ]; then
+  echo "📤 Local commits not pushed (need to push)"
+else
+  echo "⚠️  Branches have diverged"
+fi
+
+echo ""
+echo "✅ Git state verification complete"
+```
+
+**Integration Points:**
+
+1. **Pre-commit Hook:**
+   ```bash
+   # .git/hooks/pre-commit
+   # Runs automatically before each commit
+   git diff --check  # Check for whitespace errors
+   ```
+
+2. **Pre-push Hook:**
+   ```bash
+   # .git/hooks/pre-push
+   # Runs automatically before each push
+   .github/scripts/pre-push-checklist.sh
+   ```
+
+3. **Manual Workflow:**
+   ```bash
+   # Add to your shell alias
+   alias gits='git status && echo "" && echo "Ahead/Behind:" && git status -sb'
+   ```
+
+4. **CI/CD Verification:**
+   ```yaml
+   # In GitHub Actions - verify working directory is clean
+   - name: Verify no uncommitted changes
+     run: |
+       if ! git diff-index --quiet HEAD --; then
+         echo "ERROR: Workflow created uncommitted changes!"
+         git status
+         git diff
+         exit 1
+       fi
+   ```
+
+**Best Practices:**
+
+1. **After Each Logical Step:**
+   - ✅ `git status` → Check state
+   - ✅ `git add -A` → Stage all changes (or selective)
+   - ✅ `git commit -S -m "..."` → Commit with message
+   - ✅ `git status` → Verify clean state
+   - ✅ `git push` → Push to remote
+
+2. **Before Switching Tasks:**
+   - ✅ Commit or stash all work-in-progress
+   - ✅ Verify clean working directory
+   - ✅ Push to remote for backup
+
+3. **After Automated Tool Runs:**
+   - ✅ Check if formatter/linter modified files
+   - ✅ Review changes with `git diff`
+   - ✅ Commit formatting changes separately
+
+4. **End of Work Session:**
+   - ✅ Run full checklist (see above)
+   - ✅ Push all commits
+   - ✅ Verify GitHub shows latest commit
+
+**Warning Signs:**
+
+🚨 **"Everything is committed"** without checking `git status`
+🚨 **Formatting on save** without verifying changes
+🚨 **Switching branches** with dirty working directory
+🚨 **Closing terminal** without pushing commits
+
+**Action for Future Work:**
+
+- Create `.github/scripts/pre-push-checklist.sh`
+- Document in CONTRIBUTING.md
+- Add to developer onboarding
+- Consider Git hooks for automation
+- Add CI check for clean working directory after workflow runs
+
+**Benefits:**
+
+✅ **No Lost Work:** All changes committed and pushed
+✅ **Clean State:** Working directory always clean
+✅ **Traceability:** Every change properly committed
+✅ **Team Sync:** Remote always up-to-date
+✅ **CI/CD Reliability:** No mysterious "works locally" issues
+
+**Related Lessons:**
+
+- Lesson #16 (Review Comment Discipline) - Both about thoroughness
+- Similar pattern: Check everything, not just what you think changed
+
+```
+
 **Action for Future:**
 
 - Add "Review ALL comments" to pre-merge checklist

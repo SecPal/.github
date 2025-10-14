@@ -556,10 +556,10 @@ See companion document: `LESSON-17-SYSTEMATIC-AUDITS.md`
 ## 🔗 Related Documents
 
 - **Lessons Learned:** `docs/LESSONS-LEARNED-CONTRACTS-REPO.md`
-  - Lesson #15: Configuration Centralization (Line 872)
-  - Lesson #16 (Review Comment Discipline): Review Comment Discipline (Line 1011)
+  - Lesson #15 (Configuration Centralization) - Line 919
+  - Lesson #16 (Review Comment Discipline) - Line 989
+  - Lesson #17 (Git State Verification) - Line 1104
 - **Prevention Strategy:** `docs/PREVENTION-STRATEGY.md` (companion to this report)
-- **Lesson #17:** `docs/LESSON-17-SYSTEMATIC-AUDITS.md` (to be created)
 
 ---
 

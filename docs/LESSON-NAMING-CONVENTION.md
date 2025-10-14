@@ -367,6 +367,7 @@ deny-licenses: ${{ steps.policy.outputs.denied }}
 ```
 ✅ Configuration Centralization
 ✅ Review Comment Discipline
+✅ Git State Verification After Work Sessions
 ✅ Systematic Code Audits
 ✅ DRY in Multi-Repo Architecture
 ✅ SPDX Compliance Best Practices
