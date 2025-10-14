@@ -25,29 +25,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "🤖 Checking for Copilot review on PR #$PR_NUMBER..."
+          echo "📍 HEAD commit: ${HEAD_SHA:0:7}"
 
           # Get all reviews
           reviews=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
 
-          # Check if Copilot has reviewed (matches both "copilot-pull-request-reviewer" and "copilot-pull-request-reviewer[bot]")
-          copilot_review=$(echo "$reviews" | jq '[.[] | select(.user.login | startswith("copilot-pull-request-reviewer"))] | length')
+          # Find the most recent Copilot review
+          latest_review=$(echo "$reviews" | jq '[.[] | select(.user.login | startswith("copilot-pull-request-reviewer"))] | sort_by(.submitted_at) | last')
 
-          if [ "$copilot_review" -eq 0 ]; then
+          if [ "$latest_review" = "null" ] || [ -z "$latest_review" ]; then
             echo "status=no-review" >> $GITHUB_OUTPUT
             echo "⚠️  No Copilot review found"
           else
-            # Check for low confidence comments in the most recent review
-            latest_review=$(echo "$reviews" | jq '[.[] | select(.user.login | startswith("copilot-pull-request-reviewer"))] | sort_by(.submitted_at) | last')
-            low_confidence=$(echo "$latest_review" | jq -r '.body' | grep -i "low confidence" || echo "")
+            # Get the commit SHA that was reviewed
+            reviewed_commit=$(echo "$latest_review" | jq -r '.commit_id')
+            echo "📝 Review commit: ${reviewed_commit:0:7}"
 
-            if [ -n "$low_confidence" ]; then
-              echo "status=low-confidence" >> $GITHUB_OUTPUT
-              echo "⚠️  Copilot review found but with LOW CONFIDENCE - manual review required"
+            # Check if the review is for the current HEAD commit
+            if [ "$reviewed_commit" != "$HEAD_SHA" ]; then
+              echo "status=outdated-review" >> $GITHUB_OUTPUT
+              echo "⚠️  Copilot review is OUTDATED (reviewed ${reviewed_commit:0:7}, current HEAD is ${HEAD_SHA:0:7})"
             else
-              echo "status=reviewed" >> $GITHUB_OUTPUT
-              echo "✅ Copilot review found with normal confidence"
+              # Check for low confidence in the review body
+              low_confidence=$(echo "$latest_review" | jq -r '.body' | grep -i "low confidence" || echo "")
+
+              if [ -n "$low_confidence" ]; then
+                echo "status=low-confidence" >> $GITHUB_OUTPUT
+                echo "⚠️  Copilot review found but with LOW CONFIDENCE - manual review required"
+              else
+                echo "status=reviewed" >> $GITHUB_OUTPUT
+                echo "✅ Copilot review found on HEAD commit with normal confidence"
+              fi
             fi
           fi
 
@@ -87,6 +98,21 @@ jobs:
             echo "This PR requires a Copilot code review before merging."
             echo ""
             echo "To request a review:"
+            echo "  1. Go to the PR on GitHub web interface"
+            echo "  2. Comment '@copilot review' on the PR"
+            echo ""
+            echo "Wait ~60 seconds for the review to complete, then re-run this check."
+            echo ""
+            exit 1
+          fi
+
+          if [ "$REVIEW_STATUS" = "outdated-review" ]; then
+            echo "❌ BLOCKED: Copilot review is OUTDATED"
+            echo ""
+            echo "The most recent Copilot review was performed on an older commit."
+            echo "After pushing new changes, you must request a new review."
+            echo ""
+            echo "To request a new review:"
             echo "  1. Go to the PR on GitHub web interface"
             echo "  2. Comment '@copilot review' on the PR"
             echo ""
