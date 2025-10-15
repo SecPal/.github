@@ -2205,7 +2205,7 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
 
 - Can't use `--admin` flag if admin bypass is disabled in repo settings (check is FAILING, not just missing approval)
 - Can't bypass with `~~RESOLVED~~` (GraphQL resolution doesn't sync to REST)
-- Can't reference `@branch` (defeats the purpose of `@main` for DRY)
+- Can't reference `@branch` (in this repo, we intentionally avoided it to keep DRY with `@main`; however, using `@branch` temporarily is a valid workaround during development—see Prevention Strategies below)
 - Can't deploy to main first (branch protection prevents direct push)
 
 **Note:** The effectiveness of the `--admin` flag depends on the repository's "Allow admins to bypass required pull requests" setting. If enabled, admins can use `gh pr merge --admin` to bypass failing checks. However, this should be avoided for critical checks like security reviews.
