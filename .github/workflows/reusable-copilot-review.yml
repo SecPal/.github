@@ -64,20 +64,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          echo "📊 Counting unresolved Copilot comments..."
+          echo "📊 Counting unresolved Copilot review threads..."
 
-          # Get all PR review comments from Copilot
-          comments=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments)
+          # Use GraphQL to get review threads with isResolved status
+          # This properly respects threads resolved via GitHub UI
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
 
-          # Count comments that:
-          # - Are from Copilot (review comments use "Copilot", reviews use "copilot-pull-request-reviewer[bot]")
-          # - Don't start with ~~RESOLVED~~
-          # Split into two steps for better readability
-          copilot_comments=$(echo "$comments" | jq '[.[] | select(.user.login == "Copilot" or (.user.login | startswith("copilot-pull-request-reviewer")))]')
-          open_comments=$(echo "$copilot_comments" | jq '[.[] | select(.body | startswith("~~RESOLVED~~") | not)] | length')
+          unresolved_threads=$(gh api graphql -f query='
+          {
+            repository(owner: "'$REPO_OWNER'", name: "'$REPO_NAME'") {
+              pullRequest(number: '$PR_NUMBER') {
+                reviewThreads(first: 100) {
+                  nodes {
+                    isResolved
+                    comments(first: 1) {
+                      nodes {
+                        author {
+                          login
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] | length')
 
-          echo "open_count=$open_comments" >> $GITHUB_OUTPUT
-          echo "Found $open_comments unresolved Copilot comment(s)"
+          echo "open_count=$unresolved_threads" >> $GITHUB_OUTPUT
+          echo "Found $unresolved_threads unresolved Copilot review thread(s)"
+          echo "Note: Using GraphQL reviewThreads API (respects UI thread resolution)"
 
       - name: Enforce Copilot review requirement
         env:
