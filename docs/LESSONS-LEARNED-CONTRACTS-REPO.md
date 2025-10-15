@@ -2337,16 +2337,16 @@ gh api graphql -f query='mutation { resolveReviewThread(...) }'
 
 **Why `~~RESOLVED~~` pattern still exists in workflow:**
 
-The workflow message still says:
+The workflow message previously instructed users as follows (historical, deprecated):
 
-```
-If a comment is outdated or incorrect:
-  - Edit the comment body to start with '~~RESOLVED~~'
-```
+> **Historical (Deprecated):**
+> If a comment is outdated or incorrect:
+>
+> - Edit the comment body to start with '~~RESOLVED~~'
 
-**Important:** With the GraphQL-based counting implemented in this fix, editing a comment body to start with `~~RESOLVED~~` does **NOT** mark a thread as resolved. Only the thread's `isResolved` state (set via the GitHub UI "Resolve conversation" button or GraphQL `resolveReviewThread` mutation) is considered for resolution status.
-
-The legacy `~~RESOLVED~~` body-prefix pattern is retained in the workflow message for historical reference only and is **no longer functionally effective** with the new GraphQL implementation.
+> **Note:** This instruction is retained for historical reference only.
+> With the new GraphQL-based implementation, editing a comment body with `~~RESOLVED~~` does **NOT** mark a thread as resolved.
+> Only the thread's `isResolved` state (set via the GitHub UI "Resolve conversation" button or GraphQL `resolveReviewThread` mutation) is authoritative.
 
 **Correct Resolution Methods:**
 
