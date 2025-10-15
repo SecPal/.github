@@ -2096,7 +2096,7 @@ The workflow used REST API to count unresolved comments:
 
 ```yaml
 # OLD (REST API) - INCORRECT
-comments=$(gh api repos/$REPO/pulls/$PR/comments)
+comments=$(gh api repos/$OWNER/$REPO/pulls/$PR/comments)
 open_comments=$(echo "$comments" | jq '[.[] | select(.body | startswith("~~RESOLVED~~") | not)] | length')
 ```
 
@@ -2324,12 +2324,15 @@ If a comment is outdated or incorrect:
   - Edit the comment body to start with '~~RESOLVED~~'
 ```
 
-This is **legacy documentation** from before GraphQL fix. It still works but is no longer necessary:
+**Important:** With the GraphQL-based counting implemented in this fix, editing a comment body to start with `~~RESOLVED~~` does **NOT** mark a thread as resolved. Only the thread's `isResolved` state (set via the GitHub UI "Resolve conversation" button or GraphQL `resolveReviewThread` mutation) is considered for resolution status.
 
-- **Old way**: Edit comment body manually with `~~RESOLVED~~` prefix
-- **New way**: Click "Resolve conversation" in GitHub UI
+The legacy `~~RESOLVED~~` body-prefix pattern is retained in the workflow message for historical reference only and is **no longer functionally effective** with the new GraphQL implementation.
 
-Both work, but UI is preferred and now properly detected.
+**Correct Resolution Methods:**
+
+- **✅ Recommended**: Click "Resolve conversation" in GitHub UI
+- **✅ Programmatic**: Use GraphQL `resolveReviewThread` mutation
+- **❌ No longer works**: Editing comment body with `~~RESOLVED~~` prefix
 
 ### Documentation Updates
 
@@ -2361,7 +2364,7 @@ Both work, but UI is preferred and now properly detected.
 - [x] PR #27 merged with fix
 - [x] Branch protection restored
 - [x] Document lesson learned
-- [ ] Update workflow user-facing messages (prefer UI)
+- [x] Update workflow user-facing messages (prefer UI)
 - [ ] Add GraphQL testing to CI/CD validation
 - [ ] Create workflow change checklist
 
