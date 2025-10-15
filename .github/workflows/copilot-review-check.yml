@@ -3,6 +3,10 @@
 
 name: Copilot Review Enforcement
 
+# DRY Phase 1b: This workflow calls the centralized reusable workflow
+# See: .github/workflows/reusable-copilot-review.yml for implementation
+# Refs: Lesson #18 (Copilot Review Enforcement System)
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -12,168 +16,9 @@ on:
     types: [created, edited, deleted]
 
 jobs:
-  check-copilot-review:
+  verify-copilot-review:
     name: Verify Copilot Review
-    runs-on: ubuntu-latest
+    uses: SecPal/.github/.github/workflows/reusable-copilot-review.yml@main
     permissions:
       pull-requests: read
       checks: write
-
-    steps:
-      - name: Check for Copilot review
-        id: check-review
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "🤖 Checking for Copilot review on PR #$PR_NUMBER..."
-          echo "📍 HEAD commit: ${HEAD_SHA:0:7}"
-
-          # Get all reviews
-          reviews=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
-
-          # Find the most recent Copilot review
-          latest_review=$(echo "$reviews" | jq '[.[] | select(.user.login | startswith("copilot-pull-request-reviewer"))] | sort_by(.submitted_at) | last')
-
-          if [ "$latest_review" = "null" ] || [ -z "$latest_review" ]; then
-            echo "status=no-review" >> $GITHUB_OUTPUT
-            echo "⚠️  No Copilot review found"
-          else
-            # Get the commit SHA that was reviewed
-            reviewed_commit=$(echo "$latest_review" | jq -r '.commit_id')
-            echo "📝 Review commit: ${reviewed_commit:0:7}"
-
-            # Check if the review is for the current HEAD commit
-            if [ "$reviewed_commit" != "$HEAD_SHA" ]; then
-              echo "status=outdated-review" >> $GITHUB_OUTPUT
-              echo "⚠️  Copilot review is OUTDATED (reviewed ${reviewed_commit:0:7}, current HEAD is ${HEAD_SHA:0:7})"
-            else
-              # Check for low confidence in the review body
-              # Using 'grep || true' to ensure command always succeeds (even with set -e)
-              low_confidence=$(echo "$latest_review" | jq -r '.body' | grep -i "low confidence" || true)
-
-              if [ -n "$low_confidence" ]; then
-                echo "status=low-confidence" >> $GITHUB_OUTPUT
-                echo "⚠️  Copilot review found but with LOW CONFIDENCE - manual review required"
-              else
-                echo "status=reviewed" >> $GITHUB_OUTPUT
-                echo "✅ Copilot review found on HEAD commit with normal confidence"
-              fi
-            fi
-          fi
-
-      - name: Count open Copilot comments
-        id: count-comments
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          echo "📊 Counting unresolved Copilot comments..."
-
-          # Get all PR review comments from Copilot
-          comments=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments)
-
-          # Count comments that:
-          # - Are from Copilot (review comments use "Copilot", reviews use "copilot-pull-request-reviewer[bot]")
-          # - Don't start with ~~RESOLVED~~
-          # Split into two steps for better readability
-          copilot_comments=$(echo "$comments" | jq '[.[] | select(.user.login == "Copilot" or (.user.login | startswith("copilot-pull-request-reviewer")))]')
-          open_comments=$(echo "$copilot_comments" | jq '[.[] | select(.body | startswith("~~RESOLVED~~") | not)] | length')
-
-          echo "open_count=$open_comments" >> $GITHUB_OUTPUT
-          echo "Found $open_comments unresolved Copilot comment(s)"
-
-      - name: Enforce Copilot review requirement
-        env:
-          REVIEW_STATUS: ${{ steps.check-review.outputs.status }}
-          OPEN_COMMENTS: ${{ steps.count-comments.outputs.open_count }}
-        run: |
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📋 Copilot Review Status"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-
-          if [ "$REVIEW_STATUS" = "no-review" ]; then
-            echo "❌ BLOCKED: No Copilot review found"
-            echo ""
-            echo "This PR requires a Copilot code review before merging."
-            echo ""
-            echo "To request a review:"
-            echo "  1. Go to the PR on GitHub web interface"
-            echo "  2. Comment '@copilot review' on the PR"
-            echo ""
-            echo "Wait ~60 seconds for the review to complete, then re-run this check."
-            echo ""
-            exit 1
-          fi
-
-          if [ "$REVIEW_STATUS" = "outdated-review" ]; then
-            echo "❌ BLOCKED: Copilot review is OUTDATED"
-            echo ""
-            echo "The most recent Copilot review was performed on an older commit."
-            echo "After pushing new changes, you must request a new review."
-            echo ""
-            echo "To request a new review:"
-            echo "  1. Go to the PR on GitHub web interface"
-            echo "  2. Comment '@copilot review' on the PR"
-            echo ""
-            echo "Wait ~60 seconds for the review to complete, then re-run this check."
-            echo ""
-            exit 1
-          fi
-
-          if [ "$REVIEW_STATUS" = "low-confidence" ]; then
-            # Check if PR description contains override flag
-            # Override pattern: ~~LOW-CONFIDENCE-ACCEPTED~~ (similar to ~~RESOLVED~~ for comments)
-            # Use case: Documentation-only changes or minor refactorings where low confidence is acceptable
-            pr_body=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} --jq '.body')
-            LOW_CONFIDENCE_OVERRIDE="~~LOW-CONFIDENCE-ACCEPTED~~"
-            # Use -F for fixed string matching (prevents regex injection)
-            if echo "$pr_body" | grep -F -q "$LOW_CONFIDENCE_OVERRIDE"; then
-              echo "⚠️  Low confidence detected but override flag found"
-              echo "✅ Proceeding with merge ($LOW_CONFIDENCE_OVERRIDE in PR description)"
-            else
-              echo "⚠️  BLOCKED: Copilot review has LOW CONFIDENCE"
-              echo ""
-              echo "Copilot suppressed comments due to low confidence in its analysis."
-              echo "This usually means:"
-              echo "  - The changes are too complex for automated review"
-              echo "  - Context is missing or unclear"
-              echo "  - Manual human review is strongly recommended"
-              echo ""
-              echo "Actions required:"
-              echo "  1. Review the suppressed comments in the Copilot review"
-              echo "  2. Address any legitimate concerns"
-              echo "  3. Request a new review after making changes"
-              echo "  4. If changes are minor/docs-only, you can override by adding"
-              echo "     '$LOW_CONFIDENCE_OVERRIDE' to the PR description"
-              echo ""
-              exit 1
-            fi
-          fi
-
-          if [ "$OPEN_COMMENTS" -gt 0 ]; then
-            echo "❌ BLOCKED: $OPEN_COMMENTS unresolved Copilot comment(s)"
-            echo ""
-            echo "All Copilot review comments must be addressed before merging."
-            echo ""
-            echo "To resolve comments:"
-            echo "  1. Fix the issues in your code"
-            echo "  2. Push your changes"
-            echo "  3. Request a new Copilot review to verify fixes"
-            echo ""
-            echo "If a comment is outdated or incorrect:"
-            echo "  - Edit the comment body to start with '~~RESOLVED~~'"
-            echo "  - Add explanation why it was resolved manually"
-            echo ""
-            echo "View comments: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}/files"
-            echo ""
-            exit 1
-          fi
-
-          echo "✅ PASSED: Copilot review complete with 0 open comments"
-          echo ""
-          echo "PR is ready for merge! 🎉"
-          echo ""
