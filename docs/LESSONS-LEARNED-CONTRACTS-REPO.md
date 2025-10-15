@@ -2094,7 +2094,7 @@ gh pr merge 26 --squash --admin
 
 The workflow used REST API to count unresolved comments:
 
-```yaml
+```bash
 # OLD (REST API) - INCORRECT
 comments=$(gh api repos/$OWNER/$REPO/pulls/$PR/comments)
 open_comments=$(echo "$comments" | jq '[.[] | select(.body | startswith("~~RESOLVED~~") | not)] | length')
@@ -2135,7 +2135,7 @@ uses: SecPal/.github/.github/workflows/reusable-copilot-review.yml@main
 
 Switch from REST API comments to GraphQL reviewThreads:
 
-```yaml
+```bash
 # NEW (GraphQL) - CORRECT
 unresolved_threads=$(gh api graphql -f query='
 {
