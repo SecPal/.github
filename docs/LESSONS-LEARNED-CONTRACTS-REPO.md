@@ -2174,16 +2174,18 @@ unresolved_threads=$(gh api graphql -f query='
 3. **Re-enable** the check (now it works because fix is on `@main`)
 
 ```bash
-# Step 1: Disable check
-gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH \
-  --input '{"strict": true, "contexts": ["other-checks-but-not-copilot"]}'
+# Step 1: Disable check (using -f for individual fields)
+gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
+  -f strict=true \
+  -f contexts[]=other-checks-but-not-copilot
 
 # Step 2: Merge PR with fix
-gh pr merge PR_NUMBER --squash --delete-branch
+gh pr merge $PR_NUMBER --squash --delete-branch
 
 # Step 3: Re-enable check (with fixed workflow on main)
-gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH \
-  --input '{"strict": true, "contexts": ["all-checks-including-copilot"]}'
+gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
+  -f strict=true \
+  -f contexts[]=all-checks-including-copilot
 ```
 
 **Why this is the only option:**
@@ -2232,6 +2234,11 @@ gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH
   repository(owner: "SecPal", name: ".github") {
     pullRequest(number: 27) {
       reviewThreads(first: 100) {
+        # Note: first: 100 is sufficient for most PRs
+        # For larger PRs with >100 threads, implement pagination:
+        # - Check pageInfo.hasNextPage
+        # - Use pageInfo.endCursor for next query
+        # - Loop until hasNextPage is false
         nodes {
           id
           isResolved # ← This is what we need!
@@ -2243,6 +2250,10 @@ gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH
               body
             }
           }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
