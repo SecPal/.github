@@ -2159,7 +2159,7 @@ unresolved_threads=$(gh api graphql \
   -f name="$REPO_NAME" \
   -F pr=$PR \
   --jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
-    select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
+    select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] |
     length')
 ```
 
@@ -2183,19 +2183,51 @@ unresolved_threads=$(gh api graphql \
 3. **Re-enable** the check (now it works because fix is on `@main`)
 
 ```bash
-# Step 1: Disable check
-gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH --input - <<'JSON'
-{"strict": true, "contexts": ["other-checks-but-not-copilot"]}
-JSON
+# Shell variables for safety and consistency
+OWNER="SecPal"
+REPO_NAME=".github"
+DEFAULT_BRANCH="main"
+PR_NUMBER="27"  # Replace with your PR number
+COPILOT_CHECK="Verify Copilot Review / Verify Copilot Review"  # Exact check name
+
+# Step 1: Disable Copilot check (fetch current, remove only Copilot, patch back)
+echo "Fetching current required checks..."
+gh api repos/$OWNER/$REPO_NAME/branches/$DEFAULT_BRANCH/protection/required_status_checks > /tmp/checks.json
+
+echo "Removing Copilot check from list..."
+jq --arg copilot "$COPILOT_CHECK" \
+  '.contexts = (.contexts | map(select(. != $copilot)))' \
+  /tmp/checks.json > /tmp/checks-without-copilot.json
+
+echo "Updating branch protection..."
+gh api repos/$OWNER/$REPO_NAME/branches/$DEFAULT_BRANCH/protection/required_status_checks \
+  -X PATCH --input /tmp/checks-without-copilot.json
 
 # Step 2: Merge PR with fix
-gh pr merge PR_NUMBER --squash --delete-branch
+echo "Merging PR..."
+gh pr merge $PR_NUMBER --squash --delete-branch
 
-# Step 3: Re-enable check (with fixed workflow on main)
-gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH --input - <<'JSON'
-{"strict": true, "contexts": ["all-checks-including-copilot"]}
-JSON
+# Step 3: Re-enable Copilot check (fetch current, add Copilot back, patch)
+echo "Fetching current required checks..."
+gh api repos/$OWNER/$REPO_NAME/branches/$DEFAULT_BRANCH/protection/required_status_checks > /tmp/checks.json
+
+echo "Adding Copilot check back..."
+jq --arg copilot "$COPILOT_CHECK" \
+  '.contexts = (if .contexts | index($copilot) then .contexts else .contexts + [$copilot] end)' \
+  /tmp/checks.json > /tmp/checks-with-copilot.json
+
+echo "Updating branch protection..."
+gh api repos/$OWNER/$REPO_NAME/branches/$DEFAULT_BRANCH/protection/required_status_checks \
+  -X PATCH --input /tmp/checks-with-copilot.json
+
+# Cleanup
+rm /tmp/checks*.json
+
+echo "✅ Done! Workflow fix is now live on $DEFAULT_BRANCH"
 ```
+
+> **Important**: This script safely modifies only the Copilot check without affecting other required checks.
+> It fetches the current list, modifies it, and patches it back to preserve all existing checks.
 
 **Why this is the only option:**
 
@@ -2266,12 +2298,14 @@ JSON
 ```bash
 # Count only:
 # 1. Threads that are NOT resolved (isResolved == false)
-# 2. AND started by Copilot (login matches "copilot" or "Copilot")
+# 2. AND started by Copilot (login matches "Copilot" exactly, case-insensitive)
 jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false and
-         (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
+         (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] |
   length'
 ```
+
+> **Note**: The regex `^[Cc]opilot$` ensures exact match (anchored) to avoid matching "copilots" or other similar usernames.
 
 ### Testing & Validation
 
@@ -2322,7 +2356,7 @@ Both work, but UI is preferred and now properly detected.
 
 - [x] Document GraphQL API preference (this lesson)
 - [x] Document bootstrap paradox and solution
-- [x] Update workflow comments to prefer UI resolution
+- [ ] Update workflow comments to prefer UI resolution (future enhancement)
 - [ ] Add to REPOSITORY-SETUP-GUIDE.md (workflow testing strategies)
 - [ ] Create runbook for future workflow bootstrap issues
 
