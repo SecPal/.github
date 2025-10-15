@@ -2189,7 +2189,7 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
   -f contexts[]=Check-B
 
 # Step 2: Merge PR with fix
-gh pr merge $PR_NUMBER --squash --delete-branch
+gh pr merge $PR --squash --delete-branch
 
 # Step 3: Re-enable check by adding it back to the list
 # Again: This REPLACES the entire array with ALL checks
@@ -2325,7 +2325,7 @@ gh api graphql -f query='mutation { resolveReviewThread(...) }'
 **Validation:**
 
 - ✅ PR #27 merged with fixed workflow (completed 2025-10-15)
-- ✅ This documentation PR (#29) captures the lessons learned
+- ✅ This documentation PR captures the lessons learned
 - ⏳ Workflow regex fix (add end-of-string `$` anchor in the workflow) pending in follow-up PR
 - ⏳ Future PRs will use GraphQL-based counting with corrected regex
 - ⏳ Thread resolution via UI will work correctly after regex fix
