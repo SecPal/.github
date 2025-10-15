@@ -1,6 +1,7 @@
-name: Copilot Review Enforcement
 # SPDX-FileCopyrightText: 2025 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Copilot Review Enforcement
 
 # DRY Phase 1b: This workflow calls the centralized reusable workflow
 # See: .github/workflows/reusable-copilot-review.yml for implementation
