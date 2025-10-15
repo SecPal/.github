@@ -2180,7 +2180,7 @@ unresolved_threads=$(gh api graphql -f query='
 
 ```bash
 # Step 1: Disable check by removing it from required checks list
-# Note: This REPLACES the entire contexts array, not appends!
+# Note: This REPLACES the entire contexts array; it does not append to it!
 # Get current checks first: gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks --jq .contexts
 gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
   -f strict=true \
