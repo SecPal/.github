@@ -2094,9 +2094,9 @@ gh pr merge 26 --squash --admin
 
 The workflow used REST API to count unresolved comments:
 
-```yaml
+```bash
 # OLD (REST API) - INCORRECT
-comments=$(gh api repos/$REPO/pulls/$PR/comments)
+comments=$(gh api repos/$OWNER/$REPO_NAME/pulls/$PR/comments)
 open_comments=$(echo "$comments" | jq '[.[] | select(.body | startswith("~~RESOLVED~~") | not)] | length')
 ```
 
@@ -2135,28 +2135,37 @@ uses: SecPal/.github/.github/workflows/reusable-copilot-review.yml@main
 
 Switch from REST API comments to GraphQL reviewThreads:
 
-```yaml
+```bash
 # NEW (GraphQL) - CORRECT
-unresolved_threads=$(gh api graphql -f query='
-{
-  repository(owner: "'$OWNER'", name: "'$REPO'") {
-    pullRequest(number: '$PR) {
-      reviewThreads(first: 100) {
-        nodes {
-          isResolved
-          comments(first: 1) {
-            nodes {
-              author { login }
+# Using GraphQL variables to avoid quoting issues
+unresolved_threads=$(gh api graphql \
+  -f query='query($owner: String!, $name: String!, $pr: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes {
+            isResolved
+            comments(first: 1) {
+              nodes {
+                author { login }
+              }
             }
           }
         }
       }
     }
-  }
-}' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
-  select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
-  length')
+  }' \
+  -f owner="$OWNER" \
+  -f name="$REPO_NAME" \
+  -F pr=$PR \
+  --jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
+    select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
+    length')
 ```
+
+> **Note**: Uses GraphQL variables (`$owner`, `$name`, `$pr`) to avoid shell quoting pitfalls.
+> The `-F` flag for `pr` ensures it's passed as an integer, not a string.
+> Limited to first 100 threads; for PRs with >100 threads, pagination would be needed.
 
 **Benefits:**
 
@@ -2175,22 +2184,24 @@ unresolved_threads=$(gh api graphql -f query='
 
 ```bash
 # Step 1: Disable check
-gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH \
-  --input '{"strict": true, "contexts": ["other-checks-but-not-copilot"]}'
+gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH --input - <<'JSON'
+{"strict": true, "contexts": ["other-checks-but-not-copilot"]}
+JSON
 
 # Step 2: Merge PR with fix
 gh pr merge PR_NUMBER --squash --delete-branch
 
 # Step 3: Re-enable check (with fixed workflow on main)
-gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH \
-  --input '{"strict": true, "contexts": ["all-checks-including-copilot"]}'
+gh api repos/OWNER/REPO/branches/main/protection/required_status_checks -X PATCH --input - <<'JSON'
+{"strict": true, "contexts": ["all-checks-including-copilot"]}
+JSON
 ```
 
 **Why this is the only option:**
 
 - Can't use `--admin` flag (check is FAILING, not just missing)
 - Can't bypass with `~~RESOLVED~~` (GraphQL resolution doesn't sync to REST)
-- Can't reference `@branch` (defeats the purpose of `@main` for DRY)
+- Can't reference `@branch` as a long-term solution (defeats the purpose of `@main` for DRY); temporary `@branch` usage during development is acceptable
 - Can't deploy to main first (branch protection prevents direct push)
 
 ### Root Cause Analysis
