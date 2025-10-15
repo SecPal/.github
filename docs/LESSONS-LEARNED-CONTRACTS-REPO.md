@@ -2140,7 +2140,7 @@ Switch from REST API comments to GraphQL reviewThreads:
 unresolved_threads=$(gh api graphql -f query='
 {
   repository(owner: "'$OWNER'", name: "'$REPO'") {
-    pullRequest(number: '$PR) {
+    pullRequest(number: '$PR') {
       reviewThreads(first: 100) {
         nodes {
           isResolved
@@ -2156,6 +2156,11 @@ unresolved_threads=$(gh api graphql -f query='
 }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
   length')
+
+# Note: For PRs with >100 review threads, implement pagination:
+# - Add pageInfo { hasNextPage endCursor } to query (see structure above)
+# - Loop with --after cursor until hasNextPage is false
+# - Aggregate results from all pages
 ```
 
 **Benefits:**
@@ -2174,18 +2179,26 @@ unresolved_threads=$(gh api graphql -f query='
 3. **Re-enable** the check (now it works because fix is on `@main`)
 
 ```bash
-# Step 1: Disable check (using -f for individual fields)
+# Step 1: Disable check by removing it from required checks list
+# Note: This REPLACES the entire contexts array, not appends!
+# Get current checks first: gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks --jq .contexts
 gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
   -f strict=true \
-  -f contexts[]=other-checks-but-not-copilot
+  -f contexts[]=Check-A \
+  -f contexts[]=Check-B \
+  # ... (all checks EXCEPT the one you're fixing)
 
 # Step 2: Merge PR with fix
 gh pr merge $PR_NUMBER --squash --delete-branch
 
-# Step 3: Re-enable check (with fixed workflow on main)
+# Step 3: Re-enable check by adding it back to the list
+# Again: This REPLACES the entire array with ALL checks
 gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
   -f strict=true \
-  -f contexts[]=all-checks-including-copilot
+  -f contexts[]=Check-A \
+  -f contexts[]=Check-B \
+  -f contexts[]=Copilot-Review-Check \
+  # ... (now INCLUDING the fixed check)
 ```
 
 **Why this is the only option:**
