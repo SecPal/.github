@@ -2179,6 +2179,10 @@ unresolved_threads=$(gh api graphql -f query='
 3. **Re-enable** the check (now it works because the fix is on `@main`)
 
 ```bash
+# IMPORTANT: Requires admin permissions on the repository!
+# Use a token with repository admin permissions (e.g., user token from a repo admin
+# or a GitHub App installation with Administration: write); otherwise returns 403.
+
 # Step 1: Disable check by removing it from required checks list
 # Note: This REPLACES the entire contexts array; it does not append to it!
 # Get current checks first: gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks --jq .contexts
@@ -2246,8 +2250,8 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
 
 ```graphql
 {
-  repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: 27) {
+  repository(owner: "$OWNER", name: "$REPO") {
+    pullRequest(number: $PR) {
       reviewThreads(first: 100) {
         # Note: first: 100 is sufficient for most PRs
         # For larger PRs with >100 threads, implement pagination:
