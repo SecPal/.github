@@ -2154,7 +2154,7 @@ unresolved_threads=$(gh api graphql -f query='
     }
   }
 }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
-  select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
+  select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] |
   length')
 
 # Note: For PRs with >100 review threads, implement pagination:
@@ -2203,10 +2203,12 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
 
 **Why this is the only option:**
 
-- Can't use `--admin` flag (check is FAILING, not just missing)
+- Can't use `--admin` flag if admin bypass is disabled in repo settings (check is FAILING, not just missing approval)
 - Can't bypass with `~~RESOLVED~~` (GraphQL resolution doesn't sync to REST)
 - Can't reference `@branch` (defeats the purpose of `@main` for DRY)
 - Can't deploy to main first (branch protection prevents direct push)
+
+**Note:** The `--admin` flag effectiveness depends on the repository's "Allow admins to bypass required pull requests" setting. If enabled, admins can use `gh pr merge --admin` to bypass failing checks. However, this should be avoided for critical checks like security reviews.
 
 ### Root Cause Analysis
 
@@ -2279,10 +2281,11 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
 ```bash
 # Count only:
 # 1. Threads that are NOT resolved (isResolved == false)
-# 2. AND started by Copilot (login matches "copilot" or "Copilot")
+# 2. AND started by Copilot (login matches "Copilot" or "copilot" exactly)
+# Note: Using $ anchor to prevent false positives (e.g., "copilot-foo")
 jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false and
-         (.comments.nodes[0].author.login | test("^[Cc]opilot")))] |
+         (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] |
   length'
 ```
 
