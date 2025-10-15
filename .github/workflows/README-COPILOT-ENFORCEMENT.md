@@ -9,16 +9,28 @@ This workflow ensures that all pull requests have a completed Copilot code revie
 
 ## Purpose
 
-Implements **Lesson #16++ (Copilot Review Discipline)**: Make code review quality checks automatic and blocking.
+Implements **Lesson #18 (Copilot Review Enforcement System)**: Make code review quality checks automatic and blocking with proper username detection, HEAD commit verification, and low-confidence handling.
 
 ## How It Works
 
-1. **Triggers on every PR event** (open, push, review)
-2. **Checks for Copilot review** existence
-3. **Counts unresolved comments** (excludes comments starting with `~~RESOLVED~~`)
-4. **Blocks merge** if:
+1. **Triggers on every PR event** (open, push, review, comment)
+2. **Checks for Copilot review** existence on HEAD commit
+3. **Verifies review is current** (on HEAD commit, not outdated)
+4. **Detects low-confidence reviews** (with override mechanism)
+5. **Counts unresolved comments** (excludes comments starting with `~~RESOLVED~~`)
+6. **Blocks merge** if:
    - No Copilot review found, OR
+   - Review is outdated (not on HEAD commit), OR
+   - Review has low confidence (without override), OR
    - Any unresolved Copilot comments exist
+
+### Key Features (Lesson #18 + #19)
+
+- **Dual username detection**: Handles both `"Copilot"` (comments) and `"copilot-pull-request-reviewer"` (reviews)
+- **HEAD commit verification**: Ensures review is on current code, not old commits
+- **Low-confidence override**: `~~LOW-CONFIDENCE-ACCEPTED~~` in PR description for docs-only changes
+- **Comment resolution pattern**: `~~RESOLVED~~` prefix for manual resolution with justification
+- **Infinite loop prevention**: Re-run without commit after marking comments (see Lesson #19)
 
 ## Required Branch Protection
 
