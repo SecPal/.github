@@ -2182,23 +2182,23 @@ unresolved_threads=$(gh api graphql -f query='
 # Step 1: Disable check by removing it from required checks list
 # Note: This REPLACES the entire contexts array; it does not append to it!
 # Get current checks first: gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks --jq .contexts
+# ... (list all checks EXCEPT the one you're fixing)
 gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
   -f strict=true \
   -f contexts[]=Check-A \
-  -f contexts[]=Check-B \
-  # ... (all checks EXCEPT the one you're fixing)
+  -f contexts[]=Check-B
 
 # Step 2: Merge PR with fix
 gh pr merge $PR_NUMBER --squash --delete-branch
 
 # Step 3: Re-enable check by adding it back to the list
 # Again: This REPLACES the entire array with ALL checks
+# ... (now INCLUDING the fixed check)
 gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
   -f strict=true \
   -f contexts[]=Check-A \
   -f contexts[]=Check-B \
-  -f contexts[]=Copilot-Review-Check \
-  # ... (now INCLUDING the fixed check)
+  -f contexts[]=Copilot-Review-Check
 ```
 
 **Why this is the only option:**
