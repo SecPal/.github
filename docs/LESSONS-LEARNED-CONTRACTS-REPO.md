@@ -2153,8 +2153,8 @@ unresolved_threads=$(gh api graphql -f query='
       }
     }
   }
-}' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
-  select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] |
+}' | jq --arg login_regex "${COPILOT_LOGIN_REGEX:-^[Cc]opilot$}" '[.data.repository.pullRequest.reviewThreads.nodes[] |
+  select(.isResolved == false and (.comments.nodes[0].author.login | test($login_regex)))] |
   length')
 
 # Note: For PRs with >100 review threads, implement pagination:
@@ -2176,7 +2176,7 @@ unresolved_threads=$(gh api graphql -f query='
 
 1. **Temporarily disable** the check in branch protection
 2. **Merge the PR** containing the fix
-3. **Re-enable** the check (now it works because fix is on `@main`)
+3. **Re-enable** the check (now it works because the fix is on `@main`)
 
 ```bash
 # Step 1: Disable check by removing it from required checks list
@@ -2208,7 +2208,7 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
 - Can't reference `@branch` (defeats the purpose of `@main` for DRY)
 - Can't deploy to main first (branch protection prevents direct push)
 
-**Note:** The `--admin` flag effectiveness depends on the repository's "Allow admins to bypass required pull requests" setting. If enabled, admins can use `gh pr merge --admin` to bypass failing checks. However, this should be avoided for critical checks like security reviews.
+**Note:** The effectiveness of the `--admin` flag depends on the repository's "Allow admins to bypass required pull requests" setting. If enabled, admins can use `gh pr merge --admin` to bypass failing checks. However, this should be avoided for critical checks like security reviews.
 
 ### Root Cause Analysis
 
@@ -2326,7 +2326,7 @@ gh api graphql -f query='mutation { resolveReviewThread(...) }'
 
 - ✅ PR #27 merged with fixed workflow (completed 2025-10-15)
 - ✅ This documentation PR (#29) captures the lessons learned
-- ⏳ Workflow regex fix (add `$` anchor) pending in follow-up PR
+- ⏳ Workflow regex fix (add end-of-string `$` anchor in the workflow) pending in follow-up PR
 - ⏳ Future PRs will use GraphQL-based counting with corrected regex
 - ⏳ Thread resolution via UI will work correctly after regex fix
 - ⏳ No more bootstrap paradox for similar workflow fixes
