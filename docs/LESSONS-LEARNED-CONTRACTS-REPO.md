@@ -2281,12 +2281,25 @@ gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PAT
 ```bash
 # Count only:
 # 1. Threads that are NOT resolved (isResolved == false)
-# 2. AND started by Copilot (login matches "Copilot" or "copilot" exactly)
-# Note: Using $ anchor to prevent false positives (e.g., "copilot-foo")
-jq '[.data.repository.pullRequest.reviewThreads.nodes[] |
+# 2. AND started by expected bot account (configurable via COPILOT_LOGIN_REGEX)
+# Note: Default matches "Copilot"/"copilot" exactly. Adjust for your bot account.
+# Examples:
+#   - GitHub Copilot PR Reviewer: ^copilot-pull-request-reviewer$
+#   - Generic Copilot accounts: ^[Cc]opilot(\[bot\])?$
+#   - Multiple variants: ^(copilot|github-copilot)(\[bot\])?$
+
+# Set regex pattern (default for simple case)
+COPILOT_LOGIN_REGEX="${COPILOT_LOGIN_REGEX:-^[Cc]opilot$}"
+
+jq --arg login_regex "$COPILOT_LOGIN_REGEX" '[.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false and
-         (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] |
+         (.comments.nodes[0].author.login | test($login_regex)))] |
   length'
+
+# Usage examples:
+# Default: COPILOT_LOGIN_REGEX="^[Cc]opilot$"
+# For bot accounts: COPILOT_LOGIN_REGEX="^copilot-pull-request-reviewer$"
+# For multiple: COPILOT_LOGIN_REGEX="^(copilot|Copilot|github-copilot)(\[bot\])?$"
 ```
 
 ### Testing & Validation
@@ -2311,10 +2324,14 @@ gh api graphql -f query='mutation { resolveReviewThread(...) }'
 
 **Validation:**
 
-- ✅ PR #27 merged with fixed workflow
-- ✅ Future PRs will use GraphQL-based counting
-- ✅ Thread resolution via UI now works correctly
-- ✅ No more bootstrap paradox for similar fixes
+- ✅ PR #27 merged with fixed workflow (completed 2025-10-15)
+- ✅ This documentation PR (#29) captures the lessons learned
+- ⏳ Workflow regex fix (add `$` anchor) pending in follow-up PR
+- ⏳ Future PRs will use GraphQL-based counting with corrected regex
+- ⏳ Thread resolution via UI will work correctly after regex fix
+- ⏳ No more bootstrap paradox for similar workflow fixes
+
+**Status:** GraphQL implementation complete and deployed. Regex tightening (preventing false positives) documented here and will be applied to workflow in separate PR to avoid bootstrap paradox.
 
 ### Related Issues
 
