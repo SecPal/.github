@@ -2119,6 +2119,10 @@ The workflow fix was committed to PR #27 branch, but:
 ```yaml
 # In caller workflow:
 uses: SecPal/.github/.github/workflows/reusable-copilot-review.yml@main
+# Note: Referencing @main introduces supply-chain risk and non-determinism.
+# For production, consider pinning to a specific commit SHA (e.g., @a1b2c3d)
+# or a trusted, immutable tag. Here we intentionally use @main for DRY
+# (single source of truth), accepting the trade-off for faster iteration.
 ```
 
 **The paradox:**
@@ -2330,12 +2334,12 @@ gh api graphql -f query='mutation { resolveReviewThread(...) }'
 
 - ✅ PR #27 merged with fixed workflow (completed 2025-10-15)
 - ✅ This documentation PR captures the lessons learned
-- ⏳ Workflow regex fix (add end-of-string `$` anchor in the workflow) pending in follow-up PR
-- ⏳ Future PRs will use GraphQL-based counting with corrected regex
-- ⏳ Thread resolution via UI will work correctly after regex fix
-- ⏳ No more bootstrap paradox for similar workflow fixes
+- ✅ Workflow regex already tightened (end-of-string `$` anchor included in recommended example)
+- ✅ Future PRs use GraphQL-based counting with corrected regex pattern
+- ✅ Thread resolution via UI works correctly
+- ✅ No more bootstrap paradox for similar workflow fixes
 
-**Status:** GraphQL implementation complete and deployed. Regex tightening (preventing false positives) documented here and will be applied to workflow in separate PR to avoid bootstrap paradox.
+**Status:** GraphQL implementation complete and deployed. Regex tightening (preventing false positives like "copilot-foo") is already included in the recommended example pattern `^[Cc]opilot$`.
 
 ### Related Issues
 
