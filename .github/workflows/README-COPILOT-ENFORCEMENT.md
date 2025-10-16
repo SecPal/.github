@@ -73,8 +73,18 @@ EOF
 
 1. **Request Copilot review** (if not automatic):
 
+   **Recommended: Via MCP tool** (when using GitHub Copilot Chat in VS Code):
+
+   ```
+   @github-pull-request Request a Copilot review for this PR
+   ```
+
+   The tool `mcp_github_github_request_copilot_review` is more reliable than comment-based requests.
+
+   **Alternative: Via comment**:
+
    ```bash
-   # Via comment
+   # Via GitHub web interface
    Comment "@copilot review" on your PR
 
    # Via CLI
