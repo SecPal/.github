@@ -4,8 +4,12 @@
 #
 # Pre-commit hook template for all SecPal repositories
 #
-# Installation:
-#   cp .github/templates/hooks/pre-commit .git/hooks/pre-commit
+# Installation (recommended):
+#   git config core.hooksPath .githooks
+#   chmod +x .githooks/pre-commit
+#
+# Alternative (legacy method, if not using core.hooksPath):
+#   cp .githooks/pre-commit .git/hooks/pre-commit
 #   chmod +x .git/hooks/pre-commit
 #
 # This hook enforces Lesson #17 (Git State Verification) by:

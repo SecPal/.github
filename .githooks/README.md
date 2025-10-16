@@ -42,7 +42,7 @@ git config core.hooksPath .githooks
 - Catches license compliance problems early
 - Detects when formatters modify files after `git add`
 
-**Synchronized with:** `SecPal/contracts` repository
+**Synchronized with:** the `SecPal/.github` and `SecPal/contracts` repositories
 
 ## Synchronization
 
