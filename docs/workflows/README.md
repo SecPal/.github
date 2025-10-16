@@ -17,7 +17,7 @@ This separation allows updating documentation without triggering workflow approv
 ## Available Workflows
 
 - **[Copilot Review Enforcement](./copilot-enforcement.md)** - Automated code review system using GitHub Copilot
-  - Workflow: `.github/workflows/copilot-review.yml` + `reusable-copilot-review.yml`
+  - Workflow: `.github/workflows/copilot-review.yml` + `.github/workflows/reusable-copilot-review.yml`
   - Enforces Copilot review before merging PRs
 
 ## Why This Structure?
