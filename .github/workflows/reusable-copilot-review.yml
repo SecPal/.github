@@ -89,7 +89,7 @@ jobs:
                 }
               }
             }
-          }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] | length')
+          }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot$")))] | length')
 
           echo "open_count=$unresolved_threads" >> $GITHUB_OUTPUT
           echo "Found $unresolved_threads unresolved Copilot review thread(s)"
@@ -173,11 +173,11 @@ jobs:
             echo "To resolve comments:"
             echo "  1. Fix the issues in your code"
             echo "  2. Push your changes"
-            echo "  3. Request a new Copilot review to verify fixes"
+            echo "  3. Click 'Resolve conversation' in GitHub UI for each addressed thread"
+            echo "  4. Request a new Copilot review to verify fixes"
             echo ""
-            echo "If a comment is outdated or incorrect:"
-            echo "  - Edit the comment body to start with '~~RESOLVED~~'"
-            echo "  - Add explanation why it was resolved manually"
+            echo "Note: Thread resolution is managed via GitHub's UI 'Resolve conversation' button."
+            echo "      GraphQL reviewThreads API is used to check isResolved status."
             echo ""
             echo "View comments: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}/files"
             echo ""
