@@ -84,14 +84,14 @@ EOF
    **Alternative: Via comment**:
 
    ```bash
-   # Via GitHub web interface
+   # Via GitHub web interface or CLI
    Comment "@copilot review" on your PR
 
-   # Via CLI
+   # Or, via gh CLI
    gh pr comment <number> --body "@copilot review"
    ```
 
-2. **Wait ~60 seconds** for review to complete
+2. **Wait ~30-60 seconds** for review to complete
 
 3. **Address all comments**:
    - Fix the code issues
