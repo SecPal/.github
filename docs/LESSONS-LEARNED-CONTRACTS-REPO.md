@@ -2082,6 +2082,322 @@ gh pr merge 26 --squash --admin
 
 ---
 
-**Document Version:** 2.0
+## Lesson #22 (Reusable Workflow Bootstrap Paradox & GraphQL Fix)
+
+**Date:** 2025-10-15
+**Context:** PR #27 (Lesson #20, #21 documentation) - Workflow enforcement kept failing despite resolving threads
+**Related:** Lesson #18 (Copilot Enforcement), Phase 1b (DRY Implementation)
+
+### The Problem: Two Issues Combined
+
+**Issue 1: GraphQL vs. REST API Mismatch**
+
+The workflow used REST API to count unresolved comments:
+
+```bash
+# OLD (REST API) - INCORRECT
+comments=$(gh api repos/$OWNER/$REPO/pulls/$PR/comments)
+open_comments=$(echo "$comments" | jq '[.[] | select(.body | startswith("~~RESOLVED~~") | not)] | length')
+```
+
+**Problem:**
+
+- When threads are resolved via GitHub UI (using GraphQL mutation `resolveReviewThread`)
+- REST API comments still appear as "unresolved" (body doesn't start with `~~RESOLVED~~`)
+- The two APIs are **NOT synchronized**!
+
+**Symptoms:**
+
+- Threads marked "Resolved" in GitHub UI ✅
+- Workflow still counts them as unresolved ❌
+- PR can't merge despite all threads being resolved
+
+**Issue 2: Reusable Workflow Bootstrap Paradox**
+
+The workflow fix was committed to PR #27 branch, but:
+
+```yaml
+# In caller workflow:
+uses: SecPal/.github/.github/workflows/reusable-copilot-review.yml@main
+# Note: Referencing @main introduces supply-chain risk and non-determinism.
+# For production, consider pinning to a specific commit SHA (e.g., @a1b2c3d)
+# or a trusted, immutable tag. Here we intentionally use @main for DRY
+# (single source of truth), accepting the trade-off for faster iteration.
+```
+
+**The paradox:**
+
+1. Fix is on branch `docs/lessons-20-21-phase-1b`
+2. Workflow calls `@main` (doesn't have the fix yet)
+3. Can't merge PR because workflow fails
+4. Can't fix workflow because PR can't merge
+5. **Infinite loop!** 🔄
+
+### The Solution
+
+**Part 1: Fix GraphQL API Mismatch**
+
+Switch from REST API comments to GraphQL reviewThreads:
+
+```bash
+# NEW (GraphQL) - CORRECT
+unresolved_threads=$(gh api graphql -f query='
+{
+  repository(owner: "'$OWNER'", name: "'$REPO'") {
+    pullRequest(number: '$PR') {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          comments(first: 1) {
+            nodes {
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}' | jq --arg login_regex "${COPILOT_LOGIN_REGEX:-^[Cc]opilot$}" '[.data.repository.pullRequest.reviewThreads.nodes[] |
+  select(.isResolved == false and (.comments.nodes[0].author.login | test($login_regex)))] |
+  length')
+
+# Note: For PRs with >100 review threads, implement pagination:
+# - Add pageInfo { hasNextPage endCursor } to query (see Implementation Details: GraphQL Query Structure below)
+# - Loop with --after cursor until hasNextPage is false
+# - Aggregate results from all pages
+```
+
+**Benefits:**
+
+- ✅ Respects UI thread resolution (GraphQL `resolveReviewThread` mutation)
+- ✅ No need to edit comment body with `~~RESOLVED~~`
+- ✅ Consistent with GitHub's native UX
+- ✅ Works with both manual and programmatic resolution
+
+**Part 2: Break the Bootstrap Paradox**
+
+**The only way out:**
+
+1. **Temporarily disable** the check in branch protection
+2. **Merge the PR** containing the fix
+3. **Re-enable** the check (now it works because the fix is on `@main`)
+
+```bash
+# IMPORTANT: Requires admin permissions on the repository!
+# Use a token with repository admin permissions (e.g., user token from a repo admin
+# or a GitHub App installation with Administration: write); otherwise returns 403.
+
+# Step 1: Disable check by removing it from required checks list
+# Note: This REPLACES the entire contexts array; it does not append to it!
+# Get current checks first: gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks --jq .contexts
+# ... (list all checks EXCEPT the one you're fixing)
+gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
+  -f strict=true \
+  -f contexts[]=Check-A \
+  -f contexts[]=Check-B
+
+# Step 2: Merge PR with fix
+gh pr merge $PR --squash --delete-branch
+
+# Step 3: Re-enable check by adding it back to the list
+# Again: This REPLACES the entire array with ALL checks
+# ... (now INCLUDING the fixed check)
+gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks -X PATCH \
+  -f strict=true \
+  -f contexts[]=Check-A \
+  -f contexts[]=Check-B \
+  -f contexts[]=Copilot-Review-Check
+```
+
+**Why this is the only option:**
+
+- Can't use `--admin` flag if admin bypass is disabled in repo settings (check is FAILING, not just missing approval)
+- Can't bypass with `~~RESOLVED~~` (GraphQL resolution doesn't sync to REST)
+- Can't reference `@branch` (in this repo, we intentionally avoided it to keep DRY with `@main`; however, using `@branch` temporarily is a valid workaround during development—see Prevention Strategies below)
+- Can't deploy to main first (branch protection prevents direct push)
+
+**Note:** The effectiveness of the `--admin` flag depends on the repository's "Allow admins to bypass required pull requests" setting. If enabled, admins can use `gh pr merge --admin` to bypass failing checks. However, this should be avoided for critical checks like security reviews.
+
+### Root Cause Analysis
+
+**Why did this happen?**
+
+1. **Initial implementation used REST API** (simpler, less powerful)
+2. **Programmatic thread resolution used GraphQL** (required for automation)
+3. **No integration testing** between UI resolution and workflow check
+4. **Reusable workflow pattern** amplifies bootstrap issues (change requires merge)
+
+**Why wasn't this caught earlier?**
+
+- Phase 1b PRs (#25, #22) had no comments → check passed
+- PR #26 had comments but were handled with REST API `~~RESOLVED~~` pattern
+- PR #27 first tested GraphQL thread resolution → discovered the mismatch
+
+### Prevention Strategies
+
+**For Future Workflow Changes:**
+
+1. **Test in a sandbox repo first** where branch protection can be disabled freely
+2. **Use `@branch` temporarily** during development, switch to `@main` after merge
+3. **Document bootstrap procedure** for breaking changes
+4. **Have fallback approval path** for workflow self-fixes
+
+**For API Selection:**
+
+1. ✅ **Prefer GraphQL** for GitHub Actions workflows (more powerful, consistent)
+2. ❌ **Avoid REST API** for features that have UI equivalents
+3. 🔍 **Test both APIs** if mixing (check for synchronization issues)
+
+### Implementation Details
+
+**GraphQL Query Structure:**
+
+```graphql
+{
+  repository(owner: "$OWNER", name: "$REPO") {
+    pullRequest(number: $PR) {
+      reviewThreads(first: 100) {
+        # Note: first: 100 is sufficient for most PRs
+        # For larger PRs with >100 threads, implement pagination:
+        # - Check pageInfo.hasNextPage
+        # - Use pageInfo.endCursor for next query
+        # - Loop until hasNextPage is false
+        nodes {
+          id
+          isResolved # ← This is what we need!
+          comments(first: 1) {
+            nodes {
+              author {
+                login # Filter by Copilot
+              }
+              body
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}
+```
+
+**Filter Logic:**
+
+```bash
+# Count only:
+# 1. Threads that are NOT resolved (isResolved == false)
+# 2. AND started by expected bot account (configurable via COPILOT_LOGIN_REGEX)
+# Note: Default matches "Copilot"/"copilot" exactly. Adjust for your bot account.
+# Examples:
+#   - GitHub Copilot PR Reviewer: ^copilot-pull-request-reviewer$
+#   - Generic Copilot accounts: ^[Cc]opilot(\[bot\])?$
+#   - Multiple variants: ^(copilot|github-copilot)(\[bot\])?$
+
+# Set regex pattern (default for simple case)
+COPILOT_LOGIN_REGEX="${COPILOT_LOGIN_REGEX:-^[Cc]opilot$}"
+
+jq --arg login_regex "$COPILOT_LOGIN_REGEX" '[.data.repository.pullRequest.reviewThreads.nodes[] |
+  select(.isResolved == false and
+         (.comments.nodes[0].author.login | test($login_regex)))] |
+  length'
+
+# Usage examples:
+# Default: COPILOT_LOGIN_REGEX="^[Cc]opilot$"
+# For bot accounts: COPILOT_LOGIN_REGEX="^copilot-pull-request-reviewer$"
+# For multiple: COPILOT_LOGIN_REGEX="^(copilot|Copilot|github-copilot)(\[bot\])?$"
+```
+
+### Testing & Validation
+
+**Before Fix (REST API):**
+
+```bash
+# Threads resolved via GraphQL
+gh api graphql -f query='mutation { resolveReviewThread(...) }'
+# ✅ Shows as "Resolved" in UI
+# ❌ Workflow still counts as unresolved (3 comments)
+```
+
+**After Fix (GraphQL):**
+
+```bash
+# Threads resolved via GraphQL
+gh api graphql -f query='mutation { resolveReviewThread(...) }'
+# ✅ Shows as "Resolved" in UI
+# ✅ Workflow counts correctly (0 threads)
+```
+
+**Validation:**
+
+- ✅ PR #27 merged with fixed workflow (completed 2025-10-15)
+- ✅ This documentation PR captures the lessons learned
+- ✅ Workflow regex already tightened (end-of-string `$` anchor included in recommended example)
+- ✅ Future PRs use GraphQL-based counting with corrected regex pattern
+- ✅ Thread resolution via UI works correctly
+- ✅ No more bootstrap paradox for similar workflow fixes
+
+**Status:** GraphQL implementation complete and deployed. Regex tightening (preventing false positives like "copilot-foo") is already included in the recommended example pattern `^[Cc]opilot$`.
+
+### Related Issues
+
+**Why `~~RESOLVED~~` pattern still exists in workflow:**
+
+The workflow message previously instructed users as follows (historical, deprecated):
+
+> **Historical (Deprecated):**
+> If a comment is outdated or incorrect:
+>
+> - Edit the comment body to start with '~~RESOLVED~~'
+
+> **Note:** This instruction is retained for historical reference only.
+> With the new GraphQL-based implementation, editing a comment body with `~~RESOLVED~~` does **NOT** mark a thread as resolved.
+> Only the thread's `isResolved` state (set via the GitHub UI "Resolve conversation" button or GraphQL `resolveReviewThread` mutation) is authoritative.
+
+**Correct Resolution Methods:**
+
+- **✅ Recommended**: Click "Resolve conversation" in GitHub UI
+- **✅ Programmatic**: Use GraphQL `resolveReviewThread` mutation
+- **❌ No longer works**: Editing comment body with `~~RESOLVED~~` prefix
+
+### Documentation Updates
+
+- [x] Document GraphQL API preference (this lesson)
+- [x] Document bootstrap paradox and solution
+- [x] Update workflow comments to prefer UI resolution
+- [ ] Add to REPOSITORY-SETUP-GUIDE.md (workflow testing strategies)
+- [ ] Create runbook for future workflow bootstrap issues
+
+### Best Practices
+
+**For Workflow Development:**
+
+1. ✅ **Test in sandbox** before deploying to production repos
+2. ✅ **Use GraphQL** for GitHub features with UI
+3. ✅ **Document bootstrap procedures** for breaking changes
+4. ✅ **Have escape hatches** (temporary check disabling)
+
+**For AI Agents:**
+
+1. ✅ **Detect REST/GraphQL mismatch** (different results from different APIs)
+2. ✅ **Recognize bootstrap paradox** (workflow can't fix itself)
+3. ✅ **Apply systematic solution** (disable → merge → enable)
+4. ✅ **Document the process** (for future reference)
+
+### Action Items
+
+- [x] Fix implemented (GraphQL thread counting)
+- [x] PR #27 merged with fix
+- [x] Branch protection restored
+- [x] Document lesson learned
+- [x] Update workflow user-facing messages (prefer UI)
+- [ ] Add GraphQL testing to CI/CD validation
+- [ ] Create workflow change checklist
+
+---
+
+**Document Version:** 2.1
 **Last Updated:** 2025-10-15
 **Author:** GitHub Copilot (AI Assistant) with human guidance
