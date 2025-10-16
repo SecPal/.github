@@ -2365,6 +2365,7 @@ The workflow message previously instructed users as follows (historical, depreca
 
 ```bash
 # Replace <OWNER>, <REPO>, and <PR_NUMBER> with your specific values
+# Note: This queries first 100 threads. For PRs with >100 threads, pagination is needed.
 # Get all unresolved Copilot thread IDs
 thread_ids=$(gh api graphql -f query='{
   repository(owner:"<OWNER>", name:"<REPO>") {
@@ -2384,7 +2385,7 @@ thread_ids=$(gh api graphql -f query='{
   }
 }' | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false and
-         (.comments.nodes[0].author.login | test("^[Cc]opilot(?:-pull-request-reviewer)?$"))) |
+         ((.comments.nodes[0].author.login // "") | test("^[Cc]opilot(?:-pull-request-reviewer)?$"))) |
   .id')
 
 # Loop through and resolve each thread
