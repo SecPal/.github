@@ -2360,6 +2360,46 @@ The workflow message previously instructed users as follows (historical, depreca
 
 - **✅ Recommended**: Click "Resolve conversation" in GitHub UI
 - **✅ Programmatic**: Use GraphQL `resolveReviewThread` mutation
+
+**Example: Resolve all Copilot threads programmatically:**
+
+```bash
+# Get all unresolved Copilot thread IDs
+thread_ids=$(gh api graphql -f query='{
+  repository(owner:"SecPal", name:".github") {
+    pullRequest(number: 35) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes {
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}' | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
+  select(.isResolved == false and
+         (.comments.nodes[0].author.login | test("^[Cc]opilot(-pull-request-reviewer)?$"))) |
+  .id')
+
+# Loop through and resolve each thread
+for thread_id in $thread_ids; do
+  echo "Resolving thread: $thread_id"
+  gh api graphql -f query="mutation {
+    resolveReviewThread(input: {threadId: \"$thread_id\"}) {
+      thread {
+        id
+        isResolved
+      }
+    }
+  }"
+done
+```
+
 - **❌ No longer works**: Editing comment body with `~~RESOLVED~~` prefix
 
 ### Documentation Updates
