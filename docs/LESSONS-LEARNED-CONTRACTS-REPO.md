@@ -2364,10 +2364,11 @@ The workflow message previously instructed users as follows (historical, depreca
 **Example: Resolve all Copilot threads programmatically:**
 
 ```bash
+# Replace <OWNER>, <REPO>, and <PR_NUMBER> with your specific values
 # Get all unresolved Copilot thread IDs
 thread_ids=$(gh api graphql -f query='{
-  repository(owner:"SecPal", name:".github") {
-    pullRequest(number: 35) {
+  repository(owner:"<OWNER>", name:"<REPO>") {
+    pullRequest(number: <PR_NUMBER>) {
       reviewThreads(first: 100) {
         nodes {
           id
