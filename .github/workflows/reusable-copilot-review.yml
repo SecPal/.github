@@ -89,7 +89,7 @@ jobs:
                 }
               }
             }
-          }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot")))] | length')
+          }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and (.comments.nodes[0].author.login | test("^[Cc]opilot(-pull-request-reviewer)?$")))] | length')
 
           echo "open_count=$unresolved_threads" >> $GITHUB_OUTPUT
           echo "Found $unresolved_threads unresolved Copilot review thread(s)"
