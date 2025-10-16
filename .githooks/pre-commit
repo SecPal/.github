@@ -4,7 +4,11 @@
 #
 # Pre-commit hook template for all SecPal repositories
 #
-# Installation:
+# Installation (recommended):
+#   git config core.hooksPath .githooks
+#   chmod +x .githooks/pre-commit
+#
+# Alternative (legacy method, if not using core.hooksPath):
 #   cp .githooks/pre-commit .git/hooks/pre-commit
 #   chmod +x .git/hooks/pre-commit
 #
