@@ -71,10 +71,16 @@ jobs:
           REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
           REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
 
-          unresolved_threads=$(gh api graphql -f query='
-          {
-            repository(owner: "'$REPO_OWNER'", name: "'$REPO_NAME'") {
-              pullRequest(number: '$PR_NUMBER') {
+          # Use GraphQL variables instead of string interpolation for safety
+          # This prevents issues with special characters in repo names
+          unresolved_threads=$(gh api graphql \
+            -f owner="$REPO_OWNER" \
+            -f name="$REPO_NAME" \
+            -F number="$PR_NUMBER" \
+            -f query='
+          query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) {
+              pullRequest(number: $number) {
                 reviewThreads(first: 100) {
                   nodes {
                     isResolved
