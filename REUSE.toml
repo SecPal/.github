@@ -4,7 +4,7 @@ SPDX-PackageSupplier = "SecPal Contributors"
 SPDX-PackageDownloadLocation = "https://github.com/SecPal/.github"
 
 [[annotations]]
-path = [".gitignore", "LICENSE", "branch-protection-**.json", "labeler.yml", "_config.yml", "package.json", "package-lock.json", ".prettierignore", ".prettierrc", ".license-policy.json"]
+path = [".gitignore", "LICENSE", "branch-protection-**.json", "labeler.yml", "_config.yml", "package.json", "package-lock.json", ".prettierignore", ".prettierrc", ".license-policy.json", ".githooks/pre-commit"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2025 SecPal Contributors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
