@@ -478,7 +478,7 @@ fi
 
 - Lesson #18: Copilot Review Enforcement System
 - Lesson #19: Infinite Review Loop Prevention
-- `README-COPILOT-ENFORCEMENT.md` (both repos)
+- `docs/workflows/copilot-enforcement.md` (workflow documentation)
 
 ---
 
