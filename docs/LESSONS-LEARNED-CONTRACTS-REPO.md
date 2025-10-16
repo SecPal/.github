@@ -2162,7 +2162,7 @@ unresolved_threads=$(gh api graphql -f query='
   length')
 
 # Note: For PRs with >100 review threads, implement pagination:
-# - Add pageInfo { hasNextPage endCursor } to query (see structure above)
+# - Add pageInfo { hasNextPage endCursor } to query (see Implementation Details: GraphQL Query Structure below)
 # - Loop with --after cursor until hasNextPage is false
 # - Aggregate results from all pages
 ```
