@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Pre-commit hook template for all SecPal repositories
+#
+# Installation:
+#   cp .github/templates/hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# This hook enforces Lesson #17 (Git State Verification) by:
+# - Detecting whitespace errors
+# - Checking code formatting (Prettier)
+# - Verifying REUSE compliance
+# - Catching formatter-induced changes after git add
+
+set -e
+
+echo "🔍 Pre-commit Hook: Running checks (Lesson #17 compliance)..."
+echo ""
+
+# 1. Check for whitespace errors
+echo "📝 Checking for whitespace errors..."
+if ! git diff --check --cached; then
+  echo ""
+  echo "❌ Whitespace errors detected!"
+  echo "Fix them and try again."
+  exit 1
+fi
+echo "✅ No whitespace errors"
+echo ""
+
+# 2. Run Prettier formatting check (if package.json has format:check script)
+if [ -f "package.json" ] && grep -q '"format:check"' package.json; then
+  echo "🎨 Checking code formatting (Prettier)..."
+  if ! npm run format:check --silent; then
+    echo ""
+    echo "❌ Code formatting check failed!"
+    echo ""
+    echo "Files need formatting. Run:"
+    echo "  npm run format"
+    echo ""
+    echo "Then stage the changes:"
+    echo "  git add -A"
+    echo ""
+    exit 1
+  fi
+  echo "✅ All files properly formatted"
+  echo ""
+fi
+
+# 3. Check REUSE compliance (if reuse tool is installed)
+if command -v reuse &> /dev/null; then
+  echo "📋 Checking REUSE compliance..."
+  if ! reuse lint > /dev/null 2>&1; then
+    echo ""
+    echo "❌ REUSE compliance check failed!"
+    echo ""
+    echo "Run this to see details:"
+    echo "  reuse lint"
+    echo ""
+    echo "Common fixes:"
+    echo "  - Add SPDX headers to new files"
+    echo "  - Download missing licenses: reuse download <license>"
+    echo "  - Check REUSE.toml annotations"
+    echo ""
+    exit 1
+  fi
+  echo "✅ REUSE compliant"
+  echo ""
+else
+  echo "⚠️  REUSE tool not installed - skipping compliance check"
+  echo "   Install: pip install reuse"
+  echo ""
+fi
+
+# 4. Check for unstaged changes (formatter detection)
+echo "🔎 Checking for unstaged changes (formatter detection)..."
+if ! git diff --quiet; then
+  echo ""
+  echo "⚠️  WARNING: Unstaged changes detected!"
+  echo ""
+  echo "This might be from formatters running after 'git add'."
+  echo "Modified files:"
+  git diff --name-only
+  echo ""
+  echo "Recommendation:"
+  echo "  1. Review changes: git diff"
+  echo "  2. Stage them: git add -A"
+  echo "  3. Commit again"
+  echo ""
+  echo "❌ Blocking commit to prevent inconsistent state (Lesson #17)"
+  exit 1
+fi
+echo "✅ No unstaged changes"
+echo ""
+
+echo "✅ All pre-commit checks passed!"
+echo ""
+exit 0

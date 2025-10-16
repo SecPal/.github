@@ -106,6 +106,30 @@ git config --global user.signingkey ~/.ssh/id_ed25519.pub
 
 See [GitHub's guide on signing commits](https://docs.github.com/en/authentication/managing-commit-signature-verification).
 
+### Install Git Hooks
+
+We use pre-commit hooks to catch issues before they reach CI (Lesson #17: Git State Verification).
+
+**Install hooks** (one-time setup per repository):
+
+```bash
+# Option 1: Configure git to use tracked hooks directory (recommended)
+git config core.hooksPath .githooks
+
+# Option 2: Copy hooks manually
+cp .githooks/* .git/hooks/
+chmod +x .git/hooks/pre-commit
+```
+
+**What the pre-commit hook checks:**
+
+- ✅ Whitespace errors (trailing spaces, incorrect line endings)
+- ✅ Code formatting via Prettier
+- ✅ REUSE compliance (SPDX headers)
+- ✅ Unstaged changes detection (catches formatter modifications)
+
+**Note:** If a hook check fails, fix the issues and commit again. The hooks prevent common CI failures and save time!
+
 ## 🔨 Making Changes
 
 ### Fork & Create a Branch
