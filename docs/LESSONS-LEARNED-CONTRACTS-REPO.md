@@ -2383,7 +2383,7 @@ thread_ids=$(gh api graphql -f query='{
   }
 }' | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false and
-         (.comments.nodes[0].author.login | test("^[Cc]opilot(-pull-request-reviewer)?$"))) |
+         (.comments.nodes[0].author.login | test("^[Cc]opilot(?:-pull-request-reviewer)?$"))) |
   .id')
 
 # Loop through and resolve each thread
