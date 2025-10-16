@@ -73,15 +73,25 @@ EOF
 
 1. **Request Copilot review** (if not automatic):
 
+   **Recommended: Via MCP tool** (when using GitHub Copilot Chat in VS Code):
+
+   ```
+   @github-pull-request Request a Copilot review for this PR
+   ```
+
+   The tool `mcp_github_github_request_copilot_review` is more reliable than comment-based requests.
+
+   **Alternative: Via comment**:
+
    ```bash
-   # Via comment
+   # Via GitHub web interface or CLI
    Comment "@copilot review" on your PR
 
-   # Via CLI
+   # Or, via gh CLI
    gh pr comment <number> --body "@copilot review"
    ```
 
-2. **Wait ~60 seconds** for review to complete
+2. **Wait ~30-60 seconds** for review to complete
 
 3. **Address all comments**:
    - Fix the code issues
