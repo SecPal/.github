@@ -5,6 +5,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Lessons Learned: contracts Repository Setup
 
+> **⚠️ DEPRECATED:** This monolithic document has been split into individual lesson files for better maintainability.
+>
+> **See:** [`docs/lessons/`](lessons/) directory for the current, organized lessons.
+>
+> **Index:** [`docs/lessons/README.md`](lessons/README.md)
+>
+> This file is kept for historical reference only and should not be updated.
+
+---
+
 **Date:** 2025-10-11
 **Repository:** SecPal/contracts
 **Purpose:** OpenAPI specifications and TypeScript type definitions
