@@ -141,7 +141,7 @@ fi
 ```bash
 # Get the FAILED enforcement run (the one blocking merge)
 FAILED_RUN=$(gh run list --workflow="Copilot Review Enforcement" \
-  --branch=docs/thread-resolution-workflow --json databaseId,conclusion \
+  --branch=$(git branch --show-current) --json databaseId,conclusion \
   --jq '.[] | select(.conclusion == "failure") | .databaseId' | head -1)
 
 if [ -n "$FAILED_RUN" ]; then
