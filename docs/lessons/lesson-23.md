@@ -56,7 +56,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 5. Always request review after addressing comments
 
 **Complete Workflow:**
-See [Review Workflow Documentation](../WORKFLOW-REVIEW-DISCIPLINE.md) (to be created)
+TODO: Create "Review Workflow Documentation" and link here. (See issue tracker for progress.)
 
 ## Related Lessons
 

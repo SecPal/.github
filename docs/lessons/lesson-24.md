@@ -25,7 +25,7 @@ echo "denied=$DENIED" >> $GITHUB_OUTPUT          # Sets empty value
 ```
 
 **Impact:**
-Security/quality workflows (dependency-review, license-check, signed-commits, security scanning) could pass even when commands failed → **false sense of security**.
+Critical workflows (dependency-review, license-check, signed-commits, security scanning) could pass even when commands failed → **false sense of security**.
 
 ## Solution
 

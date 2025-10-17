@@ -55,7 +55,7 @@ gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup[].name'
 1. **Always verify** check names from actual PR before configuring protection
 2. Update branch protection when workflow structure changes
 3. Test protection works by creating test PR
-4. Document check names in `WORKFLOW-STATUS-CHECK-NAMES.md`
+4. Create and document check names in `WORKFLOW-STATUS-CHECK-NAMES.md` (if not already present)
 
 **This is a recurrence of Lesson #1** - needs better enforcement!
 
