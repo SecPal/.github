@@ -139,6 +139,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Navigate to .github root directory
+# Note: All subsequent tests (Test 6-8) assume working directory is the .github repository root
 if ! cd "$GITHUB_ROOT"; then
     echo -e "${RED}  ❌${NC} Failed to navigate to .github root directory"
     exit 1

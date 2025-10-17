@@ -53,7 +53,14 @@ jobs:
               drift_detected=true
 
               # Generate diff for report with truncation handling
-              full_diff_output=$(diff -u <(echo "$template_content") <(echo "$remote_content") || true)
+              # Use temp files to avoid shell argument length limits with large files
+              template_tmp=$(mktemp)
+              remote_tmp=$(mktemp)
+              printf "%s" "$template_content" > "$template_tmp"
+              printf "%s" "$remote_content" > "$remote_tmp"
+              full_diff_output=$(diff -u "$template_tmp" "$remote_tmp" || true)
+              rm -f "$template_tmp" "$remote_tmp"
+
               diff_line_count=$(echo "$full_diff_output" | wc -l)
               max_diff_lines=50
 
