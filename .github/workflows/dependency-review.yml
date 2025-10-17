@@ -8,8 +8,9 @@ on:
     branches: [main, develop]
 
 # Note: Permissions are intentionally limited to 'read' for the calling workflow.
-# The reusable workflow at SecPal/.github/.github/workflows/reusable-dependency-review.yml@main
-# must declare any write permissions it needs, as permissions do not automatically inherit.
+# The reusable workflow can inherit permissions granted by this calling workflow,
+# which are intentionally restricted to 'read'. If the reusable workflow requires
+# write permissions, it must explicitly request them.
 permissions:
   contents: read
   pull-requests: read
