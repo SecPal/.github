@@ -111,7 +111,7 @@ Each lesson document contains:
 - **High Priority**: 12
 - **Medium Priority**: 9
 - **Implemented**: 23
-- **In Progress**: 2
+- **Documented**: 2 (Lessons #20, #25)
 
 ## 🔄 Continuous Improvement
 
