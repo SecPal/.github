@@ -41,6 +41,8 @@ steps:
     env:
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
     run: |
+      set -euo pipefail
+
       if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
         echo "skip=true" >> "$GITHUB_OUTPUT"
         echo "🤖 Dependabot PR detected - skipping Copilot review requirement"
@@ -154,21 +156,30 @@ done
 - **Fallback handling**: Make the implementation more resilient for non-PR contexts by falling back to `$GITHUB_ACTOR` when `github.event.pull_request.user.login` is unavailable:
 
 ```yaml
-env:
-  PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-  FALLBACK_AUTHOR: ${{ github.actor }}
-run: |
-  AUTHOR="${PR_AUTHOR:-$FALLBACK_AUTHOR}"
-  if [ "$AUTHOR" = "dependabot[bot]" ]; then
-    # ... detection logic
-  fi
+- name: Skip Copilot review for Dependabot
+  id: check-author
+  env:
+    PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+    FALLBACK_AUTHOR: ${{ github.actor }}
+  run: |
+    set -euo pipefail
+
+    AUTHOR="${PR_AUTHOR:-$FALLBACK_AUTHOR}"
+    if [ "$AUTHOR" = "dependabot[bot]" ]; then
+      echo "skip=true" >> "$GITHUB_OUTPUT"
+      echo "🤖 Dependabot PR detected - skipping Copilot review requirement"
+    else
+      echo "skip=false" >> "$GITHUB_OUTPUT"
+      echo "👤 Human-authored PR - Copilot review required"
+    fi
 ```
 
-- **Job-level guard**: Consider moving to job-level `if` condition instead of step-level checks for better CI performance:
+- **Job-level guard**: Consider moving to job-level `if` condition instead of step-level checks for better CI performance. **Important**: If adopting this approach, ensure job names match existing required status checks (e.g., `name: Copilot Review`) or update branch protection rules accordingly:
 
 ```yaml
 jobs:
   copilot-review:
+    name: Copilot Review # Must match branch protection required check name
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -176,11 +187,13 @@ jobs:
         # ... existing review checks
 
   dependabot-auto-pass:
+    name: Copilot Review # Same name so branch protection is satisfied
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Dependabot auto-pass
         run: |
+          set -euo pipefail
           echo "✅ PASSED: Copilot review not required for automated dependency updates"
           echo "Quality assurance is provided by:"
           echo "  ✓ Automated tests (contracts-tests, unit tests, etc.)"
