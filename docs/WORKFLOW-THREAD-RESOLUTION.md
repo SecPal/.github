@@ -92,7 +92,9 @@ mutation {
 }
 " 2>&1)
 
-# Check for errors
+# Check for errors (repeated pattern for self-contained copy-paste examples)
+# Note: While this pattern repeats in Steps 2-3 and the Complete Script,
+# we intentionally keep it duplicated so each section is independently usable.
 if echo "$RESULT" | jq -e '.errors' > /dev/null 2>&1; then
   echo "❌ Failed to resolve thread $THREAD_ID"
   echo "$RESULT" | jq '.errors'
