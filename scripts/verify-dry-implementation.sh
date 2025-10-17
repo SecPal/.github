@@ -95,6 +95,7 @@ echo ""
 echo "Test 5: Verify contracts workflows migrated to reusables..."
 
 # Use environment variable if set, otherwise default to sibling directory
+# CONTRACTS_REPO_PATH: Optional path to contracts repository (default: ../contracts)
 CONTRACTS_PATH="${CONTRACTS_REPO_PATH:-../contracts}"
 
 if cd "$CONTRACTS_PATH" 2>/dev/null; then
