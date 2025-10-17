@@ -13,5 +13,5 @@
     "AGPL-3.0-or-later"
   ],
   "deniedLicenses": ["GPL-2.0", "LGPL-2.0", "LGPL-2.1", "AGPL-1.0"],
-  "description": "License policy for AGPL-3.0-or-later compatibility. Note: AGPL-3.0-or-later is allowed (our project license), but older AGPL-1.0 is denied due to compatibility concerns."
+  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license and meets our compatibility requirements. AGPL-1.0 is explicitly denied because it is not compatible with AGPL-3.0-or-later and cannot be upgraded automatically; dependencies must use AGPL-3.0-or-later or a more permissive license. This distinction is important for version-specific compatibility and compliance."
 }
