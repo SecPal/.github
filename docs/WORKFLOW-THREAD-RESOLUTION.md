@@ -139,9 +139,17 @@ fi
 ### Step 4: Rerun Enforcement Check
 
 ```bash
-# Only after ALL threads are resolved
-gh run rerun $(gh run list --workflow="Copilot Review Enforcement" \
-  --branch=docs/lessons-split --limit=1 --json databaseId --jq '.[0].databaseId')
+# Get the FAILED enforcement run (the one blocking merge)
+FAILED_RUN=$(gh run list --workflow="Copilot Review Enforcement" \
+  --branch=docs/thread-resolution-workflow --json databaseId,conclusion \
+  --jq '.[] | select(.conclusion == "failure") | .databaseId' | head -1)
+
+if [ -n "$FAILED_RUN" ]; then
+  echo "🔄 Rerunning failed check: $FAILED_RUN"
+  gh run rerun $FAILED_RUN
+else
+  echo "✅ No failed runs found"
+fi
 ```
 
 ## Complete Script Example
@@ -201,6 +209,36 @@ for THREAD_ID in $THREAD_IDS; do
 done
 
 echo "🎉 All threads resolved successfully!"
+
+# Verify all threads are resolved
+UNRESOLVED=$(gh api graphql -f query="
+query {
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 50) {
+        nodes { id isResolved }
+      }
+    }
+  }
+}" --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
+
+if [ "$UNRESOLVED" -gt 0 ]; then
+  echo "⚠️  Still $UNRESOLVED unresolved - manual action required"
+  exit 1
+fi
+
+# Rerun the FAILED enforcement check (not the latest one!)
+FAILED_RUN=$(gh run list --workflow="Copilot Review Enforcement" \
+  --branch=$(git branch --show-current) --json databaseId,conclusion \
+  --jq '.[] | select(.conclusion == "failure") | .databaseId' | head -1)
+
+if [ -n "$FAILED_RUN" ]; then
+  echo "🔄 Rerunning failed enforcement check: $FAILED_RUN"
+  gh run rerun $FAILED_RUN
+  echo "✅ Check rerun requested - PR should be ready to merge in ~30s"
+else
+  echo "✅ No failed runs - PR is ready to merge"
+fi
 ```
 
 ## Key Learnings
@@ -242,6 +280,24 @@ If GraphQL fails:
 - Don't try to bypass branch protection
 - Inform user: "Please resolve threads manually via GitHub UI"
 - Provide PR URL and wait for manual action
+
+### 6. Rerun the FAILED Check, Not the Latest
+
+**CRITICAL:** When rerunning enforcement checks:
+
+```bash
+# WRONG: Reruns the latest (might be SUCCESS already)
+gh run rerun $(gh run list --limit=1 --json databaseId --jq '.[0].databaseId')
+
+# CORRECT: Rerun the FAILED check (the one blocking merge)
+FAILED_RUN=$(gh run list --workflow="Copilot Review Enforcement" \
+  --json databaseId,conclusion \
+  --jq '.[] | select(.conclusion == "failure") | .databaseId' | head -1)
+gh run rerun $FAILED_RUN
+```
+
+GitHub shows ALL check runs, but only the **failed** one blocks the merge.
+Rerunning the latest (successful) check does nothing to unblock.
 
 ## Related Lessons
 
