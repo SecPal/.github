@@ -256,6 +256,4 @@ contracts repo:
 ---
 
 **Implementation Date:** 2025-10-17
-**Implemented By:** GitHub Copilot
-**Reviewed By:** Pending
 **Status:** ✅ Ready for Review & Merge

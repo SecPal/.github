@@ -276,7 +276,7 @@ Add check for problematic patterns:
 
 ```bash
 # Check for AI attribution in staged files
-if git diff --cached | grep -iE "co-authored-by.*copilot|implemented by.*AI|@SecPal/"; then
+if git diff --cached | grep -iE "co-authored-by.*copilot|implemented by.*AI|@SecPal/\w+"; then
   echo "❌ LESSON #28 VIOLATION: Remove AI attribution and team mentions"
   echo ""
   echo "Remove:"
