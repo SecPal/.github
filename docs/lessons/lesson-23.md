@@ -36,7 +36,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
    # Ask GitHub Copilot in chat (MCP tool available via Claude Desktop/Cline)
    # Example uses concrete values for clarity - customize for your repo/PR:
    # mcp_github_github_request_copilot_review('<owner>', '<repo>', <pr_number>)
-   mcp_github_github_request_copilot_review('SecPal', '.github', 43)
+   mcp_github_github_request_copilot_review('SecPal', '.github', 42)
    ```
 5. **Address ALL comments** - fix code based on feedback
 6. **Resolve ALL threads via GraphQL** (CRITICAL - see [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md))

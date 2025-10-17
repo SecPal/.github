@@ -93,8 +93,8 @@ mutation {
 " 2>&1)
 
 # Check for errors (repeated pattern for self-contained copy-paste examples)
-# Note: While this pattern repeats in Steps 2-3 and the Complete Script,
-# we intentionally keep it duplicated so each section is independently usable.
+# Note: This error-checking pattern appears in three locations: Step 2, Step 3's verification check, and the Complete Script.
+# We intentionally keep it duplicated so each section is independently usable.
 if echo "$RESULT" | jq -e '.errors' > /dev/null 2>&1; then
   echo "❌ Failed to resolve thread $THREAD_ID"
   echo "$RESULT" | jq '.errors'
@@ -111,10 +111,10 @@ fi
 
 ```bash
 PR_NUMBER=42
-UNRESOLVED=$(gh api graphql -f query='
+UNRESOLVED=$(gh api graphql -f query="
 query {
-  repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: '$PR_NUMBER') {
+  repository(owner: \"SecPal\", name: \".github\") {
+    pullRequest(number: $PR_NUMBER) {
       reviewThreads(first: 50) {
         nodes {
           id
@@ -127,7 +127,7 @@ query {
     }
   }
 }
-' --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
+" --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
 
 if [ "$UNRESOLVED" -gt 0 ]; then
   echo "⚠️  Still $UNRESOLVED unresolved threads"
