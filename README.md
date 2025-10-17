@@ -121,7 +121,27 @@ See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for complete rules and setup in
 
 **Note**: Branch protection is applied to each repository individually (api, frontend, contracts, .github).
 
-## 📝 Issue & PR Templates
+## � Required Secrets
+
+### SYNC_TOKEN
+
+The automated template synchronization workflow (`sync-templates.yml`) requires a `SYNC_TOKEN` secret with the following permissions:
+
+- `contents: write` - To push changes to target repositories
+- `pull-requests: write` - To create pull requests in target repositories
+
+**Setup Instructions:**
+
+1. Create a GitHub Personal Access Token (Classic) or Fine-Grained Token
+2. For Classic Token: Select scopes `repo` (full control)
+3. For Fine-Grained Token: Grant permissions `contents: write` and `pull-requests: write` for target repositories
+4. Add the token as a secret named `SYNC_TOKEN` in this repository's settings
+
+**Why not GITHUB_TOKEN?**
+
+The default `GITHUB_TOKEN` only has permissions for the current repository. Cross-repository operations (creating PRs in `contracts`, `api`, etc.) require a Personal Access Token with broader scope.
+
+## �📝 Issue & PR Templates
 
 ### Creating Issues
 

@@ -139,11 +139,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Navigate to .github root directory
-cd "$GITHUB_ROOT" || {
+if ! cd "$GITHUB_ROOT"; then
     echo -e "${RED}  ❌${NC} Failed to navigate to .github root directory"
-    ((failed++))
     exit 1
-}
+fi
 
 if [ -f "docs/lessons/lesson-27.md" ]; then
     echo -e "${GREEN}  ✅${NC} Lesson #27 exists"
