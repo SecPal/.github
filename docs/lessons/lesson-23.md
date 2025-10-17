@@ -49,7 +49,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 2. **Address comments** → Fix code, commit, push
 3. **Request review manually** → Use MCP tool
 4. **Wait for review** → Check if "no new comments"
-5. **Resolve threads via GraphQL** → Mark conversations complete (see [Thread Resolution](../WORKFLOW-THREAD-RESOLUTION.md))
+5. **Resolve threads via GraphQL** → Mark conversations complete (see [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md))
 6. **Verify all resolved** → Check enforcement passes
 7. **Rerun if race condition** → Check before review completed
 8. **All green** → Merge ✅

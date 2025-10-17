@@ -93,7 +93,7 @@ mutation {
 " 2>&1)
 
 # Check for errors (repeated pattern for self-contained copy-paste examples)
-# Note: This error-checking pattern appears in three locations: Step 2, Step 3's verification check, and the Complete Script.
+# Note: This error-checking pattern appears in Step 2 and the Complete Script.
 # We intentionally keep it duplicated so each section is independently usable.
 if echo "$RESULT" | jq -e '.errors' > /dev/null 2>&1; then
   echo "❌ Failed to resolve thread $THREAD_ID"
