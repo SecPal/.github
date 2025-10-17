@@ -81,17 +81,16 @@ gh api /repos/SecPal/.github/pulls/$PR_NUMBER/comments --jq '.[] | {
 ```bash
 THREAD_ID="PRRC_kwDOQAoSms6RVnL7"
 
-RESULT=$(gh api graphql -f query="$(cat <<EOF
+RESULT=$(gh api graphql -f query="
 mutation {
-  resolveReviewThread(input: {threadId: "$THREAD_ID"}) {
+  resolveReviewThread(input: {threadId: \"$THREAD_ID\"}) {
     thread {
       id
       isResolved
     }
   }
 }
-EOF
-)" 2>&1)
+" 2>&1)
 
 # Check for errors
 if echo "$RESULT" | jq -e '.errors' > /dev/null 2>&1; then
