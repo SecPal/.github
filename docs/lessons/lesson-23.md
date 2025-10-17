@@ -45,7 +45,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 
 1. **First push** → Copilot reviews automatically ✅
 2. **Address comments** → Fix code, commit, push
-3. **Request review manually** → Use MCP tool (GraphQL)
+3. **Request review manually** → Use MCP tool
 4. **Wait for review** → Check if "no new comments"
 5. **Resolve threads via GraphQL** → Mark conversations complete (see [Thread Resolution](../WORKFLOW-THREAD-RESOLUTION.md))
 6. **Verify all resolved** → Check enforcement passes
