@@ -251,5 +251,4 @@ If GraphQL fails:
 
 1. **Request MCP Tool:** Ask MCP maintainers to add `resolve_review_thread` tool
 2. **Create Helper Script:** Package the complete script above as reusable workflow
-3. **Update Lesson #23:** Add thread resolution step to workflow
-4. **Pre-merge Checklist:** Always verify threads before requesting final review
+3. **Pre-merge Checklist:** Always verify threads before requesting final review

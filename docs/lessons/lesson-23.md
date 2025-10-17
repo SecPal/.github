@@ -34,7 +34,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 4. **Request Copilot review via MCP after each push:**
    ```bash
    # Use MCP GitHub tool (NOT gh api)
-   mcp_github_github_request_copilot_review(owner, repo, pullNumber)
+   mcp_github_github_request_copilot_review('SecPal', '.github', 42)
    ```
 5. **Address ALL comments** - fix code based on feedback
 6. **Resolve ALL threads via GraphQL** (CRITICAL - see [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md))
