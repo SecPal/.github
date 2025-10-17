@@ -104,6 +104,17 @@ Each lesson document contains:
 3. **Action for Future Repos**: Copy-paste implementation steps
 4. **Related Lessons**: Cross-references to similar issues
 
+## ✍️ Writing Guidelines
+
+When creating or updating lessons, follow these principles:
+
+- **Use English**: All lessons must be written in English for consistency and accessibility
+- **No user quotes**: Document processes and solutions, not conversation history or user feedback
+- **Focus on patterns**: Document reusable workflows and patterns, not one-time fixes
+- **Self-contained**: Each lesson should be understandable without external context
+
+See [Lesson #25](lesson-25.md) for quality standards and [CONTRIBUTING.md](../../CONTRIBUTING.md) for general contribution guidelines.
+
 ## 📊 Statistics
 
 - **Total Lessons**: 25
