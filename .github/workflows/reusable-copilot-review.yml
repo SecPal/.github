@@ -15,7 +15,28 @@ jobs:
       checks: write
 
     steps:
+      - name: Skip Copilot review for Dependabot
+        id: check-author
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          echo "📝 PR Author: $PR_AUTHOR"
+
+          if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "🤖 Dependabot PR detected - skipping Copilot review requirement"
+            echo ""
+            echo "Rationale: Dependency updates are automated and don't require code review."
+            echo "Quality assurance is provided by CI tests, npm audit, and other checks."
+            echo ""
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "👤 Human-authored PR - Copilot review required"
+          fi
+
       - name: Check for Copilot review
+        if: steps.check-author.outputs.skip != 'true'
         id: check-review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,6 +81,7 @@ jobs:
           fi
 
       - name: Count open Copilot comments
+        if: steps.check-author.outputs.skip != 'true'
         id: count-comments
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,6 +126,7 @@ jobs:
           echo "Note: Using GraphQL reviewThreads API (respects UI thread resolution)"
 
       - name: Enforce Copilot review requirement
+        if: steps.check-author.outputs.skip != 'true'
         env:
           REVIEW_STATUS: ${{ steps.check-review.outputs.status }}
           OPEN_COMMENTS: ${{ steps.count-comments.outputs.open_count }}
@@ -194,6 +217,26 @@ jobs:
           fi
 
           echo "✅ PASSED: Copilot review complete with 0 open comments"
+          echo ""
+          echo "PR is ready for merge! 🎉"
+          echo ""
+
+      - name: Dependabot auto-pass
+        if: steps.check-author.outputs.skip == 'true'
+        run: |
+          set -euo pipefail
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🤖 Dependabot PR - Copilot Review Skipped"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "✅ PASSED: Copilot review not required for automated dependency updates"
+          echo ""
+          echo "Quality assurance is provided by:"
+          echo "  ✓ Automated tests (contracts-tests, unit tests, etc.)"
+          echo "  ✓ Security checks (npm audit, dependency review)"
+          echo "  ✓ Code quality checks (prettier, eslint, reuse)"
+          echo "  ✓ CI/CD pipeline validation"
           echo ""
           echo "PR is ready for merge! 🎉"
           echo ""
