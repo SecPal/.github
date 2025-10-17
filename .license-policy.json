@@ -9,7 +9,8 @@
     "CC0-1.0",
     "Unlicense",
     "WTFPL",
-    "Python-2.0"
+    "Python-2.0",
+    "AGPL-3.0-or-later"
   ],
   "deniedLicenses": ["GPL-2.0", "LGPL-2.0", "LGPL-2.1", "AGPL-1.0"],
   "description": "License policy for AGPL-3.0-or-later compatibility"
