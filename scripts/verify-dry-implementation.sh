@@ -129,9 +129,13 @@ echo ""
 echo "Test 6: Check documentation..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Navigate to .github root (try absolute path first, then relative fallback)
 if cd "$GITHUB_ROOT"; then
+    # Successfully navigated using script-relative path
     :
 elif cd ../.github; then
+    # Fallback: relative navigation from current directory
     :
 else
     echo -e "${RED}  ❌${NC} Failed to navigate to .github root directory"

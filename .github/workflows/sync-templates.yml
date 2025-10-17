@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: SecPal/${{ matrix.repo }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SYNC_TOKEN }}
           path: target
 
       - name: Sync check-licenses.sh
