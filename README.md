@@ -121,7 +121,7 @@ See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for complete rules and setup in
 
 **Note**: Branch protection is applied to each repository individually (api, frontend, contracts, .github).
 
-## � Required Secrets
+## 🔐 Required Secrets
 
 ### SYNC_TOKEN
 
@@ -141,7 +141,7 @@ The automated template synchronization workflow (`sync-templates.yml`) requires 
 
 The default `GITHUB_TOKEN` only has permissions for the current repository. Cross-repository operations (creating PRs in `contracts`, `api`, etc.) require a Personal Access Token with broader scope.
 
-## �📝 Issue & PR Templates
+## Issue & PR Templates
 
 ### Creating Issues
 

@@ -52,12 +52,25 @@ jobs:
               echo "❌ DRIFT DETECTED in $repo!"
               drift_detected=true
 
-              # Generate diff for report
-              diff_output=$(diff -u <(echo "$template_content") <(echo "$remote_content") | head -n 50 || true)
+              # Generate diff for report with truncation handling
+              full_diff_output=$(diff -u <(echo "$template_content") <(echo "$remote_content") || true)
+              diff_line_count=$(echo "$full_diff_output" | wc -l)
+              max_diff_lines=50
+
+              if [ "$diff_line_count" -gt "$max_diff_lines" ]; then
+                diff_output=$(echo "$full_diff_output" | head -n $max_diff_lines)
+                truncation_note="⚠️ Diff output truncated to $max_diff_lines lines (total: $diff_line_count lines). Please check manually if needed."
+              else
+                diff_output="$full_diff_output"
+                truncation_note=""
+              fi
 
               drift_report+="### ❌ Drift in \`$repo\`\n\n"
-              drift_report+="\`\`\`diff\n$diff_output\n\`\`\`\n\n"
-              drift_report+="---\n\n"
+              drift_report+="\`\`\`diff\n$diff_output\n\`\`\`\n"
+              if [ -n "$truncation_note" ]; then
+                drift_report+="$truncation_note\n"
+              fi
+              drift_report+="\n---\n\n"
             else
               echo "✅ $repo is in sync"
             fi
