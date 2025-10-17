@@ -42,10 +42,10 @@ steps:
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
     run: |
       if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
-        echo "skip=true" >> $GITHUB_OUTPUT
+        echo "skip=true" >> "$GITHUB_OUTPUT"
         echo "🤖 Dependabot PR detected - skipping Copilot review requirement"
       else
-        echo "skip=false" >> $GITHUB_OUTPUT
+        echo "skip=false" >> "$GITHUB_OUTPUT"
         echo "👤 Human-authored PR - Copilot review required"
       fi
 
@@ -151,19 +151,32 @@ done
 - **Auto-merge**: Consider enabling Dependabot auto-merge for minor/patch updates
 - **Grouping**: Configure Dependabot to group related updates into single PRs
 - **Schedule**: Limit Dependabot runs to specific days to batch updates
+- **Fallback handling**: Make the implementation more resilient for non-PR contexts by falling back to `$GITHUB_ACTOR` when `github.event.pull_request.user.login` is unavailable:
+
+```yaml
+env:
+  PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+  FALLBACK_AUTHOR: ${{ github.actor }}
+run: |
+  AUTHOR="${PR_AUTHOR:-$FALLBACK_AUTHOR}"
+  if [ "$AUTHOR" = "dependabot[bot]" ]; then
+    # ... detection logic
+  fi
+```
+
 - **Job-level guard**: Consider moving to job-level `if` condition instead of step-level checks for better CI performance:
 
 ```yaml
 jobs:
   copilot-review:
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Check for Copilot review
         # ... existing review checks
 
   dependabot-auto-pass:
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Dependabot auto-pass
@@ -175,7 +188,7 @@ jobs:
           echo "  ✓ Code quality checks (Prettier, ESLint, REUSE)"
 ```
 
-This approach short-circuits earlier and saves CI time by not starting the job at all for Dependabot PRs.
+This approach short-circuits earlier and saves CI time by not starting the job at all for Dependabot PRs. The `github.event_name` check ensures the workflow doesn't fail in non-PR contexts.
 
 ## Conclusion
 
