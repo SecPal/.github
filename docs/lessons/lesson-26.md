@@ -60,7 +60,7 @@ steps:
       echo "Quality assurance is provided by:"
       echo "  ✓ Automated tests (contracts-tests, unit tests, etc.)"
       echo "  ✓ Security checks (npm audit, dependency review)"
-      echo "  ✓ Code quality checks (prettier, eslint, reuse)"
+      echo "  ✓ Code quality checks (Prettier, ESLint, REUSE)"
 ```
 
 ### Key Decisions
@@ -151,6 +151,31 @@ done
 - **Auto-merge**: Consider enabling Dependabot auto-merge for minor/patch updates
 - **Grouping**: Configure Dependabot to group related updates into single PRs
 - **Schedule**: Limit Dependabot runs to specific days to batch updates
+- **Job-level guard**: Consider moving to job-level `if` condition instead of step-level checks for better CI performance:
+
+```yaml
+jobs:
+  copilot-review:
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Copilot review
+        # ... existing review checks
+
+  dependabot-auto-pass:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dependabot auto-pass
+        run: |
+          echo "✅ PASSED: Copilot review not required for automated dependency updates"
+          echo "Quality assurance is provided by:"
+          echo "  ✓ Automated tests (contracts-tests, unit tests, etc.)"
+          echo "  ✓ Security checks (npm audit, dependency review)"
+          echo "  ✓ Code quality checks (Prettier, ESLint, REUSE)"
+```
+
+This approach short-circuits earlier and saves CI time by not starting the job at all for Dependabot PRs.
 
 ## Conclusion
 

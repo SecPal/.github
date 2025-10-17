@@ -120,7 +120,7 @@ See [Lesson #25](lesson-25.md) for quality standards and [CONTRIBUTING.md](../..
 
 - **Total Lessons**: 26
 - **Critical Priority**: 5 (Lessons #1, #2, #6, #21, #24)
-- **High Priority**: 12
+- **High Priority**: 11
 - **Medium Priority**: 10
 - **Implemented**: 24
 - **Documented**: 2 (Lessons #20, #25)
