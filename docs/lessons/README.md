@@ -62,14 +62,15 @@ Complex workflow patterns and automation improvements.
 | [#21](lesson-21.md) | Branch Protection Check Names Must Match Exactly  | ✅ Implemented | CRITICAL |
 | [#22](lesson-22.md) | Reusable Workflow Bootstrap Paradox & GraphQL Fix | ✅ Implemented | HIGH     |
 
-### 🆕 Recent Additions (Lessons #23-24)
+### 🆕 Recent Additions (Lessons #23-25)
 
 Latest lessons from ongoing repository maintenance.
 
-| #                   | Lesson                                      | Status         | Priority |
-| ------------------- | ------------------------------------------- | -------------- | -------- |
-| [#23](lesson-23.md) | Review Workflow Discipline                  | 🚧 In Progress | HIGH     |
-| [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail) | ✅ Implemented | CRITICAL |
+| #                   | Lesson                                       | Status         | Priority |
+| ------------------- | -------------------------------------------- | -------------- | -------- |
+| [#23](lesson-23.md) | Review Workflow Discipline                   | ✅ Implemented | HIGH     |
+| [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail)  | ✅ Implemented | CRITICAL |
+| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors | ✅ Documented  | HIGH     |
 
 ## 🔍 How to Use This Index
 
@@ -105,12 +106,12 @@ Each lesson document contains:
 
 ## 📊 Statistics
 
-- **Total Lessons**: 24
-- **Critical Priority**: 5 (Lessons #1, #2, #6, #21, #24 - based on lesson priority, not category)
-- **High Priority**: 11
+- **Total Lessons**: 25
+- **Critical Priority**: 5 (Lessons #1, #2, #6, #21, #24)
+- **High Priority**: 12
 - **Medium Priority**: 9
-- **Implemented**: 22
-- **In Progress**: 2
+- **Implemented**: 23
+- **Documented**: 2 (Lessons #20, #25)
 
 ## 🔄 Continuous Improvement
 
@@ -118,6 +119,7 @@ This is a living document. New lessons are added as we discover issues across Se
 
 ### Recent Updates
 
+- **2025-10-17**: Added Lesson #25 (Meta-Quality: Learning from Recurring Errors)
 - **2025-10-17**: Added Lesson #24 (Workflow Error Handling)
 - **2025-10-17**: Split monolithic LESSONS-LEARNED into individual files
 - **2025-10-16**: Cross-repo audit revealed Lesson #21 recurrence
