@@ -139,6 +139,12 @@ echo "Test 6: Check documentation..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Validate that GITHUB_ROOT exists before attempting to cd
+if [ ! -d "$GITHUB_ROOT" ]; then
+    echo -e "${RED}  ❌${NC} GITHUB_ROOT directory does not exist: $GITHUB_ROOT"
+    exit 1
+fi
+
 # Navigate to .github root directory
 # Note: All subsequent tests (Test 6-8) assume working directory is the .github repository root
 if ! cd "$GITHUB_ROOT"; then

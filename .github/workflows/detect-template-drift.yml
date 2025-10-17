@@ -56,6 +56,8 @@ jobs:
               # Use temp files to avoid shell argument length limits with large files
               template_tmp=$(mktemp)
               remote_tmp=$(mktemp)
+              # Ensure cleanup on script exit (even on failure)
+              trap 'rm -f "$template_tmp" "$remote_tmp"' EXIT
               printf "%s" "$template_content" > "$template_tmp"
               printf "%s" "$remote_content" > "$remote_tmp"
               full_diff_output=$(diff -u "$template_tmp" "$remote_tmp" || true)
