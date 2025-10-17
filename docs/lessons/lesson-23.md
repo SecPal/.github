@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 **Category:** Recent Additions
 **Priority:** HIGH
-**Status:** ✅ Implemented
+**Status:** 🚧 In Progress
 **Date:** 2025-10-16
 **Repository:** .github
 
