@@ -22,6 +22,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
           echo "🤖 Checking for Copilot review on PR #$PR_NUMBER..."
           echo "📍 HEAD commit: ${HEAD_SHA:0:7}"
 
@@ -64,6 +65,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           echo "📊 Counting unresolved Copilot review threads..."
 
           # Use GraphQL to get review threads with isResolved status
@@ -106,6 +108,7 @@ jobs:
           REVIEW_STATUS: ${{ steps.check-review.outputs.status }}
           OPEN_COMMENTS: ${{ steps.count-comments.outputs.open_count }}
         run: |
+          set -euo pipefail
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📋 Copilot Review Status"
