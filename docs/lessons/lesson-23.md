@@ -56,7 +56,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 5. Always request review after addressing comments
 
 **Complete Workflow:**
-See [Review Workflow Documentation](https://github.com/SecPal/.github/issues/new?title=Create+Review+Workflow+Documentation&labels=documentation) - tracked in issue tracker.
+See [Review Workflow Documentation (to be created)](https://github.com/SecPal/.github/issues/new?title=Create+Review+Workflow+Documentation&labels=documentation) – documentation is tracked as a future issue and is not yet available.
 
 ## Related Lessons
 

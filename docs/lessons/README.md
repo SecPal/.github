@@ -106,7 +106,7 @@ Each lesson document contains:
 ## 📊 Statistics
 
 - **Total Lessons**: 24
-- **Critical**: 5 (Lessons #1, #2, #6, #21, #24)
+- **Critical Priority**: 5 (Lessons #1, #2, #6, #21, #24 - based on lesson priority, not category)
 - **High Priority**: 11
 - **Medium Priority**: 9
 - **Implemented**: 22
