@@ -26,6 +26,7 @@ jobs:
       - name: Determine if should run dependency review
         id: should-run
         run: |
+          set -euo pipefail
           should_run="true"
 
           # Check if skip logic is enabled
@@ -87,6 +88,7 @@ jobs:
         if: steps.should-run.outputs.should_run == 'true'
         id: policy
         run: |
+          set -euo pipefail
           if [ ! -f .license-policy.json ]; then
             echo "❌ Error: .license-policy.json not found!" >&2
             echo "Create this file to define allowed/denied licenses." >&2

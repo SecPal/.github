@@ -27,6 +27,7 @@ jobs:
 
       - name: Check licenses
         run: |
+          set -euo pipefail
           echo "Checking npm package licenses for AGPL-3.0-or-later compatibility..."
           # Note: license-checker reports private packages as "UNLICENSED" even with license field
           # Allow UNLICENSED for our own private @secpal packages

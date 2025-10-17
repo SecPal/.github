@@ -36,6 +36,7 @@ jobs:
 
       - name: Check for security issues in GitHub Actions
         run: |
+          set -euo pipefail
           echo "Checking GitHub Actions workflows for security issues..."
 
           # Check for unpinned actions (should use commit SHA or specific version)

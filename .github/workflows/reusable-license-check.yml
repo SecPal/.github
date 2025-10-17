@@ -25,6 +25,7 @@ jobs:
 
       - name: Run license check
         run: |
+          set -euo pipefail
           if [ -x scripts/check-licenses.sh ]; then
             ./scripts/check-licenses.sh
           else

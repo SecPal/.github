@@ -19,6 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           # Skip verification for Dependabot PRs
           if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
             echo "✅ Skipping signature verification for Dependabot"
