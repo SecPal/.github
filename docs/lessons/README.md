@@ -62,7 +62,7 @@ Complex workflow patterns and automation improvements.
 | [#21](lesson-21.md) | Branch Protection Check Names Must Match Exactly  | ✅ Implemented | CRITICAL |
 | [#22](lesson-22.md) | Reusable Workflow Bootstrap Paradox & GraphQL Fix | ✅ Implemented | HIGH     |
 
-### 🆕 Recent Additions (Lessons #23-26)
+### 🆕 Recent Additions (Lessons #23-27)
 
 Latest lessons from ongoing repository maintenance.
 
@@ -72,6 +72,7 @@ Latest lessons from ongoing repository maintenance.
 | [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail)         | ✅ Implemented | CRITICAL |
 | [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors        | ✅ Documented  | HIGH     |
 | [#26](lesson-26.md) | Dependabot Exception for Copilot Review Enforcement | ✅ Implemented | MEDIUM   |
+| [#27](lesson-27.md) | Script Consolidation & Best Practice Merging        | ✅ Implemented | HIGH     |
 
 ## 🔍 How to Use This Index
 

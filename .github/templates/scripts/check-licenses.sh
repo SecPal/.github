@@ -13,6 +13,10 @@ fi
 # Check if jq is installed
 if ! command -v jq &> /dev/null; then
   echo "Error: jq is required but not installed!" >&2
+  echo "To install jq:" >&2
+  echo "  - On Debian/Ubuntu: sudo apt install jq" >&2
+  echo "  - On macOS (Homebrew): brew install jq" >&2
+  echo "  - See https://stedolan.github.io/jq/download/ for other platforms." >&2
   exit 1
 fi
 
@@ -30,9 +34,9 @@ fi
 
 ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
 
-# Verify allowedLicenses is not empty
-if [ -z "$ALLOWED" ]; then
-  echo "Error: 'allowedLicenses' is empty in .license-policy.json." >&2
+# Verify allowedLicenses is not empty (Bug fix from contracts: use length check)
+if [ "$(jq -r '.allowedLicenses | length' .license-policy.json)" -eq 0 ]; then
+  echo "Error: 'allowedLicenses' array is empty in .license-policy.json." >&2
   exit 1
 fi
 
