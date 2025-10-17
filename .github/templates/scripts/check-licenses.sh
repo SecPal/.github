@@ -67,8 +67,15 @@ else
   LICENSE_CHECKER_BIN="$(pwd)/node_modules/.bin/license-checker"
 fi
 
+# Get package name and version from package.json to exclude it from the check
+# (the root package itself should not be checked, only its dependencies)
+PACKAGE_NAME=$(jq -r '.name // "unknown"' package.json 2>/dev/null || echo "unknown")
+PACKAGE_VERSION=$(jq -r '.version // "0.0.0"' package.json 2>/dev/null || echo "0.0.0")
+EXCLUDE_PACKAGE="${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
 # Run license-checker and handle errors (use local installation for security)
-OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --summary 2>&1)
+# Exclude the root package from license checking (only check dependencies)
+OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --excludePackages "$EXCLUDE_PACKAGE" --summary 2>&1)
 STATUS=$?
 if [ $STATUS -ne 0 ]; then
   echo "Error: license-checker failed."

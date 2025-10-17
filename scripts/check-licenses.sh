@@ -40,4 +40,11 @@ if [ -z "$ALLOWED" ]; then
   exit 1
 fi
 
-npx license-checker --production --onlyAllow "$ALLOWED" --summary
+# Get package name and version from package.json to exclude it from the check
+# (the root package itself should not be checked, only its dependencies)
+PACKAGE_NAME=$(jq -r '.name // "unknown"' package.json 2>/dev/null || echo "unknown")
+PACKAGE_VERSION=$(jq -r '.version // "0.0.0"' package.json 2>/dev/null || echo "0.0.0")
+EXCLUDE_PACKAGE="${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+# Exclude the root package from license checking (only check dependencies)
+npx license-checker --production --onlyAllow "$ALLOWED" --excludePackages "$EXCLUDE_PACKAGE" --summary
