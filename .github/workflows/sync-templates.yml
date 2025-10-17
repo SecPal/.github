@@ -100,7 +100,7 @@ jobs:
             ### Related
             - Source: [.github/templates/scripts/](https://github.com/SecPal/.github/tree/main/.github/templates/scripts)
             - Documentation: [DRY Strategy](https://github.com/SecPal/.github/blob/main/docs/DRY-ANALYSIS-AND-STRATEGY.md)
-            - Lesson: [#17 Multi-Repo DRY](https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-17.md)
+            - Lesson: [#27 Script Consolidation](https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-27.md)
 
             ---
 

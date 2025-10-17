@@ -118,7 +118,7 @@ jobs:
             ## 📚 Documentation
             - [DRY Strategy](https://github.com/SecPal/.github/blob/main/docs/DRY-ANALYSIS-AND-STRATEGY.md)
             - [Template README](https://github.com/SecPal/.github/blob/main/.github/templates/scripts/README.md)
-            - [Lesson #17: Multi-Repo DRY](https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-17.md)
+            - [Lesson #27: Script Consolidation](https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-27.md)
 
             ---
 
@@ -199,7 +199,7 @@ jobs:
         run: |
           if [ "${{ steps.drift.outputs.drift_detected }}" == "true" ]; then
             echo "⚠️  Template drift detected! Check the created/updated issue for details."
-            exit 1
+            echo "This is informational - drift is tracked via GitHub issue."
           else
             echo "✅ All repositories are in sync with templates!"
           fi

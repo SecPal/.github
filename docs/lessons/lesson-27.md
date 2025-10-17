@@ -484,9 +484,9 @@ gh workflow run detect-template-drift.yml
 
 ## Related Lessons
 
-- [Lesson #17: Git State Verification](lesson-17.md) - Different Lesson #17 than DRY strategy doc mentions
-- [Lesson #15: Configuration Centralization](lesson-15.md) - Similar pattern for configs (if exists)
+- [Lesson #17: Git State Verification](lesson-17.md) - Git workflow discipline
 - [Lesson #22: Reusable Workflow Bootstrap](lesson-22.md) - Reusable workflow patterns
+- [Lesson #15: Configuration Centralization](lesson-15.md) - Centralized config patterns (if exists)
 
 ## References
 

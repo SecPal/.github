@@ -93,38 +93,43 @@ fi
 # Test 5: Verify contracts workflows use reusables
 echo ""
 echo "Test 5: Verify contracts workflows migrated to reusables..."
-cd ../contracts 2>/dev/null || { echo -e "${YELLOW}⚠️  SKIP${NC}: contracts repo not found"; cd - > /dev/null; }
+if cd ../contracts 2>/dev/null; then
+    if [ -d ".github/workflows" ]; then
+        errors=false
 
-if [ -d ".github/workflows" ]; then
-    errors=false
+        if grep -q "uses: SecPal/.github/.github/workflows/reusable-dependency-review.yml@main" .github/workflows/dependency-review.yml 2>/dev/null; then
+            echo -e "${GREEN}  ✅${NC} dependency-review.yml uses reusable"
+        else
+            echo -e "${RED}  ❌${NC} dependency-review.yml not migrated"
+            errors=true
+        fi
 
-    if grep -q "uses: SecPal/.github/.github/workflows/reusable-dependency-review.yml@main" .github/workflows/dependency-review.yml 2>/dev/null; then
-        echo -e "${GREEN}  ✅${NC} dependency-review.yml uses reusable"
-    else
-        echo -e "${RED}  ❌${NC} dependency-review.yml not migrated"
-        errors=true
+        if grep -q "uses: SecPal/.github/.github/workflows/reusable-license-check.yml@main" .github/workflows/license-check.yml 2>/dev/null; then
+            echo -e "${GREEN}  ✅${NC} license-check.yml uses reusable"
+        else
+            echo -e "${RED}  ❌${NC} license-check.yml not migrated"
+            errors=true
+        fi
+
+        if [ "$errors" = false ]; then
+            ((passed++))
+        else
+            ((failed++))
+        fi
+
+        cd - > /dev/null
     fi
-
-    if grep -q "uses: SecPal/.github/.github/workflows/reusable-license-check.yml@main" .github/workflows/license-check.yml 2>/dev/null; then
-        echo -e "${GREEN}  ✅${NC} license-check.yml uses reusable"
-    else
-        echo -e "${RED}  ❌${NC} license-check.yml not migrated"
-        errors=true
-    fi
-
-    if [ "$errors" = false ]; then
-        ((passed++))
-    else
-        ((failed++))
-    fi
-
-    cd - > /dev/null
+else
+    echo -e "${YELLOW}⚠️  SKIP${NC}: contracts repo not found"
+    ((failed++))
 fi
 
 # Test 6: Check Lesson #27 exists
 echo ""
 echo "Test 6: Check documentation..."
-cd /home/user/code/SecPal/.github 2>/dev/null || cd ../.github
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$GITHUB_ROOT" 2>/dev/null || cd ../.github
 if [ -f "docs/lessons/lesson-27.md" ]; then
     echo -e "${GREEN}  ✅${NC} Lesson #27 exists"
     ((passed++))
