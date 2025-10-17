@@ -129,7 +129,16 @@ echo ""
 echo "Test 6: Check documentation..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$GITHUB_ROOT" 2>/dev/null || cd ../.github
+if cd "$GITHUB_ROOT"; then
+    :
+elif cd ../.github; then
+    :
+else
+    echo -e "${RED}  ❌${NC} Failed to navigate to .github root directory"
+    ((failed++))
+    # Continue script to show all failures
+fi
+
 if [ -f "docs/lessons/lesson-27.md" ]; then
     echo -e "${GREEN}  ✅${NC} Lesson #27 exists"
     ((passed++))

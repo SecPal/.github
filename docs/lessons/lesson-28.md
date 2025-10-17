@@ -276,13 +276,14 @@ Add check for problematic patterns:
 
 ```bash
 # Check for AI attribution in staged files
-if git diff --cached | grep -iE "co-authored-by.*copilot|implemented by.*AI|@SecPal/\w+"; then
+# Pattern: co-authored-by copilot, "implemented by AI" text, @SecPal/team in commit messages
+if git diff --cached | grep -iE "co-authored-by.*copilot|implemented by.*AI|^\+.*@SecPal/\w+"; then
   echo "❌ LESSON #28 VIOLATION: Remove AI attribution and team mentions"
   echo ""
   echo "Remove:"
   echo "  - Co-authored-by: GitHub Copilot"
   echo "  - 'Implemented by AI/Copilot'"
-  echo "  - @SecPal/team mentions"
+  echo "  - @SecPal/team mentions (in PR descriptions, not URLs)"
   echo ""
   exit 1
 fi

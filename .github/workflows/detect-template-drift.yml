@@ -103,7 +103,7 @@ jobs:
             ## 🔧 How to Fix
 
             **Option 1: Automatic Sync (Recommended)**
-            1. Trigger the [Sync Script Templates workflow](https://github.com/SecPal/.github/actions/workflows/sync-templates.yml)
+            1. Trigger the [Sync Script Templates workflow](https://github.com/SecPal/.github/blob/main/.github/workflows/sync-templates.yml)
             2. Review and merge the generated PRs
 
             **Option 2: Manual Sync**
