@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Lesson #8 (REUSE.toml Itself Needs SPDX Headers)
 
-**Category:** Critical Issues
+**Category:** Critical Issues (Priority: MEDIUM)
 **Priority:** MEDIUM
 **Status:** ✅ Fixed
 **Date:** 2025-10-11

@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Lesson #9 (Deprecated Dependencies from Jest)
 
-**Category:** Issues to Be Aware Of
+**Category:** Critical Issues
 **Priority:** MEDIUM
 **Status:** ✅ Documented
 **Date:** 2025-10-11

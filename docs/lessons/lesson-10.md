@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Lesson #10 (Dependency Graph Requires Explicit Activation)
 
-**Category:** Issues to Be Aware Of
+**Category:** Critical Issues
 **Priority:** MEDIUM
 **Status:** ✅ Fixed
 **Date:** 2025-10-11
