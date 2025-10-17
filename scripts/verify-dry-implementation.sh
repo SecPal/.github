@@ -125,6 +125,7 @@ if cd "$CONTRACTS_PATH" 2>/dev/null; then
     else
         echo -e "${YELLOW}⚠️  SKIP${NC}: .github/workflows directory not found in contracts repo"
         ((failed++))
+        cd - > /dev/null
     fi
 else
     echo -e "${YELLOW}⚠️  SKIP${NC}: contracts repo not found at $CONTRACTS_PATH"
