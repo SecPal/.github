@@ -31,21 +31,28 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 1. **Track ALL review TODOs** systematically
 2. **One TODO = One PR** (focused, reviewable changes)
 3. **Sequential execution** (don't mix concerns)
-4. **Copilot review AFTER each change push:**
+4. **Request Copilot review via MCP after each push:**
    ```bash
-   # After pushing changes
-   gh api -X POST repos/SecPal/.github/pulls/$PR/requested_reviewers \
-     -f reviewers='["copilot-pull-request-reviewer[bot]"]'
+   # Use MCP GitHub tool (NOT gh api)
+   mcp_github_github_request_copilot_review(owner, repo, pullNumber)
    ```
-5. **Address ALL comments before requesting new review**
-6. **Check enforcement** before merge
+5. **Address ALL comments** - fix code based on feedback
+6. **Resolve ALL threads via GraphQL** (CRITICAL - see [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md))
+7. **Verify threads resolved** before merge
+8. **Check enforcement passes** before merge
 
-**Key Workflow:**
+**Complete Workflow (MUST follow ALL steps):**
 
-- First push → Copilot reviews automatically ✅
-- Subsequent pushes → Request review manually ✅
-- Check status → Rerun if raced ✅
-- All comments addressed → Merge ✅
+1. **First push** → Copilot reviews automatically ✅
+2. **Address comments** → Fix code, commit, push
+3. **Request review manually** → Use MCP tool (GraphQL)
+4. **Wait for review** → Check if "no new comments"
+5. **Resolve threads via GraphQL** → Mark conversations complete (see [Thread Resolution](../WORKFLOW-THREAD-RESOLUTION.md))
+6. **Verify all resolved** → Check enforcement passes
+7. **Rerun if race condition** → Check before review completed
+8. **All green** → Merge ✅
+
+**CRITICAL:** Step 5 (resolve threads) is REQUIRED - addressing comments in code is NOT enough!
 
 ## Action for Future Repos
 
@@ -55,8 +62,23 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 4. One concern per PR - don't mix unrelated fixes
 5. Always request review after addressing comments
 
-**Complete Workflow:**
-See [Review Workflow Documentation (to be created)](https://github.com/SecPal/.github/issues/new?title=Create+Review+Workflow+Documentation&labels=documentation) – documentation is tracked as a future issue and is not yet available.
+**Complete Workflow Documentation:**
+
+- [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md) - GraphQL-based thread resolution (REQUIRED)
+- Additional review workflow documentation to be created (tracked in issue tracker)
+
+## Lessons Learned from PR #42
+
+**Problem:** Threads not resolved after addressing comments → Enforcement check kept failing
+
+**Root Cause:** Two separate concepts in GitHub:
+
+1. **Comment body** (text) - can be edited
+2. **Thread resolved status** (boolean) - MUST be set via GraphQL
+
+**Solution:** Created [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md) documentation
+
+**Key Learning:** Addressing comments in code ≠ Resolving threads in GitHub
 
 ## Related Lessons
 
@@ -64,6 +86,7 @@ See [Review Workflow Documentation (to be created)](https://github.com/SecPal/.g
 - [Lesson #16 (Review Comment Discipline)](lesson-16.md) - Meta-lesson
 - [Lesson #18 (Copilot Review Enforcement)](lesson-18.md) - Automated enforcement
 - [Lesson #19 (Infinite Loop Prevention)](lesson-19.md) - When to request review
+- [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md) - GraphQL thread resolution (NEW)
 
 ---
 
