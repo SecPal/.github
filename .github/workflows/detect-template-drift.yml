@@ -95,16 +95,19 @@ jobs:
             const fs = require('fs');
             const driftReport = fs.readFileSync('drift_report.md', 'utf8');
 
-            // Check if drift issue already exists
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'template-drift',
-              per_page: 100
-            });
+            // Check if drift issue already exists (handle pagination)
+            const issues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'template-drift',
+                per_page: 100
+              }
+            );
 
-            const existingIssue = issues.data.find(issue =>
+            const existingIssue = issues.find(issue =>
               issue.title.includes('Template Drift Detected')
             );
 
@@ -177,16 +180,19 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Find open drift issues
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'template-drift',
-              per_page: 100
-            });
+            // Find all open drift issues (handle pagination)
+            const issues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'template-drift',
+                per_page: 100
+              }
+            );
 
-            for (const issue of issues.data) {
+            for (const issue of issues) {
               if (issue.title.includes('Template Drift Detected')) {
                 // Close the issue
                 await github.rest.issues.update({
