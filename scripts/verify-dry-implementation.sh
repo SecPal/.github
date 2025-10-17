@@ -138,7 +138,14 @@ fi
 echo ""
 echo "Test 6: Check documentation..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Compute repository root directory with error handling
+if REPO_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)"; then
+    :
+else
+    echo -e "${RED}  ❌${NC} Failed to compute repository root directory from $SCRIPT_DIR/.."
+    exit 1
+fi
 
 # Validate that REPO_ROOT exists before attempting to cd
 if [ ! -d "$REPO_ROOT" ]; then
