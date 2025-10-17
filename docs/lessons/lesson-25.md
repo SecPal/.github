@@ -24,11 +24,13 @@ PR #43 (Thread Resolution Workflow) required **9 review cycles** to merge, despi
 
 ### Recurring Error #1: Forgot Review Request
 
-**What happened**: After pushing commit ed10352, forgot to call `mcp_github_github_request_copilot_review`.
+**What happened**: After pushing subsequent commits, forgot to manually request review via `mcp_github_github_request_copilot_review`.
 
-**Impact**: User intervention needed: "Du hast (mal wieder) vergessen den Review nach einem Push anzustoßen"
+**Impact**: User intervention needed to remind about missing review request.
 
 **Why it matters**: This is a **procedural step** that must be automatic, not optional.
+
+**Note**: First push to new branch triggers automatic review. Subsequent pushes require manual review request.
 
 ### Recurring Error #2: Superficial Fixes
 
@@ -84,13 +86,15 @@ grep -rn "\[Thread Resolution" docs/
 
 ### Post-Push Automatic Workflow
 
-**AFTER every `git push`, NO EXCEPTIONS:**
+**IMPORTANT**: First push to a new branch triggers automatic Copilot review. Only subsequent pushes require manual review request.
+
+**After SUBSEQUENT pushes only:**
 
 ```bash
 # Step 1: Wait for GitHub to process push
 sleep 60
 
-# Step 2: ALWAYS request review (no matter how small the change)
+# Step 2: Request review (only needed for subsequent pushes, not first push)
 mcp_github_github_request_copilot_review('SecPal', '.github', PR_NUMBER)
 
 # Step 3: Wait for review result
@@ -100,7 +104,7 @@ sleep 90
 gh pr view PR_NUMBER --json reviews --jq '.reviews[-1].body'
 ```
 
-**Mental trigger**: `git push` → **IMMEDIATELY** think "Review request!"
+**Mental trigger for subsequent pushes**: `git push` (after first) → **IMMEDIATELY** think "Review request!"
 
 ### Comprehensive Fix Protocol
 
@@ -139,8 +143,8 @@ When addressing review comments:
 
 ### Phase 2: After Each Push
 
-- [ ] ✅ **IMMEDIATE**: Request Copilot review (no delay, no exceptions)
-- [ ] Wait 90s for review
+- [ ] **FIRST push**: Wait 90s for automatic review
+- [ ] **SUBSEQUENT pushes**: Request Copilot review manually (no delay, no exceptions)
 - [ ] Read review summary
 - [ ] If comments: Go to Phase 3
 - [ ] If clean: Go to Phase 4
@@ -190,7 +194,8 @@ Example: Comment says "pattern appears in Step 3" → **READ STEP 3** to verify!
 
 Create muscle memory:
 
-- `git push` → **ALWAYS** followed by review request
+- First `git push` → Wait for automatic review
+- Subsequent `git push` → **ALWAYS** request review manually
 - Review comment → **ALWAYS** search whole file
 - Claim in docs → **ALWAYS** verify against code
 
@@ -209,7 +214,7 @@ Create muscle memory:
 
 ### Immediate Changes
 
-1. **Create mental trigger**: `git push` = "Did I request review?"
+1. **Distinguish push types**: First push = automatic review, subsequent = manual request
 2. **Before every commit**: Run comprehensive pattern search
 3. **When fixing comments**: Always verify factual accuracy
 
@@ -225,14 +230,14 @@ Create muscle memory:
 
 - Maximum **3 review cycles** (vs. 9 in PR #43)
 - **0 factual errors** in documentation
-- **0 forgotten review requests**
+- **0 inappropriate review requests** (understand first vs. subsequent push)
 - **First commit** already addresses common patterns
 
 **How to measure**:
 
 - Review count per PR (trend down)
 - Comments per review (trend down)
-- Wait time between push and review request (trend to 0)
+- Understanding of workflow timing (first vs. subsequent pushes)
 
 ## Related Lessons
 
@@ -257,5 +262,5 @@ Create muscle memory:
 ## Future Improvements
 
 1. **Automated checklist**: Tool that runs searches and reports potential issues
-2. **Pre-push hook**: Remind to request review after push
+2. **Workflow documentation**: Clearly distinguish first push (automatic) vs. subsequent (manual request)
 3. **Template commit messages**: Include "Self-review completed: [checklist]"
