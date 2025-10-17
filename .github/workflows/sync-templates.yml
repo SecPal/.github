@@ -72,7 +72,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           path: target
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SYNC_TOKEN }}
           commit-message: "chore(scripts): sync check-licenses.sh from .github template"
           branch: sync/check-licenses-script-${{ github.run_number }}
           delete-branch: true

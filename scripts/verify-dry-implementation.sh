@@ -93,7 +93,11 @@ fi
 # Test 5: Verify contracts workflows use reusables
 echo ""
 echo "Test 5: Verify contracts workflows migrated to reusables..."
-if cd ../contracts 2>/dev/null; then
+
+# Use environment variable if set, otherwise default to sibling directory
+CONTRACTS_PATH="${CONTRACTS_REPO_PATH:-../contracts}"
+
+if cd "$CONTRACTS_PATH" 2>/dev/null; then
     if [ -d ".github/workflows" ]; then
         errors=false
 
@@ -118,9 +122,13 @@ if cd ../contracts 2>/dev/null; then
         fi
 
         cd - > /dev/null
+    else
+        echo -e "${YELLOW}⚠️  SKIP${NC}: .github/workflows directory not found in contracts repo"
+        ((failed++))
     fi
 else
-    echo -e "${YELLOW}⚠️  SKIP${NC}: contracts repo not found"
+    echo -e "${YELLOW}⚠️  SKIP${NC}: contracts repo not found at $CONTRACTS_PATH"
+    echo -e "${YELLOW}   ${NC}Set CONTRACTS_REPO_PATH env var to specify location"
     ((failed++))
 fi
 
@@ -130,18 +138,12 @@ echo "Test 6: Check documentation..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Navigate to .github root (try absolute path first, then relative fallback)
-if cd "$GITHUB_ROOT"; then
-    # Successfully navigated using script-relative path
-    :
-elif cd ../.github; then
-    # Fallback: relative navigation from current directory
-    :
-else
+# Navigate to .github root directory
+cd "$GITHUB_ROOT" || {
     echo -e "${RED}  ❌${NC} Failed to navigate to .github root directory"
     ((failed++))
-    # Continue script to show all failures
-fi
+    exit 1
+}
 
 if [ -f "docs/lessons/lesson-27.md" ]; then
     echo -e "${GREEN}  ✅${NC} Lesson #27 exists"
