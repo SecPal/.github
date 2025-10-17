@@ -67,7 +67,8 @@ gh api graphql -f query='
 ### Step 1: Get Thread IDs from Review Comments
 
 ```bash
-gh api /repos/SecPal/.github/pulls/42/comments --jq '.[] | {
+PR_NUMBER=42
+gh api /repos/SecPal/.github/pulls/$PR_NUMBER/comments --jq '.[] | {
   id: .id,
   node_id: .node_id,
   path: .path,
@@ -108,10 +109,11 @@ fi
 ### Step 3: Verify All Threads Are Resolved
 
 ```bash
+PR_NUMBER=42
 UNRESOLVED=$(gh api graphql -f query='
 query {
   repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: 42) {
+    pullRequest(number: '$PR_NUMBER') {
       reviewThreads(first: 50) {
         nodes {
           id

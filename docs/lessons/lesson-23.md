@@ -33,7 +33,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 3. **Sequential execution** (don't mix concerns)
 4. **Request Copilot review via MCP after each push:**
    ```bash
-   # Use MCP GitHub tool (NOT gh api)
+   # Ask GitHub Copilot in chat (MCP tool available via Claude Desktop/Cline)
    mcp_github_github_request_copilot_review('SecPal', '.github', 42)
    ```
 5. **Address ALL comments** - fix code based on feedback
