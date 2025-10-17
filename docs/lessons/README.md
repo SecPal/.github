@@ -62,15 +62,16 @@ Complex workflow patterns and automation improvements.
 | [#21](lesson-21.md) | Branch Protection Check Names Must Match Exactly  | ✅ Implemented | CRITICAL |
 | [#22](lesson-22.md) | Reusable Workflow Bootstrap Paradox & GraphQL Fix | ✅ Implemented | HIGH     |
 
-### 🆕 Recent Additions (Lessons #23-25)
+### 🆕 Recent Additions (Lessons #23-26)
 
 Latest lessons from ongoing repository maintenance.
 
-| #                   | Lesson                                       | Status         | Priority |
-| ------------------- | -------------------------------------------- | -------------- | -------- |
-| [#23](lesson-23.md) | Review Workflow Discipline                   | ✅ Implemented | HIGH     |
-| [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail)  | ✅ Implemented | CRITICAL |
-| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors | ✅ Documented  | HIGH     |
+| #                   | Lesson                                              | Status         | Priority |
+| ------------------- | --------------------------------------------------- | -------------- | -------- |
+| [#23](lesson-23.md) | Review Workflow Discipline                          | ✅ Implemented | HIGH     |
+| [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail)         | ✅ Implemented | CRITICAL |
+| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors        | ✅ Documented  | HIGH     |
+| [#26](lesson-26.md) | Dependabot Exception for Copilot Review Enforcement | ✅ Implemented | MEDIUM   |
 
 ## 🔍 How to Use This Index
 
@@ -117,11 +118,11 @@ See [Lesson #25](lesson-25.md) for quality standards and [CONTRIBUTING.md](../..
 
 ## 📊 Statistics
 
-- **Total Lessons**: 25
+- **Total Lessons**: 26
 - **Critical Priority**: 5 (Lessons #1, #2, #6, #21, #24)
 - **High Priority**: 12
-- **Medium Priority**: 9
-- **Implemented**: 23
+- **Medium Priority**: 10
+- **Implemented**: 24
 - **Documented**: 2 (Lessons #20, #25)
 
 ## 🔄 Continuous Improvement
@@ -130,6 +131,7 @@ This is a living document. New lessons are added as we discover issues across Se
 
 ### Recent Updates
 
+- **2025-10-17**: Added Lesson #26 (Dependabot Exception for Copilot Review Enforcement)
 - **2025-10-17**: Added Lesson #25 (Meta-Quality: Learning from Recurring Errors)
 - **2025-10-17**: Added Lesson #24 (Workflow Error Handling)
 - **2025-10-17**: Split monolithic LESSONS-LEARNED into individual files
