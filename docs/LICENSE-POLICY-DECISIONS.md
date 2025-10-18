@@ -158,9 +158,9 @@ During the 2025-10-12 audit, version inconsistencies were discovered:
 
 ### Action Items
 
-- [ ] Upgrade remaining v4 instances in `.github` to v6
-  - `/.github/workflows/config-checks.yml` (line 20)
-  - `/.github/workflows/security.yml` (line 21)
+- [x] Upgrade remaining v4 instances in `.github` to v6
+  - ✅ `/.github/workflows/config-checks.yml` (completed in this PR)
+  - ✅ `/.github/workflows/security.yml` (completed in this PR)
 - [ ] Update documentation templates to reference v6
 - [ ] Add version check to config-enforcement workflow (future)
 
@@ -247,7 +247,7 @@ Both repositories share the same denied licenses:
 - [ ] Industry best practices review
 - [ ] AGPL compatibility verification
 
-**Next Quarterly Review:** 2025-01-18
+**Next Quarterly Review:** 2026-01-18
 **Next Annual Review:** 2026-10-18
 
 ---
