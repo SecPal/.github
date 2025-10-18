@@ -76,6 +76,7 @@ The license policy initially **did not include AGPL-3.0-or-later in the allowed 
 >
 > - Remove all `//` comments
 > - Remove trailing commas after the last array element
+> - `BSD-*` wildcard may not be supported by all tools - enumerate explicit identifiers (BSD-2-Clause, BSD-3-Clause) if needed
 > - Validate with `npm run check:licenses` to ensure proper JSON syntax
 
 ```jsonc
