@@ -43,35 +43,33 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 7. **Verify threads resolved** before merge
 8. **Check enforcement passes** before merge
 
-**Complete Workflow (MUST follow ALL steps):**
-
-1. **First push** → Copilot reviews automatically ✅
-2. **Address comments** → Fix code, commit, push
-3. **Resolve addressed threads** → Via GraphQL (see optimized workflow below)
-4. **Request review manually** → Use MCP tool
-5. **Wait for review** → Check if "no new comments"
-6. **All green** → Merge ✅
-
-**Optimized Workflow (PR #57+):**
+**Complete Review Workflow (PR #58+ Standard):**
 
 ```
-Fix code → Commit → Push → Resolve threads → Request review
+1. First push → Copilot reviews automatically ✅ (wait 90 seconds)
+2. Address comments → Fix code, commit, push
+3. Resolve threads → Via GraphQL BEFORE requesting review
+4. Request review → Use MCP tool (manual request required after subsequent pushes)
+5. Wait for review → Check if "no new comments"
+6. All green → Merge ✅
 ```
 
-**Why better than old workflow?**
+**Why resolve threads BEFORE requesting review?**
 
-- Threads already resolved when review runs
-- Copilot sees clean state → Can approve immediately
-- Saves 1-2 review cycles
-- No need to rerun failed checks
+- ✅ Threads already resolved when Copilot runs → Can approve immediately
+- ✅ Saves 1-2 review cycles (no "unresolved threads" comment)
+- ✅ No need to rerun failed checks
+- ✅ Cleaner review state → Better review quality
 
-**When to resolve threads:**
+**Thread Resolution Timing:**
 
-- ✅ After push (before requesting review) - RECOMMENDED
-- ✅ After review says "no new comments" - Also works
-- ❌ Before addressing code changes - Premature
+- ✅ **After push, BEFORE request** - PRIMARY approach (PR #58+)
+- ⚠️ **After review completes** - Old workflow (requires rerun, wastes cycles)
+- ❌ **Before addressing code** - Premature (comments not fixed yet)
 
-**CRITICAL:** Step 3 (resolve threads) is REQUIRED - addressing comments in code is NOT enough!
+**CRITICAL:** Resolving threads is REQUIRED - addressing comments in code is NOT enough!
+
+**Automation Available:** Use `scripts/resolve-pr-threads.sh <PR_NUMBER>` (run from repository root) to automate thread resolution.
 
 ## Understanding Thread Resolution
 
@@ -100,7 +98,7 @@ gh api graphql -f query='mutation {
 ```bash
 REPO_OWNER="SecPal"
 REPO_NAME=".github"
-PR_NUMBER=57
+PR_NUMBER=57  # Example
 
 gh api graphql -f query="
 query(\$owner: String!, \$name: String!, \$number: Int!) {
@@ -158,4 +156,8 @@ See [WORKFLOW-THREAD-RESOLUTION.md](../WORKFLOW-THREAD-RESOLUTION.md) for comple
 ---
 
 **Last Updated:** 2025-10-18
-**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve before request)
+**Changes:**
+
+- Made optimized workflow PRIMARY (resolve before request, not after)
+- Added automation reference (`resolve-pr-threads.sh`)
+- Clarified timing guidance with rationale

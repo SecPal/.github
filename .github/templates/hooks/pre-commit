@@ -115,6 +115,143 @@ fi
 echo "✅ No unstaged changes"
 echo ""
 
+# 5. Check documentation quality (if scripts are available)
+# Only run on staged markdown files in docs/ directory
+STAGED_DOCS=$(git diff --cached --name-only | grep -E '^docs/.*\.md$' || true)
+
+if [ -n "$STAGED_DOCS" ]; then
+  SCRIPTS_DIR="scripts"
+  # Handle both .github repo structure and other repos referencing .github
+  if [ ! -d "$SCRIPTS_DIR" ] && [ -d "../.github/scripts" ]; then
+    SCRIPTS_DIR="../.github/scripts"
+  fi
+
+  if [ -f "$SCRIPTS_DIR/shellcheck-docs.sh" ]; then
+    echo "🔍 Checking bash blocks in documentation..."
+    FAILED_FILES=""
+    for file in $STAGED_DOCS; do
+    if ! "$SCRIPTS_DIR/shellcheck-docs.sh" "$file" > /dev/null 2>&1; then
+        FAILED_FILES="$FAILED_FILES $file"
+      fi
+    done
+
+    if [ -n "$FAILED_FILES" ]; then
+      echo ""
+      echo "❌ Bash block validation failed!"
+      echo ""
+      echo "Failed files:"
+      for file in $FAILED_FILES; do
+        echo "  - $file"
+      done
+      echo ""
+      echo "Run this for details:"
+      for file in $FAILED_FILES; do
+        echo "  $SCRIPTS_DIR/shellcheck-docs.sh $file"
+      done
+      echo ""
+      exit 1
+    fi
+    echo "✅ All bash blocks validated"
+    echo ""
+  fi
+
+  if [ -f "$SCRIPTS_DIR/check-hardcoded-examples.sh" ]; then
+    echo "🔍 Checking for hardcoded values in examples..."
+    FAILED_FILES=""
+    for file in $STAGED_DOCS; do
+    if ! "$SCRIPTS_DIR/check-hardcoded-examples.sh" "$file" > /dev/null 2>&1; then
+        FAILED_FILES="$FAILED_FILES $file"
+      fi
+    done
+
+    if [ -n "$FAILED_FILES" ]; then
+      echo ""
+      echo "❌ Hardcoded value check failed!"
+      echo ""
+      echo "Failed files:"
+      for file in $FAILED_FILES; do
+        echo "  - $file"
+      done
+      echo ""
+      echo "Run this for details:"
+      for file in $FAILED_FILES; do
+        echo "  $SCRIPTS_DIR/check-hardcoded-examples.sh $file"
+      done
+      echo ""
+      exit 1
+    fi
+    echo "✅ No hardcoded values detected"
+    echo ""
+  fi
+
+  if [ -f "$SCRIPTS_DIR/validate-graphql-docs.sh" ]; then
+    echo "🔍 Validating GraphQL queries in documentation..."
+    FAILED_FILES=""
+    for file in $STAGED_DOCS; do
+    if ! "$SCRIPTS_DIR/validate-graphql-docs.sh" "$file" > /dev/null 2>&1; then
+        FAILED_FILES="$FAILED_FILES $file"
+      fi
+    done
+
+    if [ -n "$FAILED_FILES" ]; then
+      echo ""
+      echo "❌ GraphQL validation failed!"
+      echo ""
+      echo "Failed files:"
+      for file in $FAILED_FILES; do
+        echo "  - $file"
+      done
+      echo ""
+      echo "Run this for details:"
+      for file in $FAILED_FILES; do
+        echo "  $SCRIPTS_DIR/validate-graphql-docs.sh $file"
+      done
+      echo ""
+      exit 1
+    fi
+    echo "✅ All GraphQL queries validated"
+    echo ""
+  fi
+fi
+
+# 5. Check bash best practices (Lesson #24)
+STAGED_BASH_FILES=$(git diff --cached --name-only --diff-filter=ACM | \
+  grep -E '\.(sh|yml|yaml)$' || true)
+
+if [ -n "$STAGED_BASH_FILES" ]; then
+  if [ -f "$SCRIPTS_DIR/check-bash-best-practices.sh" ]; then
+    echo "🔧 Checking bash best practices (Lesson #24)..."
+    FAILED_FILES=""
+    for file in $STAGED_BASH_FILES; do
+      if ! "$SCRIPTS_DIR/check-bash-best-practices.sh" "$file" > /dev/null 2>&1; then
+        FAILED_FILES="${FAILED_FILES}${file} "
+      fi
+    done
+
+    if [ -n "$FAILED_FILES" ]; then
+      echo ""
+      echo "❌ Bash best practices check failed!"
+      echo ""
+      echo "Failed files:"
+      for file in $FAILED_FILES; do
+        echo "  - $file"
+      done
+      echo ""
+      echo "Run this for details:"
+      for file in $FAILED_FILES; do
+        echo "  $SCRIPTS_DIR/check-bash-best-practices.sh $file"
+      done
+      echo ""
+      echo "Common fix: Add 'set -euo pipefail' after shebang or as first line of run: blocks"
+      echo "See: https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-24.md"
+      echo ""
+      exit 1
+    fi
+    echo "✅ All bash scripts follow best practices"
+    echo ""
+  fi
+fi
+
 echo "✅ All pre-commit checks passed!"
 echo ""
 exit 0

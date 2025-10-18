@@ -39,6 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           bash scripts/validate-prevention-strategy.sh "${{ matrix.repo }}"
 
       - name: Upload validation report
@@ -69,6 +70,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ADDITIONAL_REPOS: ${{ github.event.inputs.additional_repos }}
         run: |
+          set -euo pipefail
           IFS=',' read -ra REPOS <<< "$ADDITIONAL_REPOS"
           FAILED=0
           for repo in "${REPOS[@]}"; do
@@ -93,6 +95,7 @@ jobs:
     steps:
       - name: Check validation results
         run: |
+          set -euo pipefail
           echo "📊 Prevention Strategy Validation Complete"
           echo "=========================================="
           echo ""
