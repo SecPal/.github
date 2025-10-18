@@ -165,7 +165,7 @@ Clear explanations prevent future confusion.
 **Issue Discovered:**
 When migrating to reusable workflows, dependency-review action treats workflow files as "dependencies" and checks their licenses:
 
-```
+```text
 The following dependencies have incompatible licenses:
 .github/workflows/dependency-review.yml » SecPal/.github/.github/workflows/reusable-dependency-review.yml@main – License: AGPL-3.0
 ```
