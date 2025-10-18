@@ -79,17 +79,17 @@ run: |
 **❌ Potential Portability Risk:**
 
 ```bash
-TMPDIR=$(mktemp -d)    # On most systems (GNU coreutils, BSD), created with 0700 by default
-chmod 700 "$TMPDIR"    # On platforms/configurations where umask affects creation, a small window may exist
+TMPDIR=$(mktemp -d)    # Typically created with 0700 on GNU/BSD, but umask may affect this
+chmod 700 "$TMPDIR"    # Ensures 0700, but a brief window may exist on affected platforms
 ```
 
 **✅ Portability/Defense-in-Depth:**
 
 ```bash
-TMPDIR=$(umask 077; mktemp -d)  # Ensures 0700 permissions even if umask or platform defaults differ
+TMPDIR=$(umask 077; mktemp -d)  # Ensures 0700 even on platforms/configurations where umask could affect creation
 ```
 
-**Why:** Defense-in-depth measure for portability. While `mktemp -d` typically creates directories with 0700 on most systems, using `umask 077` ensures tmpdir is only accessible to the current user even on platforms/configurations where umask could affect creation. Prevents any possibility of tmpdir containing sensitive data (API tokens, workflow contents) being readable by other users.
+**Why:** Defense-in-depth measure for portability. Ensures tmpdir is only accessible to the current user even on platforms/configurations where umask could affect creation. Prevents any possibility of tmpdir containing sensitive data (API tokens, workflow contents) being readable by other users.
 
 ### 2. Guaranteed Cleanup with Trap
 
@@ -105,7 +105,7 @@ rm -rf "$TMPDIR"  # Not executed if script exits early (error, signal)
 
 ```bash
 TMPDIR=$(umask 077; mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT  # Always runs, even on error
+trap 'rm -rf -- "$TMPDIR"' EXIT  # Always runs, even on error
 
 # ... do work ...
 # Cleanup automatic on exit
@@ -154,7 +154,7 @@ set -euo pipefail
 
 # Atomic tmpdir with guaranteed cleanup
 TMPDIR=$(umask 077; mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+trap 'rm -rf -- "$TMPDIR"' EXIT
 
 # Process files with failure tracking
 FAILED=0

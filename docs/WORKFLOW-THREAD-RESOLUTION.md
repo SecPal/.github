@@ -81,11 +81,11 @@ Using comment IDs (`PRRC_*`) will fail with: `Could not resolve to PullRequestRe
 PR_NUMBER=42
 
 # Get review threads with their IDs and first comment
-gh api graphql -f query='
-query($number: Int!) {
-  repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: $number) {
-      reviewThreads(first: 50) {
+gh api graphql -f query="
+query(\$number: Int!) {
+  repository(owner: \"SecPal\", name: \".github\") {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
         nodes {
           id
           isResolved
@@ -96,10 +96,14 @@ query($number: Int!) {
             }
           }
         }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
       }
     }
   }
-}' -f number=$PR_NUMBER --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | {
+}" -f number=$PR_NUMBER --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | {
   thread_id: .id,
   path: .comments.nodes[0].path,
   preview: .comments.nodes[0].body[:100]
@@ -151,11 +155,11 @@ fi
 
 ```bash
 PR_NUMBER=42
-UNRESOLVED=$(gh api graphql -f query='
-query($number: Int!) {
-  repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: $number) {
-      reviewThreads(first: 50) {
+UNRESOLVED=$(gh api graphql -f query="
+query(\$number: Int!) {
+  repository(owner: \"SecPal\", name: \".github\") {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
         nodes {
           id
           isResolved
@@ -166,8 +170,7 @@ query($number: Int!) {
       }
     }
   }
-}
-' -f number=$PR_NUMBER --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
+}" -f number=$PR_NUMBER --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
 
 if [ "$UNRESOLVED" -gt 0 ]; then
   echo "⚠️  Still $UNRESOLVED unresolved threads"
@@ -207,11 +210,11 @@ REPO_NAME=".github"
 echo "🔍 Fetching unresolved threads for PR #$PR_NUMBER..."
 
 # Get all unresolved thread IDs
-THREAD_IDS=$(gh api graphql -f query='
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      reviewThreads(first: 50) {
+THREAD_IDS=$(gh api graphql -f query="
+query(\$owner: String!, \$name: String!, \$number: Int!) {
+  repository(owner: \$owner, name: \$name) {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
         nodes {
           id
           isResolved
@@ -219,7 +222,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       }
     }
   }
-}' -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER \
+}" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER \
   --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | .[].id')
 
 if [ -z "$THREAD_IDS" ]; then
@@ -254,16 +257,16 @@ done
 echo "🎉 All threads resolved successfully!"
 
 # Verify all threads are resolved
-UNRESOLVED=$(gh api graphql -f query='
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      reviewThreads(first: 50) {
+UNRESOLVED=$(gh api graphql -f query="
+query(\$owner: String!, \$name: String!, \$number: Int!) {
+  repository(owner: \$owner, name: \$name) {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
         nodes { id isResolved }
       }
     }
   }
-}' -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER \
+}" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER \
   --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
 
 if [ "$UNRESOLVED" -gt 0 ]; then
@@ -386,11 +389,11 @@ git push
 
 # Immediately resolve threads for comments you addressed
 PR_NUMBER=57
-gh api graphql -f query='
-query($number: Int!) {
-  repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: $number) {
-      reviewThreads(first: 50) {
+gh api graphql -f query="
+query(\$number: Int!) {
+  repository(owner: \"SecPal\", name: \".github\") {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
         nodes {
           id
           isResolved
@@ -401,7 +404,7 @@ query($number: Int!) {
       }
     }
   }
-}' -f number=$PR_NUMBER | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
+}" -f number=$PR_NUMBER | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false) |
   .id' | while IFS= read -r THREAD_ID; do
     gh api graphql -f query="
@@ -413,9 +416,7 @@ query($number: Int!) {
 done
 
 # NOW request review (subsequent push)
-# Use MCP tool (preferred) or API with JSON array syntax
-# gh api POST /repos/SecPal/.github/pulls/57/requested_reviewers \
-#   -f team_reviewers='["copilot"]'
+# Use MCP tool: mcp_github_github_request_copilot_review
 ```
 
 **When to use:**
@@ -442,4 +443,4 @@ done
 ---
 
 **Last Updated:** 2025-10-18
-**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve → request)
+**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve → request), fixed GraphQL variable expansion, added pagination support
