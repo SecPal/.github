@@ -166,8 +166,8 @@ During the 2025-10-12 audit, version inconsistencies were discovered:
 ### Migration Command
 
 ```bash
-# Upgrade all setup-node actions to v6
-find .github/workflows -name "*.yml" -type f -exec sed -i 's/setup-node@v[4-5]/setup-node@v6/g' {} \;
+# Upgrade all setup-node actions to v6 (specific to actions/setup-node)
+find .github/workflows -name "*.yml" -type f -exec sed -i 's/actions\/setup-node@v[4-5]/actions\/setup-node@v6/g' {} \;
 ```
 
 ---
