@@ -154,4 +154,4 @@ See [WORKFLOW-THREAD-RESOLUTION.md](../WORKFLOW-THREAD-RESOLUTION.md) for comple
 ---
 
 **Last Updated:** 2025-10-18
-**Changes:** Added PRRT*\* vs PRRC*\* explanation, optimized workflow (resolve before request)
+**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve before request)

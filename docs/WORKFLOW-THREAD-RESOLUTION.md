@@ -413,8 +413,9 @@ query($number: Int!) {
 done
 
 # NOW request review (subsequent push)
-gh api POST /repos/SecPal/.github/pulls/57/requested_reviewers \
-  -f team_reviewers[]='copilot'
+# Use MCP tool (preferred) or API with JSON array syntax
+# gh api POST /repos/SecPal/.github/pulls/57/requested_reviewers \
+#   -f team_reviewers='["copilot"]'
 ```
 
 **When to use:**
@@ -441,4 +442,4 @@ gh api POST /repos/SecPal/.github/pulls/57/requested_reviewers \
 ---
 
 **Last Updated:** 2025-10-18
-**Changes:** Added PRRT*\* vs PRRC*\* explanation, optimized workflow (resolve → request)
+**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve → request)
