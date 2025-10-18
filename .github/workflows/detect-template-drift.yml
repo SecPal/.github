@@ -226,6 +226,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
+          set -euo pipefail
           if [ "${{ steps.drift.outputs.drift_detected }}" == "true" ]; then
             echo "⚠️  Template drift detected! Check the created/updated issue for details."
             echo "This is informational - drift is tracked via GitHub issue."

@@ -115,6 +115,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
+          set -euo pipefail
           if [ "${{ steps.sync.outputs.has_changes }}" == "true" ]; then
             echo "✅ Created PR for ${{ matrix.repo }}"
           else
