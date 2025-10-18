@@ -76,20 +76,20 @@ run: |
 
 ### 1. Atomic Temporary Directory Permissions
 
-**❌ Race Condition Risk:**
+**❌ Potential Portability Risk:**
 
 ```bash
-TMPDIR=$(mktemp -d)    # Created with default permissions (755)
-chmod 700 "$TMPDIR"    # Small window where dir is readable by others
+TMPDIR=$(mktemp -d)    # On most systems (GNU coreutils, BSD), created with 0700 by default
+chmod 700 "$TMPDIR"    # On platforms/configurations where umask affects creation, a small window may exist
 ```
 
-**✅ Atomic Permissions:**
+**✅ Portability/Defense-in-Depth:**
 
 ```bash
-TMPDIR=$(umask 077; mktemp -d)  # Created with 700 permissions immediately
+TMPDIR=$(umask 077; mktemp -d)  # Ensures 0700 permissions even if umask or platform defaults differ
 ```
 
-**Why:** Prevents race condition where tmpdir contains sensitive data (API tokens, workflow contents) readable by other users between creation and chmod.
+**Why:** Defense-in-depth measure for portability. While `mktemp -d` typically creates directories with 0700 on most systems, using `umask 077` ensures tmpdir is only accessible to the current user even on platforms/configurations where umask could affect creation. Prevents any possibility of tmpdir containing sensitive data (API tokens, workflow contents) being readable by other users.
 
 ### 2. Guaranteed Cleanup with Trap
 

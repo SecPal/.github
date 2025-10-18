@@ -82,9 +82,9 @@ PR_NUMBER=42
 
 # Get review threads with their IDs and first comment
 gh api graphql -f query='
-query {
+query($number: Int!) {
   repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: '$PR_NUMBER') {
+    pullRequest(number: $number) {
       reviewThreads(first: 50) {
         nodes {
           id
@@ -99,7 +99,7 @@ query {
       }
     }
   }
-}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | {
+}' -f number=$PR_NUMBER --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | {
   thread_id: .id,
   path: .comments.nodes[0].path,
   preview: .comments.nodes[0].body[:100]
@@ -151,10 +151,10 @@ fi
 
 ```bash
 PR_NUMBER=42
-UNRESOLVED=$(gh api graphql -f query="
-query {
-  repository(owner: \"SecPal\", name: \".github\") {
-    pullRequest(number: $PR_NUMBER) {
+UNRESOLVED=$(gh api graphql -f query='
+query($number: Int!) {
+  repository(owner: "SecPal", name: ".github") {
+    pullRequest(number: $number) {
       reviewThreads(first: 50) {
         nodes {
           id
@@ -167,7 +167,7 @@ query {
     }
   }
 }
-" --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
+' -f number=$PR_NUMBER --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
 
 if [ "$UNRESOLVED" -gt 0 ]; then
   echo "⚠️  Still $UNRESOLVED unresolved threads"
@@ -207,10 +207,10 @@ REPO_NAME=".github"
 echo "🔍 Fetching unresolved threads for PR #$PR_NUMBER..."
 
 # Get all unresolved thread IDs
-THREAD_IDS=$(gh api graphql -f query="
-query {
-  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
-    pullRequest(number: $PR_NUMBER) {
+THREAD_IDS=$(gh api graphql -f query='
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
       reviewThreads(first: 50) {
         nodes {
           id
@@ -219,7 +219,8 @@ query {
       }
     }
   }
-}" --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | .[].id')
+}' -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | .[].id')
 
 if [ -z "$THREAD_IDS" ]; then
   echo "✅ No unresolved threads found"
@@ -253,16 +254,17 @@ done
 echo "🎉 All threads resolved successfully!"
 
 # Verify all threads are resolved
-UNRESOLVED=$(gh api graphql -f query="
-query {
-  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
-    pullRequest(number: $PR_NUMBER) {
+UNRESOLVED=$(gh api graphql -f query='
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
       reviewThreads(first: 50) {
         nodes { id isResolved }
       }
     }
   }
-}" --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
+}' -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes | map(select(.isResolved == false)) | length')
 
 if [ "$UNRESOLVED" -gt 0 ]; then
   echo "⚠️  Still $UNRESOLVED unresolved - manual action required"
@@ -383,10 +385,11 @@ Rerunning the latest (successful) check does nothing to unblock.
 git push
 
 # Immediately resolve threads for comments you addressed
+PR_NUMBER=57
 gh api graphql -f query='
-query {
+query($number: Int!) {
   repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: 57) {
+    pullRequest(number: $number) {
       reviewThreads(first: 50) {
         nodes {
           id
@@ -398,9 +401,9 @@ query {
       }
     }
   }
-}' | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
+}' -f number=$PR_NUMBER | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false) |
-  .id' | while read THREAD_ID; do
+  .id' | while IFS= read -r THREAD_ID; do
     gh api graphql -f query="
     mutation {
       resolveReviewThread(input: {threadId: \"$THREAD_ID\"}) {
