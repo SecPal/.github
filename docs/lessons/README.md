@@ -20,19 +20,19 @@ This directory contains individual lessons learned during the setup and maintena
 
 Must be addressed immediately in all repositories. These issues can block PRs or compromise security.
 
-| #                   | Lesson                                                             | Status   | Priority |
-| ------------------- | ------------------------------------------------------------------ | -------- | -------- |
-| [#0](lesson-00.md)  | **Start Here - Essential Rules for AI Assistants**                | ✅ Active | CRITICAL |
-| [#1](lesson-01.md)  | Branch Protection: Wrong Status Check Context Names                | ✅ Fixed | CRITICAL |
-| [#2](lesson-02.md)  | Signed Commits: `git verify-commit` Doesn't Work in GitHub Actions | ✅ Fixed | CRITICAL |
-| [#3](lesson-03.md)  | Dependency Review: Invalid "proprietary" License Identifier        | ✅ Fixed | HIGH     |
-| [#4](lesson-04.md)  | Dependabot PRs Failed Signed Commits Check                         | ✅ Fixed | HIGH     |
-| [#5](lesson-05.md)  | Dependabot PRs Failed Dependency Review (GitHub Actions Updates)   | ✅ Fixed | HIGH     |
-| [#6](lesson-06.md)  | Branch Protection: Admin Bypass Enabled                            | ✅ Fixed | CRITICAL |
-| [#7](lesson-07.md)  | package-lock.json Must Be Committed (npm Projects)                 | ✅ Fixed | HIGH     |
-| [#8](lesson-08.md)  | REUSE.toml Itself Needs SPDX Headers                               | ✅ Fixed | MEDIUM   |
-| [#9](lesson-09.md)  | Deprecated Dependencies (Jest's glob@7.2.3)                        | ✅ Fixed | MEDIUM   |
-| [#10](lesson-10.md) | Dependency Graph Requires Explicit Activation                      | ✅ Fixed | MEDIUM   |
+| #                   | Lesson                                                             | Status    | Priority |
+| ------------------- | ------------------------------------------------------------------ | --------- | -------- |
+| [#0](lesson-00.md)  | **Start Here - Essential Rules for AI Assistants**                 | ✅ Active | CRITICAL |
+| [#1](lesson-01.md)  | Branch Protection: Wrong Status Check Context Names                | ✅ Fixed  | CRITICAL |
+| [#2](lesson-02.md)  | Signed Commits: `git verify-commit` Doesn't Work in GitHub Actions | ✅ Fixed  | CRITICAL |
+| [#3](lesson-03.md)  | Dependency Review: Invalid "proprietary" License Identifier        | ✅ Fixed  | HIGH     |
+| [#4](lesson-04.md)  | Dependabot PRs Failed Signed Commits Check                         | ✅ Fixed  | HIGH     |
+| [#5](lesson-05.md)  | Dependabot PRs Failed Dependency Review (GitHub Actions Updates)   | ✅ Fixed  | HIGH     |
+| [#6](lesson-06.md)  | Branch Protection: Admin Bypass Enabled                            | ✅ Fixed  | CRITICAL |
+| [#7](lesson-07.md)  | package-lock.json Must Be Committed (npm Projects)                 | ✅ Fixed  | HIGH     |
+| [#8](lesson-08.md)  | REUSE.toml Itself Needs SPDX Headers                               | ✅ Fixed  | MEDIUM   |
+| [#9](lesson-09.md)  | Deprecated Dependencies (Jest's glob@7.2.3)                        | ✅ Fixed  | MEDIUM   |
+| [#10](lesson-10.md) | Dependency Graph Requires Explicit Activation                      | ✅ Fixed  | MEDIUM   |
 
 ### ⚠️ Process Issues (Lessons #11-14)
 
