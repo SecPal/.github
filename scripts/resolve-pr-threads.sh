@@ -10,6 +10,9 @@ set -euo pipefail
 # Purpose: Resolve all unresolved review threads for a given PR
 # Usage: ./resolve-pr-threads.sh <PR_NUMBER> [REPO_OWNER] [REPO_NAME]
 #
+# IMPORTANT: This script should be executed directly, not sourced.
+# The cleanup traps are configured for direct execution only.
+#
 # Prerequisites:
 #   - gh CLI installed and authenticated
 #   - jq installed for JSON processing
@@ -19,11 +22,13 @@ set -euo pipefail
 #   1 - Error (validation failed, API error, or unresolved threads remain)
 #
 
-set -euo pipefail
-
 # Configuration
-REPO_OWNER="${2:-SecPal}"
-REPO_NAME="${3:-.github}"
+# Try to detect from git remote, fallback to defaults
+DEFAULT_OWNER=$(git remote get-url origin 2>/dev/null | sed -n 's#.*/\([^/]*\)/.*#\1#p' || echo "SecPal")
+DEFAULT_REPO=$(git remote get-url origin 2>/dev/null | sed -n 's#.*/\([^/]*\)\.git$#\1#p' || echo ".github")
+
+REPO_OWNER="${2:-$DEFAULT_OWNER}"
+REPO_NAME="${3:-$DEFAULT_REPO}"
 PR_NUMBER="${1:-}"
 
 # Colors for output
@@ -189,7 +194,7 @@ mutation($threadId: ID!) {
   # Create temporary file for output
   local tmpfile
   tmpfile=$(umask 077; mktemp)
-  trap 'rm -f -- "$tmpfile"' EXIT INT TERM
+  trap 'rm -rf -- "$tmpfile"' EXIT INT TERM
 
   # Execute mutation and capture output
   gh api graphql \

@@ -57,8 +57,12 @@ check_graphql_query() {
     local violations=()
 
     # Extract actual GraphQL from shell wrapper
+    # Extract GraphQL query content using multi-step approach for clarity
+    local raw_query
+    raw_query=$(sed -n "/query=/,/'/p" "$query_file" || echo "")
+
     local graphql_content
-    graphql_content=$(sed -n "/query=/,/'/p" "$query_file" | sed "s/.*query=['\"]//" | sed "s/['\"].*//" || echo "")
+    graphql_content=$(echo "$raw_query" | sed "s/.*query=['\"]//" | sed "s/['\"].*//" || echo "")
 
     if [ -z "$graphql_content" ]; then
         violations+=("Could not extract GraphQL query")

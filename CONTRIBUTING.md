@@ -489,7 +489,12 @@ gh issue create --title "Code style improvements from PR #XX" \
 
 All source files must include SPDX headers:
 
-```
+```bash
+# For shell scripts:
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# For other languages:
 // SPDX-FileCopyrightText: 2025 SecPal Contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 ```
