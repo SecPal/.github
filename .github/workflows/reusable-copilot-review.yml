@@ -35,6 +35,16 @@ jobs:
             echo "👤 Human-authored PR - Copilot review required"
           fi
 
+      - name: Wait for Copilot review (on pull_request event)
+        if: steps.check-author.outputs.skip != 'true' && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          echo "⏳ Waiting 90 seconds for Copilot to review..."
+          echo "Rationale: Copilot review is triggered async when PR opens."
+          echo "This delay prevents race condition where check runs before review completes."
+          sleep 90
+          echo "✅ Wait complete - proceeding with check"
+
       - name: Check for Copilot review
         if: steps.check-author.outputs.skip != 'true'
         id: check-review
