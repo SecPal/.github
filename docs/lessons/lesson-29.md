@@ -37,9 +37,18 @@ License-checker reported the root package as UNLICENSED and the immediate respon
 
 **Correct Solutions (in order of implementation):**
 
-1. ✅ Keep `private: true` in package.json (prevents accidental npm publication, even for public repositories)
-2. ✅ Exclude root package from license checking using `--excludePackages` or equivalent tooling configuration
+1. ✅ Set `private: false` in package.json (repository is public, contains no sensitive data)
+2. ✅ Exclude root package from license checking using `--excludePackages`
 3. ✅ Add AGPL-3.0-or-later (the project's own license) to allowed list
+
+**Note on `private: true` vs `private: false`:**
+
+- **Copilot suggested**: Keep `private: true` to prevent accidental npm publication
+- **Actual implementation**: Set `private: false` because:
+  - Repository is public with no sensitive data
+  - No intention to publish to npm (no publish workflow exists)
+  - Simpler than maintaining exclude lists
+  - Prevents license-checker from reporting as UNLICENSED
 
 **Wrong Approach:**
 

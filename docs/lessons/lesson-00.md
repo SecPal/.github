@@ -17,7 +17,36 @@ This lesson provides the **fundamental rules** that AI assistants must follow wh
 
 ## Critical Rules
 
-### 1. Branch Protection - NEVER Push to Main Directly
+### 1. Quality First - Think Before You Act
+
+**Rule:** Systematic review BEFORE commit. Never rush. Verify facts, don't blindly accept suggestions.
+
+**What This Means:**
+
+- **Before every commit**: Review ALL changes comprehensively
+- **Before accepting review comments**: Verify against actual code/implementation
+- **Before declaring "ready"**: Check everything systematically
+- **Never blindly accept**: Not from Copilot, not from any source - verify first!
+
+**Example from This Session:**
+
+```
+❌ WRONG: Copilot says "keep private: true" → Accept without checking
+✅ CORRECT: Copilot says "keep private: true" → Check package.json → See private: false → Recognize contradiction
+```
+
+**Why:**
+
+- Prevents introducing errors while fixing other issues
+- Catches contradictions between suggestions and reality
+- Ensures documentation matches implementation
+- Single most important rule - enables all others
+
+**Target:** Max 3 review cycles per PR. Ideal: 1 cycle, 0 comments.
+
+**Related:** [Lesson #25](lesson-25.md)
+
+### 2. Branch Protection - NEVER Push to Main Directly
 
 **Rule:** ALL changes must go through pull requests. Main branch is protected.
 
@@ -45,7 +74,7 @@ gh pr create --base main
 
 **Related:** [Lesson #1](lesson-01.md), [Lesson #6](lesson-06.md), [Lesson #13](lesson-13.md)
 
-### 2. Pre-commit Hook - Prettier Runs Automatically
+### 3. Pre-commit Hook - Prettier Runs Automatically
 
 **Rule:** Pre-commit hook runs Prettier automatically. If files are formatted, you must re-stage them.
 
@@ -105,7 +134,7 @@ git commit -m "style: apply formatting"
 
 **Related:** [Lesson #17](lesson-17.md), [Lesson #11](lesson-11.md)
 
-### 3. Lesson Writing - No User Quotes
+### 4. Lesson Writing - No User Quotes
 
 **Rule:** Document processes and solutions, not conversation history or user feedback.
 
@@ -139,9 +168,9 @@ proprietary dependencies, compromising open source compliance.
 
 **Related:** [README.md Writing Guidelines](README.md#writing-guidelines), [Lesson #25](lesson-25.md)
 
-### 4. License Policy - Never Modify Without Approval
+### 5. License Policy - Never Modify Without Approval
 
-**Rule:** `.license-policy.json` is security-critical. Never modify without explicit approval.
+**Rule:** `.license-policy.json` is a security boundary. Never modify without explicit user approval.
 
 **What This Means:**
 
@@ -170,9 +199,9 @@ proprietary dependencies, compromising open source compliance.
 
 **Related:** [Lesson #29](lesson-29.md)
 
-### 5. Admin Override - Only for Bootstrap Paradoxes
+### 6. Admin Override - Only for Bootstrap Paradoxes
 
-**Rule:** `gh pr merge --admin` bypasses ALL protections. Use ONLY for bootstrap paradoxes.
+**Rule:** Use `--admin` flag ONLY for bootstrap paradoxes (Lesson #22). Never to bypass failing checks.
 
 **Valid Use Case (Lesson #22):**
 
@@ -203,23 +232,27 @@ proprietary dependencies, compromising open source compliance.
 │ CRITICAL RULES - AI Assistant Quick Reference              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│ 1. BRANCH PROTECTION                                        │
+│ 1. QUALITY FIRST                                            │
+│    ✓ Systematic review before commit                       │
+│    ✗ Never blindly accept suggestions - verify first!      │
+│                                                             │
+│ 2. BRANCH PROTECTION                                        │
 │    ✓ Always create PR branch                               │
 │    ✗ Never push to main directly                           │
 │                                                             │
-│ 2. PRE-COMMIT HOOK                                          │
+│ 3. PRE-COMMIT HOOK                                          │
 │    ✓ If "unstaged changes": git add -A && git commit       │
 │    ✗ Don't use -n to skip hook (except when hanging)       │
 │                                                             │
-│ 3. LESSON WRITING                                           │
+│ 4. LESSON WRITING                                           │
 │    ✓ English, patterns, self-contained                     │
 │    ✗ No user quotes, no conversation history               │
 │                                                             │
-│ 4. LICENSE POLICY                                           │
+│ 5. LICENSE POLICY                                           │
 │    ✓ Ask before modifying .license-policy.json             │
 │    ✗ Never modify to "fix" a check                         │
 │                                                             │
-│ 5. ADMIN OVERRIDE                                           │
+│ 6. ADMIN OVERRIDE                                           │
 │    ✓ Use for bootstrap paradoxes only                      │
 │    ✗ Never use to bypass failing checks                    │
 │                                                             │
