@@ -124,11 +124,16 @@ get_unresolved_threads() {
 
   log_info "Fetching unresolved threads for PR #$pr_number in $owner/$repo..."
 
-  local query='
-query($owner: String!, $name: String!, $number: Int!) {
+  local all_thread_ids=""
+  local has_next_page=true
+  local cursor=""
+
+  while [ "$has_next_page" = true ]; do
+    local query='
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $cursor) {
         nodes {
           id
           isResolved
@@ -148,42 +153,68 @@ query($owner: String!, $name: String!, $number: Int!) {
   }
 }'
 
-  local result
-  result=$(gh api graphql \
-    -f query="$query" \
-    -f owner="$owner" \
-    -f name="$repo" \
-    -F number="$pr_number" 2>&1)
+    local result
+    if [ -z "$cursor" ]; then
+      result=$(gh api graphql \
+        -f query="$query" \
+        -f owner="$owner" \
+        -f name="$repo" \
+        -F number="$pr_number" 2>&1)
+    else
+      result=$(gh api graphql \
+        -f query="$query" \
+        -f owner="$owner" \
+        -f name="$repo" \
+        -F number="$pr_number" \
+        -f cursor="$cursor" 2>&1)
+    fi
 
-  local exit_code=$?
+    local exit_code=$?
 
-  if [ $exit_code -ne 0 ]; then
-    log_error "Failed to fetch threads from GraphQL API"
-    echo "$result" >&2
-    return 1
-  fi
+    if [ $exit_code -ne 0 ]; then
+      log_error "Failed to fetch threads from GraphQL API"
+      echo "$result" >&2
+      return 1
+    fi
 
-  # Check for GraphQL errors
-  if echo "$result" | jq -e '.errors' > /dev/null 2>&1; then
-    log_error "GraphQL query returned errors:"
-    echo "$result" | jq -r '.errors[] | "  - \(.message)"' >&2
-    return 1
-  fi
+    # Check for GraphQL errors
+    if echo "$result" | jq -e '.errors' > /dev/null 2>&1; then
+      log_error "GraphQL query returned errors:"
+      echo "$result" | jq -r '.errors[] | "  - \(.message)"' >&2
+      return 1
+    fi
 
-  # Extract unresolved thread IDs
-  local thread_ids
-  thread_ids=$(echo "$result" | jq -r '
-    .data.repository.pullRequest.reviewThreads.nodes[]
-    | select(.isResolved == false)
-    | .id
-  ')
+    # Extract unresolved thread IDs from this page
+    local page_thread_ids
+    page_thread_ids=$(echo "$result" | jq -r '
+      .data.repository.pullRequest.reviewThreads.nodes[]
+      | select(.isResolved == false)
+      | .id
+    ')
 
-  if [ -z "$thread_ids" ]; then
+    if [ -n "$page_thread_ids" ]; then
+      if [ -z "$all_thread_ids" ]; then
+        all_thread_ids="$page_thread_ids"
+      else
+        all_thread_ids="$all_thread_ids"$'\n'"$page_thread_ids"
+      fi
+    fi
+
+    # Check if there are more pages
+    has_next_page=$(echo "$result" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+    cursor=$(echo "$result" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+
+    if [ "$has_next_page" != "true" ]; then
+      break
+    fi
+  done
+
+  if [ -z "$all_thread_ids" ]; then
     log_success "No unresolved threads found"
     return 0
   fi
 
-  echo "$thread_ids"
+  echo "$all_thread_ids"
 }
 
 resolve_thread() {
@@ -204,7 +235,7 @@ mutation($threadId: ID!) {
   # Create temporary file for output
   local tmpfile
   tmpfile=$(umask 077; mktemp)
-  trap 'rm -rf -- "$tmpfile"' EXIT INT TERM
+  trap 'rm -f -- "$tmpfile"' EXIT INT TERM
 
   # Execute mutation and capture output
   gh api graphql \

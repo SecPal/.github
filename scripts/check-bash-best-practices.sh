@@ -36,10 +36,21 @@ check_set_flags() {
             if [ ${#run_blocks[@]} -gt 0 ] && [ -n "${run_blocks[0]}" ]; then
                 for block_line in "${run_blocks[@]}"; do
                     local line_num="${block_line%%:*}"
-                    local next_line=$((line_num + 1))
 
-                    # Check if next line contains 'set -euo pipefail'
-                    if ! sed -n "${next_line}p" "$file" | grep -q "set -euo pipefail"; then
+                    # Find first non-empty, non-comment line after 'run: |'
+                    local first_script_line
+                    first_script_line=$(awk "NR>$line_num {
+                        # Skip empty lines
+                        if (\$0 ~ /^[[:space:]]*$/) next;
+                        # Skip comment lines
+                        if (\$0 ~ /^[[:space:]]*#/) next;
+                        # Found first real command
+                        print;
+                        exit
+                    }" "$file")
+
+                    # Check if first script line contains 'set -euo pipefail'
+                    if [ -n "$first_script_line" ] && ! echo "$first_script_line" | grep -q "set -euo pipefail"; then
                         echo -e "${RED}❌${NC} Missing 'set -euo pipefail' in run block at line $line_num"
                         echo "   Fix: Add 'set -euo pipefail' as first line of run block"
                         ((violations++))

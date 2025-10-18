@@ -65,12 +65,37 @@ check_graphql_query() {
     local violations=()
 
     # Extract actual GraphQL from shell wrapper
-    # Extract GraphQL query content using multi-step approach for clarity
-    local raw_query
-    raw_query=$(sed -n "/query=/,/'/p" "$query_file" || echo "")
+    # Robust parsing that handles quotes within GraphQL queries
+    local graphql_content=""
+    local in_query=0
+    local quote_char=""
 
-    local graphql_content
-    graphql_content=$(echo "$raw_query" | sed "s/.*query=['\"]//" | sed "s/['\"].*//" || echo "")
+    while IFS= read -r line; do
+        if [[ $in_query -eq 0 ]]; then
+            # Detect start of query assignment
+            if [[ "$line" =~ query=([\'\"]) ]]; then
+                in_query=1
+                quote_char="${BASH_REMATCH[1]}"
+                # Remove everything up to and including query=' or query="
+                graphql_content="${line#*query=$quote_char}"
+                # If closing quote is on same line, extract only content between quotes
+                if [[ "$graphql_content" =~ (.*)$quote_char ]]; then
+                    graphql_content="${BASH_REMATCH[1]}"
+                    in_query=0
+                    break
+                fi
+            fi
+        else
+            # Accumulate lines until closing quote
+            if [[ "$line" =~ (.*)$quote_char ]]; then
+                graphql_content+=$'\n'"${BASH_REMATCH[1]}"
+                in_query=0
+                break
+            else
+                graphql_content+=$'\n'"$line"
+            fi
+        fi
+    done < "$query_file"
 
     if [ -z "$graphql_content" ]; then
         violations+=("Could not extract GraphQL query")

@@ -65,8 +65,19 @@ check_bash_patterns() {
 
     # Pattern 3: mktemp without atomic permissions
     if grep -q 'mktemp -d' "$script"; then
-        if ! grep -E '(umask 077.*mktemp|mktemp.*chmod)' "$script" > /dev/null 2>&1; then
-            violations+=("mktemp without atomic permissions (use: TMPDIR=\$(umask 077; mktemp -d))")
+        # Check for umask 077 with mktemp
+        if ! grep -E 'umask 077.*mktemp' "$script" > /dev/null 2>&1; then
+            # Look for variable assignment from mktemp
+            local mktemp_var
+            mktemp_var=$(grep -E '([A-Za-z_][A-Za-z0-9_]*)=.*mktemp' "$script" | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/' | head -n1)
+            if [ -n "$mktemp_var" ]; then
+                # Check if chmod is applied to that specific variable
+                if ! grep -E "chmod .*\\\$$mktemp_var" "$script" > /dev/null 2>&1; then
+                    violations+=("mktemp without atomic permissions (use: TMPDIR=\$(umask 077; mktemp -d) or chmod on mktemp result)")
+                fi
+            else
+                violations+=("mktemp without atomic permissions (use: TMPDIR=\$(umask 077; mktemp -d))")
+            fi
         fi
     fi
 
