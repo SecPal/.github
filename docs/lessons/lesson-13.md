@@ -43,20 +43,34 @@ gh label create "contracts" --color "0366d6" --description "Contracts dependenci
 ```
 
 **Key Insight:**
-If tempted to use `--admin`, the correct answer is: **wait and fix properly**.
+If tempted to use `--admin`, the correct answer is usually: **wait and fix properly**.
+
+## Valid Use Case: Bootstrap Paradoxes
+
+**Exception:** Bootstrap paradoxes (see Lesson #22) are valid use cases for `--admin`:
+
+- Fix is IN the PR but checks run with `@main` (which doesn't have the fix)
+- Check fails BECAUSE the fix isn't in main yet
+- Can't merge because check fails → can't get fix into main
+- This is a circular dependency that REQUIRES `--admin` to break
+
+**Example:** PR adds AGPL-3.0 to license policy, but dependency-review (running with main's policy) flags the PR itself for not having AGPL-3.0 allowed.
 
 ## Action for Future Repos
 
-1. **NEVER** use `--admin` for normal PR merges
-2. Reserve admin bypass ONLY for true emergencies
+1. Reserve `--admin` for bootstrap paradoxes ONLY (Lesson #22)
+2. For normal issues: Wait and fix properly
 3. Create all required labels during setup
 4. Address ALL warnings before merging
 5. Add "No admin bypass used?" to pre-merge checklist
+6. If using `--admin`: Document WHY in commit/PR description
 
 ## Related Lessons
 
 - [Lesson #6 (Branch Protection: Admin Bypass)](lesson-06.md) - Why we set enforce_admins: true
 - [Lesson #21 (Branch Protection Names Must Match)](lesson-21.md)
+- [Lesson #22 (Bootstrap Paradox)](lesson-22.md) - Valid use case for --admin
+- [Lesson #29 (License Policy)](lesson-29.md) - Bootstrap example with dependency-review
 
 ---
 

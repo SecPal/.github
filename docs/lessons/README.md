@@ -10,24 +10,29 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This directory contains individual lessons learned during the setup and maintenance of SecPal repositories. Each lesson is a self-contained document with problem description, solution, and implementation guidelines.
 
+## 🚦 Start Here
+
+**New AI assistants:** Read [Lesson #0](lesson-00.md) FIRST before making any changes!
+
 ## 📚 Lesson Categories
 
-### 🔴 Critical Issues (Lessons #1-10)
+### 🔴 Critical Issues (Lessons #0-10)
 
 Must be addressed immediately in all repositories. These issues can block PRs or compromise security.
 
-| #                   | Lesson                                                             | Status   | Priority |
-| ------------------- | ------------------------------------------------------------------ | -------- | -------- |
-| [#1](lesson-01.md)  | Branch Protection: Wrong Status Check Context Names                | ✅ Fixed | CRITICAL |
-| [#2](lesson-02.md)  | Signed Commits: `git verify-commit` Doesn't Work in GitHub Actions | ✅ Fixed | CRITICAL |
-| [#3](lesson-03.md)  | Dependency Review: Invalid "proprietary" License Identifier        | ✅ Fixed | HIGH     |
-| [#4](lesson-04.md)  | Dependabot PRs Failed Signed Commits Check                         | ✅ Fixed | HIGH     |
-| [#5](lesson-05.md)  | Dependabot PRs Failed Dependency Review (GitHub Actions Updates)   | ✅ Fixed | HIGH     |
-| [#6](lesson-06.md)  | Branch Protection: Admin Bypass Enabled                            | ✅ Fixed | CRITICAL |
-| [#7](lesson-07.md)  | package-lock.json Must Be Committed (npm Projects)                 | ✅ Fixed | HIGH     |
-| [#8](lesson-08.md)  | REUSE.toml Itself Needs SPDX Headers                               | ✅ Fixed | MEDIUM   |
-| [#9](lesson-09.md)  | Deprecated Dependencies (Jest's glob@7.2.3)                        | ✅ Fixed | MEDIUM   |
-| [#10](lesson-10.md) | Dependency Graph Requires Explicit Activation                      | ✅ Fixed | MEDIUM   |
+| #                   | Lesson                                                             | Status    | Priority |
+| ------------------- | ------------------------------------------------------------------ | --------- | -------- |
+| [#0](lesson-00.md)  | **Start Here - Essential Rules for AI Assistants**                 | ✅ Active | CRITICAL |
+| [#1](lesson-01.md)  | Branch Protection: Wrong Status Check Context Names                | ✅ Fixed  | CRITICAL |
+| [#2](lesson-02.md)  | Signed Commits: `git verify-commit` Doesn't Work in GitHub Actions | ✅ Fixed  | CRITICAL |
+| [#3](lesson-03.md)  | Dependency Review: Invalid "proprietary" License Identifier        | ✅ Fixed  | HIGH     |
+| [#4](lesson-04.md)  | Dependabot PRs Failed Signed Commits Check                         | ✅ Fixed  | HIGH     |
+| [#5](lesson-05.md)  | Dependabot PRs Failed Dependency Review (GitHub Actions Updates)   | ✅ Fixed  | HIGH     |
+| [#6](lesson-06.md)  | Branch Protection: Admin Bypass Enabled                            | ✅ Fixed  | CRITICAL |
+| [#7](lesson-07.md)  | package-lock.json Must Be Committed (npm Projects)                 | ✅ Fixed  | HIGH     |
+| [#8](lesson-08.md)  | REUSE.toml Itself Needs SPDX Headers                               | ✅ Fixed  | MEDIUM   |
+| [#9](lesson-09.md)  | Deprecated Dependencies (Jest's glob@7.2.3)                        | ✅ Fixed  | MEDIUM   |
+| [#10](lesson-10.md) | Dependency Graph Requires Explicit Activation                      | ✅ Fixed  | MEDIUM   |
 
 ### ⚠️ Process Issues (Lessons #11-14)
 
@@ -62,7 +67,7 @@ Complex workflow patterns and automation improvements.
 | [#21](lesson-21.md) | Branch Protection Check Names Must Match Exactly  | ✅ Implemented | CRITICAL |
 | [#22](lesson-22.md) | Reusable Workflow Bootstrap Paradox & GraphQL Fix | ✅ Implemented | HIGH     |
 
-### 🆕 Recent Additions (Lessons #23-28)
+### 🆕 Recent Additions (Lessons #23-29)
 
 Latest lessons from ongoing repository maintenance.
 
@@ -70,10 +75,11 @@ Latest lessons from ongoing repository maintenance.
 | ------------------- | ----------------------------------------------------- | -------------- | -------- |
 | [#23](lesson-23.md) | Review Workflow Discipline                            | ✅ Implemented | HIGH     |
 | [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail)           | ✅ Implemented | CRITICAL |
-| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors          | ✅ Documented  | HIGH     |
+| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors          | ✅ Updated     | HIGH     |
 | [#26](lesson-26.md) | Dependabot Exception for Copilot Review Enforcement   | ✅ Implemented | MEDIUM   |
 | [#27](lesson-27.md) | Script Consolidation & Best Practice Merging          | ✅ Implemented | HIGH     |
 | [#28](lesson-28.md) | Professional Communication in Technical Documentation | ✅ Implemented | HIGH     |
+| [#29](lesson-29.md) | License Policy is Security-Critical                   | ✅ Documented  | CRITICAL |
 
 ## 🔍 How to Use This Index
 
