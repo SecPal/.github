@@ -24,7 +24,7 @@ declare -A PATTERNS=(
     ["owner: \"SecPal\""]="Hardcoded owner in GraphQL (use: \\\$owner variable)"
     ["name: \"\\.github\""]="Hardcoded repo name in GraphQL (use: \\\$name variable)"
     ["repository\(owner: \"[^$]"]="Hardcoded repository owner (use: variables)"
-    ["pullRequest\(number: [0-9]"]="Hardcoded PR number in query (use: \\\$number variable)"
+    ["pullRequest\(number: [0-9]+"]="Hardcoded PR number in query (use: \\\$number variable)"
     ["PRRT\\*\\\\\\*|PRRC\\*\\\\\\*"]="Incorrect markdown escaping (use backticks: \`PRRT_*\` or \`PRRC_*\`)"
 )
 

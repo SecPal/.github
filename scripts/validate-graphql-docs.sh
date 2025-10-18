@@ -145,6 +145,8 @@ check_graphql_query() {
     fi
 
     # Pattern 5: Basic syntax errors
+    # Note: Simple brace counting - doesn't account for braces in string literals
+    # This is sufficient for documentation examples which typically don't have braces in strings
     local opening_braces
     opening_braces=$(echo "$graphql_content" | grep -o '{' | wc -l)
     local closing_braces

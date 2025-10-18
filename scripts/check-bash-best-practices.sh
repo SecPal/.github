@@ -39,15 +39,15 @@ check_set_flags() {
 
                     # Find first non-empty, non-comment line after 'run: |'
                     local first_script_line
-                    first_script_line=$(awk "NR>$line_num {
+                    first_script_line=$(awk -v line="$line_num" 'NR>line {
                         # Skip empty lines
-                        if (\$0 ~ /^[[:space:]]*$/) next;
+                        if ($0 ~ /^[[:space:]]*$/) next;
                         # Skip comment lines
-                        if (\$0 ~ /^[[:space:]]*#/) next;
+                        if ($0 ~ /^[[:space:]]*#/) next;
                         # Found first real command
                         print;
                         exit
-                    }" "$file")
+                    }' "$file")
 
                     # Check if first script line contains 'set -euo pipefail'
                     if [ -n "$first_script_line" ] && ! echo "$first_script_line" | grep -q "set -euo pipefail"; then

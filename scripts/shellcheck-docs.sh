@@ -29,7 +29,7 @@ extract_bash_blocks() {
     local current_block=""
 
     while IFS= read -r line; do
-        if [[ "$line" =~ ^\`\`\`(bash|sh) ]]; then
+        if [[ "$line" =~ ^\`\`\`(bash|sh|zsh|shell) ]]; then
             in_bash_block=true
             ((++block_num))
             current_block=""

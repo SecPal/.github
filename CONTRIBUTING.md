@@ -457,9 +457,7 @@ Research shows diminishing returns after cycle 3:
 
 # 1. Mark comment with justification (don't commit code changes)
 gh api -X PATCH repos/SecPal/<repo>/pulls/comments/<COMMENT_ID> \
-  -f body="~~LOW-PRIORITY-ACCEPTED~~ This is a valid style preference,
-  but addressing it would trigger cycle 4+. Creating follow-up issue
-  #123 to track stylistic improvements for future refactoring."
+  -f body="~~LOW-PRIORITY-ACCEPTED~~ This is a valid style preference, but addressing it would trigger cycle 4+. Creating follow-up issue #123 to track stylistic improvements for future refactoring."
 
 # 2. Create follow-up issue for batch improvements
 gh issue create --title "Code style improvements from PR #XX" \

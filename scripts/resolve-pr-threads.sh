@@ -26,12 +26,15 @@ set -euo pipefail
 # Try to detect from git remote, fallback to defaults
 # Extract owner and repo from git remote URL (supports SSH and HTTPS)
 GIT_URL=$(git remote get-url origin 2>/dev/null || echo "")
-if [[ "$GIT_URL" =~ ^git@([^:]+):([^/]+)/([^/]+)\.git$ ]]; then
-  DEFAULT_OWNER="${BASH_REMATCH[2]}"
-  DEFAULT_REPO="${BASH_REMATCH[3]}"
-elif [[ "$GIT_URL" =~ ^https?://[^/]+/([^/]+)/([^/]+)\.git$ ]]; then
+# SSH: git@host:owner/repo.git OR git@host:port:owner/repo.git
+if [[ "$GIT_URL" =~ ^git@([^:]+)(:[0-9]+)?:([^/]+)/([^/]+)\.git$ ]]; then
+  DEFAULT_OWNER="${BASH_REMATCH[3]}"
+  DEFAULT_REPO="${BASH_REMATCH[4]}"
+# HTTPS: https://host/owner/repo.git OR https://host/owner/repo (with optional query/anchor)
+elif [[ "$GIT_URL" =~ ^https?://[^/]+/([^/]+)/([^/?#]+)(\.git)?([?#].*)?$ ]]; then
   DEFAULT_OWNER="${BASH_REMATCH[1]}"
-  DEFAULT_REPO="${BASH_REMATCH[2]}"
+  # Strip .git suffix if present
+  DEFAULT_REPO="${BASH_REMATCH[2]%.git}"
 else
   DEFAULT_OWNER="SecPal"
   DEFAULT_REPO=".github"
