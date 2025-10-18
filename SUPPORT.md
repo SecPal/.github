@@ -39,7 +39,7 @@ Have an idea for a new feature? Create a feature request in the relevant reposit
 
 **Do not report security vulnerabilities as public issues!**
 
-Please report security vulnerabilities to: **security@sepal.app**
+Please report security vulnerabilities to: **security@secpal.app**
 
 See our [Security Policy](SECURITY.md) for more details.
 

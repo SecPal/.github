@@ -5,7 +5,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Security Vulnerability
     url: https://github.com/SecPal/.github/blob/main/SECURITY.md
-    about: Please report security vulnerabilities to security@sepal.app (see SECURITY.md)
+    about: Please report security vulnerabilities to security@secpal.app (see SECURITY.md)
   - name: Support Resources
     url: https://github.com/SecPal/.github/blob/main/SUPPORT.md
     about: Get help and find documentation
