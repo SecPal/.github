@@ -32,7 +32,15 @@ extract_graphql_queries() {
         # Detect GraphQL in bash/shell blocks
         if [[ "$line" =~ ^\`\`\`(bash|sh|yaml) ]]; then
             is_shell_block=true
-        elif [[ "$line" =~ ^\ *query=\'|^\ *query=\"|^\ *-f\ query= ]]; then
+        elif [[ "$line" =~ ^[[:space:]]*query=\' ]]; then
+            in_graphql=true
+            ((++query_num))
+            current_query="$line"$'\n'
+        elif [[ "$line" =~ ^[[:space:]]*query=\" ]]; then
+            in_graphql=true
+            ((++query_num))
+            current_query="$line"$'\n'
+        elif [[ "$line" =~ ^[[:space:]]*-f[[:space:]]+query= ]]; then
             in_graphql=true
             ((++query_num))
             current_query="$line"$'\n'

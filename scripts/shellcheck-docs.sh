@@ -84,8 +84,8 @@ check_bash_patterns() {
         fi
     fi
 
-    # Pattern 6: read without -r
-    if grep -E 'read [A-Z_]+' "$script" > /dev/null 2>&1; then
+    # Pattern 6: read without -r (only match bash read command, not GraphQL)
+    if grep -E '^[[:space:]]*read [A-Z_]+' "$script" > /dev/null 2>&1; then
         if ! grep -q 'read -r' "$script"; then
             violations+=("read without -r (backslash interpretation risk)")
         fi

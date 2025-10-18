@@ -131,7 +131,7 @@ if [ -n "$STAGED_DOCS" ]; then
     FAILED_FILES=""
     for file in $STAGED_DOCS; do
       if ! "$SCRIPTS_DIR/shellcheck-docs.sh" "$file" > /dev/null 2>&1; then
-        FAILED_FILES="$FAILED_FILES$file "
+        FAILED_FILES="${FAILED_FILES}${file} "
       fi
     done
 
@@ -160,7 +160,7 @@ if [ -n "$STAGED_DOCS" ]; then
     FAILED_FILES=""
     for file in $STAGED_DOCS; do
       if ! "$SCRIPTS_DIR/check-hardcoded-examples.sh" "$file" > /dev/null 2>&1; then
-        FAILED_FILES="$FAILED_FILES$file "
+        FAILED_FILES="${FAILED_FILES}${file} "
       fi
     done
 
@@ -189,7 +189,7 @@ if [ -n "$STAGED_DOCS" ]; then
     FAILED_FILES=""
     for file in $STAGED_DOCS; do
       if ! "$SCRIPTS_DIR/validate-graphql-docs.sh" "$file" > /dev/null 2>&1; then
-        FAILED_FILES="$FAILED_FILES$file "
+        FAILED_FILES="${FAILED_FILES}${file} "
       fi
     done
 
@@ -224,7 +224,7 @@ if [ -n "$STAGED_BASH_FILES" ]; then
     FAILED_FILES=""
     for file in $STAGED_BASH_FILES; do
       if ! "$SCRIPTS_DIR/check-bash-best-practices.sh" "$file" > /dev/null 2>&1; then
-        FAILED_FILES="$FAILED_FILES$file "
+        FAILED_FILES="${FAILED_FILES}${file} "
       fi
     done
 

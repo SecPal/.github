@@ -20,7 +20,7 @@ FAILED=0
 # Patterns to detect (add more as needed)
 declare -A PATTERNS=(
     ["PR_NUMBER=[0-9]+"]="Hardcoded PR number (use: PR_NUMBER=\$PR_NUMBER or PR_NUMBER=42 # example)"
-    ["number: [0-9]{2,}"]="Hardcoded PR/issue number in GraphQL (use: \\\$number variable)"
+    ["number: [0-9]+"]="Hardcoded PR/issue number in GraphQL (use: \\\$number variable)"
     ["owner: \"SecPal\""]="Hardcoded owner in GraphQL (use: \\\$owner variable)"
     ["name: \"\\.github\""]="Hardcoded repo name in GraphQL (use: \\\$name variable)"
     ["repository\(owner: \"[^$]"]="Hardcoded repository owner (use: variables)"
