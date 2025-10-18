@@ -147,9 +147,8 @@ During the 2025-10-12 audit, version inconsistencies were discovered:
 
 **`.github` Repository:**
 
-- Most workflows: v5 ✅
-- Legacy workflows: v4 ⚠️ (config-checks.yml, security.yml)
-- Target: **v6**
+- All workflows: v6 ✅
+- Status: **COMPLETE** (upgraded in this PR)
 
 **`contracts` Repository:**
 
