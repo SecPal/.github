@@ -10,7 +10,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This directory contains individual lessons learned during the setup and maintenance of SecPal repositories. Each lesson is a self-contained document with problem description, solution, and implementation guidelines.
 
-## 📚 Lesson Categories
+## � Start Here
+
+**New AI assistants:** Read [Lesson #0](lesson-00.md) FIRST before making any changes!
+
+## �📚 Lesson Categories
 
 ### 🔴 Critical Issues (Lessons #1-10)
 
@@ -18,6 +22,7 @@ Must be addressed immediately in all repositories. These issues can block PRs or
 
 | #                   | Lesson                                                             | Status   | Priority |
 | ------------------- | ------------------------------------------------------------------ | -------- | -------- |
+| [#0](lesson-00.md)  | **Start Here - Essential Rules for AI Assistants**                | ✅ Active | CRITICAL |
 | [#1](lesson-01.md)  | Branch Protection: Wrong Status Check Context Names                | ✅ Fixed | CRITICAL |
 | [#2](lesson-02.md)  | Signed Commits: `git verify-commit` Doesn't Work in GitHub Actions | ✅ Fixed | CRITICAL |
 | [#3](lesson-03.md)  | Dependency Review: Invalid "proprietary" License Identifier        | ✅ Fixed | HIGH     |

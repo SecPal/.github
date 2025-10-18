@@ -39,7 +39,7 @@ Enable admin enforcement while allowing self-merge:
 
 1. Set `enforce_admins: true` in all branch protection configs
 2. Set review count to 0 for solo maintainer workflows
-3. Never use `--admin` to bypass checks (see Lesson #13)
+3. Reserve `--admin` for bootstrap paradoxes only (see Lesson #13 and #22)
 
 ## Related Lessons
 
