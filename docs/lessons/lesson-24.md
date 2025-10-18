@@ -131,6 +131,7 @@ run: |
 ```yaml
 run: |
   set -euo pipefail
+  shopt -s nullglob
   FAILED=0
   for file in *.sh; do
     if ! bash "$file"; then

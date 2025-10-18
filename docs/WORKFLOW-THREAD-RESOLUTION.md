@@ -450,4 +450,4 @@ done
 ---
 
 **Last Updated:** 2025-10-18
-**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve → request), fixed GraphQL variable expansion, added pagination support
+**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve → request), fixed GraphQL variable expansion, increased page size to 100 and exposed `pageInfo` (enables pagination, full iteration not implemented in examples)
