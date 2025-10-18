@@ -139,12 +139,12 @@ This is a living document. New lessons are added as we discover issues across Se
 
 ### Recent Updates
 
-- **2025-10-18**: Added Lesson #29 (License Policy is Security-Critical)
-- **2025-10-17**: Added Lesson #28 (Professional Communication in Technical Documentation)
-- **2025-10-17**: Added Lesson #27 (Script Consolidation & Best Practice Merging)
-- **2025-10-17**: Added Lesson #26 (Dependabot Exception for Copilot Review Enforcement)
-- **2025-10-17**: Added Lesson #25 (Meta-Quality: Learning from Recurring Errors)
-- **2025-10-17**: Added Lesson #24 (Workflow Error Handling)
+- **2025-10-18**: Added [Lesson #29](lesson-29.md) (License Policy is Security-Critical)
+- **2025-10-17**: Added [Lesson #28](lesson-28.md) (Professional Communication in Technical Documentation)
+- **2025-10-17**: Added [Lesson #27](lesson-27.md) (Script Consolidation & Best Practice Merging)
+- **2025-10-17**: Added [Lesson #26](lesson-26.md) (Dependabot Exception for Copilot Review Enforcement)
+- **2025-10-17**: Added [Lesson #25](lesson-25.md) (Meta-Quality: Learning from Recurring Errors)
+- **2025-10-17**: Added [Lesson #24](lesson-24.md) (Workflow Error Handling)
 - **2025-10-17**: Split monolithic LESSONS-LEARNED into individual files
 - **2025-10-16**: Cross-repo audit revealed Lesson #21 recurrence
 
