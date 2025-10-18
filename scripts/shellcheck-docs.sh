@@ -88,10 +88,10 @@ check_bash_patterns() {
         fi
     fi
 
-    # Pattern 5: rm -rf without -- protection
-    if grep -E 'rm -rf [^-]' "$script" > /dev/null 2>&1; then
-        if ! grep -E 'rm -rf -- ' "$script" > /dev/null 2>&1; then
-            violations+=("rm -rf without '--' protection (use: rm -rf -- \"\$VAR\")")
+    # Pattern 5: rm -rf or rm -f without -- protection
+    if grep -E 'rm -(rf|fr|f) [^-]' "$script" > /dev/null 2>&1; then
+        if ! grep -E 'rm -(rf|fr|f) -- ' "$script" > /dev/null 2>&1; then
+            violations+=("rm -rf/-f without '--' protection (use: rm -f -- \"\$VAR\")")
         fi
     fi
 

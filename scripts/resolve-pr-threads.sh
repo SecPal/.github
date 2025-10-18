@@ -30,11 +30,21 @@ GIT_URL=$(git remote get-url origin 2>/dev/null || echo "")
 if [[ "$GIT_URL" =~ ^git@([^:]+)(:[0-9]+)?:([^/]+)/([^/]+)\.git$ ]]; then
   DEFAULT_OWNER="${BASH_REMATCH[3]}"
   DEFAULT_REPO="${BASH_REMATCH[4]}"
+  # Validate capture groups
+  if [[ -z "$DEFAULT_OWNER" || -z "$DEFAULT_REPO" ]]; then
+    DEFAULT_OWNER="SecPal"
+    DEFAULT_REPO=".github"
+  fi
 # HTTPS: https://host/owner/repo.git OR https://host/owner/repo (with optional query/anchor)
 elif [[ "$GIT_URL" =~ ^https?://[^/]+/([^/]+)/([^/?#]+)(\.git)?([?#].*)?$ ]]; then
   DEFAULT_OWNER="${BASH_REMATCH[1]}"
   # Strip .git suffix if present
   DEFAULT_REPO="${BASH_REMATCH[2]%.git}"
+  # Validate capture groups
+  if [[ -z "$DEFAULT_OWNER" || -z "$DEFAULT_REPO" ]]; then
+    DEFAULT_OWNER="SecPal"
+    DEFAULT_REPO=".github"
+  fi
 else
   DEFAULT_OWNER="SecPal"
   DEFAULT_REPO=".github"
@@ -380,10 +390,10 @@ main() {
   # Resolve each thread
   local failed=0
   while IFS= read -r thread_id; do
-    if ! resolve_thread "$thread_id"; then
+  if ! resolve_thread "$thread_id"; then
       failed=1
     fi
-  done <<< "$thread_ids"
+  done < <(echo "$thread_ids")
 
   echo ""
 

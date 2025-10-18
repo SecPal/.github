@@ -335,6 +335,8 @@ bats tests/shellcheck-docs.bats
 **Last Updated:** 2025-10-18
 **Maintainers:** SecPal Contributors
 
+---
+
 ## Exit Codes
 
 Both scripts use exit codes for automation:
@@ -344,9 +346,15 @@ Both scripts use exit codes for automation:
 
 Use in CI/CD:
 
+````yaml
+```yaml
 ```yaml
 - name: Verify clean state
   run: ./scripts/post-commit-check.sh
+````
+
+```
+
 ```
 
 ---

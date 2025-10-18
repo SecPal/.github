@@ -69,7 +69,7 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 
 **CRITICAL:** Resolving threads is REQUIRED - addressing comments in code is NOT enough!
 
-**Automation Available:** Use `scripts/resolve-pr-threads.sh <PR_NUMBER>` to automate thread resolution (run from repository root).
+**Automation Available:** Use `scripts/resolve-pr-threads.sh <PR_NUMBER>` (run from repository root) to automate thread resolution.
 
 ## Understanding Thread Resolution
 
