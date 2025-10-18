@@ -37,8 +37,8 @@ License-checker reported the root package as UNLICENSED and the immediate respon
 
 **Correct Solutions (in order of implementation):**
 
-1. ✅ Set `private: false` in package.json (repository is public, contains no sensitive data)
-2. ✅ Exclude root package from license checking using `--excludePackages`
+1. ✅ Keep `private: true` in package.json (prevents accidental npm publication, even for public repositories)
+2. ✅ Exclude root package from license checking using `--excludePackages` or equivalent tooling configuration
 3. ✅ Add AGPL-3.0-or-later (the project's own license) to allowed list
 
 **Wrong Approach:**
@@ -56,14 +56,14 @@ The license policy initially **did not include AGPL-3.0-or-later in the allowed 
 
 **Why It Matters:**
 
-- AGPL-3.0-or-later (allowed) ≠ AGPL-1.0 (denied)
+- AGPL-3.0-or-later (allowed) ≠ AGPL-1.0-only (denied)
 - Version-specific compatibility is crucial
-- AGPL-1.0 cannot be automatically upgraded to AGPL-3.0-or-later
+- AGPL-1.0-only cannot be automatically upgraded to AGPL-3.0-or-later
 - Our license allows GPLv3+ compatible dependencies
 
 ## License Policy Structure
 
-```json
+```jsonc
 {
   "allowedLicenses": [
     "MIT",
@@ -73,22 +73,22 @@ The license policy initially **did not include AGPL-3.0-or-later in the allowed 
     "GPL-3.0-or-later",
     "LGPL-3.0-or-later",
     "AGPL-3.0", // GitHub reports reusable workflows as this
-    "AGPL-3.0-or-later" // Our project license!
+    "AGPL-3.0-or-later", // Our project license!
   ],
   "deniedLicenses": [
     "GPL-2.0", // Not compatible with GPLv3+
     "LGPL-2.0", // Not compatible with LGPLv3+
     "LGPL-2.1", // Not compatible with LGPLv3+
-    "AGPL-1.0" // Ancient version, incompatible
+    "AGPL-1.0-only", // Ancient version, incompatible
   ],
-  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license..."
+  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license...",
 }
 ```
 
 **Version Distinctions:**
 
 - **AGPL-3.0-or-later**: Our license, fully compatible
-- **AGPL-1.0**: Ancient, incompatible, explicitly denied
+- **AGPL-1.0-only**: Ancient, incompatible, explicitly denied
 - **AGPL-3.0**: GitHub's way of reporting our workflows (also allowed)
 
 ## Rules Established
@@ -139,7 +139,7 @@ When license policy IS modified (with approval):
 
 ```json
 {
-  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license and meets our compatibility requirements. AGPL-1.0 is explicitly denied because it is not compatible with AGPL-3.0-or-later and cannot be upgraded automatically..."
+  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license and meets our compatibility requirements. AGPL-1.0-only is explicitly denied because it is not compatible with AGPL-3.0-or-later and cannot be upgraded automatically..."
 }
 ```
 
