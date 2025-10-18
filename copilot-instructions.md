@@ -173,13 +173,15 @@ set -euo pipefail
 
 ```
 1. Create branch → Make changes → Commit
-2. Push (FIRST time) → Automatic Copilot review ✅
+2. Push (FIRST time) → Automatic Copilot review ✅ (wait 90 seconds)
 3. Review has comments? → Fix code → Commit → Push
-4. Push (SUBSEQUENT) → Request review MANUALLY ⚠️
-5. Repeat steps 3-4 until "no new comments"
-6. Resolve threads via GraphQL (REQUIRED)
+4. Resolve threads → Via GraphQL BEFORE requesting review
+5. Request review → Manually via MCP (required after subsequent pushes)
+6. Repeat steps 3-5 until "no new comments"
 7. Verify enforcement passes → Merge
 ```
+
+**CRITICAL TIMING CHANGE (PR #58+):** Resolve threads BEFORE requesting review, not after!
 
 ### Critical Timing Rules (Lesson #19, #23)
 
@@ -214,7 +216,32 @@ mcp_github_github_request_copilot_review('SecPal', '<repo-name>', <PR_NUMBER>)
 1. **Comment body** (text) - editable via REST API
 2. **Thread resolved status** (boolean) - ONLY via GraphQL
 
-**Complete Workflow:**
+**Optimized Workflow (PR #58+):**
+
+```bash
+# Step 1: Fix code → Commit → Push
+git add .
+git commit -m "fix: address review comments"
+git push
+
+# Step 2: Resolve threads IMMEDIATELY (use helper script)
+/home/user/code/SecPal/.github/scripts/resolve-pr-threads.sh <PR_NUMBER>
+
+# Step 3: Request review (thread resolution already done!)
+# Copilot sees clean state → can approve immediately
+mcp_github_github_request_copilot_review('SecPal', '<repo-name>', <PR_NUMBER>)
+
+# Result: Saves 1-2 review cycles, no need to rerun failed checks
+```
+
+**Why resolve BEFORE requesting review?**
+
+- ✅ Threads already resolved when Copilot runs
+- ✅ Can approve immediately (no "X unresolved threads" comment)
+- ✅ Saves 1-2 review cycles per PR
+- ✅ No need to rerun failed enforcement checks
+
+**Manual Thread Resolution:**
 
 ```bash
 # Step 1: Get unresolved thread IDs

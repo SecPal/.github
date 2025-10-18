@@ -402,6 +402,87 @@ git push --force-with-lease origin 123-descriptive-feature-name
 - Be patient and responsive
 - CI must pass before merging
 
+### Review Comment Priority Policy
+
+**Understanding Review Comments:**
+
+GitHub Copilot and human reviewers categorize comments by priority. Understanding these categories helps you respond appropriately and efficiently.
+
+#### Priority Levels
+
+| Priority     | Meaning                                                 | Required Action            | Examples                                                          |
+| ------------ | ------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------- |
+| **CRITICAL** | Security issue, data loss risk, or breaking bug         | MUST fix before merge      | SQL injection, memory leak, incorrect access control              |
+| **HIGH**     | Functional bug, incorrect behavior, or maintenance risk | MUST fix before merge      | Logic error, missing error handling, incorrect algorithm          |
+| **MEDIUM**   | Code quality, maintainability, or documentation issue   | Should fix (may negotiate) | Complex code without comments, inconsistent naming, missing tests |
+| **LOW**      | Style, minor inconsistency, or preference               | Optional (use judgment)    | Variable naming preference, extra whitespace, comment wording     |
+
+#### Nitpick Policy
+
+**Definition:** A "nitpick" is a LOW priority comment that doesn't affect functionality, security, or maintainability.
+
+**Examples of Nitpicks:**
+
+- "Consider using `const` instead of `let`" (when value never changes)
+- "This comment could be slightly clearer"
+- "Extra blank line at end of file"
+- "Prefer single quotes over double quotes" (when both are valid per style guide)
+
+**When to Address Nitpicks:**
+
+- ✅ **DO address** if the change is trivial (< 30 seconds)
+- ✅ **DO address** if it improves consistency with recent patterns
+- ⚠️ **CONSIDER addressing** if review cycle count is low (1-2 cycles)
+- ❌ **DON'T address** if it would start a 4th+ review cycle
+- ❌ **DON'T address** if it contradicts an earlier review comment
+
+**Review Cycle Economics:**
+
+Research shows diminishing returns after cycle 3:
+
+- **Cycle 1-2:** High-value feedback (functional issues, bugs, major improvements)
+- **Cycle 3:** Mixed feedback (some improvements, some nitpicks)
+- **Cycle 4+:** Mostly nitpicks (< 10% high-value comments)
+
+**Time Investment:**
+
+- Each review cycle costs ~30-60 minutes (fix + review + CI + context switching)
+- Cycle 4+ typically costs more time than the value gained
+- Better to merge and create follow-up issue for stylistic improvements
+
+**How to Handle:**
+
+```bash
+# If on review cycle 3+ with only nitpicks remaining:
+
+# 1. Mark comment with justification (don't commit code changes)
+gh api -X PATCH repos/SecPal/<repo>/pulls/comments/<COMMENT_ID> \
+  -f body="~~LOW-PRIORITY-ACCEPTED~~ This is a valid style preference,
+  but addressing it would trigger cycle 4+. Creating follow-up issue
+  #123 to track stylistic improvements for future refactoring."
+
+# 2. Create follow-up issue for batch improvements
+gh issue create --title "Code style improvements from PR #XX" \
+  --body "Track LOW priority suggestions from review cycles 3+"
+
+# 3. Merge current PR (functional work is complete)
+# 4. Address stylistic items in future PR (when touching code anyway)
+```
+
+**Communication Tips:**
+
+- Always acknowledge the comment: "Good catch!" or "Valid point"
+- Explain your reasoning: "Deferring to follow-up issue to avoid cycle 4"
+- Be respectful: Reviewer is trying to help improve code quality
+- Link to this policy if needed: "Per CONTRIBUTING.md nitpick policy..."
+
+**For Reviewers:**
+
+- Mark nitpicks explicitly: "NITPICK: Consider renaming..."
+- Don't block PRs on LOW priority items after cycle 3
+- Consider batching style feedback into follow-up issues
+- Focus on HIGH/CRITICAL items in later review cycles
+
 ## 📄 License
 
 ### REUSE Compliance
