@@ -19,7 +19,7 @@ This document records all license policy decisions for SecPal repositories, expl
 
 - ✅ Repository-specific allowed licenses are **intentional**
 - ✅ SSPL-1.0 remains **not explicitly denied** (monitored)
-- ✅ Node.js Action standardization: **v6** (latest stable)
+- ✅ Node.js Action standardization: **v6** (current stable)
 
 ---
 
@@ -122,14 +122,14 @@ SSPL-1.0 (Server Side Public License) was found hardcoded in `.github/dependency
 During the 2025-10-12 audit, version inconsistencies were discovered:
 
 - `.github`: Mix of v4, v5
-- `contracts`: v6 (latest)
+- `contracts`: v6
 
 ### Decision: **STANDARDIZE ON v6** ✅
 
 **Rationale:**
 
 1. **Version Stability:**
-   - v6 is the latest stable release
+   - v6 is the current stable release
    - `contracts` has been using v6 without issues
    - Dependabot keeps us up-to-date automatically
 
@@ -246,8 +246,8 @@ Both repositories share the same denied licenses:
 - [ ] Industry best practices review
 - [ ] AGPL compatibility verification
 
-**Next Quarterly Review:** 2026-01-18
-**Next Annual Review:** 2026-10-18
+**Next Quarterly Review:** 3 months from last update (2026-01-18)
+**Next Annual Review:** 12 months from document creation (2026-10-18)
 
 ---
 

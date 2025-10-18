@@ -800,6 +800,8 @@ diff -u repo1.json repo2.json
 
 ---
 
+<!-- NOTE: Update these fields when making significant changes to this document -->
+
 **Last Updated:** 2025-10-18
 **Version:** 2.3 (Enhanced Review Workflow Clarity)
 **Maintained In:** `./copilot-instructions.md`
