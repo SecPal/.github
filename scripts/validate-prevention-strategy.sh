@@ -48,7 +48,10 @@ echo ""
 # Check 3: Required status checks exist
 echo "📋 Check 3: Required Status Checks"
 REQUIRED_CHECKS=$(gh api "/repos/${REPO}/branches/main/protection" --jq '.required_status_checks.contexts[]' 2>/dev/null || echo "ERROR")
-if [ -z "$REQUIRED_CHECKS" ] || [ "$REQUIRED_CHECKS" = "ERROR" ]; then
+if [ "$REQUIRED_CHECKS" = "ERROR" ]; then
+  echo -e "${RED}❌${NC} Failed to fetch required status checks (API error)"
+  ((FAILURES++))
+elif [ -z "$REQUIRED_CHECKS" ]; then
   echo -e "${RED}❌${NC} No required status checks configured"
   ((FAILURES++))
 else
@@ -98,12 +101,20 @@ WORKFLOW_FILES=$(gh api "/repos/${REPO}/contents/.github/workflows" --jq '.[].na
 if [ -z "$WORKFLOW_FILES" ] || [ "$WORKFLOW_FILES" = "ERROR" ]; then
   echo -e "${YELLOW}⚠️${NC}  Could not fetch workflow files"
 else
+  # Cache all workflow contents to reduce API calls
+  TMPDIR=$(mktemp -d)
   for file in $WORKFLOW_FILES; do
-    USES_REUSABLE=$(gh api "/repos/${REPO}/contents/.github/workflows/$file" --jq '.content' | base64 -d | grep "uses: SecPal/.github" || echo "")
-    if [ -n "$USES_REUSABLE" ]; then
+    gh api "/repos/${REPO}/contents/.github/workflows/$file" --jq '.content' 2>/dev/null | base64 -d > "$TMPDIR/$file" 2>/dev/null || true
+  done
+
+  # Check for reusable workflow usage
+  for file in $WORKFLOW_FILES; do
+    if [ -f "$TMPDIR/$file" ] && grep -q "uses: SecPal/.github" "$TMPDIR/$file" 2>/dev/null; then
       echo -e "${GREEN}✅${NC} $file uses reusable workflows"
     fi
   done
+
+  rm -rf "$TMPDIR"
 fi
 echo ""
 
