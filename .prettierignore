@@ -15,3 +15,6 @@ coverage/
 
 # Licenses (already formatted)
 LICENSES/
+
+# Bash scripts (no parser available)
+scripts/*.sh

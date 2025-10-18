@@ -103,6 +103,9 @@ if [ -z "$WORKFLOW_FILES" ] || [ "$WORKFLOW_FILES" = "ERROR" ]; then
 else
   # Cache all workflow contents to reduce API calls
   TMPDIR=$(mktemp -d)
+  chmod 700 "$TMPDIR"
+  trap 'rm -rf "$TMPDIR"' EXIT
+
   for file in $WORKFLOW_FILES; do
     gh api "/repos/${REPO}/contents/.github/workflows/$file" --jq '.content' 2>/dev/null | base64 -d > "$TMPDIR/$file" 2>/dev/null || true
   done
@@ -113,8 +116,7 @@ else
       echo -e "${GREEN}✅${NC} $file uses reusable workflows"
     fi
   done
-
-  rm -rf "$TMPDIR"
+  # Cleanup handled by trap
 fi
 echo ""
 

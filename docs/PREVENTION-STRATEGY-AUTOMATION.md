@@ -5,8 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Prevention Strategy Automation
 
-**Purpose:** Automated validation of prevention measures to ensure quality controls remain active  
-**Created:** 2025-10-18  
+**Purpose:** Automated validation of prevention measures to ensure quality controls remain active
+**Created:** 2025-10-18
 **Scope:** All SecPal repositories
 
 ---
@@ -16,6 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 This document describes the automated validation system that ensures prevention measures from the post-audit action items remain properly configured across all repositories.
 
 **Why automate?**
+
 - Settings can drift over time
 - New repositories need validation
 - Manual checks are error-prone
@@ -30,6 +31,7 @@ This document describes the automated validation system that ensures prevention 
 **File:** `scripts/validate-prevention-strategy.sh`
 
 **Usage:**
+
 ```bash
 # Validate a single repository
 ./scripts/validate-prevention-strategy.sh SecPal/.github
@@ -39,6 +41,7 @@ This document describes the automated validation system that ensures prevention 
 ```
 
 **What it checks:**
+
 1. ✅ Branch protection - `enforce_admins: true`
 2. ✅ Required status checks configured
 3. ✅ Copilot Review in required checks (Lesson #18)
@@ -47,6 +50,7 @@ This document describes the automated validation system that ensures prevention 
 6. ✅ Reusable workflows in use (DRY)
 
 **Exit codes:**
+
 - `0` - All checks passed
 - `1` - One or more checks failed
 
@@ -61,6 +65,7 @@ This document describes the automated validation system that ensures prevention 
 **Manual trigger:** Available via `workflow_dispatch`
 
 **What it does:**
+
 ```
 1. Runs validation script for each repository
 2. Uploads validation reports as artifacts
@@ -69,6 +74,7 @@ This document describes the automated validation system that ensures prevention 
 ```
 
 **Repositories validated:**
+
 - `SecPal/.github`
 - `SecPal/contracts`
 - (+ additional repos via manual trigger input)
@@ -84,6 +90,7 @@ This document describes the automated validation system that ensures prevention 
 **Trigger:** Automatic (1st of month)
 
 **Process:**
+
 ```
 1. Workflow runs automatically
 2. Validates all repositories
@@ -101,6 +108,7 @@ This document describes the automated validation system that ensures prevention 
 **Trigger:** Manual (`workflow_dispatch`)
 
 **Process:**
+
 ```bash
 # 1. Go to GitHub Actions UI
 # 2. Select "Prevention Strategy Validation" workflow
@@ -113,12 +121,14 @@ This document describes the automated validation system that ensures prevention 
 ### Scenario 3: Post-Configuration Change
 
 **When to run:**
+
 - After modifying branch protection
 - After adding/removing required checks
 - After updating workflows
 - After any security setting changes
 
 **Process:**
+
 ```bash
 # Local validation before committing
 ./scripts/validate-prevention-strategy.sh SecPal/.github
@@ -130,6 +140,7 @@ This document describes the automated validation system that ensures prevention 
 ### Scenario 4: Audit Preparation
 
 **Before quarterly/annual audits:**
+
 ```
 1. Trigger manual validation for ALL repos
 2. Review validation reports
@@ -143,14 +154,14 @@ This document describes the automated validation system that ensures prevention 
 
 ### Per Repository
 
-| Check | Expected | Lesson Reference |
-|-------|----------|------------------|
-| `enforce_admins` | `true` | #6, #13 |
-| Required status checks exist | Yes | #1, #21 |
-| Copilot Review required | Yes | #18 |
-| Status check names match jobs | Yes | #1, #21 |
-| Workflows running | Success | General |
-| Reusable workflows used | Yes | DRY |
+| Check                         | Expected | Lesson Reference |
+| ----------------------------- | -------- | ---------------- |
+| `enforce_admins`              | `true`   | #6, #13          |
+| Required status checks exist  | Yes      | #1, #21          |
+| Copilot Review required       | Yes      | #18              |
+| Status check names match jobs | Yes      | #1, #21          |
+| Workflows running             | Success  | General          |
+| Reusable workflows used       | Yes      | DRY              |
 
 ### Cross-Repository
 
@@ -181,10 +192,11 @@ This document describes the automated validation system that ensures prevention 
    - `docs/lessons/` - Specific lesson references
 
 4. **Re-validate:**
+
    ```bash
    # Local
    ./scripts/validate-prevention-strategy.sh SecPal/repo-name
-   
+
    # Or trigger GitHub Actions manually
    ```
 
@@ -200,18 +212,20 @@ This document describes the automated validation system that ensures prevention 
 ### Adding New Repositories
 
 **Update workflow matrix:**
+
 ```yaml
 # .github/workflows/prevention-strategy-validation.yml
 matrix:
   repo:
-    - 'SecPal/.github'
-    - 'SecPal/contracts'
-    - 'SecPal/new-repo'  # Add here
+    - "SecPal/.github"
+    - "SecPal/contracts"
+    - "SecPal/new-repo" # Add here
 ```
 
 ### Modifying Validation Logic
 
 **Update script:**
+
 ```bash
 # scripts/validate-prevention-strategy.sh
 # Add new checks in numbered sections
@@ -224,11 +238,12 @@ matrix:
 # .github/workflows/prevention-strategy-validation.yml
 on:
   schedule:
-    - cron: '0 9 1 * *'  # Modify cron expression
+    - cron: "0 9 1 * *" # Modify cron expression
 ```
 
-**Current:** Monthly (1st at 09:00 UTC)  
+**Current:** Monthly (1st at 09:00 UTC)
 **Alternatives:**
+
 - Weekly: `'0 9 * * 1'` (every Monday)
 - Quarterly: `'0 9 1 1,4,7,10 *'` (Jan, Apr, Jul, Oct)
 
@@ -294,6 +309,7 @@ $ ./scripts/validate-prevention-strategy.sh SecPal/new-repo
 ### Repository Setup
 
 **When creating new repository:**
+
 ```
 1. Follow REPOSITORY-SETUP-GUIDE.md
 2. Run validation script
@@ -304,8 +320,9 @@ $ ./scripts/validate-prevention-strategy.sh SecPal/new-repo
 
 ### Pull Request Process
 
-**Not run on every PR** (too heavy)  
+**Not run on every PR** (too heavy)
 **When to validate:**
+
 - Workflow files changed
 - Branch protection settings changed
 - After remediation PRs
@@ -313,6 +330,7 @@ $ ./scripts/validate-prevention-strategy.sh SecPal/new-repo
 ### Quarterly Audit
 
 **Include in audit process:**
+
 1. Review last 3 months of validation runs
 2. Document any failures and fixes
 3. Update lessons if new patterns emerge
@@ -334,6 +352,6 @@ $ ./scripts/validate-prevention-strategy.sh SecPal/new-repo
 
 ---
 
-**Last Updated:** 2025-10-18  
-**Automation Status:** Active (monthly schedule)  
+**Last Updated:** 2025-10-18
+**Automation Status:** Active (monthly schedule)
 **Next Scheduled Run:** 2025-11-01 09:00 UTC
