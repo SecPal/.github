@@ -89,7 +89,7 @@ grep -rn "\[Thread Resolution" docs/
 **⚠️ CRITICAL TIMING CLARIFICATION:**
 
 | Action                   | When                       | Wait Time              | Notes                                |
-| ------------------------ | -------------------------- | ---------------------- | ------------------------------------ |
+|--------------------------|----------------------------|------------------------|--------------------------------------|
 | **First push** to new PR | Automatic                  | Wait 90s AFTER push    | GitHub triggers review automatically |
 | **Request review**       | Manual (subsequent pushes) | NO wait before request | Request immediately after push       |
 | **Wait for review**      | After request              | Wait 90s AFTER request | Review runs asynchronously           |

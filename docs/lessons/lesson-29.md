@@ -72,6 +72,12 @@ The license policy initially **did not include AGPL-3.0-or-later in the allowed 
 
 ## License Policy Structure
 
+> **Note:** This example uses JSONC (JSON with Comments) for clarity. The actual `.license-policy.json` file must use strict JSON format:
+>
+> - Remove all `//` comments
+> - Remove trailing commas after the last array element
+> - Validate with `npm run check:licenses` to ensure proper JSON syntax
+
 ```jsonc
 {
   "allowedLicenses": [
