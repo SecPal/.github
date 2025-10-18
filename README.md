@@ -186,7 +186,7 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guideli
 Security is critical for SecPal. Please:
 
 - Read our [Security Policy](SECURITY.md)
-- Report vulnerabilities to **security@sepal.app**
+- Report vulnerabilities to **security@secpal.app**
 - **Never** report security issues publicly
 
 ## 📄 License
