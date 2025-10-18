@@ -126,12 +126,12 @@ See [Lesson #25](lesson-25.md) for quality standards and [CONTRIBUTING.md](../..
 
 ## 📊 Statistics
 
-- **Total Lessons**: 26
-- **Critical Priority**: 5 (Lessons #1, #2, #6, #21, #24)
-- **High Priority**: 11
+- **Total Lessons**: 30
+- **Critical Priority**: 6 (Lessons #1, #2, #6, #21, #24, #29)
+- **High Priority**: 14
 - **Medium Priority**: 10
-- **Implemented**: 24
-- **Documented**: 2 (Lessons #20, #25)
+- **Implemented**: 27
+- **Documented**: 3 (Lessons #20, #25, #29)
 
 ## 🔄 Continuous Improvement
 
@@ -139,6 +139,9 @@ This is a living document. New lessons are added as we discover issues across Se
 
 ### Recent Updates
 
+- **2025-10-18**: Added Lesson #29 (License Policy is Security-Critical)
+- **2025-10-17**: Added Lesson #28 (Professional Communication in Technical Documentation)
+- **2025-10-17**: Added Lesson #27 (Script Consolidation & Best Practice Merging)
 - **2025-10-17**: Added Lesson #26 (Dependabot Exception for Copilot Review Enforcement)
 - **2025-10-17**: Added Lesson #25 (Meta-Quality: Learning from Recurring Errors)
 - **2025-10-17**: Added Lesson #24 (Workflow Error Handling)
