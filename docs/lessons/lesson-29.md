@@ -85,9 +85,9 @@ The license policy initially **did not include AGPL-3.0-or-later in the allowed 
     "AGPL-3.0-or-later", // Our project license!
   ],
   "deniedLicenses": [
-    "GPL-2.0", // Not compatible with GPLv3+
-    "LGPL-2.0", // Not compatible with LGPLv3+
-    "LGPL-2.1", // Not compatible with LGPLv3+
+    "GPL-2.0-only", // Not compatible with GPLv3+
+    "LGPL-2.0-only", // Not compatible with LGPLv3+
+    "LGPL-2.1-only", // Not compatible with LGPLv3+
     "AGPL-1.0-only", // Ancient version, incompatible
   ],
   "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license...",

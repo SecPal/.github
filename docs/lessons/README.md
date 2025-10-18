@@ -10,11 +10,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This directory contains individual lessons learned during the setup and maintenance of SecPal repositories. Each lesson is a self-contained document with problem description, solution, and implementation guidelines.
 
-## � Start Here
+## 🚦 Start Here
 
 **New AI assistants:** Read [Lesson #0](lesson-00.md) FIRST before making any changes!
 
-## �📚 Lesson Categories
+## 📚 Lesson Categories
 
 ### 🔴 Critical Issues (Lessons #1-10)
 

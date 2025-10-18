@@ -117,7 +117,8 @@ gh pr view PR_NUMBER --json reviews --jq '.reviews[-1].body'
 git push
 
 # NO DELAY - Request review immediately
-mcp_github_github_request_copilot_review('SecPal', '.github', PR_NUMBER)
+# (Using MCP GitHub tool or equivalent)
+# mcp_github_github_request_copilot_review('SecPal', '.github', PR_NUMBER)
 
 # NOW wait for review to complete
 sleep 90
