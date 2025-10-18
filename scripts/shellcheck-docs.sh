@@ -64,6 +64,9 @@ check_bash_patterns() {
     fi
 
     # Pattern 3: mktemp without atomic permissions
+    # Known limitation: Variable extraction and chmod checking may miss complex assignments
+    # (e.g., command substitution, nested variables). This is acceptable for documentation
+    # validation as examples typically use simple patterns.
     if grep -q 'mktemp -d' "$script"; then
         # Check for umask 077 with mktemp
         if ! grep -E 'umask 077.*mktemp' "$script" > /dev/null 2>&1; then

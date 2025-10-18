@@ -25,12 +25,14 @@ set -euo pipefail
 # Configuration
 # Try to detect from git remote, fallback to defaults
 # Extract owner and repo from git remote URL (supports SSH and HTTPS)
+# Known limitation: Doesn't handle all Git URL formats (e.g., git:// protocol, custom SSH ports with colon)
+# Rationale: Covers 95% of use cases (GitHub SSH/HTTPS), falls back to safe defaults
 GIT_URL=$(git remote get-url origin 2>/dev/null || echo "")
 # SSH: git@host:owner/repo.git OR git@host:port:owner/repo.git
 if [[ "$GIT_URL" =~ ^git@([^:]+)(:[0-9]+)?:([^/]+)/([^/]+)\.git$ ]]; then
   DEFAULT_OWNER="${BASH_REMATCH[3]}"
   DEFAULT_REPO="${BASH_REMATCH[4]}"
-  # Validate capture groups
+  # Validate capture groups - if regex failed to capture, use fallback
   if [[ -z "$DEFAULT_OWNER" || -z "$DEFAULT_REPO" ]]; then
     DEFAULT_OWNER="SecPal"
     DEFAULT_REPO=".github"
@@ -40,12 +42,13 @@ elif [[ "$GIT_URL" =~ ^https?://[^/]+/([^/]+)/([^/?#]+)(\.git)?([?#].*)?$ ]]; th
   DEFAULT_OWNER="${BASH_REMATCH[1]}"
   # Strip .git suffix if present
   DEFAULT_REPO="${BASH_REMATCH[2]%.git}"
-  # Validate capture groups
+  # Validate capture groups - if regex failed to capture, use fallback
   if [[ -z "$DEFAULT_OWNER" || -z "$DEFAULT_REPO" ]]; then
     DEFAULT_OWNER="SecPal"
     DEFAULT_REPO=".github"
   fi
 else
+  # Fallback for unsupported URL formats
   DEFAULT_OWNER="SecPal"
   DEFAULT_REPO=".github"
 fi
@@ -390,7 +393,7 @@ main() {
   # Resolve each thread
   local failed=0
   while IFS= read -r thread_id; do
-  if ! resolve_thread "$thread_id"; then
+    if ! resolve_thread "$thread_id"; then
       failed=1
     fi
   done < <(echo "$thread_ids")
