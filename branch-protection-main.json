@@ -5,10 +5,10 @@
       "Code Formatting",
       "REUSE Compliance",
       "verify-commits",
-      "check-npm-licenses",
+      "check-npm-licenses / check-licenses",
       "npm-audit",
       "actions-security",
-      "dependency-review"
+      "dependency-review / dependency-review"
     ]
   },
   "required_pull_request_reviews": {
