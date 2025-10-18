@@ -407,12 +407,19 @@ query(\$number: Int!) {
 }" -f number=$PR_NUMBER | jq -r '.data.repository.pullRequest.reviewThreads.nodes[] |
   select(.isResolved == false) |
   .id' | while IFS= read -r THREAD_ID; do
-    gh api graphql -f query="
+    RESULT=$(gh api graphql -f query="
     mutation {
       resolveReviewThread(input: {threadId: \"$THREAD_ID\"}) {
         thread { id isResolved }
       }
-    }" > /dev/null && echo "✅ Resolved $THREAD_ID"
+    }" 2>&1)
+
+    if echo "$RESULT" | jq -e '.errors' > /dev/null 2>&1; then
+      echo "❌ Failed to resolve $THREAD_ID"
+      exit 1
+    else
+      echo "✅ Resolved $THREAD_ID"
+    fi
 done
 
 # NOW request review (subsequent push)

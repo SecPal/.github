@@ -105,19 +105,19 @@ rm -rf "$TMPDIR"  # Not executed if script exits early (error, signal)
 
 ```bash
 TMPDIR=$(umask 077; mktemp -d)
-trap 'rm -rf -- "$TMPDIR"' EXIT  # Always runs, even on error
+trap 'rm -rf -- "$TMPDIR"' EXIT INT TERM  # Runs on most errors and termination signals
 
 # ... do work ...
 # Cleanup automatic on exit
 ```
 
-**Why:** `trap` ensures cleanup happens even if script fails, is killed, or exits early.
+**Why:** `trap` ensures cleanup happens on most errors and termination signals (EXIT, INT, TERM), but not all (e.g., SIGKILL or abrupt exec).
 
 ### 3. Workflow Failure Propagation
 
 **❌ Silent Failures (Masking Errors):**
 
-```bash
+```yaml
 run: |
   set -euo pipefail
   for file in *.sh; do
@@ -128,7 +128,7 @@ run: |
 
 **✅ Accumulate and Fail:**
 
-```bash
+```yaml
 run: |
   set -euo pipefail
   FAILED=0
@@ -151,10 +151,11 @@ run: |
 ```bash
 #!/bin/bash
 set -euo pipefail
+shopt -s nullglob  # Prevent literal '*.txt' if no files match
 
 # Atomic tmpdir with guaranteed cleanup
 TMPDIR=$(umask 077; mktemp -d)
-trap 'rm -rf -- "$TMPDIR"' EXIT
+trap 'rm -rf -- "$TMPDIR"' EXIT INT TERM
 
 # Process files with failure tracking
 FAILED=0

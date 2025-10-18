@@ -98,11 +98,15 @@ gh api graphql -f query='mutation {
 **✅ CORRECT - Get thread IDs via GraphQL:**
 
 ```bash
-gh api graphql -f query='
-query {
-  repository(owner: "SecPal", name: ".github") {
-    pullRequest(number: 57) {
-      reviewThreads(first: 50) {
+REPO_OWNER="SecPal"
+REPO_NAME=".github"
+PR_NUMBER=57
+
+gh api graphql -f query="
+query(\$owner: String!, \$name: String!, \$number: Int!) {
+  repository(owner: \$owner, name: \$name) {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
         nodes {
           id              # This is PRRT_* (thread ID)
           isResolved
@@ -111,7 +115,7 @@ query {
       }
     }
   }
-}'
+}" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER
 # Returns: PRRT_kwDOQAoSms5eewML (thread ID)
 ```
 
