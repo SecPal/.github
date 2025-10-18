@@ -800,9 +800,9 @@ diff -u repo1.json repo2.json
 
 ---
 
-**Last Updated:** 2025-10-17
-**Version:** 2.0 (Complete rewrite based on lessons #1-26)
-**Maintained In:** `/home/user/code/SecPal/copilot-instructions.md`
+**Last Updated:** 2025-10-18
+**Version:** 2.3 (Enhanced Review Workflow Clarity)
+**Maintained In:** `./copilot-instructions.md`
 **Applies To:** All SecPal repositories (.github, contracts, future repos)
 **Base Documentation:** `.github/docs/lessons/` (26 lessons)
 
