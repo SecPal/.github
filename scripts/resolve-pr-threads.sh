@@ -79,19 +79,19 @@ EOF
 }
 
 log_info() {
-  echo -e "${BLUE}ℹ${NC} $*"
+  echo -e "${BLUE}ℹ${NC} $*" >&2
 }
 
 log_success() {
-  echo -e "${GREEN}✅${NC} $*"
+  echo -e "${GREEN}✅${NC} $*" >&2
 }
 
 log_warning() {
-  echo -e "${YELLOW}⚠️${NC} $*"
+  echo -e "${YELLOW}⚠️${NC} $*" >&2
 }
 
 log_error() {
-  echo -e "${RED}❌${NC} $*"
+  echo -e "${RED}❌${NC} $*" >&2
 }
 
 validate_prerequisites() {
@@ -235,10 +235,9 @@ mutation($threadId: ID!) {
   }
 }'
 
-  # Create temporary file for output
+  # Create temporary file for output (function-local, cleaned up manually)
   local tmpfile
   tmpfile=$(umask 077; mktemp)
-  trap 'rm -f -- "$tmpfile"' EXIT INT TERM
 
   # Execute mutation and capture output
   gh api graphql \
