@@ -13,19 +13,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 🚨 START HERE - Essential Rules
 
-**⚠️ NEW AI ASSISTANTS: Read [Lesson #0](/.github/docs/lessons/lesson-00.md) FIRST!**
+**⚠️ NEW AI ASSISTANTS: Start with these documents in order:**
 
-Critical rules you MUST follow:
+1. **[QUICK-REFERENCE.md](/.github/docs/QUICK-REFERENCE.md)** - Critical rules, 1 page, read EVERY session
+2. **[WORKFLOWS-EXECUTABLE.md](/.github/docs/WORKFLOWS-EXECUTABLE.md)** - Step-by-step tool call sequences
+3. **[Lesson #0 - Start Here](/.github/docs/lessons/lesson-00.md)** - Context and philosophy
+4. **This document** - Complete reference (when you need deep context)
+
+### Top 7 Critical Rules
 
 1. ✅ **Quality First**: Systematic review before commit - NEVER blindly accept suggestions!
 2. ✅ **Branch Protection**: Always create PR branch, NEVER push to main
 3. ✅ **Pre-commit Hook**: NEVER use `--no-verify` except bootstrap paradoxes (Lesson #22)
-4. ✅ **Review Workflow**: Fix code → Commit → Push → Respond to comments → Request review (Lesson #23)
-5. ✅ **Thread Resolution**: Addressing code ≠ Resolving threads (needs GraphQL, see WORKFLOW-THREAD-RESOLUTION.md)
+4. ✅ **Review Workflow**: Fix code → Commit → Push → **IMMEDIATELY request review** (Lesson #23)
+5. ✅ **Thread Resolution**: Addressing code ≠ Resolving threads (needs GraphQL, see WORKFLOWS-EXECUTABLE.md)
 6. ✅ **Lesson Writing**: No user quotes, English only, document patterns not conversations
-7. ✅ **License Policy**: Never modify `.license-policy.json` without approval
+7. ✅ **License Policy**: Never modify `.license-policy.json` without approval (Lesson #29)
 
-**Full details:** [Lesson #0 - Start Here](/.github/docs/lessons/lesson-00.md)
+**💡 Tip:** Bookmark [QUICK-REFERENCE.md](/.github/docs/QUICK-REFERENCE.md) - it's your daily checklist!
 
 ---
 
@@ -803,10 +808,10 @@ diff -u repo1.json repo2.json
 <!-- NOTE: Update these fields when making significant changes to this document -->
 
 **Last Updated:** 2025-10-18
-**Version:** 2.3 (Enhanced Review Workflow Clarity)
+**Version:** 2.4 (Added Quick Reference & Executable Workflows)
 **Maintained In:** `./copilot-instructions.md`
 **Applies To:** All SecPal repositories (.github, contracts, future repos)
-**Base Documentation:** `.github/docs/lessons/` (26 lessons)
+**Base Documentation:** `.github/docs/lessons/` (30 lessons)
 
 ---
 
@@ -814,10 +819,11 @@ diff -u repo1.json repo2.json
 
 **For Copilot Chat/Coding Assistants working in SecPal repos:**
 
-- [ ] Read this entire document (15-20 min)
+- [ ] Read [QUICK-REFERENCE.md](/.github/docs/QUICK-REFERENCE.md) first (5 min, EVERY session)
+- [ ] Bookmark [WORKFLOWS-EXECUTABLE.md](/.github/docs/WORKFLOWS-EXECUTABLE.md) (copy-paste workflows)
+- [ ] Understand this document's structure (15-20 min, first time only)
 - [ ] Review Lesson #25 (pre-commit checklist)
 - [ ] Review Lesson #23 (review workflow)
-- [ ] Review WORKFLOW-THREAD-RESOLUTION.md
 - [ ] Understand first vs. subsequent push behavior
 - [ ] Know when to use `set -euo pipefail`
 - [ ] Know how to search for patterns comprehensively
