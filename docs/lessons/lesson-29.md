@@ -1,0 +1,222 @@
+<!--
+SPDX-FileCopyrightText: 2025 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+# Lesson #29 (License Policy is Security-Critical - Never Modify Without Approval)
+
+**Category:** Security & Compliance
+**Priority:** CRITICAL
+**Status:** ✅ Implemented
+**Date:** 2025-10-18
+**Repository:** .github, contracts
+
+## Problem
+
+During DRY Phase 1 & 2 implementation (PR #48), the AI assistant attempted to modify `.license-policy.json` to add `UNLICENSED` to the allowed licenses list without explicit user approval.
+
+**Critical Error Sequence:**
+
+1. License check failed (root package reported as UNLICENSED)
+2. AI proposed adding "UNLICENSED" to allowed licenses
+3. **User immediately stopped: "Stop ... Wir erlauben kein UNLICENSED!"**
+4. Root cause: Misunderstanding of license policy purpose and project requirements
+
+**Why This Was Dangerous:**
+
+- `.license-policy.json` defines what licenses are acceptable for dependencies
+- UNLICENSED means "all rights reserved" - incompatible with open source
+- Adding UNLICENSED would allow proprietary/unlicensed dependencies
+- This is a **security and compliance decision**, not a technical fix
+
+## Root Cause Analysis
+
+**The Real Problem:**
+
+- Root package was `private: true` in package.json
+- license-checker reports private packages as UNLICENSED
+- Root package itself was being checked (should only check dependencies)
+
+**Correct Solutions:**
+
+1. ✅ Set `private: false` (repo is public, no sensitive data)
+2. ✅ Exclude root package from license checking (`--excludePackages`)
+3. ✅ Add AGPL-3.0-or-later (OUR project license) to allowed list
+
+**Wrong Solution:**
+
+- ❌ Adding UNLICENSED to allowed licenses (would allow any unlicensed dependency)
+
+## Critical Learning: AGPL-3.0-or-later IS Our License!
+
+**Major Oversight:**
+The license policy initially **did not include AGPL-3.0-or-later in the allowed list**, even though:
+
+- AGPL-3.0-or-later is the project's own license (see SPDX headers)
+- All our code is licensed under AGPL-3.0-or-later
+- This should have been obvious from the start!
+
+**Why It Matters:**
+
+- AGPL-3.0-or-later (allowed) ≠ AGPL-1.0 (denied)
+- Version-specific compatibility is crucial
+- AGPL-1.0 cannot be automatically upgraded to AGPL-3.0-or-later
+- Our license allows GPLv3+ compatible dependencies
+
+## License Policy Structure
+
+```json
+{
+  "allowedLicenses": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-*",
+    "ISC",
+    "GPL-3.0-or-later",
+    "LGPL-3.0-or-later",
+    "AGPL-3.0", // GitHub reports reusable workflows as this
+    "AGPL-3.0-or-later" // Our project license!
+  ],
+  "deniedLicenses": [
+    "GPL-2.0", // Not compatible with GPLv3+
+    "LGPL-2.0", // Not compatible with LGPLv3+
+    "LGPL-2.1", // Not compatible with LGPLv3+
+    "AGPL-1.0" // Ancient version, incompatible
+  ],
+  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license..."
+}
+```
+
+**Version Distinctions:**
+
+- **AGPL-3.0-or-later**: Our license, fully compatible
+- **AGPL-1.0**: Ancient, incompatible, explicitly denied
+- **AGPL-3.0**: GitHub's way of reporting our workflows (also allowed)
+
+## Rules Established
+
+### Rule 1: Never Modify Without Explicit Approval
+
+**NEVER** modify `.license-policy.json` without explicit user approval, even if:
+
+- It seems like an obvious fix
+- License checks are failing
+- It would unblock a PR
+- User is not present
+
+**Why:**
+
+- License policy is a **legal and compliance decision**
+- Wrong decision could introduce legal liability
+- User must understand implications before approving
+- May require legal review in commercial contexts
+
+### Rule 2: Understand Before Suggesting
+
+Before proposing license policy changes:
+
+1. ✅ Understand WHY the check is failing
+2. ✅ Identify the actual problem (not just symptoms)
+3. ✅ Check if project's own license is in allowed list
+4. ✅ Consider non-policy solutions first
+5. ✅ Explain trade-offs clearly if policy change needed
+
+**Ask Questions First:**
+
+- "The license check is failing because X. I see three options: A, B, C. Which approach do you prefer?"
+- NOT: "I'm adding X to the allowed licenses to fix the check."
+
+### Rule 3: Defense in Depth
+
+For the root package issue, we implemented **two solutions**:
+
+1. Exclude root package from checks (`--excludePackages`)
+2. Add project license to allowed list (AGPL-3.0-or-later)
+
+This prevents similar issues even if one mitigation fails.
+
+### Rule 4: Document Rationale
+
+When license policy IS modified (with approval):
+
+```json
+{
+  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license and meets our compatibility requirements. AGPL-1.0 is explicitly denied because it is not compatible with AGPL-3.0-or-later and cannot be upgraded automatically..."
+}
+```
+
+Clear explanations prevent future confusion.
+
+## Bootstrap Problem: Dependency Review and Reusable Workflows
+
+**Issue Discovered:**
+When migrating to reusable workflows, dependency-review action treats workflow files as "dependencies" and checks their licenses:
+
+```
+The following dependencies have incompatible licenses:
+.github/workflows/dependency-review.yml » SecPal/.github/.github/workflows/reusable-dependency-review.yml@main – License: AGPL-3.0
+```
+
+**Solution:**
+Add both `AGPL-3.0` and `AGPL-3.0-or-later` to allowed list:
+
+- Our SPDX headers say `AGPL-3.0-or-later`
+- GitHub reports workflows as `AGPL-3.0` (without suffix)
+- Both must be allowed for compatibility
+
+**Related:** See Lesson #22 (Bootstrap Paradox) for using `--admin` to break circular dependencies.
+
+## Pre-commit Hook Enhancement
+
+Consider adding a pre-commit check:
+
+```bash
+# Check for modifications to license policy
+if git diff --cached --name-only | grep -q "\.license-policy\.json"; then
+  echo "⚠️  WARNING: License policy file modified"
+  echo "This is a security-critical file. Ensure changes are authorized."
+  echo ""
+  # Don't block, just warn (policy changes ARE sometimes needed)
+fi
+```
+
+## Action for Future Projects
+
+1. **Include project's own license in allowed list from day 1**
+2. Always ask before modifying license policy
+3. Explain why check is failing, offer multiple solutions
+4. Document rationale for all policy decisions
+5. Implement defense in depth (multiple mitigations)
+6. Add both AGPL-3.0 and AGPL-3.0-or-later if using reusable workflows
+
+## Related Lessons
+
+- [Lesson #22 (Bootstrap Paradox)](lesson-22.md) - Using --admin to break circular dependencies
+- [Lesson #17 (Pre-commit Hooks)](lesson-17.md) - Automated checks
+- [Lesson #27 (DRY Implementation)](lesson-27.md) - Context for this incident
+
+## Incident Timeline
+
+**2025-10-17 20:00-23:00** - PR #48 Review Marathon:
+
+1. License check fails (root package as UNLICENSED)
+2. AI proposes adding UNLICENSED to policy ❌
+3. User stops immediately: "Wir erlauben kein UNLICENSED!"
+4. Correct fix: Set `private: false`, exclude root package
+5. Realization: AGPL-3.0-or-later missing from allowed list!
+6. Added with comprehensive description
+7. 15+ commits to address all review feedback
+8. All 45 review threads resolved
+
+**2025-10-18 00:00-00:30** - PR #30 Bootstrap Issue:
+
+1. Dependency review fails on reusable workflows (AGPL-3.0)
+2. Recognized as Lesson #22 bootstrap paradox
+3. Added AGPL-3.0 to allowed list
+4. Used `--admin` override to merge (policy fix was in PR)
+
+---
+
+**Last Updated:** 2025-10-18
+**Incident Severity:** HIGH (prevented by user intervention)
+**Status:** Rules established, lesson documented

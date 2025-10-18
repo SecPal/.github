@@ -62,7 +62,7 @@ Complex workflow patterns and automation improvements.
 | [#21](lesson-21.md) | Branch Protection Check Names Must Match Exactly  | ✅ Implemented | CRITICAL |
 | [#22](lesson-22.md) | Reusable Workflow Bootstrap Paradox & GraphQL Fix | ✅ Implemented | HIGH     |
 
-### 🆕 Recent Additions (Lessons #23-28)
+### 🆕 Recent Additions (Lessons #23-29)
 
 Latest lessons from ongoing repository maintenance.
 
@@ -70,10 +70,11 @@ Latest lessons from ongoing repository maintenance.
 | ------------------- | ----------------------------------------------------- | -------------- | -------- |
 | [#23](lesson-23.md) | Review Workflow Discipline                            | ✅ Implemented | HIGH     |
 | [#24](lesson-24.md) | Workflow Error Handling (set -euo pipefail)           | ✅ Implemented | CRITICAL |
-| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors          | ✅ Documented  | HIGH     |
+| [#25](lesson-25.md) | Meta-Quality: Learning from Recurring Errors          | ✅ Updated     | HIGH     |
 | [#26](lesson-26.md) | Dependabot Exception for Copilot Review Enforcement   | ✅ Implemented | MEDIUM   |
 | [#27](lesson-27.md) | Script Consolidation & Best Practice Merging          | ✅ Implemented | HIGH     |
 | [#28](lesson-28.md) | Professional Communication in Technical Documentation | ✅ Implemented | HIGH     |
+| [#29](lesson-29.md) | License Policy is Security-Critical                   | ✅ Documented  | CRITICAL |
 
 ## 🔍 How to Use This Index
 
