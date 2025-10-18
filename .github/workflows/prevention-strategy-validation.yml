@@ -1,0 +1,97 @@
+name: Prevention Strategy Validation
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Run monthly to ensure prevention measures are still in place
+on:
+  schedule:
+    # Run on the 1st of every month at 09:00 UTC
+    - cron: "0 9 1 * *"
+
+  # Allow manual trigger for ad-hoc validation
+  workflow_dispatch:
+    inputs:
+      additional_repos:
+        description: "Additional repositories to validate (comma-separated, e.g., SecPal/api,SecPal/frontend)"
+        required: false
+        default: ""
+
+jobs:
+  validate:
+    name: Validate ${{ matrix.repo }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - "SecPal/.github"
+          - "SecPal/contracts"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run validation script
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/validate-prevention-strategy.sh "${{ matrix.repo }}"
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report-${{ matrix.repo }}-${{ github.run_number }}
+          path: |
+            validation-*.txt
+            validation-*.md
+          retention-days: 90
+
+  # Validate additional repos if provided via workflow_dispatch
+  validate-additional:
+    name: Validate additional repos
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.additional_repos != ''
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate additional repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ADDITIONAL_REPOS: ${{ github.event.inputs.additional_repos }}
+        run: |
+          IFS=',' read -ra REPOS <<< "$ADDITIONAL_REPOS"
+          for repo in "${REPOS[@]}"; do
+            repo=$(echo "$repo" | xargs) # trim whitespace
+            echo "Validating $repo..."
+            bash scripts/validate-prevention-strategy.sh "$repo" || echo "❌ Validation failed for $repo"
+          done
+
+  summary:
+    name: Validation Summary
+    runs-on: ubuntu-latest
+    needs: [validate]
+    if: always()
+
+    steps:
+      - name: Check validation results
+        run: |
+          echo "📊 Prevention Strategy Validation Complete"
+          echo "=========================================="
+          echo ""
+          echo "Repositories validated:"
+          echo "  - SecPal/.github"
+          echo "  - SecPal/contracts"
+          echo ""
+          echo "Next scheduled run: 1st of next month at 09:00 UTC"
+          echo ""
+          echo "See artifacts for detailed reports."
