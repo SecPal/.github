@@ -167,7 +167,8 @@ During the 2025-10-12 audit, version inconsistencies were discovered:
 
 ```bash
 # Upgrade all setup-node actions to v6 (specific to actions/setup-node)
-find .github/workflows -name "*.yml" -type f -exec sed -i 's/actions\/setup-node@v[4-5]/actions\/setup-node@v6/g' {} \;
+# Uses word boundary check to avoid matching similar action names
+find .github/workflows -name "*.yml" -type f -exec sed -E -i 's/actions\/setup-node@v(4|5)([^0-9A-Za-z_-]|$)/actions\/setup-node@v6\2/g' {} \;
 ```
 
 ---

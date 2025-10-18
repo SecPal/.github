@@ -193,7 +193,7 @@ git push origin feature-branch
 git push origin feature-branch
 
 # ✅ DO: Request review immediately via MCP
-mcp_github_github_request_copilot_review('SecPal', 'repo-name', PR_NUMBER)
+mcp_github_github_request_copilot_review('SecPal', '<repo-name>', <PR_NUMBER>)
 
 # ❌ DON'T: Forget to request (common error, requires manual intervention)
 ```
