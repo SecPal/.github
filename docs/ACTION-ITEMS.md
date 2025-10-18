@@ -138,61 +138,40 @@ Complete prevention framework including:
 
 ---
 
-### 2. Policy & Version Decisions (MEDIUM PRIORITY)
+### 2. Policy & Version Decisions (COMPLETED ✅ 2025-10-18)
 
-Three decisions needed:
+**Status:** All decisions documented in [LICENSE-POLICY-DECISIONS.md](LICENSE-POLICY-DECISIONS.md)
 
-#### A) SSPL-1.0 License
+#### A) SSPL-1.0 License ✅
 
-**Question:** Should SSPL-1.0 be in denied licenses?
+**Decision:** NOT explicitly denied (monitored)
 
-**Context:**
+**Rationale:**
 
-- Was in `.github/dependency-review.yml` (before fix)
-- NOT in any `.license-policy.json`
-- No longer enforced after moving to dynamic loading
+- No npm dependencies currently use SSPL-1.0
+- Will be flagged by Dependency Review if it appears
+- Quarterly monitoring scheduled
 
-**Options:**
+#### B) Different Allowed Licenses ✅
 
-1. Add to both `.license-policy.json` files (if we want to deny it)
-2. Remove entirely (if it was accidental)
-3. Document as "not relevant for our dependencies"
+**Decision:** INTENTIONAL differences maintained
 
-**Recommendation:** Research if any npm dependencies use SSPL-1.0, then decide
+**Rationale:**
 
-#### B) Different Allowed Licenses
+- `.github`: Includes WTFPL, Python-2.0 (CI/CD tooling)
+- `contracts`: Includes GPL-3.0-or-later, LGPL-3.0-or-later (type definitions)
+- Different dependency ecosystems justify different policies
 
-**Question:** Are repo-specific license policies intentional?
+#### C) Node.js Action Version Standardization ✅
 
-**Differences:**
+**Decision:** Standardized on v6
 
-- `.github` unique: `WTFPL`, `Python-2.0`
-- `contracts` unique: `GPL-3.0-or-later`, `LGPL-3.0-or-later`, `AGPL-3.0-or-later`
+**Actions Taken:**
 
-**Options:**
-
-1. **Intentional:** Document rationale (e.g., contracts allows GPL for dependencies)
-2. **Unify:** Create single policy for all SecPal repos
-3. **Hybrid:** Core policy + repo-specific additions
-
-**Recommendation:** Create `docs/LICENSE-POLICY-DECISIONS.md` documenting the strategy
-
-#### C) Node.js Action Version Standardization
-
-**Question:** Standardize on v4 or v5?
-
-**Current State:**
-
-- `.github`: `actions/setup-node@v4`
-- `contracts`: `actions/setup-node@v5` (upgraded by Dependabot)
-
-**Options:**
-
-1. Upgrade `.github` to v5 (if stable)
-2. Rollback `contracts` to v4 (for consistency)
-3. Test v5 in contracts first, then decide
-
-**Recommendation:** Monitor contracts for issues, upgrade .github after 2-4 weeks if stable
+- ✅ Upgraded `config-checks.yml` from v4 to v6
+- ✅ Upgraded `security.yml` from v4 to v6
+- ✅ `contracts` already on v6
+- ✅ Documentation updated
 
 ---
 
