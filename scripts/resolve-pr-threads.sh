@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2025 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+set -euo pipefail
+
 #
 # resolve-pr-threads.sh - Automated PR Thread Resolution
 #

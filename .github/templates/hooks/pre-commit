@@ -214,6 +214,44 @@ if [ -n "$STAGED_DOCS" ]; then
   fi
 fi
 
+# 5. Check bash best practices (Lesson #24)
+STAGED_BASH_FILES=$(git diff --cached --name-only --diff-filter=ACM | \
+  grep -E '\.(sh|yml|yaml)$' || true)
+
+if [ -n "$STAGED_BASH_FILES" ]; then
+  if [ -f "$SCRIPTS_DIR/check-bash-best-practices.sh" ]; then
+    echo "🔧 Checking bash best practices (Lesson #24)..."
+    FAILED_FILES=""
+    for file in $STAGED_BASH_FILES; do
+      if ! "$SCRIPTS_DIR/check-bash-best-practices.sh" "$file" > /dev/null 2>&1; then
+        FAILED_FILES="$FAILED_FILES$file "
+      fi
+    done
+
+    if [ -n "$FAILED_FILES" ]; then
+      echo ""
+      echo "❌ Bash best practices check failed!"
+      echo ""
+      echo "Failed files:"
+      for file in $FAILED_FILES; do
+        echo "  - $file"
+      done
+      echo ""
+      echo "Run this for details:"
+      for file in $FAILED_FILES; do
+        echo "  $SCRIPTS_DIR/check-bash-best-practices.sh $file"
+      done
+      echo ""
+      echo "Common fix: Add 'set -euo pipefail' after shebang or as first line of run: blocks"
+      echo "See: https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-24.md"
+      echo ""
+      exit 1
+    fi
+    echo "✅ All bash scripts follow best practices"
+    echo ""
+  fi
+fi
+
 echo "✅ All pre-commit checks passed!"
 echo ""
 exit 0

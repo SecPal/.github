@@ -11,7 +11,9 @@
     "lint": "reuse lint"
   },
   "devDependencies": {
-    "prettier": "^3.4.2"
+    "bats": "^1.12.0",
+    "prettier": "^3.4.2",
+    "shellcheck": "^4.1.0"
   },
   "engines": {
     "node": ">=22.0.0"
