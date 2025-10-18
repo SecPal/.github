@@ -82,11 +82,26 @@ Modified files:
 
 **Fix:** `git add -A && git commit`
 
+**Manual Formatting (when needed):**
+
+```bash
+# Check formatting before commit
+npm run format:check
+
+# Fix formatting issues
+npm run format
+
+# Then commit
+git add -A
+git commit -m "style: apply formatting"
+```
+
 **Why This Exists:**
 
 - Ensures committed code is properly formatted
 - Prevents CI failures due to formatting issues
 - Catches formatter-modified files (Lesson #17)
+- Pre-commit hook runs `npm run format:check` automatically
 
 **Related:** [Lesson #17](lesson-17.md), [Lesson #11](lesson-11.md)
 
