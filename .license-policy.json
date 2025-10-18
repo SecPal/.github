@@ -9,8 +9,9 @@
     "CC0-1.0",
     "Unlicense",
     "WTFPL",
-    "Python-2.0"
+    "Python-2.0",
+    "AGPL-3.0-or-later"
   ],
   "deniedLicenses": ["GPL-2.0", "LGPL-2.0", "LGPL-2.1", "AGPL-1.0"],
-  "description": "License policy for AGPL-3.0-or-later compatibility"
+  "description": "License policy for AGPL-3.0-or-later compatibility. AGPL-3.0-or-later is allowed as it is our project license and meets our compatibility requirements. AGPL-1.0 is explicitly denied because it is not compatible with AGPL-3.0-or-later and cannot be upgraded automatically; dependencies must use AGPL-3.0-or-later or a more permissive license. This distinction is important for version-specific compatibility and compliance."
 }

@@ -1,0 +1,234 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Detect Template Drift
+
+on:
+  schedule:
+    # Run every Monday at 9:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  detect-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout .github repository
+        uses: actions/checkout@v5
+
+      - name: Check template drift across repositories
+        id: drift
+        run: |
+          set -euo pipefail
+
+          echo "🔍 Checking for template drift across SecPal repositories..."
+          echo ""
+
+          drift_detected=false
+          drift_report=""
+
+          # List of repositories to check
+          repos=("contracts")
+
+          for repo in "${repos[@]}"; do
+            echo "📦 Checking SecPal/$repo..."
+
+            # Fetch current script from target repo
+            remote_url="https://raw.githubusercontent.com/SecPal/$repo/main/scripts/check-licenses.sh"
+
+            if ! remote_content=$(curl -sf "$remote_url"); then
+              echo "⚠️  Could not fetch script from $repo (may not exist yet)"
+              continue
+            fi
+
+            # Compare with template
+            template_content=$(cat .github/templates/scripts/check-licenses.sh)
+
+            if [ "$remote_content" != "$template_content" ]; then
+              echo "❌ DRIFT DETECTED in $repo!"
+              drift_detected=true
+
+              # Generate diff for report with truncation handling
+              # Use temp files to avoid shell argument length limits with large files
+              template_tmp=$(mktemp)
+              remote_tmp=$(mktemp)
+              # Ensure cleanup on script exit (even on failure)
+              trap 'rm -f "$template_tmp" "$remote_tmp"' EXIT
+              printf "%s" "$template_content" > "$template_tmp"
+              printf "%s" "$remote_content" > "$remote_tmp"
+              full_diff_output=$(diff -u "$template_tmp" "$remote_tmp" || true)
+              rm -f "$template_tmp" "$remote_tmp"
+
+              diff_line_count=$(echo "$full_diff_output" | wc -l)
+              max_diff_lines=50
+
+              if [ "$diff_line_count" -gt "$max_diff_lines" ]; then
+                diff_output=$(echo "$full_diff_output" | head -n $max_diff_lines)
+                truncation_note="⚠️ Diff output truncated to $max_diff_lines lines (total: $diff_line_count lines). Please check manually if needed."
+              else
+                diff_output="$full_diff_output"
+                truncation_note=""
+              fi
+
+              drift_report+="### ❌ Drift in \`$repo\`\n\n"
+              drift_report+="\`\`\`diff\n$diff_output\n\`\`\`\n"
+              if [ -n "$truncation_note" ]; then
+                drift_report+="$truncation_note\n"
+              fi
+              drift_report+="\n---\n\n"
+            else
+              echo "✅ $repo is in sync"
+            fi
+
+            echo ""
+          done
+
+          if [ "$drift_detected" = true ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            # Save drift report for issue creation
+            echo "$drift_report" > drift_report.md
+          else
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "✅ All repositories are in sync with templates!"
+          fi
+
+      - name: Create drift issue
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const driftReport = fs.readFileSync('drift_report.md', 'utf8');
+
+            // Check if drift issue already exists (handle pagination)
+            const issues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'template-drift',
+                per_page: 100
+              }
+            );
+
+            const existingIssue = issues.find(issue =>
+              issue.title.includes('Template Drift Detected')
+            );
+
+            const issueBody = `## 🚨 Template Drift Detected
+
+            Automated drift detection found differences between the centralized script templates and their copies in target repositories.
+
+            ${driftReport}
+
+            ## 🔧 How to Fix
+
+            **Option 1: Automatic Sync (Recommended)**
+            1. Trigger the [Sync Script Templates workflow](https://github.com/SecPal/.github/blob/main/.github/workflows/sync-templates.yml)
+            2. Review and merge the generated PRs
+
+            **Option 2: Manual Sync**
+            \`\`\`bash
+            # For each drifted repository:
+            curl -o scripts/check-licenses.sh https://raw.githubusercontent.com/SecPal/.github/main/.github/templates/scripts/check-licenses.sh
+            chmod +x scripts/check-licenses.sh
+            git add scripts/check-licenses.sh
+            git commit -m "chore: sync check-licenses.sh from .github template"
+            \`\`\`
+
+            ## 📚 Documentation
+            - [DRY Strategy](https://github.com/SecPal/.github/blob/main/docs/DRY-ANALYSIS-AND-STRATEGY.md)
+            - [Template README](https://github.com/SecPal/.github/blob/main/.github/templates/scripts/README.md)
+            - [Lesson #27: Script Consolidation](https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-27.md)
+
+            ---
+
+            🤖 **Automated drift detection**
+            📅 Detected: ${new Date().toISOString()}
+            🔄 This issue will auto-close when drift is resolved
+            `;
+
+            if (existingIssue) {
+              // Update existing issue
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: issueBody
+              });
+
+              // Add comment about new drift detected
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: `🔄 **Drift still present** - Issue updated with latest diff (${new Date().toISOString()})`
+              });
+
+              core.info(`Updated existing drift issue #${existingIssue.number}`);
+            } else {
+              // Create new issue
+              const newIssue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🚨 Template Drift Detected in Script Templates',
+                body: issueBody,
+                labels: ['template-drift', 'automation', 'maintenance']
+              });
+
+              core.info(`Created new drift issue #${newIssue.data.number}`);
+            }
+
+      - name: Close resolved drift issues
+        if: steps.drift.outputs.drift_detected == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Find all open drift issues (handle pagination)
+            const issues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'template-drift',
+                per_page: 100
+              }
+            );
+
+            for (const issue of issues) {
+              if (issue.title.includes('Template Drift Detected')) {
+                // Close the issue
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed'
+                });
+
+                // Add resolution comment
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `✅ **Drift resolved!** All repositories are now in sync with templates.\n\n🤖 Auto-closed by drift detection workflow (${new Date().toISOString()})`
+                });
+
+                core.info(`Closed resolved drift issue #${issue.number}`);
+              }
+            }
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.drift.outputs.drift_detected }}" == "true" ]; then
+            echo "⚠️  Template drift detected! Check the created/updated issue for details."
+            echo "This is informational - drift is tracked via GitHub issue."
+          else
+            echo "✅ All repositories are in sync with templates!"
+          fi

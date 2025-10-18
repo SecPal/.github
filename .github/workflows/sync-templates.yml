@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Sync Script Templates
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/templates/scripts/**"
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Target repository (leave empty for all)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-templates:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo:
+          - contracts
+          # Add future repos here as they're created
+      fail-fast: false
+
+    steps:
+      - name: Checkout .github (source)
+        uses: actions/checkout@v5
+        with:
+          path: source
+
+      - name: Checkout target repository
+        uses: actions/checkout@v5
+        with:
+          repository: SecPal/${{ matrix.repo }}
+          token: ${{ secrets.SYNC_TOKEN }}
+          path: target
+
+      - name: Sync check-licenses.sh
+        id: sync
+        run: |
+          set -euo pipefail
+
+          echo "🔄 Syncing check-licenses.sh to ${{ matrix.repo }}..."
+
+          # Ensure target directory exists
+          mkdir -p target/scripts
+
+          # Copy template to target
+          cp source/.github/templates/scripts/check-licenses.sh target/scripts/check-licenses.sh
+          chmod +x target/scripts/check-licenses.sh
+
+          # Check if there are changes
+          cd target
+          if git diff --quiet scripts/check-licenses.sh; then
+            echo "✅ No changes needed for ${{ matrix.repo }}"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "📝 Changes detected in ${{ matrix.repo }}"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.sync.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: target
+          token: ${{ secrets.SYNC_TOKEN }}
+          commit-message: "chore(scripts): sync check-licenses.sh from .github template"
+          branch: sync/check-licenses-script-${{ github.run_number }}
+          delete-branch: true
+          title: "chore(scripts): Sync check-licenses.sh from .github template"
+          body: |
+            ## 🔄 Automated Template Sync
+
+            This PR synchronizes `scripts/check-licenses.sh` from the centralized template in `.github/templates/scripts/`.
+
+            ### Changes
+            - ✅ Updated `scripts/check-licenses.sh` to match the latest template
+
+            ### Why This PR?
+            We maintain a **single source of truth** for shared scripts in the `.github` repository. This ensures:
+            - 🔒 Consistency across all SecPal repositories
+            - 🐛 Bug fixes propagate automatically
+            - ✨ New features available everywhere
+            - 📚 Follows DRY (Don't Repeat Yourself) principles
+
+            ### Validation
+            - [ ] Script has correct SPDX headers
+            - [ ] Script is executable (`chmod +x`)
+            - [ ] No repo-specific customizations overwritten
+
+            ### Related
+            - Source: [.github/templates/scripts/](https://github.com/SecPal/.github/tree/main/.github/templates/scripts)
+            - Documentation: [DRY Strategy](https://github.com/SecPal/.github/blob/main/docs/DRY-ANALYSIS-AND-STRATEGY.md)
+            - Lesson: [#27 Script Consolidation](https://github.com/SecPal/.github/blob/main/docs/lessons/lesson-27.md)
+
+            ---
+
+            🤖 **Automated sync** triggered by changes to `.github/templates/scripts/`
+            📅 Run: ${{ github.run_number }} | Commit: ${{ github.sha }}
+          labels: |
+            automation
+            chore
+            scripts
+          assignees: ${{ github.actor }}
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.sync.outputs.has_changes }}" == "true" ]; then
+            echo "✅ Created PR for ${{ matrix.repo }}"
+          else
+            echo "✅ ${{ matrix.repo }} already in sync"
+          fi

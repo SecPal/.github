@@ -13,6 +13,10 @@ fi
 # Check if jq is installed
 if ! command -v jq &> /dev/null; then
   echo "Error: jq is required but not installed!" >&2
+  echo "To install jq:" >&2
+  echo "  - On Debian/Ubuntu: sudo apt install jq" >&2
+  echo "  - On macOS (Homebrew): brew install jq" >&2
+  echo "  - See https://stedolan.github.io/jq/download/ for other platforms." >&2
   exit 1
 fi
 
@@ -30,9 +34,9 @@ fi
 
 ALLOWED=$(jq -r '.allowedLicenses | join(";")' .license-policy.json)
 
-# Verify allowedLicenses is not empty
-if [ -z "$ALLOWED" ]; then
-  echo "Error: 'allowedLicenses' is empty in .license-policy.json." >&2
+# Verify allowedLicenses is not empty (Bug fix from contracts: use length check)
+if [ "$(jq -r '.allowedLicenses | length' .license-policy.json)" -eq 0 ]; then
+  echo "Error: 'allowedLicenses' array is empty in .license-policy.json." >&2
   exit 1
 fi
 
@@ -63,8 +67,24 @@ else
   LICENSE_CHECKER_BIN="$(pwd)/node_modules/.bin/license-checker"
 fi
 
+# Get package name and version from package.json to exclude it from the check
+# (the root package itself should not be checked, only its dependencies)
+if [ -f package.json ]; then
+  PACKAGE_NAME=$(jq -r '.name // "unknown"' package.json)
+  PACKAGE_VERSION=$(jq -r '.version // "0.0.0"' package.json)
+  EXCLUDE_PACKAGE="${PACKAGE_NAME}@${PACKAGE_VERSION}"
+else
+  # No package.json means no root package to exclude
+  EXCLUDE_PACKAGE=""
+fi
+
 # Run license-checker and handle errors (use local installation for security)
-OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --summary 2>&1)
+# Exclude the root package from license checking (only check dependencies)
+if [ -n "$EXCLUDE_PACKAGE" ]; then
+  OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --excludePackages "$EXCLUDE_PACKAGE" --summary 2>&1)
+else
+  OUTPUT=$("$LICENSE_CHECKER_BIN" --production --onlyAllow "$ALLOWED" --summary 2>&1)
+fi
 STATUS=$?
 if [ $STATUS -ne 0 ]; then
   echo "Error: license-checker failed."

@@ -7,33 +7,16 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Note: Permissions are intentionally limited to 'read' for the calling workflow.
+# The reusable workflow can inherit permissions granted by this calling workflow,
+# which are intentionally restricted to 'read'. If the reusable workflow requires
+# write permissions, it must explicitly request them.
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   dependency-review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Load license policy
-        id: policy
-        run: |
-          set -euo pipefail
-          if [ ! -f .license-policy.json ]; then
-            echo "Error: .license-policy.json not found!" >&2
-            exit 1
-          fi
-          DENIED=$(jq -r '.deniedLicenses | join(", ")' .license-policy.json)
-          if [ -z "$DENIED" ]; then
-            echo "Error: deniedLicenses is empty in .license-policy.json!" >&2
-            exit 1
-          fi
-          echo "denied=$DENIED" >> $GITHUB_OUTPUT
-
-      - name: Dependency Review
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: moderate
-          deny-licenses: ${{ steps.policy.outputs.denied }}
+    uses: SecPal/.github/.github/workflows/reusable-dependency-review.yml@main
+    with:
+      skip-dependabot-workflow-only: false
