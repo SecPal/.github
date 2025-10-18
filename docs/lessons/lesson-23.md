@@ -47,14 +47,79 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 
 1. **First push** → Copilot reviews automatically ✅
 2. **Address comments** → Fix code, commit, push
-3. **Request review manually** → Use MCP tool
-4. **Wait for review** → Check if "no new comments"
-5. **Resolve threads via GraphQL** → Mark conversations complete (see [Thread Resolution Workflow](../WORKFLOW-THREAD-RESOLUTION.md))
-6. **Verify all resolved** → Check enforcement passes
-7. **Rerun if race condition** → Check before review completed
-8. **All green** → Merge ✅
+3. **Resolve addressed threads** → Via GraphQL (see optimized workflow below)
+4. **Request review manually** → Use MCP tool
+5. **Wait for review** → Check if "no new comments"
+6. **All green** → Merge ✅
 
-**CRITICAL:** Step 5 (resolve threads) is REQUIRED - addressing comments in code is NOT enough!
+**Optimized Workflow (PR #57+):**
+
+```
+Fix code → Commit → Push → Resolve threads → Request review
+```
+
+**Why better than old workflow?**
+
+- Threads already resolved when review runs
+- Copilot sees clean state → Can approve immediately
+- Saves 1-2 review cycles
+- No need to rerun failed checks
+
+**When to resolve threads:**
+
+- ✅ After push (before requesting review) - RECOMMENDED
+- ✅ After review says "no new comments" - Also works
+- ❌ Before addressing code changes - Premature
+
+**CRITICAL:** Step 3 (resolve threads) is REQUIRED - addressing comments in code is NOT enough!
+
+## Understanding Thread Resolution
+
+**GitHub has TWO node ID types:**
+
+- `PRRC_*` = Pull Request Review Comment (individual comment)
+- `PRRT_*` = Pull Request Review Thread (conversation)
+
+**The GraphQL `resolveReviewThread` mutation requires `PRRT_*` thread IDs, NOT `PRRC_*` comment IDs!**
+
+**Common mistake (PR #57):**
+
+```bash
+# ❌ WRONG - Using comment node_id
+gh api /repos/owner/repo/pulls/57/comments --jq '.[] | .node_id'
+# Returns: PRRC_kwDOQAoSms6RlPwU (comment ID)
+
+gh api graphql -f query='mutation {
+  resolveReviewThread(input: {threadId: "PRRC_kwDOQAoSms6RlPwU"}) {...}
+}'
+# Error: Could not resolve to PullRequestReviewThread node
+```
+
+**✅ CORRECT - Get thread IDs via GraphQL:**
+
+```bash
+REPO_OWNER="SecPal"
+REPO_NAME=".github"
+PR_NUMBER=57
+
+gh api graphql -f query="
+query(\$owner: String!, \$name: String!, \$number: Int!) {
+  repository(owner: \$owner, name: \$name) {
+    pullRequest(number: \$number) {
+      reviewThreads(first: 100) {
+        nodes {
+          id              # This is PRRT_* (thread ID)
+          isResolved
+          comments(first: 1) { nodes { body } }
+        }
+      }
+    }
+  }
+}" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f number=$PR_NUMBER
+# Returns: PRRT_kwDOQAoSms5eewML (thread ID)
+```
+
+See [WORKFLOW-THREAD-RESOLUTION.md](../WORKFLOW-THREAD-RESOLUTION.md) for complete examples.
 
 ## Action for Future Repos
 
@@ -92,4 +157,5 @@ TODOs from PR #32 code review identified issues but weren't systematically track
 
 ---
 
-**Last Updated:** 2025-10-17
+**Last Updated:** 2025-10-18
+**Changes:** Added `PRRT_*` vs `PRRC_*` explanation, optimized workflow (resolve before request)

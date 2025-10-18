@@ -72,6 +72,107 @@ run: |
   # Your script here
 ```
 
+## Additional Best Practices (PR #57)
+
+### 1. Atomic Temporary Directory Permissions
+
+**❌ Potential Portability Risk:**
+
+```bash
+TMPDIR=$(mktemp -d)    # Typically created with 0700 on GNU/BSD, but umask may affect this
+chmod 700 "$TMPDIR"    # Ensures 0700, but a brief window may exist on affected platforms
+```
+
+**✅ Portability/Defense-in-Depth:**
+
+```bash
+TMPDIR=$(umask 077; mktemp -d)  # Ensures 0700 even on platforms/configurations where umask could affect creation
+```
+
+**Why:** Defense-in-depth measure for portability. Ensures tmpdir is only accessible to the current user even on platforms/configurations where umask could affect creation. Prevents any possibility of tmpdir containing sensitive data (API tokens, workflow contents) being readable by other users.
+
+### 2. Guaranteed Cleanup with Trap
+
+**❌ Manual Cleanup (Can Fail):**
+
+```bash
+TMPDIR=$(mktemp -d)
+# ... do work ...
+rm -rf "$TMPDIR"  # Not executed if script exits early (error, signal)
+```
+
+**✅ Trap-Based Cleanup:**
+
+```bash
+TMPDIR=$(umask 077; mktemp -d)
+trap 'rm -rf -- "$TMPDIR"' EXIT INT TERM  # Runs on most errors and termination signals
+
+# ... do work ...
+# Cleanup automatic on exit
+```
+
+**Why:** `trap` ensures cleanup happens on most errors and termination signals (EXIT, INT, TERM), but not all (e.g., SIGKILL or abrupt exec).
+
+### 3. Workflow Failure Propagation
+
+**❌ Silent Failures (Masking Errors):**
+
+```yaml
+run: |
+  set -euo pipefail
+  for file in *.sh; do
+    bash "$file" || echo "❌ $file failed"  # Logs but continues
+  done
+  # Workflow passes even if all scripts failed
+```
+
+**✅ Accumulate and Fail:**
+
+```yaml
+run: |
+  set -euo pipefail
+  shopt -s nullglob
+  FAILED=0
+  for file in *.sh; do
+    if ! bash "$file"; then
+      echo "❌ $file failed"
+      FAILED=1
+    fi
+  done
+  if [ "$FAILED" -ne 0 ]; then
+    echo "One or more scripts failed"
+    exit 1  # Workflow fails properly
+  fi
+```
+
+**Why:** Ensures CI/CD fails when validation fails. Don't mask errors with `|| echo` - track them and fail explicitly.
+
+### Complete Example (PR #57)
+
+```bash
+#!/bin/bash
+set -euo pipefail
+shopt -s nullglob  # Prevent literal '*.txt' if no files match
+
+# Atomic tmpdir with guaranteed cleanup
+TMPDIR=$(umask 077; mktemp -d)
+trap 'rm -rf -- "$TMPDIR"' EXIT INT TERM
+
+# Process files with failure tracking
+FAILED=0
+for file in *.txt; do
+  if ! process_file "$file" > "$TMPDIR/$file.out"; then
+    echo "❌ Failed to process $file"
+    FAILED=1
+  fi
+done
+
+# Cleanup automatic via trap
+if [ "$FAILED" -ne 0 ]; then
+  exit 1
+fi
+```
+
 ## Related Lessons
 
 - [Lesson #2 (Signed Commits: GitHub API)](lesson-02.md) - Script now has error handling
@@ -85,4 +186,5 @@ run: |
 
 ---
 
-**Last Updated:** 2025-10-17
+**Last Updated:** 2025-10-18
+**Changes:** Added atomic tmpdir permissions, trap cleanup, workflow failure propagation (PR #57)
