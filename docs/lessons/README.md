@@ -16,7 +16,7 @@ This directory contains individual lessons learned during the setup and maintena
 
 ## 📚 Lesson Categories
 
-### 🔴 Critical Issues (Lessons #1-10)
+### 🔴 Critical Issues (Lessons #0-10)
 
 Must be addressed immediately in all repositories. These issues can block PRs or compromise security.
 

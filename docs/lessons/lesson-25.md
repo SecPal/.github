@@ -89,7 +89,7 @@ grep -rn "\[Thread Resolution" docs/
 **⚠️ CRITICAL TIMING CLARIFICATION:**
 
 | Action                   | When                       | Wait Time              | Notes                                |
-|--------------------------|----------------------------|------------------------|--------------------------------------|
+| ------------------------ | -------------------------- | ---------------------- | ------------------------------------ |
 | **First push** to new PR | Automatic                  | Wait 90s AFTER push    | GitHub triggers review automatically |
 | **Request review**       | Manual (subsequent pushes) | NO wait before request | Request immediately after push       |
 | **Wait for review**      | After request              | Wait 90s AFTER request | Review runs asynchronously           |
@@ -106,8 +106,8 @@ git push origin feature-branch
 # Wait for automatic review to complete
 sleep 90
 
-# Check review outcome
-gh pr view PR_NUMBER --json reviews --jq '.reviews[-1].body'
+# Check review outcome (current branch's PR)
+gh pr view --json reviews --jq '.reviews[-1].body'
 ```
 
 **After SUBSEQUENT pushes:**
@@ -118,13 +118,13 @@ git push
 
 # NO DELAY - Request review immediately
 # (Using MCP GitHub tool or equivalent)
-# mcp_github_github_request_copilot_review('SecPal', '.github', PR_NUMBER)
+# Example: mcp_github_github_request_copilot_review('SecPal', '.github', 49)
 
 # NOW wait for review to complete
 sleep 90
 
-# Check review outcome
-gh pr view PR_NUMBER --json reviews --jq '.reviews[-1].body'
+# Check review outcome (current branch's PR)
+gh pr view --json reviews --jq '.reviews[-1].body'
 ```
 
 **Mental trigger for subsequent pushes**: `git push` → **IMMEDIATELY** think "Review request!" → THEN wait
