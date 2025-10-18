@@ -102,8 +102,7 @@ if [ -z "$WORKFLOW_FILES" ] || [ "$WORKFLOW_FILES" = "ERROR" ]; then
   echo -e "${YELLOW}⚠️${NC}  Could not fetch workflow files"
 else
   # Cache all workflow contents to reduce API calls
-  TMPDIR=$(mktemp -d)
-  chmod 700 "$TMPDIR"
+  TMPDIR=$(umask 077; mktemp -d)
   trap 'rm -rf "$TMPDIR"' EXIT
 
   for file in $WORKFLOW_FILES; do
