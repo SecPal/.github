@@ -16,13 +16,13 @@ echo "Using base branch: $BASE"
 
 # 0) Formatting & Compliance
 if command -v npx >/dev/null 2>&1; then
-  npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || true  # Don't fail on format
+  npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
 fi
 if command -v reuse >/dev/null 2>&1; then
   reuse lint
 fi
 if command -v npx >/dev/null 2>&1; then
-  npx markdownlint-cli2 '**/*.md' || true
+  npx markdownlint-cli2 '**/*.md'
 fi
 
 # 1) PHP / Laravel
@@ -37,11 +37,21 @@ if [ -f composer.json ]; then
 fi
 
 # 2) Node / React
-if [ -f package.json ] || [ -f pnpm-lock.yaml ]; then
+if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
   pnpm lint
   pnpm typecheck
   pnpm test
+elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then
+  npm ci
+  npm run lint
+  npm run typecheck
+  npm run test
+elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
+  yarn install --frozen-lockfile
+  yarn lint
+  yarn typecheck
+  yarn test
 fi
 
 # 3) OpenAPI (Spectral)
