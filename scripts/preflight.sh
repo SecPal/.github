@@ -71,9 +71,9 @@ fi
 if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
   # Check if scripts exist before running (pnpm run <script> exits 0 with --if-present)
-  pnpm --if-present lint
-  pnpm --if-present typecheck
-  pnpm --if-present test
+  pnpm run --if-present lint
+  pnpm run --if-present typecheck
+  pnpm run --if-present test
 elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then
   npm ci
   npm run --if-present lint
@@ -81,10 +81,16 @@ elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then
   npm run --if-present test
 elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
   yarn install --frozen-lockfile
-  # Yarn doesn't have --if-present, check package.json
-  if grep -q '"lint"' package.json; then yarn lint; fi
-  if grep -q '"typecheck"' package.json; then yarn typecheck; fi
-  if grep -q '"test"' package.json; then yarn test; fi
+  # Yarn doesn't have --if-present, check package.json using jq or Node.js
+  if command -v jq >/dev/null 2>&1; then
+    jq -e '.scripts.lint' package.json >/dev/null 2>&1 && yarn lint
+    jq -e '.scripts.typecheck' package.json >/dev/null 2>&1 && yarn typecheck
+    jq -e '.scripts.test' package.json >/dev/null 2>&1 && yarn test
+  else
+    node -e "process.exit(require('./package.json').scripts?.lint ? 0 : 1)" && yarn lint
+    node -e "process.exit(require('./package.json').scripts?.typecheck ? 0 : 1)" && yarn typecheck
+    node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)" && yarn test
+  fi
 fi
 
 # 3) OpenAPI (Spectral)
@@ -104,22 +110,19 @@ fi
 
 # 5) Check PR size locally (against BASE)
 if ! git rev-parse -q --verify "origin/$BASE" >/dev/null 2>&1; then
-  echo "Error: Cannot verify base branch origin/$BASE. Run 'git fetch origin $BASE' first." >&2
-  exit 1
+  echo "Warning: Cannot verify base branch origin/$BASE. Skipping PR size check. (Run 'git fetch origin $BASE' to enable.)" >&2
+else
+  MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null)
+  if [ -z "$MERGE_BASE" ]; then
+    echo "Warning: Cannot determine merge base with origin/$BASE. Skipping PR size check." >&2
+  else
+    # Use --numstat for locale-independent parsing (sum insertions + deletions)
+    CHANGED=$(git diff --numstat "$MERGE_BASE"...HEAD 2>/dev/null | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
+    [ -z "$CHANGED" ] && CHANGED=0
+    if [ "$CHANGED" -gt 600 ]; then
+      echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
+      exit 2
+    fi
+    echo "Preflight OK · Changed lines: $CHANGED"
+  fi
 fi
-
-MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null)
-if [ -z "$MERGE_BASE" ]; then
-  echo "Error: Cannot determine merge base with origin/$BASE." >&2
-  exit 1
-fi
-
-# Use --numstat for locale-independent parsing (sum insertions + deletions)
-CHANGED=$(git diff --numstat "$MERGE_BASE"...HEAD 2>/dev/null | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
-[ -z "$CHANGED" ] && CHANGED=0
-if [ "$CHANGED" -gt 600 ]; then
-  echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
-  exit 2
-fi
-
-echo "Preflight OK · Changed lines: $CHANGED"
