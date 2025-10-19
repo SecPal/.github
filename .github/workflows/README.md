@@ -254,7 +254,7 @@ jobs:
     uses: SecPal/.github/.github/workflows/reusable-actionlint.yml@main
 ```
 
-### Quality Gates
+## Quality Gates
 
 ### `reusable-copilot-review-check.yml`
 

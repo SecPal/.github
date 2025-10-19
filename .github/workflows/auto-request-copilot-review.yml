@@ -19,18 +19,16 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-
-            try {
-              await github.rest.pulls.requestReviewers({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber,
-                reviewers: ['copilot-pull-request-reviewer']
-              });
-              core.info('✓ Copilot review requested');
-            } catch (error) {
-              // Copilot reviews are requested via a different mechanism
-              // This will fail, but that's expected
-              core.info('Note: Copilot reviews must be requested manually or via GitHub UI');
-              core.info('This workflow serves as a reminder to request a Copilot review');
-            }
+            
+            // Copilot reviews cannot be requested programmatically via the GitHub API.
+            // This workflow serves as a reminder in the Actions log.
+            core.info('╔════════════════════════════════════════════════════════╗');
+            core.info('║  📝 REMINDER: Request a Copilot Review                 ║');
+            core.info('║                                                        ║');
+            core.info('║  Copilot reviews must be requested manually via:      ║');
+            core.info('║  1. GitHub UI (PR page)                                ║');
+            core.info('║  2. GitHub CLI: gh pr review --copilot                 ║');
+            core.info('║  3. API call (if you have the right permissions)       ║');
+            core.info('║                                                        ║');
+            core.info('║  This ensures code quality before merging! ✨          ║');
+            core.info('╚════════════════════════════════════════════════════════╝');
