@@ -106,7 +106,8 @@ if [ -z "$MERGE_BASE" ]; then
   exit 1
 fi
 
-CHANGED=$(git diff --shortstat "$MERGE_BASE"...HEAD 2>/dev/null | awk '{print $4+$6}')
+# Use --numstat for locale-independent parsing (sum insertions + deletions)
+CHANGED=$(git diff --numstat "$MERGE_BASE"...HEAD 2>/dev/null | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
 [ -z "$CHANGED" ] && CHANGED=0
 if [ "$CHANGED" -gt 600 ]; then
   echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2

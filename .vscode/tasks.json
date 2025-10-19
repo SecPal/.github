@@ -7,7 +7,11 @@
       "label": "Preflight (local)",
       "type": "shell",
       "command": "./scripts/preflight.sh",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "windows": {
+        "command": "bash",
+        "args": ["-lc", "./scripts/preflight.sh"]
+      }
     }
   ]
 }
