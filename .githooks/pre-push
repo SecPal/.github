@@ -8,5 +8,6 @@ SCRIPT="$(git rev-parse --show-toplevel)/scripts/preflight.sh"
 if [ -x "$SCRIPT" ]; then
   "$SCRIPT"
 else
-  echo "Warning: preflight.sh not found or not executable - skipping checks" >&2
+  echo "Error: preflight.sh not found or not executable - push blocked" >&2
+  exit 1
 fi

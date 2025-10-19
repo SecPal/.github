@@ -17,20 +17,22 @@ echo "Using base branch: $BASE"
 # 0) Formatting & Compliance
 if command -v npx >/dev/null 2>&1; then
   npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
+  npx markdownlint-cli2 '**/*.md'
+  # Workflow linting (part of documented gates)
+  if [ -d .github/workflows ]; then
+    npx actionlint
+  fi
 fi
 if command -v reuse >/dev/null 2>&1; then
   reuse lint
-fi
-if command -v npx >/dev/null 2>&1; then
-  npx markdownlint-cli2 '**/*.md'
 fi
 
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
-  # Run Laravel Pint code style check if available
+  # Run Laravel Pint code style check if available (blocking: aligns with gates)
   if [ -x ./vendor/bin/pint ]; then
-    ./vendor/bin/pint --test || true  # Don't fail on format, just warn
+    ./vendor/bin/pint --test
   fi
   ./vendor/bin/phpstan analyse --level=max
   php artisan test --parallel
@@ -55,13 +57,13 @@ elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
 fi
 
 # 3) OpenAPI (Spectral)
-if [ -f docs/openapi.yaml ]; then
+if [ -f docs/openapi.yaml ] && command -v npx >/dev/null 2>&1; then
   npx @stoplight/spectral-cli lint docs/openapi.yaml
 fi
 
 # 4) Semgrep (optional: if installed)
 if command -v semgrep >/dev/null 2>&1; then
-  semgrep --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions .
+  semgrep --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions --exclude node_modules --exclude vendor --exclude .git .
 else
   echo "Semgrep not found – skipping security scan (optional)."
 fi
