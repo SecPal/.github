@@ -173,7 +173,7 @@ Run **before** requesting Copilot review:
 
 A Copilot review is **fresh** if:
 
-```
+```text
 review.submitted_at > commit.committer.date (of HEAD commit)
 ```
 
