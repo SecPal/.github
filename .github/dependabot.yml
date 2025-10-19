@@ -17,8 +17,5 @@ updates:
     open-pull-requests-limit: 10
     rebase-strategy: "auto"
     target-branch: "main"
-    allow:
-      - dependency-type: "all"
-    insecure-external-code-execution: "deny"
     pull-request-branch-name:
       separator: "-"
