@@ -95,7 +95,7 @@ fi
 
 # 3) OpenAPI (Spectral)
 if [ -f docs/openapi.yaml ] && command -v npx >/dev/null 2>&1; then
-  npx @stoplight/spectral-cli lint docs/openapi.yaml
+  npx --yes @stoplight/spectral-cli lint docs/openapi.yaml
 fi
 
 # 4) Semgrep (optional: if installed, findings don't block)
