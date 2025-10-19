@@ -5,7 +5,7 @@ name: Copilot Review Check
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [synchronize, reopened]
 
 # Prevent duplicate runs
 concurrency:
