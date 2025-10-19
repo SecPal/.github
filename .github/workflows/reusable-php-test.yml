@@ -7,20 +7,20 @@ on:
   workflow_call:
     inputs:
       php-version:
-        description: 'PHP version to use'
+        description: "PHP version to use"
         required: false
         type: string
-        default: '8.3'
+        default: "8.3"
       composer-install-flags:
-        description: 'Flags for composer install'
+        description: "Flags for composer install"
         required: false
         type: string
-        default: '--prefer-dist --no-progress --no-interaction'
+        default: "--prefer-dist --no-progress --no-interaction"
       test-command:
-        description: 'Command to run tests'
+        description: "Command to run tests"
         required: false
         type: string
-        default: './vendor/bin/pest'
+        default: "./vendor/bin/pest"
 
 jobs:
   test:

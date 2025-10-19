@@ -7,20 +7,20 @@ on:
   workflow_call:
     inputs:
       node-version:
-        description: 'Node.js version to use'
+        description: "Node.js version to use"
         required: false
         type: string
-        default: '22.x'
+        default: "22.x"
       install-command:
-        description: 'Command to install dependencies'
+        description: "Command to install dependencies"
         required: false
         type: string
-        default: 'npm ci'
+        default: "npm ci"
       build-command:
-        description: 'Command to build the project'
+        description: "Command to build the project"
         required: false
         type: string
-        default: 'npm run build'
+        default: "npm run build"
 
 jobs:
   build:
@@ -34,7 +34,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Install dependencies
         run: ${{ inputs.install-command }}
