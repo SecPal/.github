@@ -25,21 +25,18 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Constants
             const COPILOT_REVIEWER_LOGIN_PREFIX = 'copilot-pull-request-reviewer';
-            const MAX_WAIT_TIME_MS = 90000; // 90 seconds for opened event
-            const POLL_INTERVAL_MS = 5000; // Check every 5 seconds
+            const MAX_WAIT_MS = 90000; // 90 seconds
+            const POLL_INTERVAL_MS = 5000; // 5 seconds
 
             const pr = context.payload.pull_request;
             const prNumber = pr ? pr.number : context.issue.number;
             const eventAction = context.payload.action;
-            const isOpenedEvent = eventAction === 'opened';
 
             core.info(`Event: ${context.eventName}, Action: ${eventAction}`);
 
-            // Function to check for Copilot review
-            async function checkForReview() {
-              // Get all commits using pagination (API returns in chronological order, oldest first)
+            // Main check logic
+            async function doCheck() {
               const commits = await github.paginate(github.rest.pulls.listCommits, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -47,105 +44,73 @@ jobs:
               });
 
               if (commits.length === 0) {
-                return { success: false, error: 'No commits found in PR' };
+                throw new Error('No commits found in PR');
               }
 
               const lastCommit = commits[commits.length - 1];
               const lastPushTime = new Date(lastCommit.commit.committer.date);
               core.info(`Last commit at: ${lastPushTime.toISOString()}`);
-              core.info(`Last commit SHA: ${lastCommit.sha}`);
 
-              // Get all reviews
               const { data: reviews } = await github.rest.pulls.listReviews({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: prNumber
               });
 
-              // Find Copilot reviews (must match both conditions to avoid false positives)
               const copilotReviews = reviews.filter(review =>
                 review.user.login.startsWith(COPILOT_REVIEWER_LOGIN_PREFIX) &&
                 review.user.type === 'Bot'
               );
 
               if (copilotReviews.length === 0) {
-                return { success: false, error: 'No Copilot review found', retry: isOpenedEvent };
+                throw new Error('No Copilot review found. Please request a Copilot review.');
               }
 
-              // Get the most recent Copilot review
-              const lastReview = copilotReviews[copilotReviews.length - 1];
-              const lastReviewTime = new Date(lastReview.submitted_at);
-
-              // Check if there's a Copilot review after the last commit
               const reviewsAfterCommit = copilotReviews.filter(review => {
                 const reviewTime = new Date(review.submitted_at);
                 return reviewTime >= lastPushTime;
               });
 
               if (reviewsAfterCommit.length === 0) {
-                return {
-                  success: false,
-                  error: `Last Copilot review was before the latest commit. ` +
-                         `Last review: ${lastReviewTime.toISOString()}, ` +
-                         `Last commit: ${lastPushTime.toISOString()}. ` +
-                         `Please request a new Copilot review.`,
-                  retry: false
-                };
+                const lastReview = copilotReviews[copilotReviews.length - 1];
+                const lastReviewTime = new Date(lastReview.submitted_at);
+                throw new Error(
+                  `Last Copilot review was before the latest commit. ` +
+                  `Last review: ${lastReviewTime.toISOString()}, ` +
+                  `Last commit: ${lastPushTime.toISOString()}. ` +
+                  `Please request a new Copilot review.`
+                );
               }
 
               const latestReview = reviewsAfterCommit[reviewsAfterCommit.length - 1];
-              return {
-                success: true,
-                message: `✓ Found Copilot review after last commit at: ${latestReview.submitted_at}`
-              };
+              core.info(`✓ Found Copilot review after last commit at: ${latestReview.submitted_at}`);
             }
 
-            // For 'opened' event: Retry with polling
-            if (isOpenedEvent) {
+            // For 'opened' event: retry with timeout
+            if (eventAction === 'opened') {
               core.info('PR opened - will wait up to 90 seconds for Copilot review...');
               const startTime = Date.now();
+              let lastError;
 
-              while (Date.now() - startTime < MAX_WAIT_TIME_MS) {
-                const result = await checkForReview();
-
-                if (result.success) {
-                  core.info(result.message);
-                  return;
+              while (Date.now() - startTime < MAX_WAIT_MS) {
+                try {
+                  await doCheck();
+                  core.info('✅ Check passed!');
+                  process.exit(0);
+                } catch (error) {
+                  lastError = error;
+                  const elapsed = Math.round((Date.now() - startTime) / 1000);
+                  core.info(`No review yet (${elapsed}s elapsed). Waiting...`);
+                  await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
                 }
-
-                if (!result.retry) {
-                  core.setFailed(result.error);
-                  return;
-                }
-
-                const elapsed = Math.round((Date.now() - startTime) / 1000);
-                core.info(`No review yet (${elapsed}s elapsed). Waiting...`);
-                await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
               }
 
-              core.setFailed('Timeout: No Copilot review found after 90 seconds. Please request a Copilot review.');
-              return;
-            }
-
-            // For other events: Immediate check (no retry)
-            const result = await checkForReview();
-            if (result.success) {
-              core.info(result.message);
+              core.setFailed(`Timeout after 90s: ${lastError.message}`);
             } else {
-              core.setFailed(result.error);
+              // For other events: immediate check
+              try {
+                await doCheck();
+              } catch (error) {
+                core.setFailed(error.message);
+              }
             }
-              return reviewTime >= lastPushTime;
-            });
-
-            if (reviewsAfterCommit.length === 0) {
-              core.setFailed(
-                `Last Copilot review was before the latest commit. ` +
-                `Last review: ${lastReviewTime.toISOString()}, ` +
-                `Last commit: ${lastPushTime.toISOString()}. ` +
-                `Please request a new Copilot review.`
-              );
-              return;
-            }
-
-            const latestReview = reviewsAfterCommit[reviewsAfterCommit.length - 1];
-            core.info(`✓ Found Copilot review after last commit at: ${latestReview.submitted_at}`);
