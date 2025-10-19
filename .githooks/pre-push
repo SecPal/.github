@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+set -euo pipefail
+
+SCRIPT="$(git rev-parse --show-toplevel)/scripts/preflight.sh"
+if [ -x "$SCRIPT" ]; then
+  "$SCRIPT"
+else
+  echo "Error: preflight.sh not found or not executable - push blocked." >&2
+  echo "Next steps:" >&2
+  echo "  - Ensure hooks are enabled: git config core.hooksPath .githooks" >&2
+  echo "  - Make the script executable: chmod +x scripts/preflight.sh" >&2
+  echo "  - In emergencies, you can bypass this hook: git push --no-verify" >&2
+  exit 1
+fi
