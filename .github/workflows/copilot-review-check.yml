@@ -104,25 +104,25 @@ jobs:
             if (isOpenedEvent) {
               core.info('PR opened - will wait up to 90 seconds for Copilot review...');
               const startTime = Date.now();
-              
+
               while (Date.now() - startTime < MAX_WAIT_TIME_MS) {
                 const result = await checkForReview();
-                
+
                 if (result.success) {
                   core.info(result.message);
                   return;
                 }
-                
+
                 if (!result.retry) {
                   core.setFailed(result.error);
                   return;
                 }
-                
+
                 const elapsed = Math.round((Date.now() - startTime) / 1000);
                 core.info(`No review yet (${elapsed}s elapsed). Waiting...`);
                 await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
               }
-              
+
               core.setFailed('Timeout: No Copilot review found after 90 seconds. Please request a Copilot review.');
               return;
             }
