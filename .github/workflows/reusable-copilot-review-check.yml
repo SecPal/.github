@@ -20,7 +20,9 @@ jobs:
             const pr = context.payload.pull_request;
             const prNumber = pr ? pr.number : context.issue.number;
 
-            // Get the latest commit
+            // Get all commits (GitHub API returns in chronological order, oldest first)
+            // We fetch up to 100 commits to find the latest one
+            // Note: For PRs with >100 commits, this may not capture the absolute latest
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -44,9 +46,9 @@ jobs:
               pull_number: prNumber
             });
 
-            // Find Copilot reviews
+            // Find Copilot reviews (check both login and bot type for robustness)
             const copilotReviews = reviews.filter(review =>
-              review.user.login === 'copilot-pull-request-reviewer'
+              review.user.type === 'Bot' && review.user.login === 'copilot-pull-request-reviewer'
             );
 
             if (copilotReviews.length === 0) {

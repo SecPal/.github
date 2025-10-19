@@ -25,7 +25,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: prNumber,
-                reviewers: ['copilot']
+                reviewers: ['copilot-pull-request-reviewer']
               });
               core.info('✓ Copilot review requested');
             } catch (error) {
