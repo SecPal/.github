@@ -23,8 +23,12 @@ if command -v npx >/dev/null 2>&1; then
   npx markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
 fi
 # Workflow linting (part of documented gates)
-if [ -d .github/workflows ] && command -v actionlint >/dev/null 2>&1; then
-  actionlint || FORMAT_EXIT=1
+if [ -d .github/workflows ]; then
+  if command -v actionlint >/dev/null 2>&1; then
+    actionlint || FORMAT_EXIT=1
+  else
+    echo "Warning: .github/workflows found but actionlint not installed - skipping workflow lint" >&2
+  fi
 fi
 if command -v reuse >/dev/null 2>&1; then
   reuse lint || FORMAT_EXIT=1
@@ -36,26 +40,30 @@ fi
 
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
-  composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
-  # Run Laravel Pint code style check if available (blocking: aligns with gates)
-  if [ -x ./vendor/bin/pint ]; then
-    ./vendor/bin/pint --test
-  fi
-  # Run PHPStan (use configured level from phpstan.neon if exists, else max)
-  if [ -x ./vendor/bin/phpstan ]; then
-    if [ -f phpstan.neon ] || [ -f phpstan.neon.dist ]; then
-      ./vendor/bin/phpstan analyse
-    else
-      ./vendor/bin/phpstan analyse --level=max
+  if ! command -v composer >/dev/null 2>&1; then
+    echo "Warning: composer.json found but composer not installed - skipping PHP checks" >&2
+  else
+    composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
+    # Run Laravel Pint code style check if available (blocking: aligns with gates)
+    if [ -x ./vendor/bin/pint ]; then
+      ./vendor/bin/pint --test
     fi
-  fi
-  # Run tests (Laravel Artisan → Pest → PHPUnit)
-  if [ -f artisan ]; then
-    php artisan test --parallel
-  elif [ -x ./vendor/bin/pest ]; then
-    ./vendor/bin/pest --parallel
-  elif [ -x ./vendor/bin/phpunit ]; then
-    ./vendor/bin/phpunit
+    # Run PHPStan (use configured level from phpstan.neon if exists, else max)
+    if [ -x ./vendor/bin/phpstan ]; then
+      if [ -f phpstan.neon ] || [ -f phpstan.neon.dist ]; then
+        ./vendor/bin/phpstan analyse
+      else
+        ./vendor/bin/phpstan analyse --level=max
+      fi
+    fi
+    # Run tests (Laravel Artisan → Pest → PHPUnit)
+    if [ -f artisan ]; then
+      php artisan test --parallel
+    elif [ -x ./vendor/bin/pest ]; then
+      ./vendor/bin/pest --parallel
+    elif [ -x ./vendor/bin/phpunit ]; then
+      ./vendor/bin/phpunit
+    fi
   fi
 fi
 
