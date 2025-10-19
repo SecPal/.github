@@ -5,17 +5,6 @@ name: Reusable - actionlint
 
 on:
   workflow_call:
-    inputs:
-      shellcheck-version:
-        description: "ShellCheck version to use"
-        required: false
-        type: string
-        default: "latest"
-      actionlint-version:
-        description: "actionlint version to use"
-        required: false
-        type: string
-        default: "latest"
 
 jobs:
   actionlint:

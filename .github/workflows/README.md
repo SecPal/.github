@@ -252,7 +252,4 @@ Lints GitHub Actions workflows with actionlint and shellcheck.
 jobs:
   actionlint:
     uses: SecPal/.github/.github/workflows/reusable-actionlint.yml@main
-    with:
-      actionlint-version: "latest" # optional
-      shellcheck-version: "latest" # optional
 ```
