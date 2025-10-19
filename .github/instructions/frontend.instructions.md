@@ -63,7 +63,8 @@ interface ButtonProps {
   variant?: "primary" | "secondary";
 }
 
-// API responses (from OpenAPI)
+// API responses (from OpenAPI-generated types)
+// Note: Assumes path alias '@' configured in tsconfig.json or vite.config.ts
 import type { User } from "@/types/api";
 
 // Hooks return type

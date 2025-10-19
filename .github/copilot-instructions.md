@@ -11,7 +11,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 > **Note:** This foundational document exceeds the typical 600-line PR limit (see "PR Size & Scope Discipline" section).
 > As comprehensive instructions that establish organization-wide standards, the larger size is justified for completeness and long-term reference value.
 
-This document provides context and guidance for GitHub Copilot (Chat, Agent, Code Reviews) to ensure efficient, high-quality development while avoiding endless iteration loops.## Repository Structure
+This document provides context and guidance for GitHub Copilot (Chat, Agent, Code Reviews) to ensure efficient, high-quality development while avoiding endless iteration loops.
+
+## Repository Structure
 
 SecPal is organized as **multiple repositories** under the `SecPal` organization:
 
