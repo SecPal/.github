@@ -21,10 +21,10 @@ FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
   npx markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
-  # Workflow linting (part of documented gates)
-  if [ -d .github/workflows ]; then
-    npx actionlint || FORMAT_EXIT=1
-  fi
+fi
+# Workflow linting (part of documented gates)
+if [ -d .github/workflows ] && command -v actionlint >/dev/null 2>&1; then
+  actionlint || FORMAT_EXIT=1
 fi
 if command -v reuse >/dev/null 2>&1; then
   reuse lint || FORMAT_EXIT=1
