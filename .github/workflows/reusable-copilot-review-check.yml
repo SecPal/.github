@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable - Copilot Review Check
+
+on:
+  workflow_call:
+
+jobs:
+  check-copilot-review:
+    name: Verify Copilot Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Check for Copilot review after last commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Constants
+            const COPILOT_REVIEWER_LOGIN_PREFIX = 'copilot-pull-request-reviewer';
+            const LARGE_PR_THRESHOLD = 500; // Conservative threshold for large PRs
+
+            const pr = context.payload.pull_request;
+            const prNumber = pr ? pr.number : context.issue.number;
+
+            // Get all commits using pagination (API returns in chronological order, oldest first)
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            if (commits.length === 0) {
+              core.setFailed('No commits found in PR');
+              return;
+            }
+
+            // Warn if PR is very large (might impact performance)
+            // Threshold set to 500 commits as a conservative value to balance between
+            // catching genuinely large PRs and avoiding false positives for active branches
+            if (commits.length >= LARGE_PR_THRESHOLD) {
+              core.warning(
+                `PR has ${commits.length} commits. Consider splitting large PRs for better review workflow.`
+              );
+            }
+
+            const lastCommit = commits[commits.length - 1];
+            const lastCommitTime = new Date(lastCommit.commit.committer.date);
+            core.info(`Last commit: ${lastCommit.sha.substring(0, 7)} at ${lastCommitTime.toISOString()}`);
+
+            // Get all reviews
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Find Copilot reviews (check both login and bot type for robustness)
+            const copilotReviews = reviews.filter(review =>
+              review.user.login.startsWith(COPILOT_REVIEWER_LOGIN_PREFIX) && review.user.type === 'Bot'
+            );
+
+            if (copilotReviews.length === 0) {
+              core.setFailed('❌ No Copilot review found. Please request a Copilot review.');
+              return;
+            }
+
+            core.info(`Found ${copilotReviews.length} Copilot review(s)`);
+
+            // Check if there's a Copilot review after the last commit
+            const reviewsAfterCommit = copilotReviews.filter(review => {
+              const reviewTime = new Date(review.submitted_at);
+              return reviewTime >= lastCommitTime;
+            });
+
+            if (reviewsAfterCommit.length === 0) {
+              const lastReview = copilotReviews[copilotReviews.length - 1];
+              const lastReviewTime = new Date(lastReview.submitted_at);
+              const timeDiff = Math.round((lastCommitTime - lastReviewTime) / 1000 / 60);
+
+              core.setFailed(
+                `❌ Last Copilot review is outdated.\n` +
+                `   Last review: ${lastReviewTime.toISOString()}\n` +
+                `   Last commit: ${lastCommitTime.toISOString()}\n` +
+                `   Time difference: ${timeDiff} minutes\n` +
+                `   Please request a new Copilot review after your latest changes.`
+              );
+              return;
+            }
+
+            const latestReview = reviewsAfterCommit[reviewsAfterCommit.length - 1];
+            const reviewTime = new Date(latestReview.submitted_at);
+            core.info(`✅ Copilot review is up-to-date (reviewed at ${reviewTime.toISOString()})`);
