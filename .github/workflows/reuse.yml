@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: REUSE Compliance
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  reuse:
+    name: Check REUSE Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v5
