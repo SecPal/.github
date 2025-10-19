@@ -10,7 +10,7 @@ on:
         description: "PHP version to use"
         required: false
         type: string
-        default: "8.3"
+        default: "8.4"
       phpstan-command:
         description: "Command to run PHPStan"
         required: false

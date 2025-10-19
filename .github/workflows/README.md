@@ -123,7 +123,7 @@ jobs:
   test:
     uses: SecPal/.github/.github/workflows/reusable-php-test.yml@main
     with:
-      php-version: "8.3" # optional, default: '8.3'
+      php-version: "8.4" # optional, default: '8.4'
       test-command: "./vendor/bin/pest" # optional
 ```
 
@@ -138,7 +138,7 @@ jobs:
   pint:
     uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@main
     with:
-      php-version: "8.3" # optional, default: '8.3'
+      php-version: "8.4" # optional, default: '8.4'
       pint-command: "./vendor/bin/pint --test" # optional
 ```
 
@@ -153,7 +153,7 @@ jobs:
   phpstan:
     uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@main
     with:
-      php-version: "8.3" # optional, default: '8.3'
+      php-version: "8.4" # optional, default: '8.4'
       phpstan-command: "./vendor/bin/phpstan analyse" # optional
 ```
 
