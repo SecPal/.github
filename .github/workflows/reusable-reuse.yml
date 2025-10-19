@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable - REUSE Compliance
+
+on:
+  workflow_call:
+    inputs:
+      reuse-version:
+        description: "Version of the REUSE action to use"
+        required: false
+        type: string
+        default: "v6"
+
+jobs:
+  reuse:
+    name: Check REUSE Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@${{ inputs.reuse-version }}

@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: 2025 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: License Compatibility
+name: Reusable - License Compatibility
 
 on:
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to use"
+        required: false
+        type: string
+        default: "3.x"
 
 jobs:
   license-check:
@@ -22,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          python-version: ${{ inputs.python-version }}
 
       - name: Install REUSE tool
         run: pip install reuse
