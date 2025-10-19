@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2025 SecPal Contributors
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ pnpm typecheck
 pnpm test
 
 # 3) OpenAPI (Spectral)
-npx spectral lint docs/openapi.yaml
+npx @stoplight/spectral-cli lint docs/openapi.yaml
 
 # 4) Semgrep (optional: falls installiert)
 if command -v semgrep >/dev/null 2>&1; then
