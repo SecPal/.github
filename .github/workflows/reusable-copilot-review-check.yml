@@ -20,13 +20,11 @@ jobs:
             const pr = context.payload.pull_request;
             const prNumber = pr ? pr.number : context.issue.number;
 
-            // Get all commits (GitHub API returns in chronological order, oldest first)
-            // Fetch up to 100 commits (should cover most PRs)
-            const { data: commits } = await github.rest.pulls.listCommits({
+            // Get all commits using pagination (API returns in chronological order, oldest first)
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: prNumber,
-              per_page: 100
+              pull_number: prNumber
             });
 
             if (commits.length === 0) {
@@ -34,11 +32,10 @@ jobs:
               return;
             }
 
-            // Warn if PR might have more commits (edge case for very large PRs)
-            if (commits.length === 100) {
+            // Warn if PR is very large (might impact performance)
+            if (commits.length >= 1000) {
               core.warning(
-                'PR has 100+ commits. Latest commit detection may be inaccurate. ' +
-                'Consider splitting large PRs for better review workflow.'
+                `PR has ${commits.length} commits. Consider splitting large PRs for better review workflow.`
               );
             }
 
