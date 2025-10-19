@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Copilot Review Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  check-copilot-review:
+    name: Verify Copilot Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Check for Copilot review after last push
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const prNumber = pr ? pr.number : context.issue.number;
+
+            // Get PR details
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Get the latest commit time
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 1,
+              page: 1
+            });
+
+            if (commits.length === 0) {
+              core.setFailed('No commits found in PR');
+              return;
+            }
+
+            const lastCommit = commits[commits.length - 1];
+            const lastPushTime = new Date(lastCommit.commit.committer.date);
+            core.info(`Last commit at: ${lastPushTime.toISOString()}`);
+            core.info(`Last commit SHA: ${lastCommit.sha}`);
+
+            // Get all reviews
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Find Copilot reviews
+            const copilotReviews = reviews.filter(review =>
+              review.user.login === 'copilot-pull-request-reviewer'
+            );
+
+            if (copilotReviews.length === 0) {
+              core.setFailed('No Copilot review found. Please request a Copilot review.');
+              return;
+            }
+
+            // Check if there's a Copilot review after the last commit
+            const reviewsAfterCommit = copilotReviews.filter(review => {
+              const reviewTime = new Date(review.submitted_at);
+              return reviewTime >= lastPushTime;
+            });
+
+            if (reviewsAfterCommit.length === 0) {
+              const lastReviewTime = new Date(copilotReviews[copilotReviews.length - 1].submitted_at);
+              core.setFailed(
+                `Last Copilot review was before the latest commit. ` +
+                `Last review: ${lastReviewTime.toISOString()}, ` +
+                `Last commit: ${lastPushTime.toISOString()}. ` +
+                `Please request a new Copilot review.`
+              );
+              return;
+            }
+
+            const latestReview = reviewsAfterCommit[reviewsAfterCommit.length - 1];
+            core.info(`✓ Found Copilot review after last commit at: ${latestReview.submitted_at}`);
