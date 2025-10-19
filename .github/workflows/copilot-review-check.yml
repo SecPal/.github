@@ -6,6 +6,8 @@ name: Copilot Review Check
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '.github/workflows/**'
   pull_request_review:
     types: [submitted]
 
@@ -83,7 +85,7 @@ jobs:
             if (isOpenedEvent) {
               core.info('PR opened - waiting up to 90s for Copilot review...');
               const startTime = Date.now();
-              
+
               while (Date.now() - startTime < MAX_WAIT_MS) {
                 try {
                   await checkReview();
