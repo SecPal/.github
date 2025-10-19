@@ -5,7 +5,7 @@ name: Copilot Review Check
 
 on:
   pull_request:
-    types: [synchronize, reopened]
+    types: [opened, synchronize, reopened]
   pull_request_review:
     types: [submitted]
 
@@ -25,66 +25,80 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Constants
             const COPILOT_REVIEWER_LOGIN_PREFIX = 'copilot-pull-request-reviewer';
+            const MAX_WAIT_MS = 90000;
+            const POLL_INTERVAL_MS = 5000;
 
             const pr = context.payload.pull_request;
             const prNumber = pr ? pr.number : context.issue.number;
+            const isOpenedEvent = context.payload.action === 'opened';
 
-            // Get all commits using pagination (API returns in chronological order, oldest first)
-            const commits = await github.paginate(github.rest.pulls.listCommits, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
+            async function checkReview() {
+              const commits = await github.paginate(github.rest.pulls.listCommits, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
 
-            if (commits.length === 0) {
-              core.setFailed('No commits found in PR');
-              return;
-            }
+              if (commits.length === 0) {
+                throw new Error('No commits found in PR');
+              }
 
-            const lastCommit = commits[commits.length - 1];
-            const lastPushTime = new Date(lastCommit.commit.committer.date);
-            core.info(`Last commit at: ${lastPushTime.toISOString()}`);
-            core.info(`Last commit SHA: ${lastCommit.sha}`);
+              const lastCommit = commits[commits.length - 1];
+              const lastPushTime = new Date(lastCommit.commit.committer.date);
+              core.info(`Last commit at: ${lastPushTime.toISOString()}`);
 
-            // Get all reviews
-            const { data: reviews } = await github.rest.pulls.listReviews({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
 
-            // Find Copilot reviews (must match both conditions to avoid false positives)
-            const copilotReviews = reviews.filter(review =>
-              review.user.login.startsWith(COPILOT_REVIEWER_LOGIN_PREFIX) &&
-              review.user.type === 'Bot'
-            );
-
-            if (copilotReviews.length === 0) {
-              core.setFailed('No Copilot review found. Please request a Copilot review.');
-              return;
-            }
-
-            // Get the most recent Copilot review
-            const lastReview = copilotReviews[copilotReviews.length - 1];
-            const lastReviewTime = new Date(lastReview.submitted_at);
-
-            // Check if there's a Copilot review after the last commit
-            const reviewsAfterCommit = copilotReviews.filter(review => {
-              const reviewTime = new Date(review.submitted_at);
-              return reviewTime >= lastPushTime;
-            });
-
-            if (reviewsAfterCommit.length === 0) {
-              core.setFailed(
-                `Last Copilot review was before the latest commit. ` +
-                `Last review: ${lastReviewTime.toISOString()}, ` +
-                `Last commit: ${lastPushTime.toISOString()}. ` +
-                `Please request a new Copilot review.`
+              const copilotReviews = reviews.filter(review =>
+                review.user.login.startsWith(COPILOT_REVIEWER_LOGIN_PREFIX) &&
+                review.user.type === 'Bot'
               );
-              return;
+
+              if (copilotReviews.length === 0) {
+                throw new Error('No Copilot review found');
+              }
+
+              const reviewsAfterCommit = copilotReviews.filter(review => {
+                const reviewTime = new Date(review.submitted_at);
+                return reviewTime >= lastPushTime;
+              });
+
+              if (reviewsAfterCommit.length === 0) {
+                const lastReview = copilotReviews[copilotReviews.length - 1];
+                throw new Error(
+                  `Last Copilot review was before the latest commit. ` +
+                  `Last review: ${new Date(lastReview.submitted_at).toISOString()}, ` +
+                  `Last commit: ${lastPushTime.toISOString()}.`
+                );
+              }
+
+              core.info(`✓ Found Copilot review after last commit`);
             }
 
-            const latestReview = reviewsAfterCommit[reviewsAfterCommit.length - 1];
-            core.info(`✓ Found Copilot review after last commit at: ${latestReview.submitted_at}`);
+            if (isOpenedEvent) {
+              core.info('PR opened - waiting up to 90s for Copilot review...');
+              const startTime = Date.now();
+              
+              while (Date.now() - startTime < MAX_WAIT_MS) {
+                try {
+                  await checkReview();
+                  process.exit(0);
+                } catch (error) {
+                  const elapsed = Math.round((Date.now() - startTime) / 1000);
+                  core.info(`${elapsed}s: ${error.message}`);
+                  await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+                }
+              }
+              core.setFailed('Timeout after 90s - no Copilot review found');
+            } else {
+              try {
+                await checkReview();
+              } catch (error) {
+                core.setFailed(error.message);
+              }
+            }
