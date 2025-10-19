@@ -64,7 +64,24 @@ interface ButtonProps {
 }
 
 // API responses (from OpenAPI-generated types)
-// Note: Assumes path alias '@' configured in tsconfig.json or vite.config.ts
+// Note: To use the '@' path alias in imports, configure your project as follows:
+// In tsconfig.json, add:
+//   "compilerOptions": {
+//     "baseUrl": ".",
+//     "paths": {
+//       "@/*": ["src/*"]
+//     }
+//   }
+// If using Vite, also add to vite.config.ts:
+//   import { defineConfig } from 'vite';
+//   import path from 'path';
+//   export default defineConfig({
+//     resolve: {
+//       alias: {
+//         '@': path.resolve(__dirname, 'src'),
+//       },
+//     },
+//   });
 import type { User } from "@/types/api";
 
 // Hooks return type
