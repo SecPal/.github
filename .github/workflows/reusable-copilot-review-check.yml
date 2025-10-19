@@ -55,7 +55,7 @@ jobs:
 
             // Find Copilot reviews (check both login and bot type for robustness)
             const copilotReviews = reviews.filter(review =>
-              review.user.type === 'Bot' && review.user.login === 'copilot-pull-request-reviewer'
+              review.user.login === 'copilot-pull-request-reviewer' && review.user.type === 'Bot'
             );
 
             if (copilotReviews.length === 0) {

@@ -70,6 +70,10 @@ jobs:
               return;
             }
 
+            // Get the most recent Copilot review
+            const lastReview = copilotReviews[copilotReviews.length - 1];
+            const lastReviewTime = new Date(lastReview.submitted_at);
+
             // Check if there's a Copilot review after the last commit
             const reviewsAfterCommit = copilotReviews.filter(review => {
               const reviewTime = new Date(review.submitted_at);
@@ -77,7 +81,6 @@ jobs:
             });
 
             if (reviewsAfterCommit.length === 0) {
-              const lastReviewTime = new Date(copilotReviews[copilotReviews.length - 1].submitted_at);
               core.setFailed(
                 `Last Copilot review was before the latest commit. ` +
                 `Last review: ${lastReviewTime.toISOString()}, ` +
