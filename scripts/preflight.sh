@@ -15,16 +15,21 @@ git fetch origin "$BASE" --depth=1 || true
 echo "Using base branch: $BASE"
 
 # 0) Formatting & Compliance
+FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
-  npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
-  npx markdownlint-cli2 '**/*.md'
+  npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
+  npx markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
   # Workflow linting (part of documented gates)
   if [ -d .github/workflows ]; then
-    npx actionlint
+    npx actionlint || FORMAT_EXIT=1
   fi
 fi
 if command -v reuse >/dev/null 2>&1; then
-  reuse lint
+  reuse lint || FORMAT_EXIT=1
+fi
+if [ "$FORMAT_EXIT" -ne 0 ]; then
+  echo "Formatting/compliance checks failed. Fix issues above." >&2
+  exit 1
 fi
 
 # 1) PHP / Laravel
@@ -35,7 +40,12 @@ if [ -f composer.json ]; then
     ./vendor/bin/pint --test
   fi
   ./vendor/bin/phpstan analyse --level=max
-  php artisan test --parallel
+  # Run tests (Laravel or PHPUnit)
+  if [ -f artisan ]; then
+    php artisan test --parallel
+  elif [ -x ./vendor/bin/phpunit ]; then
+    ./vendor/bin/phpunit
+  fi
 fi
 
 # 2) Node / React
