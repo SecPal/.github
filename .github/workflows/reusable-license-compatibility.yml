@@ -7,10 +7,10 @@ on:
   workflow_call:
     inputs:
       python-version:
-        description: 'Python version to use'
+        description: "Python version to use"
         required: false
         type: string
-        default: '3.x'
+        default: "3.x"
 
 jobs:
   license-check:
