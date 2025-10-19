@@ -40,9 +40,11 @@ if [ -f composer.json ]; then
     ./vendor/bin/pint --test
   fi
   ./vendor/bin/phpstan analyse --level=max
-  # Run tests (Laravel or PHPUnit)
+  # Run tests (Laravel Artisan → Pest → PHPUnit)
   if [ -f artisan ]; then
     php artisan test --parallel
+  elif [ -x ./vendor/bin/pest ]; then
+    ./vendor/bin/pest --parallel
   elif [ -x ./vendor/bin/phpunit ]; then
     ./vendor/bin/phpunit
   fi
@@ -73,7 +75,10 @@ fi
 
 # 4) Semgrep (optional: if installed)
 if command -v semgrep >/dev/null 2>&1; then
-  semgrep --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions --exclude node_modules --exclude vendor --exclude .git .
+  semgrep --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions \
+    --exclude node_modules --exclude vendor --exclude .git \
+    --exclude dist --exclude build --exclude coverage --exclude .next \
+    .
 else
   echo "Semgrep not found – skipping security scan (optional)."
 fi
