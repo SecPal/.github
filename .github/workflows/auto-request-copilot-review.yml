@@ -19,7 +19,7 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            
+
             // Copilot reviews cannot be requested programmatically via the GitHub API.
             // This workflow serves as a reminder in the Actions log.
             core.info('╔════════════════════════════════════════════════════════╗');
