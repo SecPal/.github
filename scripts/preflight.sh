@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
-# Default-Branch automatisch ermitteln (fällt zurück auf main)
+# Auto-detect default branch (fallback to main)
 BASE="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
 [ -z "${BASE:-}" ] && BASE="main"
 git fetch origin "$BASE" --depth=1 || true
@@ -15,12 +15,12 @@ git fetch origin "$BASE" --depth=1 || true
 echo "Using base branch: $BASE"
 
 # 1) PHP / Laravel
-composer install --no-interaction --no-progress
-vendor/bin/phpstan analyse --level=max
+composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
+./vendor/bin/phpstan analyse --level=max
 php artisan test --parallel
 
 # 2) Node / React
-pnpm i --frozen-lockfile
+pnpm install --frozen-lockfile
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -28,11 +28,11 @@ pnpm test
 # 3) OpenAPI (Spectral)
 npx @stoplight/spectral-cli lint docs/openapi.yaml
 
-# 4) Semgrep (optional: falls installiert)
+# 4) Semgrep (optional: if installed)
 if command -v semgrep >/dev/null 2>&1; then
   semgrep ci --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions
 else
-  echo "Semgrep nicht gefunden – überspringe Security-Scan (optional)."
+  echo "Semgrep not found – skipping security scan (optional)."
 fi
 
 # 5) PR-Size lokal prüfen (gegen BASE)

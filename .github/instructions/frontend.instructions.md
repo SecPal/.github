@@ -21,8 +21,8 @@ applyTo:
   - "packages/ui/**"
 
 rules:
-  - "React + TS; A11y prüfen; Storybook-Stories für neue Komponenten."
-  - "API-Zugriff: RTK/TanStack Query; Types aus OpenAPI-Generator."
+  - "React + TS; check accessibility (a11y); provide Storybook stories for new components."
+  - "API access: RTK/TanStack Query; types from the OpenAPI generator."
 -->
 
 ## Architecture

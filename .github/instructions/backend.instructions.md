@@ -20,9 +20,9 @@ applyTo:
   - "docs/openapi.yaml"
 
 rules:
-  - "Eloquent: eager loading verpflichtend; keine N+1."
-  - "Validierung via FormRequests; API-Output via Resources/DTO."
-  - "Migrations mit Rollback-Plan dokumentieren."
+  - "Eloquent: eager loading required; avoid N+1."
+  - "Validation via FormRequests; API output via Resources/DTO."
+  - "Document migrations with a rollback plan."
 -->
 
 ## Architecture
