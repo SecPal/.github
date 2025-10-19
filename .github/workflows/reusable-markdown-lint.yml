@@ -24,3 +24,4 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@v18
         with:
           globs: "**/*.md"
+          config: ${{ inputs.config-file }}

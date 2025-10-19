@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: 2025 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+# Note: This workflow uses inline jobs instead of calling reusable workflows
+# to avoid a chicken-and-egg problem: the reusable workflows are not yet
+# available on the main branch until this PR is merged.
+# Other repositories should use the reusable workflows via:
+#   uses: SecPal/.github/.github/workflows/reusable-prettier.yml@main
+#   uses: SecPal/.github/.github/workflows/reusable-markdown-lint.yml@main
+
 name: Code Quality
 
 on:
