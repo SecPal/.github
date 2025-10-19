@@ -239,3 +239,17 @@ jobs:
   test:
     uses: SecPal/.github/.github/workflows/reusable-php-test.yml@main
 ```
+
+### Workflow Linting
+
+### `reusable-actionlint.yml`
+
+Lints GitHub Actions workflows with actionlint and shellcheck.
+
+**Usage:**
+
+```yaml
+jobs:
+  actionlint:
+    uses: SecPal/.github/.github/workflows/reusable-actionlint.yml@main
+```
