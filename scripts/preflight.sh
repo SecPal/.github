@@ -28,6 +28,10 @@ fi
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
+  # Run Laravel Pint code style check if available
+  if [ -x ./vendor/bin/pint ]; then
+    ./vendor/bin/pint --test || true  # Don't fail on format, just warn
+  fi
   ./vendor/bin/phpstan analyse --level=max
   php artisan test --parallel
 fi
@@ -53,7 +57,18 @@ else
 fi
 
 # 5) Check PR size locally (against BASE)
-CHANGED=$(git diff --shortstat "origin/$BASE"...HEAD 2>/dev/null | awk '{print $4+$6}')
+if ! git rev-parse -q --verify "origin/$BASE" >/dev/null 2>&1; then
+  echo "Error: Cannot verify base branch origin/$BASE. Run 'git fetch origin $BASE' first." >&2
+  exit 1
+fi
+
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null)
+if [ -z "$MERGE_BASE" ]; then
+  echo "Error: Cannot determine merge base with origin/$BASE." >&2
+  exit 1
+fi
+
+CHANGED=$(git diff --shortstat "$MERGE_BASE"...HEAD 2>/dev/null | awk '{print $4+$6}')
 [ -z "$CHANGED" ] && CHANGED=0
 if [ "$CHANGED" -gt 600 ]; then
   echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
