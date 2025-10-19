@@ -10,7 +10,9 @@ cd "$ROOT_DIR"
 # Auto-detect default branch (fallback to main)
 BASE="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
 [ -z "${BASE:-}" ] && BASE="main"
-git fetch origin "$BASE" --depth=1 || true
+if ! git fetch origin "$BASE" --depth=1 2>/dev/null; then
+  echo "Warning: Failed to fetch origin/$BASE - PR size check may use stale data" >&2
+fi
 
 echo "Using base branch: $BASE"
 
@@ -39,7 +41,12 @@ if [ -f composer.json ]; then
   if [ -x ./vendor/bin/pint ]; then
     ./vendor/bin/pint --test
   fi
-  ./vendor/bin/phpstan analyse --level=max
+  # Run PHPStan (use configured level from phpstan.neon if exists, else max)
+  if [ -f phpstan.neon ] || [ -f phpstan.neon.dist ]; then
+    ./vendor/bin/phpstan analyse
+  else
+    ./vendor/bin/phpstan analyse --level=max
+  fi
   # Run tests (Laravel Artisan → Pest → PHPUnit)
   if [ -f artisan ]; then
     php artisan test --parallel
