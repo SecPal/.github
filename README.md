@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2025 SecPal
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # SecPal Organization
 
 This repository contains general project documentation, settings, and community health files for the [SecPal organization](https://github.com/SecPal).

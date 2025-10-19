@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2025 SecPal
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # Hi there 👋
 
 SecPal is a digital guard book and much more. It's the "guard's friend" in every respect. The target group is private, German security services.
