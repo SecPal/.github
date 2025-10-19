@@ -11,10 +11,6 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
-    reviewers:
-      - "SecPal/maintainers" # This will need to be created
-    assignees:
-      - "SecPal/maintainers"
     labels:
       - "dependencies"
       - "dependabot"
@@ -23,6 +19,6 @@ updates:
     target-branch: "main"
     allow:
       - dependency-type: "all"
-    insecure-external-code-execution: "log"
+    insecure-external-code-execution: "deny"
     pull-request-branch-name:
       separator: "-"
