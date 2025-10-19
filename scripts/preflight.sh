@@ -42,10 +42,12 @@ if [ -f composer.json ]; then
     ./vendor/bin/pint --test
   fi
   # Run PHPStan (use configured level from phpstan.neon if exists, else max)
-  if [ -f phpstan.neon ] || [ -f phpstan.neon.dist ]; then
-    ./vendor/bin/phpstan analyse
-  else
-    ./vendor/bin/phpstan analyse --level=max
+  if [ -x ./vendor/bin/phpstan ]; then
+    if [ -f phpstan.neon ] || [ -f phpstan.neon.dist ]; then
+      ./vendor/bin/phpstan analyse
+    else
+      ./vendor/bin/phpstan analyse --level=max
+    fi
   fi
   # Run tests (Laravel Artisan → Pest → PHPUnit)
   if [ -f artisan ]; then
@@ -60,19 +62,21 @@ fi
 # 2) Node / React
 if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
-  pnpm lint
-  pnpm typecheck
-  pnpm test
+  # Check if scripts exist before running (pnpm run <script> exits 0 with --if-present)
+  pnpm --if-present lint
+  pnpm --if-present typecheck
+  pnpm --if-present test
 elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then
   npm ci
-  npm run lint
-  npm run typecheck
-  npm run test
+  npm run --if-present lint
+  npm run --if-present typecheck
+  npm run --if-present test
 elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
   yarn install --frozen-lockfile
-  yarn lint
-  yarn typecheck
-  yarn test
+  # Yarn doesn't have --if-present, check package.json
+  if grep -q '"lint"' package.json; then yarn lint; fi
+  if grep -q '"typecheck"' package.json; then yarn typecheck; fi
+  if grep -q '"test"' package.json; then yarn test; fi
 fi
 
 # 3) OpenAPI (Spectral)
