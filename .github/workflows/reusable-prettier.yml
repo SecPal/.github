@@ -34,4 +34,4 @@ jobs:
         run: npm install -g prettier
 
       - name: Run Prettier Check
-        run: prettier --check "${{ inputs.files }}"
+        run: prettier --check ${{ inputs.files }}
