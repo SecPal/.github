@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable - Prettier
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "22.x"
+      files:
+        description: "File patterns to check (space-separated)"
+        required: false
+        type: string
+        default: "**/*.{md,yml,yaml,json}"
+
+jobs:
+  prettier:
+    name: Check Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install Prettier
+        run: npm install -g prettier
+
+      - name: Run Prettier Check
+        run: prettier --check "${{ inputs.files }}"

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Ignore files that should not be formatted
+.github/workflows/
+node_modules/
+vendor/
+dist/
+build/
+*.min.js
+*.min.css
+package-lock.json
+composer.lock

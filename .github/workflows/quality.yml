@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Code Quality
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  prettier:
+    uses: SecPal/.github/.github/workflows/reusable-prettier.yml@main
+
+  markdown-lint:
+    uses: SecPal/.github/.github/workflows/reusable-markdown-lint.yml@main

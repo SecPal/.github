@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable - OpenAPI Lint
+
+on:
+  workflow_call:
+    inputs:
+      openapi-file:
+        description: 'Path to OpenAPI specification file'
+        required: false
+        type: string
+        default: 'openapi.yaml'
+      node-version:
+        description: 'Node.js version to use'
+        required: false
+        type: string
+        default: '22.x'
+
+jobs:
+  openapi-lint:
+    name: Validate OpenAPI Specification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install OpenAPI linter
+        run: npm install -g @redocly/cli
+
+      - name: Validate OpenAPI specification
+        run: redocly lint ${{ inputs.openapi-file }}
