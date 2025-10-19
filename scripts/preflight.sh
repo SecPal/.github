@@ -16,7 +16,7 @@ echo "Using base branch: $BASE"
 
 # 0) Formatting & Compliance
 if command -v npx >/dev/null 2>&1; then
-  npx prettier --check . || true  # Don't fail on format
+  npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || true  # Don't fail on format
 fi
 if command -v reuse >/dev/null 2>&1; then
   reuse lint
@@ -47,7 +47,7 @@ fi
 
 # 4) Semgrep (optional: if installed)
 if command -v semgrep >/dev/null 2>&1; then
-  semgrep ci --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions
+  semgrep --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions .
 else
   echo "Semgrep not found – skipping security scan (optional)."
 fi
