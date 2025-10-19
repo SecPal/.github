@@ -214,6 +214,8 @@ If review is stale:
 - **PR #8** (actionlint + pre-commit): 237 lines - optimal size, quick review cycle
 - **PR #9** (Copilot review enforcement): 240 lines - optimal size, 9 iterations but manageable due to focused scope
 
+> **Note:** Although PR #9 exceeded the target of ≤3 review iterations per PR (see line 432), the higher count was acceptable because each iteration addressed narrowly scoped feedback, enabling rapid convergence. Exceptions may be warranted for foundational or process-changing PRs.
+
 **Exception:** Documentation and configuration files (like this instructions file) may exceed the limit when establishing foundational standards.
 
 **Target:** Keep PRs ≤ 600 changed lines for maintainability.
@@ -425,11 +427,13 @@ Add as required before merge:
 
 **Target:** ≤ 3 review iterations per PR
 
+> **Note:** While the target is 3 iterations, exceptions may occur for complex or high-impact changes. For example, [PR #9](https://github.com/SecPal/.github/pull/9) required 9 iterations due to extensive review and scope adjustments. In such cases, document the reasons for exceeding the target and follow the escalation steps below.
+
 **After 3 iterations:**
 
 1. Pause and reassess scope
 2. Consider splitting PR
-3. Document blockers in PR comment
+3. Document blockers and reasons for extra iterations in PR comment (reference relevant PRs if helpful)
 4. Request human review if agent stuck
 
 ### Quality vs Speed

@@ -64,8 +64,8 @@ interface ButtonProps {
 }
 
 // API responses (from OpenAPI-generated types)
-// Note: To use the '@' path alias in imports, configure your project as follows:
-// In tsconfig.json, add:
+// Note: To use the '@' path alias prefix (as in import statements like `import x from '@/...'`), configure your project as follows:
+// In tsconfig.json, add the following to map '@/*' to 'src/*':
 //   "compilerOptions": {
 //     "baseUrl": ".",
 //     "paths": {
