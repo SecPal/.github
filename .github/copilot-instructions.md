@@ -7,10 +7,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 > **Scope:** This file applies to **all SecPal repositories** as organization-level default.
 > Individual repositories can override by creating their own `.github/copilot-instructions.md`.
+>
+> **Note:** This foundational document exceeds the typical 600-line PR limit (see "PR Size & Scope Discipline" section).
+> As comprehensive instructions that establish organization-wide standards, the larger size is justified for completeness and long-term reference value.
 
-This document provides context and guidance for GitHub Copilot (Chat, Agent, Code Reviews) to ensure efficient, high-quality development while avoiding endless iteration loops.
-
-## Repository Structure
+This document provides context and guidance for GitHub Copilot (Chat, Agent, Code Reviews) to ensure efficient, high-quality development while avoiding endless iteration loops.## Repository Structure
 
 SecPal is organized as **multiple repositories** under the `SecPal` organization:
 
@@ -207,9 +208,11 @@ If review is stale:
 
 **Rationale:** Based on PR history analysis:
 
-- PR #7: 840 lines (too large, hard to review)
-- PR #8: 237 lines (good size)
-- PR #9: 240 lines (good size, 9 iterations but manageable)
+- **PR #7** (reusable workflows): 840 lines - too large, hard to review comprehensively
+- **PR #8** (actionlint + pre-commit): 237 lines - optimal size, quick review cycle
+- **PR #9** (Copilot review enforcement): 240 lines - optimal size, 9 iterations but manageable due to focused scope
+
+**Exception:** Documentation and configuration files (like this instructions file) may exceed the limit when establishing foundational standards.
 
 **Target:** Keep PRs ≤ 600 changed lines for maintainability.
 
@@ -504,4 +507,6 @@ For questions or issues with these guidelines:
 
 ---
 
-**Last Updated:** 2025-10-19 (based on PRs #7-9 learnings)
+**Last Updated:** October 19, 2025 (based on PRs #7-9 learnings)
+
+**Document Version:** 1.0.0 - Initial organization-wide instructions
