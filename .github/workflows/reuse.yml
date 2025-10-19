@@ -13,4 +13,11 @@ on:
 
 jobs:
   reuse:
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main
+    name: Check REUSE Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v6

@@ -13,4 +13,62 @@ on:
 
 jobs:
   license-check:
-    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@main
+    name: Check License Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install REUSE tool
+        run: pip install reuse
+
+      - name: Extract licenses
+        run: |
+          echo "Checking for AGPL-3.0-or-later compatibility..."
+          reuse spdx -o reuse.spdx
+
+      - name: Check AGPL compatibility
+        run: |
+          # Extract all licenses from the SPDX file
+          licenses=$(grep "LicenseInfoInFile" reuse.spdx | cut -d':' -f2 | sort -u | tr -d ' ')
+
+          echo "Found licenses: $licenses"
+
+          # AGPL-3.0-or-later is compatible with:
+          # - AGPL-3.0-or-later itself
+          # - GPL-3.0-or-later (can be upgraded to AGPL)
+          # - LGPL-3.0-or-later (can be upgraded to AGPL)
+          # - MIT, BSD, Apache-2.0 (permissive licenses)
+          # - CC0-1.0 (public domain)
+
+          compatible_licenses=(
+            "AGPL-3.0-or-later"
+            "GPL-3.0-or-later"
+            "LGPL-3.0-or-later"
+            "MIT"
+            "BSD-2-Clause"
+            "BSD-3-Clause"
+            "Apache-2.0"
+            "CC0-1.0"
+            "ISC"
+          )
+
+          incompatible_found=0
+          for license in $licenses; do
+            if [[ ! " ${compatible_licenses[@]} " =~ " ${license} " ]]; then
+              echo "ERROR: Incompatible license found: $license"
+              incompatible_found=1
+            fi
+          done
+
+          if [ $incompatible_found -eq 1 ]; then
+            echo "ERROR: Found licenses incompatible with AGPL-3.0-or-later"
+            exit 1
+          fi
+
+          echo "All licenses are compatible with AGPL-3.0-or-later ✓"
