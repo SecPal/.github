@@ -21,8 +21,7 @@ jobs:
             const prNumber = pr ? pr.number : context.issue.number;
 
             // Get all commits (GitHub API returns in chronological order, oldest first)
-            // We fetch up to 100 commits to find the latest one
-            // Note: For PRs with >100 commits, this may not capture the absolute latest
+            // Fetch up to 100 commits (should cover most PRs)
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -33,6 +32,14 @@ jobs:
             if (commits.length === 0) {
               core.setFailed('No commits found in PR');
               return;
+            }
+
+            // Warn if PR might have more commits (edge case for very large PRs)
+            if (commits.length === 100) {
+              core.warning(
+                'PR has 100+ commits. Latest commit detection may be inaccurate. ' +
+                'Consider splitting large PRs for better review workflow.'
+              );
             }
 
             const lastCommit = commits[commits.length - 1];

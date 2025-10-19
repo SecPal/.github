@@ -35,12 +35,11 @@ jobs:
               pull_number: prNumber
             });
 
-            // Get all commits (API returns in chronological order, oldest first)
-            const { data: commits } = await github.rest.pulls.listCommits({
+            // Get all commits using pagination (API returns in chronological order, oldest first)
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: prNumber,
-              per_page: 100
+              pull_number: prNumber
             });
 
             if (commits.length === 0) {
@@ -60,9 +59,9 @@ jobs:
               pull_number: prNumber
             });
 
-            // Find Copilot reviews (check both login and bot type for robustness)
+            // Find Copilot reviews (must match both conditions to avoid false positives)
             const copilotReviews = reviews.filter(review =>
-              review.user.login === 'copilot-pull-request-reviewer' ||
+              review.user.login === 'copilot-pull-request-reviewer' &&
               review.user.type === 'Bot'
             );
 
