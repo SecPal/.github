@@ -100,7 +100,7 @@ fi
 
 # 4) Semgrep (optional: if installed, findings don't block)
 if command -v semgrep >/dev/null 2>&1; then
-  semgrep --config p/owasp-top-ten --config p/r2c-ci --error --skip-unknown-extensions \
+  semgrep --config p/owasp-top-ten --config p/r2c-ci --skip-unknown-extensions \
     --exclude node_modules --exclude vendor --exclude .git \
     --exclude dist --exclude build --exclude coverage --exclude .next \
     . || echo "Semgrep found issues (non-blocking scan)." >&2
@@ -117,7 +117,7 @@ else
     echo "Warning: Cannot determine merge base with origin/$BASE. Skipping PR size check." >&2
   else
     # Use --numstat for locale-independent parsing (sum insertions + deletions)
-    CHANGED=$(git diff --numstat "$MERGE_BASE"...HEAD 2>/dev/null | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
+    CHANGED=$(git diff --numstat "$MERGE_BASE"..HEAD 2>/dev/null | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
     [ -z "$CHANGED" ] && CHANGED=0
     if [ "$CHANGED" -gt 600 ]; then
       echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
