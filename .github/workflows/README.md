@@ -256,4 +256,3 @@ jobs:
       actionlint-version: "latest" # optional
       shellcheck-version: "latest" # optional
 ```
-
