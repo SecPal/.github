@@ -60,4 +60,3 @@ pre-commit autoupdate
 ## License
 
 All projects within the SecPal organization are licensed under the [AGPL-3.0-or-later](https://spdx.org/licenses/AGPL-3.0-or-later.html).
-
