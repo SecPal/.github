@@ -7,15 +7,15 @@ on:
   workflow_call:
     inputs:
       php-version:
-        description: 'PHP version to use'
+        description: "PHP version to use"
         required: false
         type: string
-        default: '8.3'
+        default: "8.3"
       pint-command:
-        description: 'Command to run Laravel Pint'
+        description: "Command to run Laravel Pint"
         required: false
         type: string
-        default: './vendor/bin/pint --test'
+        default: "./vendor/bin/pint --test"
 
 jobs:
   pint:

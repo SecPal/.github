@@ -46,8 +46,8 @@ jobs:
   prettier:
     uses: SecPal/.github/.github/workflows/reusable-prettier.yml@main
     with:
-      node-version: '22.x' # optional, default: '22.x'
-      files: '**/*.{md,yml,yaml,json}' # optional
+      node-version: "22.x" # optional, default: '22.x'
+      files: "**/*.{md,yml,yaml,json}" # optional
 ```
 
 #### `reusable-markdown-lint.yml`
@@ -75,9 +75,9 @@ jobs:
   test:
     uses: SecPal/.github/.github/workflows/reusable-node-test.yml@main
     with:
-      node-version: '22.x' # optional, default: '22.x'
-      install-command: 'npm ci' # optional
-      test-command: 'npm test' # optional
+      node-version: "22.x" # optional, default: '22.x'
+      install-command: "npm ci" # optional
+      test-command: "npm test" # optional
 ```
 
 #### `reusable-node-lint.yml`
@@ -91,8 +91,8 @@ jobs:
   lint:
     uses: SecPal/.github/.github/workflows/reusable-node-lint.yml@main
     with:
-      node-version: '22.x' # optional, default: '22.x'
-      lint-command: 'npm run lint' # optional
+      node-version: "22.x" # optional, default: '22.x'
+      lint-command: "npm run lint" # optional
 ```
 
 #### `reusable-node-build.yml`
@@ -106,8 +106,8 @@ jobs:
   build:
     uses: SecPal/.github/.github/workflows/reusable-node-build.yml@main
     with:
-      node-version: '22.x' # optional, default: '22.x'
-      build-command: 'npm run build' # optional
+      node-version: "22.x" # optional, default: '22.x'
+      build-command: "npm run build" # optional
 ```
 
 ### Backend Workflows (PHP/Laravel)
@@ -123,8 +123,8 @@ jobs:
   test:
     uses: SecPal/.github/.github/workflows/reusable-php-test.yml@main
     with:
-      php-version: '8.3' # optional, default: '8.3'
-      test-command: './vendor/bin/pest' # optional
+      php-version: "8.3" # optional, default: '8.3'
+      test-command: "./vendor/bin/pest" # optional
 ```
 
 #### `reusable-php-lint.yml`
@@ -138,8 +138,8 @@ jobs:
   pint:
     uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@main
     with:
-      php-version: '8.3' # optional, default: '8.3'
-      pint-command: './vendor/bin/pint --test' # optional
+      php-version: "8.3" # optional, default: '8.3'
+      pint-command: "./vendor/bin/pint --test" # optional
 ```
 
 #### `reusable-php-stan.yml`
@@ -153,8 +153,8 @@ jobs:
   phpstan:
     uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@main
     with:
-      php-version: '8.3' # optional, default: '8.3'
-      phpstan-command: './vendor/bin/phpstan analyse' # optional
+      php-version: "8.3" # optional, default: '8.3'
+      phpstan-command: "./vendor/bin/phpstan analyse" # optional
 ```
 
 ### Contracts Workflows (OpenAPI)
@@ -170,8 +170,8 @@ jobs:
   openapi-lint:
     uses: SecPal/.github/.github/workflows/reusable-openapi-lint.yml@main
     with:
-      openapi-file: 'openapi.yaml' # optional, default: 'openapi.yaml'
-      node-version: '22.x' # optional, default: '22.x'
+      openapi-file: "openapi.yaml" # optional, default: 'openapi.yaml'
+      node-version: "22.x" # optional, default: '22.x'
 ```
 
 ## Example: Complete CI Workflow for Frontend

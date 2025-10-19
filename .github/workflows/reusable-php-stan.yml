@@ -7,15 +7,15 @@ on:
   workflow_call:
     inputs:
       php-version:
-        description: 'PHP version to use'
+        description: "PHP version to use"
         required: false
         type: string
-        default: '8.3'
+        default: "8.3"
       phpstan-command:
-        description: 'Command to run PHPStan'
+        description: "Command to run PHPStan"
         required: false
         type: string
-        default: './vendor/bin/phpstan analyse'
+        default: "./vendor/bin/phpstan analyse"
 
 jobs:
   phpstan:

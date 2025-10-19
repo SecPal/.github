@@ -7,10 +7,10 @@ on:
   workflow_call:
     inputs:
       reuse-version:
-        description: 'Version of the REUSE action to use'
+        description: "Version of the REUSE action to use"
         required: false
         type: string
-        default: 'v6'
+        default: "v6"
 
 jobs:
   reuse:

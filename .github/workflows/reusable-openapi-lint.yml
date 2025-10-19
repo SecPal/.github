@@ -7,15 +7,15 @@ on:
   workflow_call:
     inputs:
       openapi-file:
-        description: 'Path to OpenAPI specification file'
+        description: "Path to OpenAPI specification file"
         required: false
         type: string
-        default: 'openapi.yaml'
+        default: "openapi.yaml"
       node-version:
-        description: 'Node.js version to use'
+        description: "Node.js version to use"
         required: false
         type: string
-        default: '22.x'
+        default: "22.x"
 
 jobs:
   openapi-lint:
