@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Pre-commit hooks for quality checks
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
+
+repos:
+  # REUSE compliance
+  - repo: https://github.com/fsfe/reuse-tool
+    rev: v5.0.2
+    hooks:
+      - id: reuse
+
+  # Code formatting
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        types_or: [markdown, yaml, json]
+
+  # Markdown linting
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.16.0
+    hooks:
+      - id: markdownlint-cli2
+        args: ["--config", ".markdownlint.json"]
+
+  # YAML linting
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: ["-c", ".yamllint.yml"]
+
+  # GitHub Actions workflow linting
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.4
+    hooks:
+      - id: actionlint
+
+  # Shell script linting
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  # Git hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: ["--fix=lf"]

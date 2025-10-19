@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+extends: default
+
+rules:
+  # Allow longer lines (default is 80)
+  line-length:
+    max: 120
+    level: warning
+
+  # GitHub Actions workflows often have long keys
+  key-ordering: disable
+
+  # Allow multiple spaces for alignment
+  colons:
+    max-spaces-after: -1
+
+  # Allow comments to be indented differently
+  comments-indentation: disable
+
+  # Allow empty values in workflows
+  empty-values:
+    forbid-in-block-mappings: false
+    forbid-in-flow-mappings: false
+
+  # Truthy values are common in GitHub Actions
+  truthy:
+    allowed-values: ["true", "false", "on", "off"]
+    check-keys: false
