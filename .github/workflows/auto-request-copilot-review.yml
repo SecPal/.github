@@ -72,12 +72,16 @@ jobs:
                 per_page: 50
               });
 
-              // Find the latest failed Copilot Review Check run for this PR
-              const failedRun = workflowRuns.workflow_runs.find(run =>
-                run.name === 'Copilot Review Check' &&
-                run.head_sha === context.payload.pull_request.head.sha &&
-                run.conclusion === 'failure'
-              );
+              // Find the latest failed Copilot Review Check run for this PR (any commit)
+              const failedRuns = workflowRuns.workflow_runs
+                .filter(run =>
+                  run.name === 'Copilot Review Check' &&
+                  run.conclusion === 'failure' &&
+                  run.head_branch === context.payload.pull_request.head.ref
+                )
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+              const failedRun = failedRuns[0];
 
               if (failedRun) {
                 core.info(`Re-running workflow run ${failedRun.id}...`);
