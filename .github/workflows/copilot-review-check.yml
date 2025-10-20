@@ -11,7 +11,7 @@ on:
 
 # Prevent duplicate runs
 concurrency:
-  group: copilot-review-check-${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
+  group: copilot-review-check-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
