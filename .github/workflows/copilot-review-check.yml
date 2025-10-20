@@ -6,10 +6,8 @@ name: Copilot Review Check
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  pull_request_review:
-    types: [submitted]
-  repository_dispatch:
-    types: [copilot-review-ready]
+  # Note: pull_request_review does not trigger for bot reviews (Copilot)
+  # The auto-request-copilot-review workflow handles re-triggering instead
 
 # Prevent duplicate runs
 concurrency:
