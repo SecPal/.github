@@ -16,28 +16,20 @@ jobs:
       actions: write
       checks: read
     steps:
-      - name: Try to request Copilot review via CLI
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Attempting to request Copilot review..."
-          gh pr review ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --copilot 2>&1 || echo "Note: Auto-request may not be supported, Copilot might review automatically"
-
       - name: Request Copilot review (reminder)
         uses: actions/github-script@v7
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
 
-            // Note: The CLI command above attempts auto-request
-            // If that doesn't work, manual request is still needed
+            // Note: Copilot reviews cannot be requested programmatically yet
+            // GitHub CLI --copilot flag doesn't exist in current version
             core.info('╔════════════════════════════════════════════════════════╗');
-            core.info('║  📝 Copilot Review Request Status                     ║');
+            core.info('║  📝 REMINDER: Request a Copilot Review                 ║');
             core.info('║                                                        ║');
-            core.info('║  Attempted automatic request via GitHub CLI           ║');
-            core.info('║  If not successful, request manually via:             ║');
+            core.info('║  Copilot reviews must be requested manually via:      ║');
             core.info('║  1. GitHub UI (PR page)                                ║');
-            core.info('║  2. GitHub CLI: gh pr review --copilot                 ║');
+            core.info('║  2. GitHub CLI: gh pr review <pr> (no --copilot yet)  ║');
             core.info('║                                                        ║');
             core.info('║  Workflow will wait up to 5 minutes for review ⏱️      ║');
             core.info('╚════════════════════════════════════════════════════════╝');
