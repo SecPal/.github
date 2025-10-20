@@ -6,8 +6,6 @@ name: Copilot Review Check
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore:
-      - '.github/workflows/**'
   pull_request_review:
     types: [submitted]
 
