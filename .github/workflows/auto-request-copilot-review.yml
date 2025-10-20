@@ -43,11 +43,11 @@ jobs:
             const COPILOT_REVIEWER_PREFIX = 'copilot-pull-request-reviewer';
             const MAX_WAIT_MS = 120000; // 2 minutes
             const POLL_INTERVAL_MS = 10000; // 10 seconds
-            
+
             core.info('Waiting for Copilot review to appear...');
             const startTime = Date.now();
             let reviewFound = false;
-            
+
             while (Date.now() - startTime < MAX_WAIT_MS && !reviewFound) {
               const { data: reviews } = await github.rest.pulls.listReviews({
                 owner: context.repo.owner,
@@ -92,7 +92,7 @@ jobs:
               core.info(`${elapsed}s: No review yet, waiting...`);
               await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
             }
-            
+
             if (!reviewFound) {
               core.warning('Timeout waiting for Copilot review');
             }
