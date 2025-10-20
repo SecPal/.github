@@ -54,41 +54,48 @@ jobs:
                 repo: context.repo.repo,
                 pull_number: prNumber
               });
-              
-              const copilotReviews = reviews.filter(r => 
+
+              const copilotReviews = reviews.filter(r =>
                 r.user.login.startsWith(COPILOT_REVIEWER_PREFIX) && r.user.type === 'Bot'
               );
-              
-              if (copilotReviews.length > 0) {
-                reviewFound = true;
-                core.info('✓ Copilot review detected! Triggering check re-run...');
-                
-                // Get the failed Copilot Review Check run
-                const { data: checkRuns } = await github.rest.checks.listForRef({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ref: context.payload.pull_request.head.sha,
-                  check_name: 'Verify Copilot Review'
-                });
-                
-                if (checkRuns.check_runs.length > 0) {
-                  const latestRun = checkRuns.check_runs[0];
-                  if (latestRun.conclusion === 'failure') {
-                    core.info(`Re-running check ${latestRun.id}...`);
-                    await github.rest.actions.reRunWorkflowFailedJobs({
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      run_id: latestRun.id
-                    });
-                    core.info('✓ Check re-run triggered!');
-                  } else {
-                    core.info(`Check status: ${latestRun.conclusion}`);
-                  }
+
+            if (copilotReviews.length > 0) {
+              reviewFound = true;
+              core.info('✓ Copilot review detected! Triggering check re-run...');
+
+              // Get workflow runs for this PR
+              const { data: workflowRuns } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                event: 'pull_request',
+                status: 'completed',
+                per_page: 50
+              });
+
+              // Find the latest failed Copilot Review Check run for this PR
+              const failedRun = workflowRuns.workflow_runs.find(run =>
+                run.name === 'Copilot Review Check' &&
+                run.head_sha === context.payload.pull_request.head.sha &&
+                run.conclusion === 'failure'
+              );
+
+              if (failedRun) {
+                core.info(`Re-running workflow run ${failedRun.id}...`);
+                try {
+                  await github.rest.actions.reRunWorkflowFailedJobs({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: failedRun.id
+                  });
+                  core.info('✓ Workflow re-run triggered!');
+                } catch (error) {
+                  core.warning(`Failed to re-run workflow: ${error.message}`);
                 }
-                break;
+              } else {
+                core.info('No failed Copilot Review Check run found for this commit');
               }
-              
-              const elapsed = Math.round((Date.now() - startTime) / 1000);
+              break;
+            }              const elapsed = Math.round((Date.now() - startTime) / 1000);
               core.info(`${elapsed}s: No review yet, waiting...`);
               await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
             }
