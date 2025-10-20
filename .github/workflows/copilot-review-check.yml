@@ -8,10 +8,12 @@ on:
     types: [opened, synchronize, reopened]
   pull_request_review:
     types: [submitted]
+  repository_dispatch:
+    types: [copilot-review-ready]
 
 # Prevent duplicate runs
 concurrency:
-  group: copilot-review-check-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: copilot-review-check-${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
   cancel-in-progress: true
 
 jobs:
