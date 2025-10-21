@@ -49,7 +49,11 @@ jobs:
           restore-keys: ${{ runner.os }}-composer-
 
       - name: Install dependencies
-        run: composer install ${{ inputs.composer-install-flags }}
+        env:
+          COMPOSER_FLAGS: ${{ inputs.composer-install-flags }}
+        run: composer install "$COMPOSER_FLAGS"
 
       - name: Run tests
-        run: ${{ inputs.test-command }}
+        env:
+          TEST_CMD: ${{ inputs.test-command }}
+        run: "$TEST_CMD"

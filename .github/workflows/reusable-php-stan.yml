@@ -45,4 +45,6 @@ jobs:
         run: composer install --prefer-dist --no-progress --no-interaction
 
       - name: Run PHPStan
-        run: ${{ inputs.phpstan-command }}
+        env:
+          PHPSTAN_CMD: ${{ inputs.phpstan-command }}
+        run: "$PHPSTAN_CMD"

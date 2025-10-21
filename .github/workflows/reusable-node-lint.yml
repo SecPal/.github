@@ -37,7 +37,11 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: ${{ inputs.install-command }}
+        env:
+          INSTALL_CMD: ${{ inputs.install-command }}
+        run: "$INSTALL_CMD"
 
       - name: Run linter
-        run: ${{ inputs.lint-command }}
+        env:
+          LINT_CMD: ${{ inputs.lint-command }}
+        run: "$LINT_CMD"
