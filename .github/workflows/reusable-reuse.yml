@@ -5,12 +5,6 @@ name: Reusable - REUSE Compliance
 
 on:
   workflow_call:
-    inputs:
-      reuse-version:
-        description: "Version of the REUSE action to use"
-        required: false
-        type: string
-        default: "v6"
 
 jobs:
   reuse:
@@ -21,4 +15,4 @@ jobs:
         uses: actions/checkout@v5
 
       - name: REUSE Compliance Check
-        uses: fsfe/reuse-action@${{ inputs.reuse-version }}
+        uses: fsfe/reuse-action@v6

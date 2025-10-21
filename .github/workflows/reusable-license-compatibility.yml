@@ -61,7 +61,14 @@ jobs:
 
           incompatible_found=0
           for license in $licenses; do
-            if [[ ! " ${compatible_licenses[@]} " =~ " ${license} " ]]; then
+            found=0
+            for compatible in "${compatible_licenses[@]}"; do
+              if [[ "$license" == "$compatible" ]]; then
+                found=1
+                break
+              fi
+            done
+            if [ $found -eq 0 ]; then
               echo "ERROR: Incompatible license found: $license"
               incompatible_found=1
             fi
