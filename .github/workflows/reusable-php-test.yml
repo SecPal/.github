@@ -39,7 +39,7 @@ jobs:
 
       - name: Get Composer Cache Directory
         id: composer-cache
-        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
@@ -51,7 +51,10 @@ jobs:
       - name: Install dependencies
         env:
           COMPOSER_FLAGS: ${{ inputs.composer-install-flags }}
-        run: composer install $COMPOSER_FLAGS
+        run: |
+          # shellcheck disable=SC2086
+          # Word splitting is intentional - flags must expand as separate arguments
+          composer install $COMPOSER_FLAGS
 
       - name: Run tests
         env:
