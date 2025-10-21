@@ -51,7 +51,7 @@ jobs:
       - name: Install dependencies
         env:
           COMPOSER_FLAGS: ${{ inputs.composer-install-flags }}
-        run: composer install "$COMPOSER_FLAGS"
+        run: composer install $COMPOSER_FLAGS
 
       - name: Run tests
         env:
