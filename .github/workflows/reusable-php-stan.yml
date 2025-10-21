@@ -47,4 +47,4 @@ jobs:
       - name: Run PHPStan
         env:
           PHPSTAN_CMD: ${{ inputs.phpstan-command }}
-        run: "$PHPSTAN_CMD"
+        run: $PHPSTAN_CMD

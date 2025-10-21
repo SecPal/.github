@@ -47,4 +47,4 @@ jobs:
       - name: Run Laravel Pint
         env:
           PINT_CMD: ${{ inputs.pint-command }}
-        run: "$PINT_CMD"
+        run: $PINT_CMD

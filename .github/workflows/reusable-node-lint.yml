@@ -39,9 +39,9 @@ jobs:
       - name: Install dependencies
         env:
           INSTALL_CMD: ${{ inputs.install-command }}
-        run: "$INSTALL_CMD"
+        run: $INSTALL_CMD
 
       - name: Run linter
         env:
           LINT_CMD: ${{ inputs.lint-command }}
-        run: "$LINT_CMD"
+        run: $LINT_CMD
