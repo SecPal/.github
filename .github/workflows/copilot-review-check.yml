@@ -20,7 +20,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check for Copilot review after last push
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const COPILOT_REVIEWER_LOGIN_PREFIX = 'copilot-pull-request-reviewer';
