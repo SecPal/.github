@@ -6,12 +6,10 @@ name: Copilot Review Check
 on:
   pull_request:
     types: [synchronize, reopened]
-  pull_request_review:
-    types: [submitted]
 
 # Prevent duplicate runs
 concurrency:
-  group: copilot-review-check-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: copilot-review-check-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -25,13 +23,11 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            // Constants
             const COPILOT_REVIEWER_LOGIN_PREFIX = 'copilot-pull-request-reviewer';
 
             const pr = context.payload.pull_request;
-            const prNumber = pr ? pr.number : context.issue.number;
+            const prNumber = pr.number;
 
-            // Get all commits using pagination (API returns in chronological order, oldest first)
             const commits = await github.paginate(github.rest.pulls.listCommits, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -46,45 +42,37 @@ jobs:
             const lastCommit = commits[commits.length - 1];
             const lastPushTime = new Date(lastCommit.commit.committer.date);
             core.info(`Last commit at: ${lastPushTime.toISOString()}`);
-            core.info(`Last commit SHA: ${lastCommit.sha}`);
 
-            // Get all reviews
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
 
-            // Find Copilot reviews (must match both conditions to avoid false positives)
             const copilotReviews = reviews.filter(review =>
               review.user.login.startsWith(COPILOT_REVIEWER_LOGIN_PREFIX) &&
               review.user.type === 'Bot'
             );
 
             if (copilotReviews.length === 0) {
-              core.setFailed('No Copilot review found. Please request a Copilot review.');
+              core.setFailed('No Copilot review found. Please request a Copilot review via the GitHub UI or CLI (gh pr review <pr-number> --copilot).');
               return;
             }
 
-            // Get the most recent Copilot review
-            const lastReview = copilotReviews[copilotReviews.length - 1];
-            const lastReviewTime = new Date(lastReview.submitted_at);
-
-            // Check if there's a Copilot review after the last commit
             const reviewsAfterCommit = copilotReviews.filter(review => {
               const reviewTime = new Date(review.submitted_at);
               return reviewTime >= lastPushTime;
             });
 
             if (reviewsAfterCommit.length === 0) {
+              const lastReview = copilotReviews[copilotReviews.length - 1];
               core.setFailed(
                 `Last Copilot review was before the latest commit. ` +
-                `Last review: ${lastReviewTime.toISOString()}, ` +
+                `Last review: ${new Date(lastReview.submitted_at).toISOString()}, ` +
                 `Last commit: ${lastPushTime.toISOString()}. ` +
                 `Please request a new Copilot review.`
               );
               return;
             }
 
-            const latestReview = reviewsAfterCommit[reviewsAfterCommit.length - 1];
-            core.info(`✓ Found Copilot review after last commit at: ${latestReview.submitted_at}`);
+            core.info(`✓ Found Copilot review after last commit.`);
