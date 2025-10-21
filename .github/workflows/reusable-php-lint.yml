@@ -45,4 +45,6 @@ jobs:
         run: composer install --prefer-dist --no-progress --no-interaction
 
       - name: Run Laravel Pint
-        run: ${{ inputs.pint-command }}
+        env:
+          PINT_CMD: ${{ inputs.pint-command }}
+        run: $PINT_CMD

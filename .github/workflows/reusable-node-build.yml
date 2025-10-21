@@ -37,7 +37,11 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: ${{ inputs.install-command }}
+        env:
+          INSTALL_CMD: ${{ inputs.install-command }}
+        run: $INSTALL_CMD
 
       - name: Build project
-        run: ${{ inputs.build-command }}
+        env:
+          BUILD_CMD: ${{ inputs.build-command }}
+        run: $BUILD_CMD
