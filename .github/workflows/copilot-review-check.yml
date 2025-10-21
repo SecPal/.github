@@ -26,7 +26,7 @@ jobs:
             const COPILOT_REVIEWER_LOGIN_PREFIX = 'copilot-pull-request-reviewer';
 
             const pr = context.payload.pull_request;
-            const prNumber = pr ? pr.number : context.issue.number;
+            const prNumber = pr.number;
 
             const commits = await github.paginate(github.rest.pulls.listCommits, {
               owner: context.repo.owner,
@@ -55,7 +55,7 @@ jobs:
             );
 
             if (copilotReviews.length === 0) {
-              core.setFailed('No Copilot review found. Please request a Copilot review via the GitHub UI or CLI (gh pr review --copilot).');
+              core.setFailed('No Copilot review found. Please request a Copilot review via the GitHub UI or CLI (gh pr review <pr-number> --copilot).');
               return;
             }
 
