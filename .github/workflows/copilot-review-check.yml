@@ -75,4 +75,4 @@ jobs:
               return;
             }
 
-            core.info(`✓ Found Copilot review after last commit.`)
+            core.info(`✓ Found Copilot review after last commit.`);
