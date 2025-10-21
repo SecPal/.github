@@ -55,7 +55,7 @@ jobs:
             );
 
             if (copilotReviews.length === 0) {
-              core.setFailed('No Copilot review found');
+              core.setFailed('No Copilot review found. Please request a Copilot review via the GitHub UI or CLI (gh pr review --copilot).');
               return;
             }
 
@@ -69,9 +69,10 @@ jobs:
               core.setFailed(
                 `Last Copilot review was before the latest commit. ` +
                 `Last review: ${new Date(lastReview.submitted_at).toISOString()}, ` +
-                `Last commit: ${lastPushTime.toISOString()}.`
+                `Last commit: ${lastPushTime.toISOString()}. ` +
+                `Please request a new Copilot review.`
               );
               return;
             }
 
-            core.info(`✓ Found Copilot review after last commit`)
+            core.info(`✓ Found Copilot review after last commit.`)
