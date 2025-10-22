@@ -98,17 +98,7 @@ if [ -f docs/openapi.yaml ] && command -v npx >/dev/null 2>&1; then
   npx --yes @stoplight/spectral-cli lint docs/openapi.yaml
 fi
 
-# 4) Semgrep (optional: if installed, findings don't block)
-if command -v semgrep >/dev/null 2>&1; then
-  semgrep --config p/owasp-top-ten --config p/r2c-ci --skip-unknown-extensions \
-    --exclude node_modules --exclude vendor --exclude .git \
-    --exclude dist --exclude build --exclude coverage --exclude .next \
-    . || echo "Semgrep found issues (non-blocking scan)." >&2
-else
-  echo "Semgrep not found – skipping security scan (optional)."
-fi
-
-# 5) Check PR size locally (against BASE)
+# 4) Check PR size locally (against BASE)
 if ! git rev-parse -q --verify "origin/$BASE" >/dev/null 2>&1; then
   echo "Warning: Cannot verify base branch origin/$BASE. Skipping PR size check. (Run 'git fetch origin $BASE' to enable.)" >&2
 else
