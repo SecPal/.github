@@ -188,6 +188,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 > **Note:** Use "SecPal Contributors" for code files where individual contributors make changes.
 > Use "SecPal" for organizational documentation, workflows, and configuration files.
+> Use the current year in the copyright date (e.g., 2025 for files created in 2025).
 
 Run `reuse lint` to check compliance.
 
