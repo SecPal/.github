@@ -186,9 +186,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 ```
 
-> **Note:** Use "SecPal Contributors" for code files where individual contributors make changes.
-> Use "SecPal" for organizational documentation, workflows, and configuration files.
-> Use the current year in the copyright date (e.g., 2025 for files created in 2025).
+**How to choose the correct copyright attribution:**
+
+- Use **"SecPal Contributors"** for all code files, including source code, test files, scripts, and any file where individual contributors make changes (e.g., `.js`, `.ts`, `.php`, `.py`, `.sh`, test files in any language).
+- Use **"SecPal"** for organizational documentation (e.g., `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`), workflow files (e.g., `.github/workflows/*.yml`), and configuration files in the root directory (e.g., `.eslintrc.yml`, `.prettierrc`, `package.json`, `composer.json`, etc.).
+- If a configuration file is specific to a code module or contains logic contributed by individuals, use **"SecPal Contributors"**.
+- For ambiguous cases, prefer **"SecPal Contributors"** if the file is likely to be edited by multiple people over time.
+- Use the **current year** in the copyright date (e.g., 2025 for files created in 2025).
 
 Run `reuse lint` to check compliance.
 

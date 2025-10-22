@@ -91,7 +91,7 @@ elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
     node -e "process.exit(require('./package.json').scripts?.typecheck ? 0 : 1)" && yarn typecheck
     node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)" && yarn test
   else
-    echo "Warning: jq and node not found - running yarn scripts without checking if they exist" >&2
+    echo "Warning: jq and node not found - attempting to run yarn scripts (failures will be ignored)" >&2
     yarn lint 2>/dev/null || true
     yarn typecheck 2>/dev/null || true
     yarn test 2>/dev/null || true
