@@ -53,7 +53,11 @@ jobs:
           COMPOSER_FLAGS: ${{ inputs.composer-install-flags }}
         run: |
           # shellcheck disable=SC2086
-          # Word splitting is intentional - flags must expand as separate arguments
+          # Word splitting is intentional - flags must expand as separate arguments.
+          # Security consideration: $COMPOSER_FLAGS comes from workflow input
+          # (inputs.composer-install-flags). This input should only be provided
+          # by trusted workflow callers. Avoid allowing untrusted users to set
+          # this input because it could change install behavior.
           composer install $COMPOSER_FLAGS
 
       - name: Run tests
