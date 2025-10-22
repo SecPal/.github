@@ -9,7 +9,7 @@ on:
   pull_request:
     branches: ["main"]
   schedule:
-    # Run at 3:00 AM daily (Berlin time = UTC+1)
+    # Run at 2:00 AM UTC daily (3:00 AM CET/4:00 AM CEST in Berlin)
     - cron: "0 2 * * *"
 
 permissions:
