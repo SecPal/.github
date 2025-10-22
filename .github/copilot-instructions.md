@@ -460,12 +460,12 @@ For questions or issues with these guidelines:
 
 ---
 
-**Version:** 1.2.0
+**Version:** 1.2.0  
 **Last Updated:** October 22, 2025
 
 **Changes:**
 
-- **Compression:** Reduced from 610 → ~470 lines (-140 lines, -23%)
+- **Compression:** Reduced from 610 → 475 lines (-135 lines, -22%)
 - **Removed:** Build & Test Commands (see README.md), OpenAPI details (future: docs/openapi.md), Workflow Architecture (future: workflows/README.md)
 - **Removed:** Redundant Code Change Format, Risk Assessment, Draft→Ready Workflow sections
 - **Added:** Self-Critique Framework (file size awareness, quality over quantity)
