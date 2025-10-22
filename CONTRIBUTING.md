@@ -141,7 +141,8 @@ git config --global commit.gpgSign true
 
 # Add your GPG key to GitHub
 gpg --armor --export <YOUR_KEY_ID>
-# Then add it at: https://github.com/settings/keys
+# Copy the entire output (including the BEGIN and END PGP PUBLIC KEY BLOCK lines)
+# and paste it into GitHub under Settings → SSH and GPG keys → New GPG key.
 ```
 
 ## Pull Request Guidelines
@@ -163,6 +164,8 @@ gpg --armor --export <YOUR_KEY_ID>
 
 All files must include SPDX license headers:
 
+**For code files (PHP, JavaScript, TypeScript, etc.):**
+
 ```php
 <?php
 // SPDX-FileCopyrightText: 2025 SecPal Contributors
@@ -174,12 +177,17 @@ All files must include SPDX license headers:
 // SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
+**For documentation and configuration files (Markdown, YAML, etc.):**
+
 ```markdown
 <!--
 SPDX-FileCopyrightText: 2025 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 ```
+
+> **Note:** Use "SecPal Contributors" for code files where individual contributors make changes.
+> Use "SecPal" for organizational documentation, workflows, and configuration files.
 
 Run `reuse lint` to check compliance.
 
