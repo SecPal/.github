@@ -56,6 +56,16 @@ Each repository follows the standards defined here unless explicitly overridden.
 - **Version Control:** Git with signed commits, linear history
 - **CI/CD:** GitHub Actions with reusable workflows
 
+### Code Security Scanning
+
+- **Tool:** CodeQL (GitHub Advanced Security)
+- **Supported Languages:**
+  - ✅ JavaScript/TypeScript, Python, Java, Go, C/C++, C#, Ruby, Swift
+  - ❌ **PHP is NOT supported by CodeQL** - use other tools (PHPStan, Psalm, Semgrep)
+- **Configuration:** `.github/workflows/codeql.yml`
+- **Note:** Always verify language support before adding to CodeQL matrix
+- **Reference:** [CodeQL language support documentation](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/)
+
 ## Build & Test Commands
 
 ### PHP/Laravel Backend
@@ -200,7 +210,10 @@ Review becomes stale when:
 
 If review is stale:
 
-1. Request new Copilot review via GitHub UI
+1. Request new Copilot review:
+   - **Via GitHub UI:** PR page → Reviews section → Request review from Copilot
+   - **Via GitHub API:** Use the MCP GitHub tool or `gh api` to request review
+   - ⚠️ **Note:** `gh pr review --copilot` does NOT exist in gh CLI
 2. Wait for workflow to re-run and turn GREEN
 3. Do NOT merge until check passes
 
@@ -389,11 +402,19 @@ Configure these settings in repository settings:
 
 ### Required Status Checks
 
-Add as required before merge:
+⚠️ **CRITICAL:** Status check names must match **exact job names** from workflow files, NOT workflow names!
 
-- `Check Code Formatting`
-- `Check REUSE Compliance`
-- `Check License Compatibility`
+**Example mismatch that blocks merging:**
+
+- ❌ Workflow name: "Code Quality" → Branch Protection expects: "Code Quality" → **FAILS** (no such check)
+- ✅ Job name: "Check Code Formatting" (from workflow "Code Quality") → **WORKS**
+
+Add these **job names** as required before merge:
+
+- `Check Code Formatting` (from workflow: Code Quality)
+- `Lint GitHub Actions Workflows` (from workflow: Workflow Lint)
+- `Check REUSE Compliance` (from workflow: REUSE Compliance)
+- `Check License Compatibility` (from workflow: License Compatibility)
 - Backend: `Pint`, `PHPStan`, `Pest`
 - Frontend: `ESLint`, `TypeCheck`, `Vitest`
 - `Verify Copilot Review` ⭐ (enforces fresh review)
@@ -403,6 +424,10 @@ Add as required before merge:
 - ✅ Require signed commits
 - ✅ Require linear history
 - ✅ Require conversation resolution
+- ✅ Enforce admins: **true**
+  - ⚠️ **Important:** When enabled, even admins cannot bypass required checks with `gh pr merge --admin`
+  - All status checks must pass, including "Verify Copilot Review"
+  - If checks must be bypassed in emergency situations, document the reason and re-enable this setting immediately after the merge
 - ✅ Allow squash merging (preferred)
 - ❌ Disable force push (except admins)
 
@@ -495,6 +520,51 @@ git commit -S -m "feat: add feature X"
 8. ✅ Fresh review after HEAD?
 9. ✅ Mark as "Ready for review"
 
+### Resolving Multiple Review Threads Efficiently
+
+For PRs with many review comments (>5 threads), use GitHub GraphQL API instead of clicking "Resolve" in UI:
+
+**Note:** Replace `REPO_NAME`, `PR_NUMBER` with actual values, and `PRRT_xxxxx` with thread IDs from step 1.
+
+```bash
+# 1. Get all review thread IDs
+gh api graphql -f query='
+query {
+  repository(owner: "SecPal", name: "REPO_NAME") {
+    pullRequest(number: PR_NUMBER) {
+      reviewThreads(first: 50) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes {
+              body
+            }
+          }
+        }
+      }
+    }
+  }
+}'
+
+# 2. Bulk resolve threads (up to 6 per mutation)
+gh api graphql -f query='
+mutation {
+  t1: resolveReviewThread(input: {threadId: "PRRT_xxxxx1"}) {
+    thread { id isResolved }
+  }
+  t2: resolveReviewThread(input: {threadId: "PRRT_xxxxx2"}) {
+    thread { id isResolved }
+  }
+  t3: resolveReviewThread(input: {threadId: "PRRT_xxxxx3"}) {
+    thread { id isResolved }
+  }
+}
+'
+```
+
+This is significantly faster than manual UI resolution for many threads.
+
 ### Before Merging
 
 - ✅ All required checks GREEN
@@ -502,6 +572,27 @@ git commit -S -m "feat: add feature X"
 - ✅ All conversations resolved
 - ✅ PR description clear and complete
 - ✅ Squash commits into single logical commit
+
+### After Merging
+
+Clean up branches and update local repository:
+
+```bash
+# Fetch and prune deleted remote branches
+git fetch --prune
+
+# Switch to main and update
+git checkout main
+git pull origin main
+
+# Verify clean state (should only show main branches)
+git branch -a
+
+# Optional: Clean up Git database
+git gc --prune=now
+```
+
+**Note:** `gh pr merge --delete-branch` deletes the remote branch but not the local one. Always run `git fetch --prune` to update local references.
 
 ## Contact & Escalation
 
@@ -513,6 +604,6 @@ For questions or issues with these guidelines:
 
 ---
 
-**Last Updated:** October 19, 2025 (based on PRs #7-9 learnings)
+**Last Updated:** October 22, 2025 (based on PRs #7-9, #23-24 learnings)
 
-**Document Version:** 1.0.0 - Initial organization-wide instructions
+**Document Version:** 1.1.0 - Added CodeQL limitations, branch protection clarifications, GraphQL review resolution, post-merge cleanup
