@@ -64,6 +64,7 @@ Each repository follows the standards defined here unless explicitly overridden.
   - ❌ **PHP is NOT supported by CodeQL** - use other tools (PHPStan, Psalm, Semgrep)
 - **Configuration:** `.github/workflows/codeql.yml`
 - **Note:** Always verify language support before adding to CodeQL matrix
+- **Reference:** [CodeQL language support documentation](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/)
 
 ## Build & Test Commands
 
@@ -426,7 +427,7 @@ Add these **job names** as required before merge:
 - ✅ Enforce admins: **true**
   - ⚠️ **Important:** When enabled, even admins cannot bypass required checks with `gh pr merge --admin`
   - All status checks must pass, including "Verify Copilot Review"
-  - To merge with failing checks, temporarily disable this setting (not recommended)
+  - If checks must be bypassed in emergency situations, document the reason and re-enable this setting immediately after the merge
 - ✅ Allow squash merging (preferred)
 - ❌ Disable force push (except admins)
 
@@ -522,6 +523,8 @@ git commit -S -m "feat: add feature X"
 ### Resolving Multiple Review Threads Efficiently
 
 For PRs with many review comments (>5 threads), use GitHub GraphQL API instead of clicking "Resolve" in UI:
+
+**Note:** Replace `REPO_NAME`, `PR_NUMBER` with actual values, and `PRRT_xxxxx` with thread IDs from step 1.
 
 ```bash
 # 1. Get all review thread IDs
