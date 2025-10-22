@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         # CodeQL supports: 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'swift'
-        language: ["javascript-typescript"]
+        language: ["javascript-typescript", "php"]
 
     steps:
       - name: Checkout repository

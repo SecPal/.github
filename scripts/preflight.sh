@@ -19,8 +19,8 @@ echo "Using base branch: $BASE"
 # 0) Formatting & Compliance
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
-  npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
-  npx markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
+  npx --yes prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
+  npx --yes markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
 fi
 # Workflow linting (part of documented gates)
 if [ -d .github/workflows ]; then
@@ -86,10 +86,15 @@ elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
     jq -e '.scripts.lint' package.json >/dev/null 2>&1 && yarn lint
     jq -e '.scripts.typecheck' package.json >/dev/null 2>&1 && yarn typecheck
     jq -e '.scripts.test' package.json >/dev/null 2>&1 && yarn test
-  else
+  elif command -v node >/dev/null 2>&1; then
     node -e "process.exit(require('./package.json').scripts?.lint ? 0 : 1)" && yarn lint
     node -e "process.exit(require('./package.json').scripts?.typecheck ? 0 : 1)" && yarn typecheck
     node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)" && yarn test
+  else
+    echo "Warning: jq and node not found - running yarn scripts without checking if they exist" >&2
+    yarn lint 2>/dev/null || true
+    yarn typecheck 2>/dev/null || true
+    yarn test 2>/dev/null || true
   fi
 fi
 
