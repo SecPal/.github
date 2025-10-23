@@ -18,9 +18,9 @@ This document provides context and guidance for GitHub Copilot (Chat, Agent, Cod
 SecPal is organized as **multiple repositories** under the `SecPal` organization:
 
 - **`SecPal/.github`** - Organization defaults (this repo): workflows, templates, shared configs
-- **`SecPal/backend`** - Laravel API backend (planned)
+- **`SecPal/api`** - Laravel API backend (planned)
 - **`SecPal/frontend`** - React frontend (planned)
-- **`SecPal/docs`** - Documentation & OpenAPI specs (planned)
+- **`SecPal/contracts`** - OpenAPI contracts (planned)
 - _(additional repos as needed)_
 
 Each repository follows the standards defined here unless explicitly overridden.
@@ -448,15 +448,18 @@ For questions or issues with these guidelines:
 
 ---
 
-**Version:** 1.2.0
-**Last Updated:** October 22, 2025
+**Version:** 1.3.0
+**Last Updated:** October 23, 2025
 
 **Changes:**
 
-- **Compression:** Reduced from 610 to 475 lines (removed 135 lines, -22%)
-- **Removed:** Build & Test Commands (see README.md), OpenAPI details (future: docs/openapi.md), Workflow Architecture (future: workflows/README.md)
-- **Removed:** Redundant Code Change Format, Risk Assessment, Draft→Ready Workflow sections
-- **Added:** Self-Critique Framework (file size awareness, quality over quantity)
-- **Added:** Conditional Required Checks warning (prevents docs-only PR blocks)
-- **Note:** Reference documentation will be added in follow-up PR #27
-- **Based on:** PRs #7-9, #23-25 learnings
+- **v1.3.0 (Oct 23, 2025):**
+  - Removed unreliable Copilot Review Check workflow
+  - Changed from automated enforcement to best practice approach for Copilot reviews
+  - Corrected repository names: `backend`→`api`, `docs`→`contracts`
+  - Fixed repository structure documentation to match planned architecture
+- **v1.2.0 (Oct 22, 2025):**
+  - Compression: Reduced from 610 to 475 lines (removed 135 lines, -22%)
+  - Removed: Build & Test Commands (see README.md), OpenAPI details (future: docs/openapi.md)
+  - Added: Self-Critique Framework, Conditional Required Checks warning
+  - Based on: PRs #7-9, #23-25 learnings

@@ -14,9 +14,9 @@ SecPal is a digital guard book and much more. It's the "guard's friend" in every
 ## Repositories
 
 - [`.github`](https://github.com/SecPal/.github): Organization-wide settings and documentation.
-- [`frontend`](https://github.com/SecPal/frontend): The SecPal frontend.
-- [`api`](https://github.com/SecPal/api): The SecPal backend.
-- [`contracts`](https://github.com/SecPal/contracts): OpenAPI contracts.
+- `frontend`: The SecPal frontend (planned)
+- `api`: The SecPal Laravel backend (planned)
+- `contracts`: OpenAPI contracts (planned)
 
 ## Development Setup
 
