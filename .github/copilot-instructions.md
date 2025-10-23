@@ -460,7 +460,7 @@ For questions or issues with these guidelines:
 
 ---
 
-**Version:** 1.2.0  
+**Version:** 1.2.0
 **Last Updated:** October 22, 2025
 
 **Changes:**
