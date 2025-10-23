@@ -9,8 +9,8 @@ We follow [Semantic Versioning](https://semver.org/) (SEMVER). Security updates 
 
 | Version | Supported          | Notes                                                     |
 | ------- | ------------------ | --------------------------------------------------------- |
-| 0.x.x   | :white_check_mark: | Development phase - all versions receive security updates |
-| < 0.0.1 | :x:                | Not yet released                                          |
+| 0.x.x   | ✅ | Development phase - all versions receive security updates |
+| < 0.0.1 | ❌                | Not yet released                                          |
 
 **Note:** Once we reach 1.0.0 (stable release), we will support:
 
@@ -147,14 +147,14 @@ SecPal repositories have the following security features enabled:
 
 | Feature                         | Status             | Description                            |
 | ------------------------------- | ------------------ | -------------------------------------- |
-| **Secret Scanning**             | :white_check_mark: | Detects leaked credentials             |
-| **Push Protection**             | :white_check_mark: | Blocks commits with secrets            |
-| **Dependabot Security Updates** | :white_check_mark: | Automated security patches             |
-| **Dependabot Version Updates**  | :white_check_mark: | Daily dependency updates (04:00 CET)   |
-| **CodeQL Analysis**             | :white_check_mark: | SAST for JavaScript/TypeScript         |
-| **Branch Protection**           | :white_check_mark: | Enforced status checks, signed commits |
-| **Security Advisories**         | :white_check_mark: | Private vulnerability reporting        |
-| **Two-Factor Authentication**   | :white_check_mark: | Required for all maintainers           |
+| **Secret Scanning**             | ✅ | Detects leaked credentials             |
+| **Push Protection**             | ✅ | Blocks commits with secrets            |
+| **Dependabot Security Updates** | ✅ | Automated security patches             |
+| **Dependabot Version Updates**  | ✅ | Daily dependency updates (04:00 CET)   |
+| **CodeQL Analysis**             | ✅ | SAST for JavaScript/TypeScript         |
+| **Branch Protection**           | ✅ | Enforced status checks, signed commits |
+| **Security Advisories**         | ✅ | Private vulnerability reporting        |
+| **Two-Factor Authentication**   | ✅ | Required for all maintainers           |
 
 ## Known Security Limitations
 
