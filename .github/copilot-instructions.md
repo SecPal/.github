@@ -102,7 +102,7 @@ Run **before** requesting Copilot review:
 8. **API:**
    - Spectral (OpenAPI validation)
 
-### 2. Copilot Code Review (Quality Gate)
+### 2. Copilot Code Review (Best Practice)
 
 **Only after all automated checks are GREEN:**
 
@@ -116,48 +116,39 @@ Run **before** requesting Copilot review:
 **Only set to "Ready for review" when:**
 
 - ✅ All automated checks GREEN
-- ✅ Copilot review completed and up-to-date
+- ✅ Copilot review completed (recommended)
 - ✅ All review threads resolved
 - ✅ PR size ≤ 600 lines
 
-## Fresh-after-HEAD Rule
+## Copilot Review Best Practice
 
-**Prevents stale reviews from being merged.**
+**Recommended (not enforced):**
 
-### Definition
+Copilot reviews are valuable but not automatically enforced:
 
-A Copilot review is **fresh** if:
+- ✅ Request Copilot review after all automated checks pass
+- ✅ Address review feedback before merging
+- ✅ Consider requesting fresh review after significant changes
 
-```text
-review.submitted_at > commit.committer.date (of HEAD commit)
-```
+**Why not enforced?**
 
-### Enforcement
+- Copilot review is valuable but not blocking
+- Previous automated check was unreliable (frequently failed with false negatives)
+- Human judgment determines when re-review is needed
+- Adds value without blocking the workflow
 
-The `copilot-review-check.yml` workflow verifies:
+**When to request Copilot review:**
 
-1. At least one review exists from `copilot-pull-request-reviewer[bot]`
-2. Review `submitted_at` timestamp is **after** the latest commit timestamp
-3. Fails check if review is missing or outdated
+- After initial PR creation and all checks pass
+- After addressing review feedback
+- After significant code changes
+- When unsure about architectural decisions
 
-### When Review Becomes Stale
+**How to request:**
 
-Review becomes stale when:
-
-- New commits are pushed after the last review
-- Code is amended/rebased
-- Any changes to PR branch
-
-### Action Required
-
-If review is stale:
-
-1. Request new Copilot review:
-   - **Via GitHub UI:** PR page → Reviews section → Request review from Copilot
-   - **Via GitHub API:** Use the MCP GitHub tool or `gh api` to request review
-   - ⚠️ **Note:** `gh pr review --copilot` does NOT exist in gh CLI
-2. Wait for workflow to re-run and turn GREEN
-3. Do NOT merge until check passes
+- **Via GitHub UI:** PR page → Reviews section → Request review from Copilot
+- **Via GitHub API:** Use the MCP GitHub tool or `gh api` to request review
+- ⚠️ **Note:** `gh pr review --copilot` does NOT exist in gh CLI
 
 ## PR Size & Scope Discipline
 
@@ -263,7 +254,6 @@ Configure these settings in repository settings:
 - `Check License Compatibility` (from workflow: License Compatibility)
 - Backend: `Pint`, `PHPStan`, `Pest` (if backend code exists)
 - Frontend: `ESLint`, `TypeCheck`, `Vitest` (if frontend code exists)
-- `Verify Copilot Review` ⭐ (enforces fresh review)
 
 ⚠️ **Conditional Required Checks Problem:**
 
@@ -283,7 +273,7 @@ Some checks only run when specific files change (e.g., "Lint GitHub Actions Work
 - ✅ Require conversation resolution
 - ✅ Enforce admins: **true**
   - ⚠️ **Important:** When enabled, even admins cannot bypass required checks with `gh pr merge --admin`
-  - All status checks must pass, including "Verify Copilot Review"
+  - All status checks must pass
   - If checks must be bypassed in emergency situations, document the reason and re-enable this setting immediately after the merge
 - ✅ Allow squash merging (preferred)
 - ❌ Disable force push (except admins)
@@ -294,7 +284,6 @@ Some checks only run when specific files change (e.g., "Lint GitHub Actions Work
 
 | Cause                         | Solution                                         |
 | ----------------------------- | ------------------------------------------------ |
-| Stale review not detected     | Use `copilot-review-check.yml` workflow          |
 | Checks run before review      | Follow gate order: checks → review → ready       |
 | Large PRs cause many comments | Keep PRs ≤ 600 lines                             |
 | Scope creep during dev        | One PR = one change class                        |
@@ -370,12 +359,11 @@ git commit -S -m "feat: add feature X"
 1. ✅ All automated checks GREEN?
 2. ✅ PR ≤ 600 lines?
 3. ✅ One change class only?
-4. ✅ Request Copilot review
+4. ✅ Request Copilot review (recommended)
 5. ✅ Address all feedback
-6. ✅ Re-request if changes made
+6. ✅ Re-request if significant changes made
 7. ✅ All threads resolved?
-8. ✅ Fresh review after HEAD?
-9. ✅ Mark as "Ready for review"
+8. ✅ Mark as "Ready for review"
 
 ### Resolving Multiple Review Threads Efficiently
 
@@ -425,7 +413,7 @@ This is significantly faster than manual UI resolution for many threads.
 ### Before Merging
 
 - ✅ All required checks GREEN
-- ✅ Fresh Copilot review (auto-verified by workflow)
+- ✅ Copilot review completed (recommended)
 - ✅ All conversations resolved
 - ✅ PR description clear and complete
 - ✅ Squash commits into single logical commit

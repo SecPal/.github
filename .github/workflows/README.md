@@ -253,25 +253,3 @@ jobs:
   actionlint:
     uses: SecPal/.github/.github/workflows/reusable-actionlint.yml@main
 ```
-
-## Quality Gates
-
-### `reusable-copilot-review-check.yml`
-
-Enforces that a Copilot review has been performed after the latest commit. This ensures code
-quality through automated reviews before merging.
-
-**Usage:**
-
-```yaml
-jobs:
-  copilot-review:
-    uses: SecPal/.github/.github/workflows/reusable-copilot-review-check.yml@main
-```
-
-**How it works:**
-
-- Checks if Copilot has reviewed the PR
-- Verifies the review happened after the most recent commit
-- Fails if review is outdated or missing
-- Add as required status check for enforcement
