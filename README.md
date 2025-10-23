@@ -57,6 +57,80 @@ pre-commit autoupdate
 - Trailing whitespace
 - Line ending normalization
 
+## Build & Test Commands
+
+Quick reference commands for local development across SecPal projects.
+
+### PHP/Laravel Backend
+
+```bash
+# Dependencies
+composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
+
+# Code Style Check
+./vendor/bin/pint --test
+
+# Static Analysis
+./vendor/bin/phpstan analyse --level=max
+
+# Tests (parallel)
+php artisan test --parallel
+```
+
+### Node.js/React Frontend
+
+```bash
+# Dependencies (use exact versions)
+npm ci
+# or for pnpm projects:
+pnpm install --frozen-lockfile
+
+# Linting
+npm run lint
+
+# Type Checking
+npm run typecheck
+# or:
+npx tsc --noEmit
+
+# Tests
+npm test
+# or:
+pnpm test
+```
+
+### OpenAPI Validation
+
+```bash
+# Lint OpenAPI spec
+npx @stoplight/spectral-cli lint docs/openapi.yaml
+```
+
+### Code Formatting (all files)
+
+```bash
+# Check formatting
+npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
+
+# Auto-fix
+npx prettier --write '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
+```
+
+### REUSE Compliance
+
+```bash
+# Install REUSE tool
+pip install reuse
+
+# Validate compliance
+reuse lint
+
+# Add missing headers
+reuse annotate --copyright "SecPal" --license "AGPL-3.0-or-later" <file>
+```
+
 ## License
 
-All projects within the SecPal organization are licensed under the [AGPL-3.0-or-later](https://spdx.org/licenses/AGPL-3.0-or-later.html).
+All projects within the SecPal organization are licensed under the [AGPL-3.0-or-later](../LICENSES/AGPL-3.0-or-later.txt).
+
+For full license information, see the [LICENSES](../LICENSES/) directory.
