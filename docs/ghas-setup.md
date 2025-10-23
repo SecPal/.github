@@ -2,13 +2,69 @@
 
 Quick-start guide for enabling GHAS in new repositories.
 
+## 🔓 Free Plan vs GitHub Advanced Security
+
+SecPal currently operates on GitHub's **Free plan**. This affects which security features are available:
+
+### ✅ Available on Free Plan (Public Repos)
+
+- **Secret Scanning** - Detects secrets from known providers (GitHub, AWS, Azure, etc.)
+- **Push Protection** - Blocks commits containing detected secrets
+- **Dependabot Alerts** - Vulnerability alerts for dependencies
+- **Dependabot Security Updates** - Automated PRs to fix vulnerabilities
+- **Manual Code Scanning** - Self-hosted CodeQL analysis
+
+### ❌ Requires GitHub Advanced Security (GHAS)
+
+**Not available on Free plan - requires GitHub Enterprise Cloud or GHAS add-on:**
+
+- **Non-Provider Pattern Detection** - Generic secret patterns (private keys, custom API tokens)
+  - Status: `secret_scanning_non_provider_patterns: disabled`
+  - Detects secrets not tied to known service providers
+- **Validity Checks** - Verifies if detected secrets are active/valid
+  - Status: `secret_scanning_validity_checks: disabled`
+  - Sends secret hashes to providers for validation
+- **Private Repository Code Scanning** - Automated CodeQL in private repos
+- **Secret Scanning in Private Repos** - Full secret scanning for private repositories
+
+### 💡 Workarounds for Free Plan
+
+If GHAS features are needed but not available:
+
+1. **TruffleHog** - Open-source secret scanning with custom patterns
+2. **GitGuardian** - Commercial secret scanning (free tier available)
+3. **Gitleaks** - Open-source SAST tool for secrets
+4. **Manual CodeQL** - Run CodeQL locally or via self-hosted runners
+
+### 📊 Current Organization Status
+
+```json
+{
+  "plan": "free",
+  "advanced_security_enabled_for_new_repositories": false
+}
+```
+
+**To upgrade:** Contact GitHub Sales or upgrade to GitHub Enterprise Cloud.
+
 ## 🎯 Setup Workflow (when repo exists)
 
-### 1️⃣ **Enable GHAS Features**
+### 1️⃣ **Enable Secret Scanning (Free Tier)**
+
+For **public repositories** on Free plan:
 
 ```bash
+# Enable basic secret scanning + push protection
 gh api -X PATCH repos/SecPal/{REPO_NAME} \
   -f security_and_analysis='{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}'
+```
+
+**Note:** Advanced features require GHAS subscription:
+
+```bash
+# ❌ NOT available on Free plan - requires GHAS:
+# secret_scanning_non_provider_patterns
+# secret_scanning_validity_checks
 ```
 
 ### 2️⃣ **Generate CodeQL Workflow**
@@ -183,12 +239,97 @@ See [Branch Protection section](#-branch-protection-recommended)
 - ✅ **Use GitHub Secrets** - Never commit credentials to code
 - ✅ **Enforce branch protection** - CodeQL must pass before merge
 
+## 🔧 Troubleshooting
+
+### "Feature requires GitHub Advanced Security"
+
+**Problem:** Attempting to enable advanced secret scanning features fails with error:
+
+```json
+{
+  "message": "Advanced Security must be enabled for this repository",
+  "documentation_url": "https://docs.github.com/rest/repos/repos#update-a-repository"
+}
+```
+
+**Cause:** Free plan does not include:
+
+- `secret_scanning_non_provider_patterns`
+- `secret_scanning_validity_checks`
+- Private repository code scanning
+
+**Solution:**
+
+1. **Verify organization plan:**
+
+   ```bash
+   gh api /orgs/SecPal | jq '.plan.name'
+   # Expected: "free"
+   ```
+
+2. **Use free tier alternatives:**
+   - Keep existing secret scanning enabled (provider patterns work on Free plan)
+   - Use open-source tools (TruffleHog, Gitleaks) for custom patterns
+   - Consider GitHub Enterprise Cloud if budget allows
+
+3. **Document limitation:**
+   - Mark issues as "requires: GitHub Advanced Security"
+   - Close as "won't do" until plan upgrade
+
+### CodeQL Not Running Automatically
+
+**Problem:** CodeQL analysis not executing on pull requests.
+
+**Cause:** Automatic CodeQL requires GHAS for private repos.
+
+**Solution:**
+
+- **Public repos:** CodeQL works on Free plan
+- **Private repos:** Manual workflow setup required (see [CodeQL section](#2️⃣-generate-codeql-workflow))
+- Or upgrade to GHAS for automated analysis
+
+### Secret Scanning Not Detecting Custom Patterns
+
+**Problem:** Generic secrets (private keys, custom tokens) not detected.
+
+**Cause:** Non-provider pattern detection requires GHAS.
+
+**Solution:**
+
+- Use alternative tools:
+  - **pre-commit hook:** Add `detect-private-key` hook
+  - **TruffleHog:** `trufflehog git file://. --only-verified`
+  - **Gitleaks:** `gitleaks detect --source .`
+
+Example pre-commit configuration:
+
+```yaml
+# Add to .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: detect-private-key
+      - id: check-added-large-files
+```
+
 ## 📚 References
+
+### GitHub Documentation
 
 - **GHAS Docs**: <https://docs.github.com/en/code-security>
 - **CodeQL Queries**: <https://codeql.github.com/codeql-query-help/>
 - **Dependabot**: <https://docs.github.com/en/code-security/dependabot>
 - **Security Lab**: <https://github.com/github/securitylab>
+- **Secret Scanning**: <https://docs.github.com/en/code-security/secret-scanning>
+
+### Alternative Tools (Free/Open Source)
+
+- **TruffleHog**: <https://github.com/trufflesecurity/trufflehog>
+- **Gitleaks**: <https://github.com/gitleaks/gitleaks>
+- **GitGuardian**: <https://www.gitguardian.com/> (free tier available)
+- **pre-commit hooks**: <https://pre-commit.com/>
+- **Semgrep**: <https://semgrep.dev/> (SAST alternative to CodeQL)
 
 ---
 
