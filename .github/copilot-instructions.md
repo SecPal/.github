@@ -241,7 +241,6 @@ If change exceeds 600 lines, split into ≤ 3 sequential PRs:
 `docs/openapi.yaml` defines the contract. Backend and frontend must conform.
 
 > **See:** Future PR will add `docs/openapi.md` with detailed OpenAPI conventions (naming, structure, validation, error responses, pagination, authentication).
-
 > **See:** Future PR will also enhance `.github/workflows/README.md` with workflow architecture and usage examples.
 
 ## Branch Protection Rules
