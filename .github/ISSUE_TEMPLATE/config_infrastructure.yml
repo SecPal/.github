@@ -1,0 +1,145 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: 🔧 Configuration/Infrastructure
+description: Report issues with CI/CD, build, dependencies, or infrastructure
+title: "[Config]: "
+labels: ["infrastructure", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report issues related to configuration, build system, CI/CD, dependencies, or infrastructure.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: What type of configuration/infrastructure issue is this?
+      options:
+        - CI/CD Pipeline (GitHub Actions)
+        - Build System (npm, composer, etc.)
+        - Dependencies (outdated, vulnerable, incompatible)
+        - Development Environment (docker, local setup)
+        - Deployment/Infrastructure
+        - Code Quality Tools (linters, formatters)
+        - Git Hooks (pre-commit, pre-push)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description
+      description: Describe the configuration or infrastructure issue
+      placeholder: The CI pipeline fails when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current Behavior
+      description: What is currently happening?
+      placeholder: Currently, the build...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+      placeholder: The build should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can this issue be reproduced?
+      placeholder: |
+        1. Run command...
+        2. Observe output...
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs/Output
+      description: Please paste any relevant logs, error messages, or workflow run outputs
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: Relevant environment information
+      placeholder: |
+        - OS: Ubuntu 22.04
+        - Node: 22.x
+        - PHP: 8.4
+        - Composer: 2.x
+        - GitHub Actions Runner: ubuntu-latest
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed Solution
+      description: If you have a solution in mind, describe it here
+      placeholder: I propose to...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: How does this affect development?
+      options:
+        - Critical (blocks development)
+        - High (significantly impacts workflow)
+        - Medium (workaround exists)
+        - Low (minor inconvenience)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: willingness
+    attributes:
+      label: Willingness to Contribute
+      description: Can you help fix this issue?
+      options:
+        - "Yes, I can submit a PR"
+        - "Yes, with guidance"
+        - "No, but I can help test"
+        - "No"
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have provided relevant logs or error messages
+          required: false
+        - label: I have described the current and expected behavior
+          required: true

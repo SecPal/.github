@@ -3,463 +3,390 @@ SPDX-FileCopyrightText: 2025 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# Copilot Instructions (Organization-wide)
+# SecPal Copilot Instructions
 
-> **Scope:** This file applies to **all SecPal repositories** as organization-level default.
-> Individual repositories can override by creating their own `.github/copilot-instructions.md`.
->
-> **Note:** This foundational document exceeds the typical 600-line PR limit (see "PR Size & Scope Discipline" section).
-> As comprehensive instructions that establish organization-wide standards, the larger size is justified for completeness and long-term reference value.
-
-This document provides context and guidance for GitHub Copilot (Chat, Agent, Code Reviews) to ensure efficient, high-quality development while avoiding endless iteration loops.
+Organization-wide defaults for all SecPal repositories.
 
 ## Repository Structure
 
-SecPal is organized as **multiple repositories** under the `SecPal` organization:
+```text
+SecPal Organization:
+├── .github/     - Organization defaults (this repo)
+├── api/         - Laravel backend (planned)
+├── frontend/    - React frontend (planned)
+└── contracts/   - OpenAPI contracts (planned)
 
-- **`SecPal/.github`** - Organization defaults (this repo): workflows, templates, shared configs
-- **`SecPal/api`** - Laravel API backend (planned)
-- **`SecPal/frontend`** - React frontend (planned)
-- **`SecPal/contracts`** - OpenAPI contracts (planned)
-- _(additional repos as needed)_
+Local: <workspace>/SecPal/<repository>
+Remote: https://github.com/SecPal/<repository>
+```
 
-Each repository follows the standards defined here unless explicitly overridden.
+## Critical Rules
 
-## Project & Tech Stack
+1. **TDD Mandatory:** Write failing test FIRST, implement, refactor. Never commit untested code. Minimum 80% coverage for new code, 100% for critical paths.
+2. **Quality Gates:** Preflight script (`./scripts/preflight.sh`) MUST pass before push. All CI checks MUST pass before merge. No bypass.
+3. **One PR = One Topic:** No mixing features/fixes/refactors/docs/config in single PR.
+4. **No Bypass:** Never use `--no-verify` or force push. Branch protection applies to admins.
+5. **Fail-Fast:** Stop at first error. Fix immediately, don't accumulate debt.
+6. **Quality Over Speed:** Take time to do it right.
+7. **CHANGELOG Mandatory:** Update CHANGELOG.md for every feature/fix/breaking change. Keep a Changelog format.
+8. **Commit Signing:** All commits MUST be GPG signed. Configure: `git config commit.gpgsign true`
+9. **Documentation:** All public APIs MUST have PHPDoc/JSDoc/TSDoc. Include examples for complex functions.
+10. **Templates:** Use `.github/ISSUE_TEMPLATE/` for issues, `.github/pull_request_template.md` for PRs.
 
-### Backend: Laravel (PHP)
+### Emergency Exception Process
 
-- **PHP Version:** 8.4
-- **Framework:** Laravel 12
-- **Testing:** Pest/PHPUnit with parallel execution
-- **Static Analysis:** PHPStan/Larastan (level: max)
-- **Code Style:** Laravel Pint
+If bypass REQUIRED (production down):
 
-### Frontend: React + TypeScript
+1. Document in commit/PR why bypass needed
+2. Create issue for proper fix
+3. Fix within 24 hours
+4. All checks must retroactively pass
 
-- **Node Version:** 22.x
-- **Build Tool:** Vite
-- **Language:** TypeScript (strict mode)
-- **Linting:** ESLint
-- **Testing:** Vitest + React Testing Library
+## Tech Stack
 
-### API Contracts
+### Backend
 
-- **Format:** OpenAPI 3.1
-- **Location:** `docs/openapi.yaml`
-- **Single Source of Truth:** API contract drives both backend and frontend
+- PHP 8.4, Laravel 12
+- Testing: Pest/PHPUnit
+- Static Analysis: PHPStan (level: max)
+- Style: Laravel Pint
+- Database: PostgreSQL (planned)
 
-### Infrastructure
+### Frontend
 
-- **License:** AGPL-3.0-or-later (all code)
-- **Compliance:** REUSE 3.3 (SPDX headers required)
-- **Version Control:** Git with signed commits, linear history
-- **CI/CD:** GitHub Actions with reusable workflows
+- Node 22.x, React, TypeScript (strict)
+- Build: Vite
+- Linting: ESLint
+- Testing: Vitest + React Testing Library
 
-### Code Security Scanning
+### API
 
-- **Tool:** CodeQL (GitHub Advanced Security)
-- **Supported Languages:**
-  - ✅ JavaScript/TypeScript, Python, Java, Go, C/C++, C#, Ruby, Swift
-  - ❌ **PHP is NOT supported by CodeQL** - use other tools (PHPStan, Psalm, Semgrep)
-- **Configuration:** `.github/workflows/codeql.yml`
-- **Note:** Always verify language support before adding to CodeQL matrix
-- **Reference:** [CodeQL language support documentation](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/)
+- OpenAPI 3.1 (single source of truth)
+- Location: `docs/openapi.yaml`
+- Style: REST, JSON responses
+- Versioning: URL-based (`/api/v1/`, `/api/v2/`)
+- Authentication: Bearer tokens (JWT planned)
 
-### Quality Standards
+### Database
 
-- **REUSE 3.3:** All files must have SPDX headers
-- **Code Style:** Prettier (Markdown, YAML, JSON, TS, JS)
-- **Linting:** Language-specific linters (PHPStan, ESLint)
-- **Testing:** Automated tests required, must pass
-- **Markdown:** `markdownlint`, `prettier`
-- **Shell Scripts:** `shellcheck`
-- **GitHub Actions:** `actionlint`
+- PostgreSQL (production)
+- SQLite (testing)
+- Migrations: Laravel migrations, MUST be reversible (up/down)
+- Seeds: Separate for dev/test/prod
 
-> **See:** [README.md](../README.md) for detailed build & test commands (PHP, Node.js, OpenAPI, REUSE).
+### Version Control
 
-## PR Gates & Workflow Order
+- Git with signed commits (GPG mandatory)
+- Linear history only
+- Conventional Commits
 
-**CRITICAL: Gates must pass in this exact order to avoid wasted cycles.**
+## Multi-Repo Coordination
 
-### 1. Pre-Merge Automated Checks (Must be GREEN first)
+When changes span multiple repositories:
 
-Run **before** requesting Copilot review:
+1. **Update `contracts/` FIRST** (OpenAPI schema changes)
+2. **Then `api/` and `frontend/` in parallel** (implement contract)
+3. **Version lock:** Tag contracts before implementing
+4. **Breaking changes:** New API version (`/api/v2/`), deprecate old version
 
-1. **Code Formatting** (`prettier`)
-2. **REUSE Compliance** (`reuse lint`)
-3. **License Compatibility** (all dependencies AGPL-compatible)
-4. **Markdown Lint** (`markdownlint`)
-5. **Workflow Lint** (`actionlint`)
-6. **Backend:**
-   - Laravel Pint (code style)
-   - PHPStan (static analysis)
-   - Pest (tests)
-7. **Frontend:**
-   - ESLint
-   - TypeScript (`tsc --noEmit`)
-   - Vitest (tests)
-8. **API:**
-   - Spectral (OpenAPI validation)
+## Versioning (Software Repositories Only)
 
-### 2. Copilot Code Review (Best Practice)
+**Note:** Only `api/`, `frontend/`, `contracts/` repositories use SEMVER. This `.github` repository is NOT versioned.
 
-**Only after all automated checks are GREEN:**
+**SEMVER 2.0.0** starting at **0.0.1**
 
-- Request Copilot review via GitHub UI
-- Wait for review to complete
-- Address all feedback
-- Re-request if changes are made
+```text
+0.x.x (development): Breaking changes allowed in MINOR bumps, no compatibility guarantees
+1.x.x+ (stable): MAJOR=breaking, MINOR=features, PATCH=fixes
 
-### 3. Ready for Review Status
+Tags: vMAJOR.MINOR.PATCH (signed)
+API URLs: /api/v1/, /api/v2/, etc.
+Deprecation: 6 months minimum for stable APIs
+```
 
-**Only set to "Ready for review" when:**
+### Breaking Changes Process
 
-- ✅ All automated checks GREEN
-- ✅ Copilot review completed (recommended)
-- ✅ All review threads resolved
-- ✅ PR size ≤ 600 lines
+**Development (0.x.x):**
 
-## Copilot Review Best Practice
+- Document in CHANGELOG.md with migration guide
+- Breaking changes in MINOR version OK
 
-**Recommended (not enforced):**
+**Stable (1.x.x+):**
 
-Copilot reviews are valuable but not automatically enforced:
+- MAJOR version bump required
+- Deprecation warnings 1 version before removal
+- Keep old version for 6 months minimum
+- Migration guide in CHANGELOG.md
+- API: New version path (`/api/v2/`), parallel support
 
-- ✅ Request Copilot review after all automated checks pass
-- ✅ Address review feedback before merging
-- ✅ Consider requesting fresh review after significant changes
+### CHANGELOG Maintenance
 
-**Why not enforced?**
+**For `.github` repository:**
 
-- Copilot review is valuable but not blocking
-- Previous automated check was unreliable (frequently failed with false negatives)
-- Human judgment determines when re-review is needed
-- Adds value without blocking the workflow
+- Chronological log format (date-based sections)
+- Document major governance/template changes
+- No version sections, no [Unreleased] section
 
-**When to request Copilot review:**
+**For software repositories (`api/`, `frontend/`, `contracts/`):**
 
-- After initial PR creation and all checks pass
-- After addressing review feedback
-- After significant code changes
-- When unsure about architectural decisions
+**Format:** Keep a Changelog 1.1.0
 
-**How to request:**
+**Required entries:**
 
-- **Via GitHub UI:** PR page → Reviews section → Request review from Copilot
-- **Via GitHub API:** Use the MCP GitHub tool or `gh api` to request review
-- ⚠️ **Note:** `gh pr review --copilot` does NOT exist in gh CLI
+- `[Unreleased]` section for ongoing work
+- Version sections: `[X.Y.Z] - YYYY-MM-DD`
+- Categories: Added, Changed, Deprecated, Removed, Fixed, Security
 
-## PR Size & Scope Discipline
+**Update timing:**
 
-### Size Limit: 600 Lines Maximum
+- Feature PR: Add to `[Unreleased]` → Added
+- Bug fix PR: Add to `[Unreleased]` → Fixed
+- Breaking change: Add to `[Unreleased]` → Changed/Removed with migration guide
+- Release: Move `[Unreleased]` to `[X.Y.Z] - date`, create new `[Unreleased]`
 
-**Rationale:** Based on PR history analysis:
+## Licensing
 
-- **PR #7** (reusable workflows): 840 lines - too large, hard to review comprehensively
-- **PR #8** (actionlint + pre-commit): 237 lines - optimal size, quick review cycle
-- **PR #9** (Copilot review enforcement): 240 lines - optimal size, 9 iterations but manageable due to focused scope
+**Default:** AGPL-3.0-or-later
 
-> **Note:** Although PR #9 exceeded the target of ≤3 review iterations per PR (see line 432), the higher count was acceptable because each iteration addressed narrowly scoped feedback, enabling rapid convergence. Exceptions may be warranted for foundational or process-changing PRs.
+**By File Type:**
 
-**Exception:** Documentation and configuration files (like this instructions file) may exceed the limit when establishing foundational standards.
+- Application code (`*.php`, `*.ts`, `*.js`): `AGPL-3.0-or-later`
+- Configuration (`*.yaml`, `*.json`, `*.toml`): `CC0-1.0`
+- Helper scripts (`*.sh`): `MIT`
+- Documentation (`*.md`): `CC0-1.0`
 
-**Target:** Keep PRs ≤ 600 changed lines for maintainability.
+**Compatible Dependencies:**
 
-### Slice Strategy for Large Changes
+- Permissive: MIT, `BSD-*`, Apache-2.0, ISC
+- Weak Copyleft: `LGPL-*`, MPL-2.0
+- Strong Copyleft: GPL-3.0-or-later, AGPL-3.0-or-later
+- Public Domain: CC0-1.0, Unlicense
 
-If change exceeds 600 lines, split into ≤ 3 sequential PRs:
+**Incompatible:**
 
-1. **PR 1:** Infrastructure/types/interfaces
-2. **PR 2:** Core implementation
-3. **PR 3:** Tests and documentation
+- GPL-2.0-only (without "or later")
+- Proprietary/Commercial licenses
+- Creative Commons (except CC0)
 
-### One PR = One Change Class
+Whitelist: `.github/license-whitelist.txt`
 
-**Prohibited combinations in single PR:**
+## Repository Visibility
 
-- ❌ Feature + Refactor
-- ❌ Fix + Documentation
-- ❌ Lint + Logic changes
-- ❌ Multiple unrelated features
+**All repositories PUBLIC by default.**
 
-**Allowed single-class PRs:**
+- AGPL compliance (source code availability)
+- Secret scanning + push protection enabled
+- Security vulnerabilities: Use GitHub Security Advisories (private disclosure)
+- Response timeline: See SECURITY.md (Critical: 24h response, 7d fix)
+- NO public issues for security vulnerabilities
 
-- ✅ New feature (implementation + tests + docs)
-- ✅ Bug fix (fix + regression test)
-- ✅ Refactor (pure refactor + updated tests)
-- ✅ Documentation (only docs changes)
+## Dependencies
 
-## Agent Working Guidelines
+**Dependabot:** Daily checks 04:00 CET, all ecosystems (npm, composer, pip, docker, github-actions)
 
-### Self-Critique Framework
+- Creates PRs for all updates (patch, minor, major)
+- Security updates prioritized
+- Manual review for major versions
 
-**Before every change, ask yourself:**
+## Quality Standards
 
-1. **Is it NEW or REDUNDANT?** - Does Copilot/GitHub already know this?
-2. **Does it solve a REAL problem?** - Not hypothetical edge cases
-3. **Does it make the file BETTER or just LONGER?** - Quality over quantity
-4. **Is there a BETTER place for it?** - Separate file? README? Docs?
-5. **File size impact?** - Check before/after:
-   - ✅ <400 lines: Good
-   - ⚠️ 400-600 lines: Consider compression
-   - 🔴 >600 lines: MUST split or compress
+**REUSE 3.3:** All files MUST have SPDX headers
 
-### Test-Driven Approach
+- Use `REUSE.toml` for bulk licensing (not deprecated `.reuse/dep5`)
+- Run `reuse lint` before commit (enforced via pre-commit hook)
 
-1. **Write failing test first** (if feature/fix)
-2. **Implement minimal fix** to pass test
-3. **Refactor** if needed
-4. **Verify** all tests still pass
+**Code Style:**
 
-### Security & Compliance
+- Markdown/YAML/JSON/TS/JS: Prettier
+- PHP: Laravel Pint
+- Linting: ESLint (JS/TS), PHPStan level:max (PHP)
+- Markdown: markdownlint
+- Shell: shellcheck
+- GitHub Actions: actionlint
 
-**Never include:**
+## Quality Gates (3-Stage)
 
-- API keys, tokens, passwords, database credentials
-- Private keys, certificates, user PII, sensitive data
+### 1. Pre-Commit (Fast)
 
-**Always verify:**
+- REUSE compliance
+- Prettier (auto-fix)
+- Markdownlint
+- yamllint
+- actionlint
+- shellcheck
 
-- SPDX headers on new files
-- License compatibility for new dependencies
-- No hardcoded secrets in code
+### 2. Pre-Push (Comprehensive)
 
-## OpenAPI Conventions
+- All pre-commit checks
+- PHPStan / ESLint
+- All tests (Pest/Vitest)
+- OpenAPI validation
+- Script: `scripts/preflight.sh`
 
-### Single Source of Truth
+### 3. CI (Enforcement)
 
-`docs/openapi.yaml` defines the contract. Backend and frontend must conform.
+- All pre-push checks
+- CodeQL (JS/TS only, NOT PHP)
+- Branch protection blocks merge if failed
 
-> **See:** Future PR will add `docs/openapi.md` with detailed OpenAPI conventions (naming, structure, validation, error responses, pagination, authentication).
-> **See:** Future PR will also enhance `.github/workflows/README.md` with workflow architecture and usage examples.
+## Branch Protection
 
-## Branch Protection Rules
+```yaml
+main:
+  required_status_checks: [REUSE, License Check, Formatting]
+  required_approving_review_count: 0 # Single maintainer
+  enforce_admins: true
+  required_signatures: true
+  required_linear_history: true
+  required_conversation_resolution: true
+  allow_force_pushes: false
+  allow_deletions: false
 
-Configure these settings in repository settings:
+merge_strategy: squash_only
+auto_delete_branches: true
+```
 
-### Required Status Checks
+## PR Rules
 
-⚠️ **CRITICAL:** Status check names must match **exact job names** from workflow files, NOT workflow names!
+**Size:** ≤600 lines changed (excluding generated code, lock files)
 
-**Example mismatch that blocks merging:**
+- > 600 lines: Split into multiple PRs
+- Exception: Initial setup, large refactors (document why)
 
-- ❌ Workflow name: "Code Quality" → Branch Protection expects: "Code Quality" → **FAILS** (no such check)
-- ✅ Job name: "Check Code Formatting" (from workflow "Code Quality") → **WORKS**
+**One Topic Rule (HARD CONSTRAINT):**
 
-**Safe required checks** (run on ALL PRs):
+Prohibited combinations in single PR:
 
-- `Check Code Formatting` (from workflow: Code Quality)
-- `Check REUSE Compliance` (from workflow: REUSE Compliance)
-- `Check License Compatibility` (from workflow: License Compatibility)
-- Backend: `Pint`, `PHPStan`, `Pest` (if backend code exists)
-- Frontend: `ESLint`, `TypeCheck`, `Vitest` (if frontend code exists)
+- Feature + Bug Fix
+- Feature + Refactor
+- Feature + Documentation
+- Feature + Dependency Update
+- Bug Fix + Refactor
+- Multiple unrelated features
+- Code + Config/Infrastructure
 
-⚠️ **Conditional Required Checks Problem:**
+Allowed combinations:
 
-Some checks only run when specific files change (e.g., "Lint GitHub Actions Workflows" only runs on `.github/workflows/*.yml` changes).
+- Feature + Tests for that feature
+- Bug fix + Tests for that fix
+- Feature + Documentation for that feature only
+- Refactor + Updated tests for refactored code
 
-**DO NOT mark conditional checks as required** - they will block PRs that don't modify their trigger files (docs-only PRs, etc.).
+**Branch Naming:**
 
-**Conditional checks** (DO NOT require):
+- `feat/description` - New features
+- `fix/description` - Bug fixes
+- `refactor/description` - Code refactoring
+- `docs/description` - Documentation only
+- `test/description` - Test improvements
+- `chore/description` - Maintenance (deps, configs)
 
-- `Lint GitHub Actions Workflows` - only runs on workflow file changes
-- Any path-filtered checks
+**Commit Convention:**
 
-### Branch Rules
+```text
+type(scope): description
 
-- ✅ Require signed commits
-- ✅ Require linear history
-- ✅ Require conversation resolution
-- ✅ Enforce admins: **true**
-  - ⚠️ **Important:** When enabled, even admins cannot bypass required checks with `gh pr merge --admin`
-  - All status checks must pass
-  - If checks must be bypassed in emergency situations, document the reason and re-enable this setting immediately after the merge
-- ✅ Allow squash merging (preferred)
-- ❌ Disable force push (except admins)
+feat: add feature
+fix: resolve bug
+refactor: restructure code
+docs: update documentation
+test: add tests
+chore: update dependencies
+```
 
-## Preventing Endless Loops
+**PR Checklist:**
 
-### Common Loop Causes & Solutions
+1. All checks GREEN locally and CI
+2. ≤600 lines
+3. ONE topic only
+4. Self-reviewed
+5. Description complete
+6. Tests pass
+7. No `--no-verify` used
 
-| Cause                         | Solution                                         |
-| ----------------------------- | ------------------------------------------------ |
-| Checks run before review      | Follow gate order: checks → review → ready       |
-| Large PRs cause many comments | Keep PRs ≤ 600 lines                             |
-| Scope creep during dev        | One PR = one change class                        |
-| Format changes trigger CI     | Run `prettier` + `reuse lint` before first push  |
-| Review finds preventable bugs | Write tests first, run locally before pushing    |
-| Unclear requirements          | Document acceptance criteria in PR description   |
-| Edge cases not considered     | Risk assessment for complex changes              |
-| Breaking changes              | OpenAPI backward compatibility + versioning      |
-| Secrets in code               | Pre-commit hooks + code review for secrets check |
+## Workflows
 
-### Iteration Budget
-
-**Target:** ≤ 3 review iterations per PR
-
-> **Note:** While the target is 3 iterations, exceptions may occur for complex or high-impact changes. For example, [PR #9](https://github.com/SecPal/.github/pull/9) required 9 iterations due to extensive review and scope adjustments. In such cases, document the reasons for exceeding the target and follow the escalation steps below.
-
-**After 3 iterations:**
-
-1. Pause and reassess scope
-2. Consider splitting PR
-3. Document blockers and reasons for extra iterations in PR comment (reference relevant PRs if helpful)
-4. Request human review if agent stuck
-
-### Quality vs Speed
-
-**Quality first approach:**
-
-- Run checks locally before push
-- Write clear PR descriptions
-- Self-review diff before marking ready
-- Don't rush to merge
-
-**Signs of rushing:**
-
-- ❌ Marking ready before checks pass
-- ❌ Ignoring Copilot feedback
-- ❌ Partial fixes ("will fix later")
-- ❌ Unclear commit messages
-
-## Quick Reference
-
-### Before Creating PR
+### Before Commit
 
 ```bash
-# Format code
-npx prettier --write .
+# Run pre-commit checks manually if needed
+pre-commit run --all-files
 
-# Add SPDX headers
-reuse annotate --copyright "SecPal" --license "AGPL-3.0-or-later" <new-files>
+# Or specific hook
+pre-commit run reuse --all-files
+```
 
-# Run checks locally
-npm run lint          # or: pnpm lint
-npm run typecheck     # or: pnpm typecheck
-npm test              # or: pnpm test
+### Before Push
 
-# Backend equivalents
-./vendor/bin/pint --test
-./vendor/bin/phpstan analyse
-php artisan test --parallel
+```bash
+# Run comprehensive checks
+./scripts/preflight.sh
 
-# Validate OpenAPI
-npx @stoplight/spectral-cli lint docs/openapi.yaml
-
-# REUSE check
-reuse lint
-
-# Commit with sign-off
-git commit -S -m "feat: add feature X"
+# Or manually per repo type
+npm test && npm run lint && npm run typecheck  # Frontend
+./vendor/bin/pint && ./vendor/bin/phpstan analyse && php artisan test  # Backend
+npx @stoplight/spectral-cli lint docs/openapi.yaml  # API
+reuse lint  # REUSE
 ```
 
 ### During PR Review
 
-1. ✅ All automated checks GREEN?
-2. ✅ PR ≤ 600 lines?
-3. ✅ One change class only?
-4. ✅ Request Copilot review (recommended)
-5. ✅ Address all feedback
-6. ✅ Re-request if significant changes made
-7. ✅ All threads resolved?
-8. ✅ Mark as "Ready for review"
+1. All automated checks GREEN?
+2. PR ≤600 lines?
+3. One topic only?
+4. CHANGELOG.md updated?
+5. Documentation updated (if public API changed)?
+6. Tests added/updated?
+7. Copilot review requested (recommended for code changes)
+8. Address all feedback
+9. All threads resolved?
 
-### Resolving Multiple Review Threads Efficiently
+### Before Merge
 
-For PRs with many review comments (>5 threads), use GitHub GraphQL API instead of clicking "Resolve" in UI:
+- All required checks GREEN
+- Copilot review completed and approved
+- All conversations resolved
+- CHANGELOG.md entry exists
+- Squash commits
 
-**Note:** Replace `REPO_NAME`, `PR_NUMBER` with actual values, and `PRRT_xxxxx` with thread IDs from step 1.
+## AI Self-Check Protocol
 
-```bash
-# 1. Get all review thread IDs
-gh api graphql -f query='
-query {
-  repository(owner: "SecPal", name: "REPO_NAME") {
-    pullRequest(number: PR_NUMBER) {
-      reviewThreads(first: 50) {
-        nodes {
-          id
-          isResolved
-          comments(first: 1) {
-            nodes {
-              body
-            }
-          }
-        }
-      }
-    }
-  }
-}'
+### Trigger Events (WHEN to self-validate)
 
-# 2. Bulk resolve threads (up to 6 per mutation)
-gh api graphql -f query='
-mutation {
-  t1: resolveReviewThread(input: {threadId: "PRRT_xxxxx1"}) {
-    thread { id isResolved }
-  }
-  t2: resolveReviewThread(input: {threadId: "PRRT_xxxxx2"}) {
-    thread { id isResolved }
-  }
-  t3: resolveReviewThread(input: {threadId: "PRRT_xxxxx3"}) {
-    thread { id isResolved }
-  }
-}
-'
-```
+Execute self-check immediately when:
 
-This is significantly faster than manual UI resolution for many threads.
+1. **Error occurred:** Compilation error, test failure, linting error, CI failure
+2. **Tool call failed:** File not found, wrong path, syntax error in edit
+3. **Constraint violated:** Realized a Critical Rule was broken
+4. **Instructions incomplete:** Missing information needed to complete task
+5. **After major change:** >200 lines changed, multi-file refactoring, architecture change
+6. **User correction:** User points out mistake or misunderstanding
+7. **Ambiguity detected:** Multiple interpretations possible, unclear requirement
 
-### Before Merging
+### Validation Checklist (WHAT to verify)
 
-- ✅ All required checks GREEN
-- ✅ Copilot review completed (recommended)
-- ✅ All conversations resolved
-- ✅ PR description clear and complete
-- ✅ Squash commits into single logical commit
+Before completing any task, verify:
 
-### After Merging
+- [ ] All Critical Rules followed? (TDD, One Topic, No Bypass, CHANGELOG, etc.)
+- [ ] Preflight script would pass? (formatting, linting, tests, REUSE)
+- [ ] CHANGELOG.md updated? (if feature/fix/breaking change)
+- [ ] Tests added/updated? (80% coverage minimum)
+- [ ] Documentation updated? (if public API changed)
+- [ ] Correct repository context? (api/ vs frontend/ vs contracts/)
+- [ ] Multi-repo coordination needed? (contracts first?)
+- [ ] Breaking change? (MAJOR version bump, deprecation process)
+- [ ] Security implications? (use SECURITY.md process if needed)
+- [ ] Commit convention followed? (type(scope): description)
 
-Clean up branches and update local repository:
+### Instructions Update Process (HOW to improve)
 
-```bash
-# Fetch and prune deleted remote branches
-git fetch --prune
+When Instructions were insufficient:
 
-# Switch to main and update
-git checkout main
-git pull origin main
-
-# Verify clean state (should only show main branches)
-git branch -a
-
-# Optional: Clean up Git database
-git gc --prune=now
-```
-
-**Note:** `gh pr merge --delete-branch` deletes the remote branch but not the local one. Always run `git fetch --prune` to update local references.
-
-## Contact & Escalation
-
-For questions or issues with these guidelines:
-
-1. Review workflow documentation in `.github/workflows/README.md`
-2. Consult Git history for examples of good PRs (#8, #9, #23-25)
+1. **Document gap:** What information was missing? What assumption was wrong?
+2. **Propose addition:** Draft new constraint/guideline in terse, factual format
+3. **Create issue:** `.github/ISSUE_TEMPLATE/documentation.yml` - "Copilot Instructions: [gap]"
+4. **Include context:** What task triggered the gap? What went wrong?
+5. **PR with update:** Branch `docs/copilot-instructions-[topic]`, update this file
+6. **Keep compact:** Add essentials only, maintain <400 lines target
 
 ---
-
-**Version:** 1.3.0
-**Last Updated:** October 23, 2025
-
-**Changes:**
-
-- **v1.3.0 (Oct 23, 2025):**
-  - Removed unreliable Copilot Review Check workflow
-  - Changed from automated enforcement to best practice approach for Copilot reviews
-  - Corrected repository names: `backend`→`api`, `docs`→`contracts`
-  - Fixed repository structure documentation to match planned architecture
-- **v1.2.0 (Oct 22, 2025):**
-  - Compression: Reduced from 610 to 475 lines (removed 135 lines, -22%)
-  - Removed: Build & Test Commands (see README.md), OpenAPI details (future: docs/openapi.md)
-  - Added: Self-Critique Framework, Conditional Required Checks warning
-  - Based on: PRs #7-9, #23-25 learnings

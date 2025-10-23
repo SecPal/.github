@@ -20,9 +20,33 @@ Ensure you have the following tools installed:
 
 ### Local Setup
 
+**Recommended Workspace Structure:**
+
+Create a dedicated directory for all SecPal repositories. This mirrors the GitHub organization structure:
+
+```bash
+<your-workspace>/SecPal/
+├── .github/          # This repository
+├── api/              # Laravel backend (planned)
+├── frontend/         # React frontend (planned)
+└── contracts/        # OpenAPI contracts (planned)
+```
+
+**Examples:**
+
+- Linux/macOS: `~/projects/SecPal/` or `~/code/SecPal/`
+- Windows: `C:\Dev\SecPal\` or `%USERPROFILE%\projects\SecPal\`
+
+**Choose your workspace location and follow these steps:**
+
 1. **Clone the repository:**
 
    ```bash
+   # Create workspace directory (choose your preferred location)
+   mkdir -p ~/projects/SecPal  # or C:\Dev\SecPal on Windows
+   cd ~/projects/SecPal
+
+   # Clone repository
    git clone https://github.com/SecPal/<repository>.git
    cd <repository>
    ```
@@ -77,6 +101,49 @@ This script runs automatically before every `git push` via the pre-push hook.
 6. **Push your branch** and open a pull request against `main`.
 
 All pull requests will be reviewed by a maintainer and by GitHub Copilot.
+
+## Pull Request Rules
+
+### One PR = One Topic (NO MIXING)
+
+**CRITICAL: Every PR must address exactly ONE logical topic.**
+
+✅ **Allowed:**
+
+- One feature (implementation + tests + docs for that feature)
+- One bug fix (fix + regression test for that bug)
+- One refactor (refactor + updated tests for that code)
+- One documentation update (docs for one topic)
+
+❌ **Strictly Prohibited:**
+
+- Feature + Refactor
+- Fix + Documentation (unrelated)
+- Lint + Logic changes
+- Multiple unrelated features
+- Any "while I'm here" additions
+
+**Example violations:**
+
+- ❌ "Add user auth + refactor database + fix README typos" → Split into 3 PRs
+- ❌ "Fix payment bug + add logging to user service" → Split into 2 PRs
+
+**Why this rule exists:**
+
+- Better review quality (focused review)
+- Safer reverts (one topic = one revert)
+- Clearer git history
+- Faster merging
+
+**If tempted to add "just one more thing":** Stop, create a separate branch and PR.
+
+### PR Size Limit
+
+Keep PRs **≤ 600 changed lines** for maintainability. If larger, split into sequential PRs:
+
+1. Infrastructure/types/interfaces
+2. Core implementation
+3. Tests and documentation
 
 ## Branch Naming Convention
 
@@ -162,9 +229,20 @@ gpg --armor --export <YOUR_KEY_ID>
 
 ## REUSE Compliance
 
-All files must include SPDX license headers:
+All files must include SPDX license headers. **SecPal uses different licenses depending on file type:**
 
-**For code files (PHP, JavaScript, TypeScript, etc.):**
+### License Selection Guide
+
+| File Type            | License             | Use For                                         |
+| -------------------- | ------------------- | ----------------------------------------------- |
+| **Application Code** | `AGPL-3.0-or-later` | PHP, TypeScript, JavaScript, React components   |
+| **Configuration**    | `CC0-1.0`           | YAML, JSON, TOML, `.gitignore`, `.editorconfig` |
+| **Helper Scripts**   | `MIT`               | Standalone bash/shell scripts, build utilities  |
+| **Documentation**    | `CC0-1.0`           | Markdown files (except LICENSE itself)          |
+
+### SPDX Header Examples
+
+**For application code (AGPL-3.0-or-later):**
 
 ```php
 <?php
@@ -177,14 +255,93 @@ All files must include SPDX license headers:
 // SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
-**For documentation and configuration files (Markdown, YAML, etc.):**
+```typescript
+// SPDX-FileCopyrightText: 2025 SecPal Contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+```
+
+**For configuration files (CC0-1.0):**
+
+```yaml
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+```
+
+<!-- REUSE-IgnoreStart -->
+
+```json
+{
+  "_comment": "SPDX-FileCopyrightText: 2025 SecPal Contributors",
+  "_license": "SPDX-License-Identifier: CC0-1.0"
+}
+```
+
+<!-- REUSE-IgnoreEnd -->
+
+**For helper scripts (MIT):**
+
+```bash
+#!/bin/bash
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: MIT
+```
+
+**For documentation (CC0-1.0):**
 
 ```markdown
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
-SPDX-License-Identifier: AGPL-3.0-or-later
+SPDX-FileCopyrightText: 2025 SecPal Contributors
+SPDX-License-Identifier: CC0-1.0
 -->
 ```
+
+### Verification
+
+Run `reuse lint` before committing to verify compliance:
+
+```bash
+# Check all files for REUSE compliance
+reuse lint
+
+# Add headers to new files automatically
+reuse annotate --license AGPL-3.0-or-later --copyright "SecPal Contributors" path/to/file.php
+```
+
+### Bulk Licensing with REUSE.toml
+
+For files that cannot contain comments (images, binaries, etc.) or to license entire directories, use `REUSE.toml` instead of the deprecated `.reuse/dep5`:
+
+**Create `REUSE.toml` in root or subdirectories:**
+
+<!-- REUSE-IgnoreStart -->
+
+```toml
+version = 1
+
+# Example: License all images in assets directory
+[[annotations]]
+path = "assets/images/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 SecPal Contributors"
+SPDX-License-Identifier = "CC0-1.0"
+
+# Example: Override licensing for vendor/third-party code
+[[annotations]]
+path = ["vendor/**", "node_modules/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Various third-party contributors"
+SPDX-License-Identifier = "SEE-LICENSE-IN-PACKAGE"
+```
+
+<!-- REUSE-IgnoreEnd -->
+
+**Precedence options:**
+
+- `closest` (default): Use file's own headers if present, fallback to REUSE.toml
+- `aggregate`: Combine both file headers AND REUSE.toml information
+- `override`: REUSE.toml takes precedence, ignore file headers
+
+**Alternative for individual files:** Create adjacent `.license` files (e.g., `logo.png.license`) containing SPDX headers.
 
 **How to choose the correct copyright attribution:**
 
