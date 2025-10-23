@@ -166,7 +166,7 @@ parameters:
     description: Number of items to return
 ```
 
-### Response Structure
+### Pagination Response Format
 
 ```yaml
 components:
