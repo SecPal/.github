@@ -241,7 +241,8 @@ If change exceeds 600 lines, split into ≤ 3 sequential PRs:
 `docs/openapi.yaml` defines the contract. Backend and frontend must conform.
 
 > **See:** Future PR will add `docs/openapi.md` with detailed OpenAPI conventions (naming, structure, validation, error responses, pagination, authentication).
-> Future PR will also enhance `.github/workflows/README.md` with workflow architecture and usage examples.
+
+> **See:** Future PR will also enhance `.github/workflows/README.md` with workflow architecture and usage examples.
 
 ## Branch Protection Rules
 
@@ -256,12 +257,6 @@ Configure these settings in repository settings:
 - ❌ Workflow name: "Code Quality" → Branch Protection expects: "Code Quality" → **FAILS** (no such check)
 - ✅ Job name: "Check Code Formatting" (from workflow "Code Quality") → **WORKS**
 
-⚠️ **Conditional Required Checks Problem:**
-
-Some checks only run when specific files change (e.g., "Lint GitHub Actions Workflows" only runs on `.github/workflows/*.yml` changes).
-
-**DO NOT mark conditional checks as required** - they will block PRs that don't modify their trigger files (docs-only PRs, etc.).
-
 **Safe required checks** (run on ALL PRs):
 
 - `Check Code Formatting` (from workflow: Code Quality)
@@ -270,6 +265,12 @@ Some checks only run when specific files change (e.g., "Lint GitHub Actions Work
 - Backend: `Pint`, `PHPStan`, `Pest` (if backend code exists)
 - Frontend: `ESLint`, `TypeCheck`, `Vitest` (if frontend code exists)
 - `Verify Copilot Review` ⭐ (enforces fresh review)
+
+⚠️ **Conditional Required Checks Problem:**
+
+Some checks only run when specific files change (e.g., "Lint GitHub Actions Workflows" only runs on `.github/workflows/*.yml` changes).
+
+**DO NOT mark conditional checks as required** - they will block PRs that don't modify their trigger files (docs-only PRs, etc.).
 
 **Conditional checks** (DO NOT require):
 
@@ -465,7 +466,7 @@ For questions or issues with these guidelines:
 
 **Changes:**
 
-- **Compression:** Reduced from 610 → 475 lines (-135 lines, -22%)
+- **Compression:** Reduced from 610 to 475 lines (removed 135 lines, -22%)
 - **Removed:** Build & Test Commands (see README.md), OpenAPI details (future: docs/openapi.md), Workflow Architecture (future: workflows/README.md)
 - **Removed:** Redundant Code Change Format, Risk Assessment, Draft→Ready Workflow sections
 - **Added:** Self-Critique Framework (file size awareness, quality over quantity)
