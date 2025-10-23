@@ -10,7 +10,7 @@ cd "$ROOT_DIR"
 # Auto-detect default branch (fallback to main)
 BASE="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
 [ -z "${BASE:-}" ] && BASE="main"
-if ! git fetch origin "$BASE" --depth=1 2>/dev/null; then
+if ! git fetch origin "$BASE" 2>/dev/null; then
   echo "Warning: Failed to fetch origin/$BASE - PR size check may use stale data" >&2
 fi
 
@@ -121,3 +121,6 @@ else
     echo "Preflight OK · Changed lines: $CHANGED"
   fi
 fi
+
+# All checks passed
+exit 0
