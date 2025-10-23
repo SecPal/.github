@@ -131,6 +131,6 @@ reuse annotate --copyright "SecPal" --license "AGPL-3.0-or-later" <file>
 
 ## License
 
-All projects within the SecPal organization are licensed under the [AGPL-3.0-or-later](../LICENSES/AGPL-3.0-or-later.txt).
+All projects within the SecPal organization are licensed under the [AGPL-3.0-or-later](LICENSES/AGPL-3.0-or-later.txt).
 
-For full license information, see the [LICENSES](../LICENSES/) directory.
+For full license information, see the [LICENSES](LICENSES/) directory.
