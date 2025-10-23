@@ -35,8 +35,9 @@ See [Dependabot Template](#-dependabot-template) below.
 ### **Laravel Backend** (not yet created)
 
 - **Stack**: Laravel, PHP 8.4, PostgreSQL
-- **CodeQL**: `php`
-- **Extras**: Composer audit, Psalm/PHPStan
+- **CodeQL**: ⚠️ **NOT SUPPORTED** - PHP is not supported by CodeQL
+- **Alternatives**: Use PHPStan (level: max), Psalm, or Semgrep for static analysis
+- **Extras**: Composer audit, Laravel Pint (code style)
 
 ### **OpenAPI Service** (not yet created)
 
@@ -127,10 +128,16 @@ For `main` branch in each repository:
 gh api repos/SecPal/{REPO_NAME}/branches/main/protection \
   --method PUT \
   --field required_status_checks='{"strict":true,"contexts":["CodeQL"]}' \
-  --field enforce_admins=false \
-  --field required_pull_request_reviews='{"required_approving_review_count":1}' \
+  --field enforce_admins=true \
+  --field required_pull_request_reviews='{"required_approving_review_count":0}' \
   --field restrictions=null
 ```
+
+**Note:**
+
+- `enforce_admins=true`: Non-negotiable - even admins must follow rules
+- `required_approving_review_count=0`: Single maintainer project, automated checks provide quality gates
+- Required status checks: Adjust based on repository type (CodeQL for JS/TS only, not for PHP)
 
 Or manually: **Settings → Branches → Add rule**
 

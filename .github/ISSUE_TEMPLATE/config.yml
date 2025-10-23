@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/SecPal/.github/discussions
+    about: Ask questions, share ideas, or discuss features
+  - name: 📚 Documentation
+    url: https://github.com/SecPal/.github/blob/main/README.md
+    about: Read the project documentation

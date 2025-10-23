@@ -1,0 +1,118 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+# License Whitelist for SecPal Dependencies
+#
+# This file lists all licenses that are compatible with AGPL-3.0-or-later
+# and may be used as dependencies in SecPal projects.
+#
+# Usage:
+#   - CI/CD checks verify all dependencies against this whitelist
+#   - npm: license-checker --onlyAllow "$(cat .github/license-whitelist.txt | grep -v '^#' | tr '\n' ';')"
+#   - composer: Custom script to parse composer licenses output
+#
+# Format: One SPDX License Identifier per line
+# Reference: https://spdx.org/licenses/
+
+# ============================================================================
+# PERMISSIVE LICENSES (Fully Compatible)
+# ============================================================================
+
+MIT
+BSD-2-Clause
+BSD-3-Clause
+Apache-2.0
+ISC
+0BSD
+Unlicense
+WTFPL
+
+# ============================================================================
+# WEAK COPYLEFT LICENSES (Compatible for Linking)
+# ============================================================================
+
+LGPL-2.0-or-later
+LGPL-2.1
+LGPL-2.1-or-later
+LGPL-3.0
+LGPL-3.0-or-later
+MPL-1.1
+MPL-2.0
+EPL-1.0
+EPL-2.0
+CDDL-1.0
+CDDL-1.1
+
+# ============================================================================
+# STRONG COPYLEFT LICENSES (Same Family, Compatible)
+# ============================================================================
+
+GPL-2.0-or-later
+GPL-3.0
+GPL-3.0-or-later
+AGPL-3.0
+AGPL-3.0-or-later
+
+# ============================================================================
+# PUBLIC DOMAIN / CC0 (Fully Compatible)
+# ============================================================================
+
+CC0-1.0
+CC-PDDC
+
+# ============================================================================
+# SPECIAL CASES (Case-by-case Review)
+# ============================================================================
+
+# Python Software Foundation License
+PSF-2.0
+Python-2.0
+
+# Zlib License (permissive, game engines)
+Zlib
+
+# Boost Software License (permissive)
+BSL-1.0
+
+# OpenSSL License (permissive with attribution)
+OpenSSL
+
+# ============================================================================
+# INCOMPATIBLE LICENSES (DO NOT USE)
+# ============================================================================
+#
+# These licenses are NOT in the whitelist and will fail CI checks:
+#
+# GPL-2.0-only          - Incompatible with AGPL-3.0
+# Proprietary           - No source code
+# Commercial            - Paid license
+# CC-BY-*               - Not for software (content only)
+# CC-BY-SA-*            - Not for software (content only)
+# CC-BY-NC-*            - Non-commercial restriction
+# JSON                  - "Evil" clause (not OSI approved)
+#
+# ============================================================================
+
+# ============================================================================
+# AUTOMATED CHECK CONFIGURATION
+# ============================================================================
+#
+# npm/package.json:
+#   Add to package.json scripts:
+#   "license-check": "license-checker --onlyAllow 'MIT;BSD-2-Clause;BSD-3-Clause;Apache-2.0;ISC;0BSD;Unlicense;WTFPL;LGPL-2.1-or-later;LGPL-3.0-or-later;MPL-2.0;GPL-3.0-or-later;AGPL-3.0-or-later;CC0-1.0;PSF-2.0;Zlib;BSL-1.0;OpenSSL'"
+#
+# composer/composer.json:
+#   composer licenses --format=json | jq -r '.packages[].license[]' | sort -u
+#   Then manually verify against this whitelist
+#
+# GitHub Actions Workflow:
+#   - name: Check Dependency Licenses
+#     run: |
+#       npm run license-check || true
+#       composer licenses
+#
+# ============================================================================
+
+# Last Updated: 2025-01-23
+# Maintained by: SecPal Maintainers
+# Source: https://github.com/SecPal/.github/blob/main/.github/license-whitelist.txt

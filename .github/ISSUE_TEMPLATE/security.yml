@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: 🔒 Security Vulnerability
+description: Report a security vulnerability (private disclosure)
+title: "[Security]: "
+labels: ["security", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **IMPORTANT: For serious security vulnerabilities, please report privately via GitHub Security Advisories:**
+        https://github.com/SecPal/.github/security/advisories/new
+
+        Use this template only for low-severity security concerns or questions about security practices.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is this security issue?
+      options:
+        - Low (hardening recommendation)
+        - Medium (potential vulnerability)
+        - High (report privately via Security Advisories)
+        - Critical (report privately via Security Advisories)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Security Issue Description
+      description: Describe the security concern (avoid revealing exploit details publicly)
+      placeholder: There is a potential security issue with...
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential Impact
+      description: What could an attacker potentially do?
+      placeholder: An attacker could potentially...
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected Components
+      description: Which parts of the system are affected?
+      placeholder: |
+        - Component: Authentication system
+        - Version: 1.0.0
+        - Files: src/auth/...
+    validations:
+      required: false
+
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: What do you recommend to fix or mitigate this issue?
+      placeholder: I recommend...
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have assessed this as LOW severity (for high/critical, I will use Security Advisories)
+          required: true
+        - label: I understand that security details should not be disclosed publicly until a fix is available
+          required: true
+        - label: I have not included exploit code or detailed attack vectors
+          required: true
