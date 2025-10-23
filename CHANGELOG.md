@@ -7,10 +7,6 @@ Chronological log of notable changes to SecPal organization defaults.
 
 **Note:** This repository contains organization-wide configuration and is NOT versioned. For versioned releases, see individual project repositories (`api/`, `frontend/`, `contracts/`).
 
-Chronological log of notable changes to SecPal organization defaults.
-
-**Note:** This repository contains organization-wide configuration and is NOT versioned. For versioned releases, see individual project repositories (`api/`, `frontend/`, `contracts/`).
-
 ---
 
 ## 2025-10-23 - Copilot Instructions Optimization
