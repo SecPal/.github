@@ -7,10 +7,10 @@
 
 We follow [Semantic Versioning](https://semver.org/) (SEMVER). Security updates are provided for the following versions:
 
-| Version | Supported          | Notes                                                     |
-| ------- | ------------------ | --------------------------------------------------------- |
-| 0.x.x   | ✅ | Development phase - all versions receive security updates |
-| < 0.0.1 | ❌                | Not yet released                                          |
+| Version | Supported | Notes                                                     |
+| ------- | --------- | --------------------------------------------------------- |
+| 0.x.x   | ✅        | Development phase - all versions receive security updates |
+| < 0.0.1 | ❌        | Not yet released                                          |
 
 **Note:** Once we reach 1.0.0 (stable release), we will support:
 
@@ -145,16 +145,16 @@ All PRs automatically run:
 
 SecPal repositories have the following security features enabled:
 
-| Feature                         | Status             | Description                            |
-| ------------------------------- | ------------------ | -------------------------------------- |
-| **Secret Scanning**             | ✅ | Detects leaked credentials             |
-| **Push Protection**             | ✅ | Blocks commits with secrets            |
-| **Dependabot Security Updates** | ✅ | Automated security patches             |
-| **Dependabot Version Updates**  | ✅ | Daily dependency updates (04:00 CET)   |
-| **CodeQL Analysis**             | ✅ | SAST for JavaScript/TypeScript         |
-| **Branch Protection**           | ✅ | Enforced status checks, signed commits |
-| **Security Advisories**         | ✅ | Private vulnerability reporting        |
-| **Two-Factor Authentication**   | ✅ | Required for all maintainers           |
+| Feature                         | Status | Description                            |
+| ------------------------------- | ------ | -------------------------------------- |
+| **Secret Scanning**             | ✅     | Detects leaked credentials             |
+| **Push Protection**             | ✅     | Blocks commits with secrets            |
+| **Dependabot Security Updates** | ✅     | Automated security patches             |
+| **Dependabot Version Updates**  | ✅     | Daily dependency updates (04:00 CET)   |
+| **CodeQL Analysis**             | ✅     | SAST for JavaScript/TypeScript         |
+| **Branch Protection**           | ✅     | Enforced status checks, signed commits |
+| **Security Advisories**         | ✅     | Private vulnerability reporting        |
+| **Two-Factor Authentication**   | ✅     | Required for all maintainers           |
 
 ## Known Security Limitations
 
