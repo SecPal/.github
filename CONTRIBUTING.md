@@ -24,7 +24,7 @@ Ensure you have the following tools installed:
 
 Create a dedicated directory for all SecPal repositories. This mirrors the GitHub organization structure:
 
-```
+```bash
 <your-workspace>/SecPal/
 ├── .github/          # This repository
 ├── api/              # Laravel backend (planned)

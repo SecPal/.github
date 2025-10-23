@@ -9,7 +9,7 @@ Organization-wide defaults for all SecPal repositories.
 
 ## Repository Structure
 
-```
+```text
 SecPal Organization:
 ├── .github/     - Organization defaults (this repo)
 ├── api/         - Laravel backend (planned)
@@ -17,7 +17,7 @@ SecPal Organization:
 └── contracts/   - OpenAPI contracts (planned)
 
 Local: <workspace>/SecPal/<repository>
-Remote: https://github.com/SecPal/\<repository\>
+Remote: https://github.com/SecPal/<repository>
 ```
 
 ## Critical Rules
@@ -95,7 +95,7 @@ When changes span multiple repositories:
 
 **SEMVER 2.0.0** starting at **0.0.1**
 
-```
+```text
 0.x.x (development): Breaking changes allowed in MINOR bumps, no compatibility guarantees
 1.x.x+ (stable): MAJOR=breaking, MINOR=features, PATCH=fixes
 
@@ -150,15 +150,15 @@ Deprecation: 6 months minimum for stable APIs
 
 **By File Type:**
 
-- Application code (_.php, _.ts, \*.js): `AGPL-3.0-or-later`
-- Configuration (_.yaml, _.json, \*.toml): `CC0-1.0`
-- Helper scripts (\*.sh): `MIT`
-- Documentation (\*.md): `CC0-1.0`
+- Application code (`*.php`, `*.ts`, `*.js`): `AGPL-3.0-or-later`
+- Configuration (`*.yaml`, `*.json`, `*.toml`): `CC0-1.0`
+- Helper scripts (`*.sh`): `MIT`
+- Documentation (`*.md`): `CC0-1.0`
 
 **Compatible Dependencies:**
 
-- Permissive: MIT, BSD-\*, Apache-2.0, ISC
-- Weak Copyleft: LGPL-\*, MPL-2.0
+- Permissive: MIT, `BSD-*`, Apache-2.0, ISC
+- Weak Copyleft: `LGPL-*`, MPL-2.0
 - Strong Copyleft: GPL-3.0-or-later, AGPL-3.0-or-later
 - Public Domain: CC0-1.0, Unlicense
 
@@ -283,7 +283,7 @@ Allowed combinations:
 
 **Commit Convention:**
 
-```
+```text
 type(scope): description
 
 feat: add feature

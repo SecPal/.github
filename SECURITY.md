@@ -46,7 +46,7 @@ We take security seriously. If you discover a security vulnerability, please rep
 
 If you cannot use GitHub Security Advisories, contact us at:
 
-**🔐 security@secpal.org** (PGP key available on request)
+**🔐 <security@secpal.org>** (PGP key available on request)
 
 **Please include:**
 
@@ -210,7 +210,7 @@ _No vulnerabilities reported yet._
 
 ## Contact
 
-- **Security Issues:** Use GitHub Security Advisories or security@secpal.org
+- **Security Issues:** Use GitHub Security Advisories or <security@secpal.org>
 - **General Questions:** Open a Discussion in the repository
 - **Non-Security Bugs:** Open an Issue using our bug report template
 
