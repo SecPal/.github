@@ -337,7 +337,7 @@ reuse lint  # REUSE
 4. CHANGELOG.md updated?
 5. Documentation updated (if public API changed)?
 6. Tests added/updated?
-7. Copilot review completed (mandatory for code changes)
+7. Copilot review requested (recommended for code changes)
 8. Address all feedback
 9. All threads resolved?
 
