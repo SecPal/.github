@@ -66,75 +66,17 @@ Each repository follows the standards defined here unless explicitly overridden.
 - **Note:** Always verify language support before adding to CodeQL matrix
 - **Reference:** [CodeQL language support documentation](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/)
 
-## Build & Test Commands
+### Quality Standards
 
-### PHP/Laravel Backend
+- **REUSE 3.3:** All files must have SPDX headers
+- **Code Style:** Prettier (Markdown, YAML, JSON, TS, JS)
+- **Linting:** Language-specific linters (PHPStan, ESLint)
+- **Testing:** Automated tests required, must pass
+- **Markdown:** `markdownlint`, `prettier`
+- **Shell Scripts:** `shellcheck`
+- **GitHub Actions:** `actionlint`
 
-```bash
-# Dependencies
-composer install --no-interaction --no-progress --prefer-dist --optimize-autoloader
-
-# Code Style Check
-./vendor/bin/pint --test
-
-# Static Analysis
-./vendor/bin/phpstan analyse --level=max
-
-# Tests (parallel)
-php artisan test --parallel
-```
-
-### Node.js/React Frontend
-
-```bash
-# Dependencies (use exact versions)
-npm ci
-# or for pnpm projects:
-pnpm install --frozen-lockfile
-
-# Linting
-npm run lint
-
-# Type Checking
-npm run typecheck
-# or:
-npx tsc --noEmit
-
-# Tests
-npm test
-# or:
-pnpm test
-```
-
-### OpenAPI Validation
-
-```bash
-# Lint OpenAPI spec
-npx @stoplight/spectral-cli lint docs/openapi.yaml
-```
-
-### Code Formatting (all files)
-
-```bash
-# Check formatting
-npx prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
-
-# Auto-fix
-npx prettier --write '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}'
-```
-
-### REUSE Compliance
-
-```bash
-# Install REUSE tool
-pip install reuse
-
-# Validate compliance
-reuse lint
-
-# Add missing headers
-reuse annotate --copyright "SecPal" --license "AGPL-3.0-or-later" <file>
-```
+> **See:** [README.md](../README.md) for detailed build & test commands (PHP, Node.js, OpenAPI, REUSE).
 
 ## PR Gates & Workflow Order
 
@@ -259,6 +201,19 @@ If change exceeds 600 lines, split into ≤ 3 sequential PRs:
 
 ## Agent Working Guidelines
 
+### Self-Critique Framework
+
+**Before every change, ask yourself:**
+
+1. **Is it NEW or REDUNDANT?** - Does Copilot/GitHub already know this?
+2. **Does it solve a REAL problem?** - Not hypothetical edge cases
+3. **Does it make the file BETTER or just LONGER?** - Quality over quantity
+4. **Is there a BETTER place for it?** - Separate file? README? Docs?
+5. **File size impact?** - Check before/after:
+   - ✅ <400 lines: Good
+   - ⚠️ 400-600 lines: Consider compression
+   - 🔴 >600 lines: MUST split or compress
+
 ### Test-Driven Approach
 
 1. **Write failing test first** (if feature/fix)
@@ -266,31 +221,12 @@ If change exceeds 600 lines, split into ≤ 3 sequential PRs:
 3. **Refactor** if needed
 4. **Verify** all tests still pass
 
-### Code Change Format
-
-- Provide inline diff blocks
-- **Maximum 300 lines per diff block**
-- Include 3-5 lines context before/after changes
-- Use exact file paths (absolute when possible)
-- Verify changes compile/run before committing
-
-### Risk Assessment
-
-For non-trivial changes, document:
-
-- **Risks:** What could break?
-- **Alternatives:** Other approaches considered?
-- **Rollback:** How to undo if needed?
-- **Testing:** What scenarios are covered?
-
 ### Security & Compliance
 
-**Never include in prompts/logs:**
+**Never include:**
 
-- API keys, tokens, passwords
-- Database credentials
-- Private keys or certificates
-- User PII or sensitive data
+- API keys, tokens, passwords, database credentials
+- Private keys, certificates, user PII, sensitive data
 
 **Always verify:**
 
@@ -298,103 +234,14 @@ For non-trivial changes, document:
 - License compatibility for new dependencies
 - No hardcoded secrets in code
 
-### Draft → Ready Workflow
-
-1. Create PR as **Draft**
-2. Run all automated checks locally
-3. Fix issues until all GREEN
-4. Push and verify CI passes
-5. Request Copilot review
-6. Address feedback
-7. Mark as **Ready for review** only when:
-   - ✅ All checks GREEN
-   - ✅ Fresh Copilot review
-   - ✅ All threads resolved
-
 ## OpenAPI Conventions
 
 ### Single Source of Truth
 
 `docs/openapi.yaml` defines the contract. Backend and frontend must conform.
 
-### Consistency Requirements
-
-- **Error Responses:** Use standard `application/problem+json` format
-- **Pagination:** Cursor-based with `meta.next_cursor`
-- **Authentication:** OAuth2 Bearer tokens
-- **Versioning:** URI versioning (`/api/v1/...`)
-- **Caching:** Use `ETag` + `If-None-Match` headers
-- **Rate Limiting:** Standard headers (`X-RateLimit-*`)
-
-### Validation
-
-OpenAPI changes must:
-
-1. Pass Spectral linting
-2. Remain backward-compatible (for existing endpoints)
-3. Include example requests/responses
-4. Document all status codes
-
-## Workflow Architecture
-
-### Reusable Workflows
-
-All quality checks are defined as reusable workflows in `SecPal/.github`.
-
-**Available for all SecPal repositories:**
-
-- `reusable-reuse.yml` - REUSE compliance
-- `reusable-license-compatibility.yml` - License checks
-- `reusable-prettier.yml` - Code formatting
-- `reusable-markdown-lint.yml` - Markdown linting
-- `reusable-actionlint.yml` - Workflow linting
-- `reusable-php-lint.yml` - Laravel Pint
-- `reusable-php-stan.yml` - PHPStan analysis
-- `reusable-php-test.yml` - Pest tests
-- `reusable-node-lint.yml` - ESLint
-- `reusable-node-test.yml` - Vitest tests
-- `reusable-node-build.yml` - Vite build
-- `reusable-openapi-lint.yml` - Spectral validation
-- `reusable-copilot-review-check.yml` - Review freshness check
-
-**See:** `.github/workflows/README.md` for detailed usage and parameters.
-
-### Usage in Other SecPal Repos
-
-Each repository should create `.github/workflows/ci.yml` using the reusable workflows.
-
-**Example for `SecPal/backend`:**
-
-```yaml
-name: CI
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-jobs:
-  # Quality checks
-  reuse:
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main
-
-  prettier:
-    uses: SecPal/.github/.github/workflows/reusable-prettier.yml@main
-
-  # Backend checks
-  pint:
-    uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@main
-
-  phpstan:
-    uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@main
-
-  pest:
-    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@main
-
-  # Quality gate (runs after code checks)
-  copilot-review:
-    uses: SecPal/.github/.github/workflows/reusable-copilot-review-check.yml@main
-```
+> **See:** Future PR will add `docs/openapi.md` with detailed OpenAPI conventions (naming, structure, validation, error responses, pagination, authentication).
+> **See:** Future PR will also enhance `.github/workflows/README.md` with workflow architecture and usage examples.
 
 ## Branch Protection Rules
 
@@ -409,15 +256,25 @@ Configure these settings in repository settings:
 - ❌ Workflow name: "Code Quality" → Branch Protection expects: "Code Quality" → **FAILS** (no such check)
 - ✅ Job name: "Check Code Formatting" (from workflow "Code Quality") → **WORKS**
 
-Add these **job names** as required before merge:
+**Safe required checks** (run on ALL PRs):
 
 - `Check Code Formatting` (from workflow: Code Quality)
-- `Lint GitHub Actions Workflows` (from workflow: Workflow Lint)
 - `Check REUSE Compliance` (from workflow: REUSE Compliance)
 - `Check License Compatibility` (from workflow: License Compatibility)
-- Backend: `Pint`, `PHPStan`, `Pest`
-- Frontend: `ESLint`, `TypeCheck`, `Vitest`
+- Backend: `Pint`, `PHPStan`, `Pest` (if backend code exists)
+- Frontend: `ESLint`, `TypeCheck`, `Vitest` (if frontend code exists)
 - `Verify Copilot Review` ⭐ (enforces fresh review)
+
+⚠️ **Conditional Required Checks Problem:**
+
+Some checks only run when specific files change (e.g., "Lint GitHub Actions Workflows" only runs on `.github/workflows/*.yml` changes).
+
+**DO NOT mark conditional checks as required** - they will block PRs that don't modify their trigger files (docs-only PRs, etc.).
+
+**Conditional checks** (DO NOT require):
+
+- `Lint GitHub Actions Workflows` - only runs on workflow file changes
+- Any path-filtered checks
 
 ### Branch Rules
 
@@ -598,12 +455,20 @@ git gc --prune=now
 
 For questions or issues with these guidelines:
 
-1. Check PR #9 for context on review enforcement
-2. Review workflow documentation in `.github/workflows/README.md`
-3. Consult Git history for examples of good PRs (#8, #9)
+1. Review workflow documentation in `.github/workflows/README.md`
+2. Consult Git history for examples of good PRs (#8, #9, #23-25)
 
 ---
 
-**Last Updated:** October 22, 2025 (based on PRs #7-9, #23-24 learnings)
+**Version:** 1.2.0
+**Last Updated:** October 22, 2025
 
-**Document Version:** 1.1.0 - Added CodeQL limitations, branch protection clarifications, GraphQL review resolution, post-merge cleanup
+**Changes:**
+
+- **Compression:** Reduced from 610 to 475 lines (removed 135 lines, -22%)
+- **Removed:** Build & Test Commands (see README.md), OpenAPI details (future: docs/openapi.md), Workflow Architecture (future: workflows/README.md)
+- **Removed:** Redundant Code Change Format, Risk Assessment, Draft→Ready Workflow sections
+- **Added:** Self-Critique Framework (file size awareness, quality over quantity)
+- **Added:** Conditional Required Checks warning (prevents docs-only PR blocks)
+- **Note:** Reference documentation will be added in follow-up PR #27
+- **Based on:** PRs #7-9, #23-25 learnings
