@@ -89,7 +89,9 @@ When changes span multiple repositories:
 3. **Version lock:** Tag contracts before implementing
 4. **Breaking changes:** New API version (`/api/v2/`), deprecate old version
 
-## Versioning
+## Versioning (Software Repositories Only)
+
+**Note:** Only `api/`, `frontend/`, `contracts/` repositories use SEMVER. This `.github` repository is NOT versioned.
 
 **SEMVER 2.0.0** starting at **0.0.1**
 
@@ -118,6 +120,14 @@ Deprecation: 6 months minimum for stable APIs
 - API: New version path (`/api/v2/`), parallel support
 
 ### CHANGELOG Maintenance
+
+**For `.github` repository:**
+
+- Chronological log format (date-based sections)
+- Document major governance/template changes
+- No version sections, no [Unreleased] section
+
+**For software repositories (`api/`, `frontend/`, `contracts/`):**
 
 **Format:** Keep a Changelog 1.1.0
 
@@ -247,20 +257,20 @@ auto_delete_branches: true
 
 Prohibited combinations in single PR:
 
-- ❌ Feature + Bug Fix
-- ❌ Feature + Refactor
-- ❌ Feature + Documentation
-- ❌ Feature + Dependency Update
-- ❌ Bug Fix + Refactor
-- ❌ Multiple unrelated features
-- ❌ Code + Config/Infrastructure
+- Feature + Bug Fix
+- Feature + Refactor
+- Feature + Documentation
+- Feature + Dependency Update
+- Bug Fix + Refactor
+- Multiple unrelated features
+- Code + Config/Infrastructure
 
 Allowed combinations:
 
-- ✅ Feature + Tests for that feature
-- ✅ Bug fix + Tests for that fix
-- ✅ Feature + Documentation for that feature only
-- ✅ Refactor + Updated tests for refactored code
+- Feature + Tests for that feature
+- Bug fix + Tests for that fix
+- Feature + Documentation for that feature only
+- Refactor + Updated tests for refactored code
 
 **Branch Naming:**
 
@@ -379,15 +389,4 @@ When Instructions were insufficient:
 5. **PR with update:** Branch `docs/copilot-instructions-[topic]`, update this file
 6. **Keep compact:** Add essentials only, maintain <400 lines target
 
-### Version Tracking
-
-Track significant Instructions updates:
-
-```
-2025-10-23: Added AI Self-Check Protocol, Multi-Repo Coordination, CHANGELOG maintenance
-2025-10-23: Initial compressed version (1047→340 lines), removed Change History
-```
-
 ---
-
-**Last Updated:** 2025-10-23
