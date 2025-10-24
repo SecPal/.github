@@ -1,0 +1,214 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+# Dependabot Auto-Merge Workflow
+# Automatically merges Dependabot PRs for PATCH updates when all CI checks pass
+#
+# Strategy (Phase 1 - v0.1.x - v0.3.x):
+#   - PATCH updates (1.2.3 → 1.2.4): Auto-merge if CI passes ✅
+#   - MINOR updates (1.2.0 → 1.3.0): Manual review required 🔍
+#   - MAJOR updates (1.x → 2.0.0): Manual review required ⚠️
+#
+# Future phases:
+#   - Phase 2 (v0.4.x+): Auto-merge PATCH + MINOR
+#   - Phase 3 (v1.0.0+): Consider auto-merge for non-breaking MAJOR
+#
+# Rollback strategy: Git revert the auto-merged commit if issues occur
+
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# Ensure only one auto-merge runs at a time per PR
+concurrency:
+  group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Determine if this PR is eligible for auto-merge
+  check-eligibility:
+    name: Check Auto-Merge Eligibility
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    outputs:
+      should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
+      update-type: ${{ steps.check.outputs.update-type }}
+    steps:
+      - name: Check PR metadata
+        id: check
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          echo "PR Title: ${PR_TITLE}"
+          echo "PR Labels: ${PR_LABELS}"
+
+          # Check if PR has 'dependencies' label (required for Dependabot PRs)
+          if ! echo "${PR_LABELS}" | grep -q "dependencies"; then
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=not-dependabot" >> "${GITHUB_OUTPUT}"
+            echo "❌ Not eligible: Missing dependencies label"
+            exit 0
+          fi
+
+          # Extract version numbers from Dependabot PR title
+          # Common formats:
+          #   "Bump package from 1.2.3 to 1.2.4"
+          #   "Update dependency from 1.2.3 to 1.2.4"
+          #   "chore(deps): bump package from 1.2.3 to 1.2.4"
+          #
+          # Note: Pre-release versions (1.2.3-beta) and build metadata (1.2.3+build)
+          # are NOT supported. Such PRs will fall back to 'unparseable' status and
+          # require manual review, which is the safer approach for non-stable versions.
+
+          # Extract "from X.Y.Z to A.B.C" pattern
+          if [[ "${PR_TITLE}" =~ from[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+)[[:space:]]+to[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            OLD_MAJOR="${BASH_REMATCH[1]}"
+            OLD_MINOR="${BASH_REMATCH[2]}"
+            OLD_PATCH="${BASH_REMATCH[3]}"
+            NEW_MAJOR="${BASH_REMATCH[4]}"
+            NEW_MINOR="${BASH_REMATCH[5]}"
+            NEW_PATCH="${BASH_REMATCH[6]}"
+
+            echo "Old version: ${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH}"
+            echo "New version: ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
+
+            # Determine update type based on semver rules
+            if [[ "${NEW_MAJOR}" != "${OLD_MAJOR}" ]]; then
+              echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+              echo "update-type=major" >> "${GITHUB_OUTPUT}"
+              echo "❌ Not eligible: MAJOR update (${OLD_MAJOR}.x.x → ${NEW_MAJOR}.x.x) requires manual review"
+            elif [[ "${NEW_MINOR}" != "${OLD_MINOR}" ]]; then
+              echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+              echo "update-type=minor" >> "${GITHUB_OUTPUT}"
+              echo "❌ Not eligible: MINOR update (${OLD_MAJOR}.${OLD_MINOR}.x → ${NEW_MAJOR}.${NEW_MINOR}.x) requires manual review"
+            elif [[ "${NEW_PATCH}" != "${OLD_PATCH}" ]]; then
+              echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
+              echo "update-type=patch" >> "${GITHUB_OUTPUT}"
+              echo "✅ Eligible for auto-merge: PATCH update (${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH})"
+            else
+              echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+              echo "update-type=no-change" >> "${GITHUB_OUTPUT}"
+              echo "❌ Not eligible: Version unchanged"
+            fi
+          else
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=unparseable" >> "${GITHUB_OUTPUT}"
+            echo "❌ Not eligible: Could not parse version numbers from PR title"
+            echo "    Title format expected: 'Bump X from 1.2.3 to 1.2.4'"
+          fi
+
+  # Enable auto-merge for eligible PRs
+  auto-merge:
+    name: Enable Auto-Merge
+    runs-on: ubuntu-latest
+    needs: check-eligibility
+    if: needs.check-eligibility.outputs.should-auto-merge == 'true'
+    steps:
+      - name: Wait for CI checks
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+          running-workflow-name: "Enable Auto-Merge"
+
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          echo "🤖 Enabling auto-merge for patch update..."
+          echo "PR: ${PR_URL}"
+          echo "Update type: ${{ needs.check-eligibility.outputs.update-type }}"
+
+          # Enable auto-merge with squash merge strategy
+          gh pr merge --auto --squash "${PR_URL}"
+
+          echo "✅ Auto-merge enabled! PR will merge when all checks pass."
+
+      - name: Add comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🤖 **Auto-merge enabled** for this patch update.\n\n` +
+                    `This PR will automatically merge when all required checks pass.\n\n` +
+                    `**Update type:** \`${{ needs.check-eligibility.outputs.update-type }}\`\n` +
+                    `**Strategy:** Squash merge\n` +
+                    `**Rollback:** If issues occur, use \`git revert\` on the merge commit.\n\n` +
+                    `_Automated by Dependabot Auto-Merge Workflow (Phase 1)_`
+            })
+
+  # Skip auto-merge for non-eligible PRs (informational)
+  skip-auto-merge:
+    name: Skip Auto-Merge
+    runs-on: ubuntu-latest
+    needs: check-eligibility
+    if: needs.check-eligibility.outputs.should-auto-merge != 'true' && github.actor == 'dependabot[bot]'
+    steps:
+      - name: Add comment for manual review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const updateType = '${{ needs.check-eligibility.outputs.update-type }}';
+            let emoji = '🔍';
+            let title = 'Manual review required';
+            let reason = 'This update requires manual review.';
+
+            if (updateType === 'major') {
+              emoji = '⚠️';
+              title = 'MAJOR version update detected';
+              reason = 'This is a **MAJOR** version update which may contain breaking changes.\n\n' +
+                       '**Action required:**\n' +
+                       '1. Review the changelog for breaking changes\n' +
+                       '2. Update code if necessary\n' +
+                       '3. Verify all tests pass\n' +
+                       '4. Merge manually after verification';
+            } else if (updateType === 'minor') {
+              emoji = '🔍';
+              title = 'MINOR version update detected';
+              reason = 'This is a **MINOR** version update which may contain new features.\n\n' +
+                       '**Action required:**\n' +
+                       '1. Review the changelog for new features\n' +
+                       '2. Consider if new features should be utilized\n' +
+                       '3. Verify all tests pass\n' +
+                       '4. Merge manually after verification\n\n' +
+                       '**Note:** In Phase 2 (v0.4.0+), MINOR updates will be auto-merged.';
+            } else if (updateType === 'unparseable') {
+              emoji = '❓';
+              title = 'Could not determine update type';
+              reason = 'The PR title format could not be parsed.\n\n' +
+                       'Expected format: `Bump package from X.Y.Z to A.B.C`\n\n' +
+                       'Please review manually.';
+            } else {
+              emoji = '🔍';
+              reason = `Update type: \`${updateType}\`\n\nPlease review and merge manually.`;
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${emoji} **${title}**\n\n` +
+                    `${reason}\n\n` +
+                    `---\n` +
+                    `**Current auto-merge policy (Phase 1):**\n` +
+                    `- ✅ PATCH updates: Auto-merge\n` +
+                    `- 🔍 MINOR updates: Manual review\n` +
+                    `- ⚠️ MAJOR updates: Manual review\n\n` +
+                    `_See policy: \`.github/workflows/dependabot-auto-merge.yml\`_`
+            })
