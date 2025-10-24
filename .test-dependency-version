@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+# This is a test dependency file for testing the Dependabot auto-merge workflow
+# Version: 1.2.4
+TEST_DEPENDENCY_VERSION=1.2.4
