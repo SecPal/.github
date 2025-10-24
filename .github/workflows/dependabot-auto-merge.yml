@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2025 SecPal
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 
 # Dependabot Auto-Merge Workflow
 # Automatically merges Dependabot PRs for PATCH updates when all CI checks pass
@@ -7,7 +7,7 @@
 # Strategy (Phase 1 - v0.1.x - v0.3.x):
 #   - PATCH updates (1.2.3 → 1.2.4): Auto-merge if CI passes ✅
 #   - MINOR updates (1.2.0 → 1.3.0): Manual review required 🔍
-#   - MAJOR updates (1.x → 2.0.0): Manual review required 🔍
+#   - MAJOR updates (1.x → 2.0.0): Manual review required ⚠️
 #
 # Future phases:
 #   - Phase 2 (v0.4.x+): Auto-merge PATCH + MINOR
