@@ -27,7 +27,7 @@ on:
 
 # Ensure only one auto-merge runs at a time per PR
 concurrency:
-  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 permissions:
@@ -66,6 +66,10 @@ jobs:
           #   "Bump package from 1.2.3 to 1.2.4"
           #   "Update dependency from 1.2.3 to 1.2.4"
           #   "chore(deps): bump package from 1.2.3 to 1.2.4"
+          #
+          # Note: Pre-release versions (1.2.3-beta) and build metadata (1.2.3+build)
+          # are NOT supported. Such PRs will fall back to 'unparseable' status and
+          # require manual review, which is the safer approach for non-stable versions.
 
           # Extract "from X.Y.Z to A.B.C" pattern
           if [[ "${PR_TITLE}" =~ from[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+)[[:space:]]+to[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
