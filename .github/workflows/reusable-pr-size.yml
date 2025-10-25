@@ -64,11 +64,20 @@ jobs:
           fi
 
           # Count changed lines with exclusions
-          DIFF_OUTPUT=$(git diff --numstat "$MERGE_BASE"..HEAD)
+          RAW_DIFF_OUTPUT=$(git diff --numstat "$MERGE_BASE"..HEAD)
+          DIFF_OUTPUT="$RAW_DIFF_OUTPUT"
 
-          for pattern in "${EXCLUDE_PATTERNS[@]}"; do
-            DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -v "$pattern" || true)
-          done
+          # Build single regex alternation for efficient filtering
+          EXCLUDE_REGEX=$(printf "%s|" "${EXCLUDE_PATTERNS[@]}" | sed 's/|$//')
+          DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
+
+          # Validate that not all files were filtered out
+          if [ -n "$RAW_DIFF_OUTPUT" ] && [ -z "$DIFF_OUTPUT" ]; then
+            echo "⚠️  Warning: All changed files were excluded by filters"
+            echo "This PR contains only lock files, license texts, or other excluded patterns"
+            echo "✅ PR size check passed (all changes are auto-generated/excluded)"
+            exit 0
+          fi
 
           CHANGED=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
 
