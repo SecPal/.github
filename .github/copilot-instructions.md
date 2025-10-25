@@ -429,7 +429,8 @@ When Instructions were insufficient:
 **WHAT:** SecPal ONLY uses these domains:
 
 - **Production/All Services:** secpal.app (including email addresses)
-- **Development:** secpal.dev (infrastructure only, NO email addresses)
+- **Development:** secpal.dev (infrastructure endpoints only, NEVER for email addresses)
+  - **All email addresses (including development):** MUST use secpal.app
 - **FORBIDDEN:** secpal.com, secpal.org, ANY other domain
 
 **WHY:** Incorrect domains expose critical infrastructure errors. Found 6 instances of secpal.org in previous commits.
@@ -512,7 +513,7 @@ credentials/
 
 **Pre-Push Hooks:** MUST validate security before allowing push (preflight.sh).
 
-**VALIDATION:** Run `grep -L "^permissions:" .github/workflows/*.yml` - MUST return empty. All workflows require explicit permissions.
+**VALIDATION:** Run `grep -L "^permissions:" .github/workflows/*.yml` - MUST produce no output. All workflows require explicit permissions.
 
 ### 5. Hidden Files Have Equal Priority (MANDATORY)
 
@@ -626,8 +627,8 @@ paths: # API endpoints
 **HOW - Validation Checklist:**
 
 - [ ] All automated checks GREEN (REUSE, Prettier, linting, tests)
-- [ ] No placeholder comments (TODO, FIXME, XXX)
-- [ ] No commented-out code blocks
+- [ ] Zero unresolved placeholder comments (TODO, FIXME, XXX) - allowed during development, must be resolved before PR
+- [ ] Zero commented-out code blocks
 - [ ] No console.log / var_dump debugging statements
 - [ ] No hardcoded values that should be config
 - [ ] All functions documented (PHPDoc/JSDoc/TSDoc)
@@ -693,7 +694,7 @@ Verify ALL items before PR creation.
 ALL gates MUST pass before push. No bypass allowed.
 
 - [ ] `./scripts/preflight.sh` exits with code 0
-- [ ] `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json"` returns ONLY secpal.app and secpal.dev
+- [ ] `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"` returns ONLY secpal.app and secpal.dev
 - [ ] All tests pass (100% success rate)
 - [ ] REUSE compliance: `reuse lint` returns 0 errors
 
