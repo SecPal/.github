@@ -5,8 +5,8 @@
 # It uses a centralized reusable workflow from SecPal/.github
 #
 # Setup required:
-# 1. Add CLA_BOT_TOKEN as an organization secret (Settings → Secrets → Actions)
-#    OR add it as a repository secret in each repo
+# 1. Add CLA_BOT_TOKEN as an organization secret (Settings → Secrets → Actions) - RECOMMENDED
+#    (Alternative: Add as repository secret in each repo - less convenient)
 # 2. The token must be a Personal Access Token with 'repo' scope
 #
 # All CLA signatures are stored centrally in SecPal/.github (branch: cla-signatures)
