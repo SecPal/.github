@@ -130,7 +130,7 @@ Before creating a **new label**:
 3. **Update this document** - Add to the standard list
 4. **Sync across repos** - Use `sync-labels.sh`
 
-**Don't create ad-hoc labels in individual repositories!**
+**Don't create ad-hoc labels in individual repositories!** This breaks cross-repo tracking, complicates automation, and requires manual cleanup.
 
 ## Label Maintenance
 
