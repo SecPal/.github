@@ -407,4 +407,321 @@ When Instructions were insufficient:
 5. **PR with update:** Branch `docs/copilot-instructions-[topic]`, update this file
 6. **Keep compact:** Add essentials only, maintain <400 lines target
 
+## Learned Lessons (Copilot-Proof Standard)
+
+### 1. Multi-Layer Review Strategy (MANDATORY)
+
+**WHAT:** Execute 4 review passes with different perspectives before creating PR.
+
+**WHY:** Single-pass reviews miss 60%+ of issues (domain errors, security gaps, missing best practices).
+
+**HOW:**
+
+1. **Comprehensive Review:** Verify all files meet coding standards, documentation complete, tests present
+2. **Deep Dive Review:** Check critical policies (domain names, license compliance, security patterns)
+3. **Best Practices Review:** Search for missing governance files (.editorconfig, .gitattributes, CODEOWNERS, SECURITY.md)
+4. **Security Auditor Review:** Verify workflow permissions, .gitignore coverage, secret patterns
+
+**VALIDATION:** Run all 4 passes before PR creation. Document findings. Fix all issues before commit.
+
+### 2. Domain Policy (CRITICAL - ZERO TOLERANCE)
+
+**WHAT:** SecPal ONLY uses these domains:
+
+- **Production/All Services:** secpal.app (including email addresses)
+- **Development:** secpal.dev (infrastructure endpoints only, NEVER for email addresses)
+  - **All email addresses (including development):** MUST use secpal.app
+- **FORBIDDEN:** secpal.com, secpal.org, ANY other domain
+
+**WHY:** Incorrect domains expose critical infrastructure errors. Found 6 instances of secpal.org in previous commits.
+
+**HOW:**
+
+1. MUST run `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"` before EVERY commit
+2. MUST validate all email addresses use @secpal.app
+3. MUST check package.json, README.md, SECURITY.md, OpenAPI specs
+4. ZERO exceptions - this is a hard blocker
+
+**VALIDATION:** `grep` returns ONLY secpal.app and secpal.dev. Any other match = PR rejected.
+
+### 3. DRY Principle over Repositories (MANDATORY)
+
+**WHAT:** Governance files MUST be symlinked from .github repo, NOT duplicated.
+
+**WHY:** Duplicates cause drift, maintenance burden, inconsistency across repos.
+
+**HOW:**
+
+**Symlinked files (contracts → .github):**
+
+```bash
+CONTRIBUTING.md -> ../.github/CONTRIBUTING.md
+SECURITY.md -> ../.github/SECURITY.md
+CODE_OF_CONDUCT.md -> ../.github/CODE_OF_CONDUCT.md
+CODEOWNERS -> ../.github/CODEOWNERS
+.editorconfig -> ../.github/.editorconfig
+.gitattributes -> ../.github/.gitattributes
+```
+
+**Implementation:**
+
+```bash
+cd contracts/
+ln -s ../.github/CONTRIBUTING.md .
+ln -s ../.github/SECURITY.md .
+ln -s ../.github/CODE_OF_CONDUCT.md .
+ln -s ../.github/CODEOWNERS .
+ln -s ../.github/.editorconfig .editorconfig
+ln -s ../.github/.gitattributes .gitattributes
+```
+
+**VALIDATION:** Run `file CONTRIBUTING.md` - must show "symbolic link". NO plain files allowed.
+
+### 4. Security by Default, not by Addition (MANDATORY)
+
+**WHAT:** Security MUST be explicit from line 1, not added later.
+
+**WHY:** Default permissive settings = privilege escalation risk. Principle of Least Privilege.
+
+**HOW:**
+
+**GitHub Actions Workflows:**
+
+```yaml
+# ✅ REQUIRED - Explicit permissions
+permissions:
+  contents: read # Minimal required access
+
+# ❌ FORBIDDEN - Implicit permissions
+# (no permissions block = write-all access)
+```
+
+**File Types:**
+
+```yaml
+# .gitignore MUST include (minimum):
+.env*
+*.key
+*.pem
+secrets/
+credentials/
+*.secret
+.aws/
+.azure/
+.gcloud/
+```
+
+**Pre-Push Hooks:** MUST validate security before allowing push (preflight.sh).
+
+**VALIDATION:** Run `grep -L "^permissions:" .github/workflows/*.yml` - MUST produce no output (all files contain permissions block). All workflows require explicit permissions.
+
+### 5. Hidden Files Have Equal Priority (MANDATORY)
+
+**WHAT:** Hidden files (.editorconfig, .gitattributes, .gitignore, CODEOWNERS) are EQUALLY critical as source code.
+
+**WHY:** Missing hidden files = inconsistent line endings, wrong git behavior, team friction, security gaps.
+
+**HOW:**
+
+**Required hidden files (per repository):**
+
+- `.editorconfig` - Code style enforcement (indent, charset, trim trailing whitespace)
+- `.gitattributes` - Line ending normalization (LF for text, binary handling)
+- `.gitignore` - Secret prevention, build artifact exclusion
+- `CODEOWNERS` - Automatic review assignment
+
+**Review protocol:** MUST explicitly validate presence. DO NOT skip because filename starts with dot.
+
+**VALIDATION:** Execute `ls -la | grep "^\."` - MUST show all 4 files. Missing file = incomplete setup = PR blocked.
+
+### 6. OpenAPI is More Than Endpoints (MANDATORY)
+
+**WHAT:** OpenAPI specs MUST include complete infrastructure from v0.0.1:
+
+- Components (schemas, responses, parameters, examples, securitySchemes)
+- Security definitions (authentication, rate limiting)
+- Server configuration (base URLs, environments)
+- Complete error schemas (4xx, 5xx)
+- Rate limiting documentation
+- CORS policy
+- Header specifications
+
+**WHY:** Incomplete specs = implementation assumptions = API drift = breaking changes.
+
+**HOW:**
+
+```yaml
+# ✅ REQUIRED from v0.0.1
+openapi: 3.1.0
+info: # Full metadata
+servers: # All environments
+security: # Global security
+components:
+  schemas: # All data models
+  responses: # Standard errors
+  parameters: # Reusable params
+  examples: # Request/response examples
+  securitySchemes: # Auth methods
+paths: # API endpoints
+```
+
+**VALIDATION:** Every OpenAPI file MUST have all 7 top-level sections before merge.
+
+### 7. package.json Must Include Complete Metadata (MANDATORY)
+
+**WHAT:** package.json MUST include complete metadata from v0.0.1:
+
+```json
+{
+  "name": "@secpal/contracts",
+  "version": "0.0.1",
+  "description": "Complete professional description",
+  "keywords": ["api", "openapi", "contracts"],
+  "homepage": "https://secpal.app",
+  "bugs": "https://github.com/SecPal/contracts/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SecPal/contracts"
+  },
+  "license": "AGPL-3.0-or-later",
+  "author": "SecPal <info@secpal.app>"
+}
+```
+
+**WHY:** Professional metadata = discoverability = trust = easier adoption.
+
+**HOW:** Copy template from `.github/templates/package.json.template` and customize per repository.
+
+**VALIDATION:** For each required field, execute individual command and verify non-empty value:
+
+```bash
+npm pkg get homepage   # MUST return non-empty
+npm pkg get bugs       # MUST return non-empty
+npm pkg get repository # MUST return non-empty
+npm pkg get license    # MUST return non-empty
+npm pkg get author     # MUST return non-empty
+```
+
+ZERO empty fields allowed.
+
+### 8. Pre-Push Quality Gates Are Effective (MANDATORY)
+
+**WHAT:** preflight.sh MUST execute before EVERY push and MUST block on failure.
+
+**WHY:** Achieved 100% CI compliance when enforced. Prevents broken commits from reaching remote.
+
+**HOW:**
+
+```bash
+# .git/hooks/pre-push
+#!/bin/bash
+./scripts/preflight.sh || exit 1
+```
+
+**Preflight checks (all MUST pass):**
+
+1. REUSE compliance (SPDX headers)
+2. Prettier formatting
+3. Linting (ESLint/PHPStan/actionlint/markdownlint)
+4. Tests (100% pass rate)
+5. OpenAPI validation (contracts repository)
+
+**VALIDATION:** Push with intentional error - MUST be blocked. Fix error - push succeeds.
+
+### 9. Copilot-Proof Code Standard (MANDATORY)
+
+**WHAT:** Code quality target = "No AI reviewer can suggest ANY improvements".
+
+**WHY:** This is the professional standard. Anything less is technical debt from day 1.
+
+**HOW - Validation Checklist:**
+
+- [ ] All automated checks GREEN (REUSE, Prettier, linting, tests)
+- [ ] Zero placeholder comments (TODO, FIXME, XXX) in final PR – all TODOs must be resolved before creating PR
+- [ ] Zero commented-out code blocks
+- [ ] No console.log / var_dump debugging statements
+- [ ] No hardcoded values that should be config
+- [ ] All functions documented (PHPDoc/JSDoc/TSDoc)
+- [ ] All edge cases tested
+- [ ] All error paths covered
+- [ ] No magic numbers without explanation
+- [ ] No violations of SOLID/DRY principles
+
+**EXPECTATION:** Run GitHub Copilot review → "No issues found" with ZERO suggestions.
+
+**VALIDATION:** Request Copilot review before merge. ANY suggestion = not ready.
+
+### 10. Systematic Post-Merge Cleanup (MANDATORY)
+
+**WHAT:** Immediately after PR merge, execute cleanup protocol:
+
+```bash
+# Execute in sequence after EVERY merge
+git checkout main
+git pull
+git branch -d feature/branch-name
+git fetch --prune
+git status  # MUST output: "nothing to commit, working tree clean"
+```
+
+**WHY:** Prevents orphaned branches, ensures local/remote sync, avoids confusion.
+
+**HOW:** Execute ALL 5 commands sequentially after EVERY merge. No exceptions.
+
+**VALIDATION:** Execute `git branch -a` - MUST show ONLY main locally, ZERO feature/fix branches.
+
+## Mandatory Checklists (Pre-PR Gates)
+
+### Checklist 1: Multi-Pass Review Strategy
+
+MUST complete ALL passes before creating PR:
+
+- [ ] **Pass 1 - Comprehensive Review:** All files meet standards, docs complete, tests present
+- [ ] **Pass 2 - Deep Dive Review:** Domain policy verified (grep secpal.), licenses correct, security patterns present
+- [ ] **Pass 3 - Best Practices Review:** Hidden files present (.editorconfig, .gitattributes, CODEOWNERS, SECURITY.md)
+- [ ] **Pass 4 - Security Auditor Review:** Workflow permissions explicit, .gitignore complete, zero secrets in code
+
+### Checklist 2: Security Validation
+
+Verify ALL items before commit. ZERO exceptions.
+
+- [ ] Workflow permissions explicitly set to minimum required (`contents: read`)
+- [ ] .gitignore includes: `.env*`, `*.key`, `*.pem`, `secrets/`, `credentials/`, `*.secret`
+- [ ] Zero secrets in code (API keys, passwords, tokens)
+- [ ] Pre-push hook configured (preflight.sh blocks on failure)
+
+### Checklist 3: Completeness Validation
+
+Verify ALL items before PR creation.
+
+- [ ] OpenAPI specs include: components, schemas, responses, parameters, examples, securitySchemes, servers
+- [ ] package.json includes: name, version, description, keywords, homepage, bugs, repository, license, author
+- [ ] Governance files present and symlinked (NOT duplicated): CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS
+- [ ] Hidden files present: .editorconfig, .gitattributes, .gitignore
+
+### Checklist 4: Quality Gates
+
+ALL gates MUST pass before push. No bypass allowed.
+
+- [ ] `./scripts/preflight.sh` exits with code 0
+- [ ] `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"` returns ONLY secpal.app and secpal.dev
+- [ ] All tests pass (100% success rate)
+- [ ] REUSE compliance: `reuse lint` returns 0 errors
+
+### Checklist 5: Copilot-Proof Standard
+
+Achieve ALL criteria before requesting review.
+
+- [ ] Zero TODO/FIXME/XXX comments
+- [ ] Zero commented-out code
+- [ ] Zero debugging statements (console.log, var_dump)
+- [ ] All functions documented (PHPDoc/JSDoc/TSDoc with examples)
+- [ ] Zero magic numbers (all constants named and explained)
+- [ ] GitHub Copilot review requested → ZERO improvement suggestions
+- [ ] All conversations resolved
+- [ ] CHANGELOG.md updated
+- [ ] All CI checks GREEN
+
+**TARGET:** All checks GREEN. Zero Copilot suggestions = standard achieved.
+
 ---
