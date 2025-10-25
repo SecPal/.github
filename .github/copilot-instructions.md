@@ -459,8 +459,8 @@ CONTRIBUTING.md -> ../.github/CONTRIBUTING.md
 SECURITY.md -> ../.github/SECURITY.md
 CODE_OF_CONDUCT.md -> ../.github/CODE_OF_CONDUCT.md
 CODEOWNERS -> ../.github/CODEOWNERS
-.editorconfig -> .github/.editorconfig
-.gitattributes -> .github/.gitattributes
+.editorconfig -> ../.github/.editorconfig
+.gitattributes -> ../.github/.gitattributes
 ```
 
 **Implementation:**
@@ -513,7 +513,7 @@ credentials/
 
 **Pre-Push Hooks:** MUST validate security before allowing push (preflight.sh).
 
-**VALIDATION:** Run `grep -L "^permissions:" .github/workflows/*.yml` - MUST produce no output. All workflows require explicit permissions.
+**VALIDATION:** Run `grep -L "^permissions:" .github/workflows/*.yml` - MUST produce no output (all files contain permissions block). All workflows require explicit permissions.
 
 ### 5. Hidden Files Have Equal Priority (MANDATORY)
 
@@ -592,7 +592,17 @@ paths: # API endpoints
 
 **HOW:** Copy template from `.github/templates/package.json.template` and customize per repository.
 
-**VALIDATION:** Execute `npm pkg get homepage bugs repository license author` - ALL fields MUST return values, ZERO empty fields allowed.
+**VALIDATION:** For each required field, execute individual command and verify non-empty value:
+
+```bash
+npm pkg get homepage   # MUST return non-empty
+npm pkg get bugs       # MUST return non-empty
+npm pkg get repository # MUST return non-empty
+npm pkg get license    # MUST return non-empty
+npm pkg get author     # MUST return non-empty
+```
+
+ZERO empty fields allowed.
 
 ### 8. Pre-Push Quality Gates Are Effective (MANDATORY)
 
@@ -627,7 +637,7 @@ paths: # API endpoints
 **HOW - Validation Checklist:**
 
 - [ ] All automated checks GREEN (REUSE, Prettier, linting, tests)
-- [ ] Zero unresolved placeholder comments (TODO, FIXME, XXX) - allowed during development, must be resolved before PR
+- [ ] Zero placeholder comments (TODO, FIXME, XXX) in final PR – all TODOs must be resolved before creating PR
 - [ ] Zero commented-out code blocks
 - [ ] No console.log / var_dump debugging statements
 - [ ] No hardcoded values that should be config
@@ -637,7 +647,7 @@ paths: # API endpoints
 - [ ] No magic numbers without explanation
 - [ ] No violations of SOLID/DRY principles
 
-**EXPECTATION:** Run GitHub Copilot review → "Looks good to me!" with NO suggestions.
+**EXPECTATION:** Run GitHub Copilot review → "No issues found" with ZERO suggestions.
 
 **VALIDATION:** Request Copilot review before merge. ANY suggestion = not ready.
 
