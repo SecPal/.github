@@ -78,6 +78,10 @@ fi
 echo "✅ Repository $ORG/$REPO found"
 echo ""
 
+# Fetch all existing labels once (performance optimization)
+echo "📥 Fetching existing labels..."
+EXISTING_LABELS=$(gh label list --repo "$ORG/$REPO" --json name,color,description)
+
 # Sync each label
 CREATED=0
 UPDATED=0
@@ -86,11 +90,13 @@ SKIPPED=0
 for label_spec in "${LABELS[@]}"; do
   IFS='|' read -r name color description <<< "$label_spec"
 
-  # Check if label exists
-  if gh label list --repo "$ORG/$REPO" --json name --jq '.[].name' | grep -q "^${name}$"; then
-    # Label exists, update it
-    CURRENT_COLOR=$(gh label list --repo "$ORG/$REPO" --json name,color --jq ".[] | select(.name==\"$name\") | .color")
-    CURRENT_DESC=$(gh label list --repo "$ORG/$REPO" --json name,description --jq ".[] | select(.name==\"$name\") | .description")
+  # Check if label exists (using cached data)
+  LABEL_DATA=$(echo "$EXISTING_LABELS" | jq -r ".[] | select(.name==\"$name\")")
+
+  if [ -n "$LABEL_DATA" ]; then
+    # Label exists, check if update needed
+    CURRENT_COLOR=$(echo "$LABEL_DATA" | jq -r '.color')
+    CURRENT_DESC=$(echo "$LABEL_DATA" | jq -r '.description')
 
     if [ "$CURRENT_COLOR" = "$color" ] && [ "$CURRENT_DESC" = "$description" ]; then
       # Already up to date
