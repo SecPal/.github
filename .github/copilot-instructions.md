@@ -23,6 +23,7 @@ Remote: https://github.com/SecPal/<repository>
 ## Critical Rules
 
 1. **TDD Mandatory:** Write failing test FIRST, implement, refactor. Never commit untested code. Minimum 80% coverage for new code, 100% for critical paths.
+   - **Exception:** `spike/*` branches are for exploration only (no TDD required). See [Spike Branch Policy](../../CONTRIBUTING.md#spike-branch-policy) for details. Cannot merge to main.
 2. **Quality Gates:** Preflight script (`./scripts/preflight.sh`) MUST pass before push. All CI checks MUST pass before merge. No bypass.
 3. **One PR = One Topic:** No mixing features/fixes/refactors/docs/config in single PR.
 4. **No Bypass:** Never use `--no-verify` or force push. Branch protection applies to admins.

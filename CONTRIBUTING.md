@@ -155,6 +155,74 @@ Use the following prefixes for your branch names:
 - `docs/` - Documentation changes (e.g., `docs/update-readme`)
 - `refactor/` - Code refactoring (e.g., `refactor/simplify-auth`)
 - `test/` - Test additions or fixes (e.g., `test/add-e2e-tests`)
+- `spike/` - Exploration/prototyping (see [Spike Branch Policy](#spike-branch-policy))
+
+### Spike Branch Policy
+
+**Spike branches** are for exploration, prototyping, and learning - **NOT for production code**.
+
+**Purpose:**
+
+- Evaluate new libraries or technologies
+- Prototype UI/UX concepts
+- Performance testing and benchmarking
+- Learning unfamiliar APIs
+
+**Rules:**
+
+1. ✅ **TDD is optional** - Tests are not required in spike branches
+2. ❌ **Cannot merge to `main`** - Spike branches are isolated
+3. ⏰ **Time-limited** - Recommended lifecycle: 7 days max
+4. 🔄 **Extract knowledge** - Create `feature/*` branch with tests for production
+5. 🧹 **Clean up** - Delete spike branch after knowledge extraction
+
+**Workflow:**
+
+```bash
+# 1. Create spike branch for exploration
+git checkout -b spike/auth-library-evaluation
+
+# 2. Experiment freely (no TDD required)
+# ... code, test, evaluate ...
+
+# 3. Document findings (in PR description or issue comment)
+
+# 4. If you opened a PR for the spike branch:
+#    - Add a summary of findings to the PR description or linked issue
+#    - Close the PR before deleting the branch
+
+# 5. Create feature branch WITH tests for production
+git checkout main
+git checkout -b feature/implement-auth-library
+# ... implement with TDD ...
+
+# 6. Delete spike branch (after closing any open PRs)
+git branch -D spike/auth-library-evaluation
+git push origin --delete spike/auth-library-evaluation
+```
+
+> **Note:** If you opened a PR for your spike branch, always close it and document your findings in the PR description or a related issue before deleting the branch. This keeps the repository clean and ensures knowledge is preserved.
+
+**Examples:**
+
+- `spike/nextauth-vs-passport-comparison`
+- `spike/tailwind-component-layout`
+- `spike/redis-caching-performance`
+- `spike/websocket-real-time-updates`
+
+**What spike branches are NOT:**
+
+- ❌ A way to avoid writing tests for production code
+- ❌ Long-lived feature development branches
+- ❌ Code that will be directly merged to main
+
+**CI Behavior:**
+
+- ✅ Formatting checks **STILL RUN** (Prettier, linting)
+- ✅ REUSE compliance **STILL REQUIRED**
+- ⏭️ **Test suites are SKIPPED** (no TDD enforcement)
+
+---
 
 ## Commit Message Convention
 
