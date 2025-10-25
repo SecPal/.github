@@ -10,3 +10,10 @@ build/
 *.min.css
 package-lock.json
 composer.lock
+
+# Config files without parsers
+.gitignore
+.gitattributes
+.editorconfig
+.prettierignore
+.markdownlintignore
