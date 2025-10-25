@@ -172,7 +172,16 @@ By contributing to SecPal projects, you agree to our [Contributor License Agreem
 - Allows you to **retain copyright** ownership
 - Ensures your work can benefit both open source and commercial users
 
-The CLA Assistant bot will automatically guide you through signing when you submit your first pull request.
+**CLA Signing Process:**
+
+When you submit your first pull request, [CLA Assistant](https://cla-assistant.io/) will automatically comment with instructions. Simply:
+
+1. Click the link in the comment
+2. Sign in with GitHub (OAuth)
+3. Click "I agree" to sign the CLA
+4. Your PR status will update automatically
+
+All signatures are stored securely in a GDPR-compliant database hosted in Europe.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
@@ -182,11 +191,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 To enable CLA checks in your SecPal repository:
 
-1. Copy the [CLA workflow template](workflow-templates/cla.yml) to your repo's `.github/workflows/` directory
-2. The `CLA_BOT_TOKEN` secret is configured organization-wide - no additional setup needed
-3. The workflow will automatically run on all new pull requests
+1. Go to [CLA Assistant](https://cla-assistant.io/) and sign in with GitHub
+2. Click "Configure CLA"
+3. Select your repository from the dropdown
+4. Link it to the SecPal CLA Gist (ask an organization admin for the Gist URL)
+5. Done! CLA Assistant will automatically monitor all pull requests
 
-All CLA signatures are stored centrally in this repository (branch: `cla-signatures`).
+**Unlike the previous GitHub Action approach, no workflow files are needed** – CLA Assistant uses GitHub webhooks directly.
+
+All CLA signatures are stored centrally in a secure database (Azure Europe, GDPR-compliant).
 
 ---
 
