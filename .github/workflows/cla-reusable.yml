@@ -9,15 +9,6 @@ on:
       CLA_BOT_TOKEN:
         description: "Personal Access Token with 'repo' scope for CLA signatures"
         required: true
-  # Also allow direct triggers for the .github repository itself
-  issue_comment:
-    types:
-      - created
-  pull_request_target:
-    types:
-      - opened
-      - synchronize
-      - reopened
 
 permissions:
   actions: write
@@ -33,7 +24,7 @@ jobs:
       - name: Validate CLA_BOT_TOKEN
         run: |
           if [ -z "${{ secrets.CLA_BOT_TOKEN }}" ]; then
-            echo "::error::CLA_BOT_TOKEN secret is not configured. Please add it in Organization Settings → Secrets."
+            echo "::error::CLA_BOT_TOKEN secret is not configured. Please add it in Organization Settings → Secrets or Repository Settings → Secrets."
             echo "::error::The secret requires a Personal Access Token with 'repo' scope."
             exit 1
           fi
