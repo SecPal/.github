@@ -54,7 +54,7 @@ jobs:
             'composer.lock'
             'yarn.lock'
             'pnpm-lock.yaml'
-            'LICENSES/.*\.txt$'
+            '^LICENSES/.*\.txt$'
           )
 
           # Add custom exclude patterns if provided

@@ -31,9 +31,9 @@ declare -a LABELS=(
   "enhancement|a2eeef|New feature or request"
   "documentation|0075ca|Improvements or additions to documentation"
   "config-infrastructure|ededed|Configuration or infrastructure changes"
-  "security|ededed|Security-related changes or vulnerabilities"
+  "security|b60205|Security-related changes or vulnerabilities"
   "dependencies|0366d6|Pull requests that update a dependency file"
-  "breaking-change|ededed|Changes that break backward compatibility"
+  "breaking-change|d93f0b|Changes that break backward compatibility"
   "developer-experience|ededed|Improvements to developer experience (DX)"
   "legal|ededed|Legal compliance, licensing, CLA"
 

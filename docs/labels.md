@@ -28,9 +28,9 @@ Labels that describe the **type** of issue or PR.
 | `enhancement`           | #a2eeef | New feature or request                      | Issues, PRs              |
 | `documentation`         | #0075ca | Improvements or additions to documentation  | Issues, PRs              |
 | `config-infrastructure` | #ededed | Configuration or infrastructure changes     | Issues, PRs              |
-| `security`              | #ededed | Security-related changes or vulnerabilities | Issues, PRs              |
+| `security`              | #b60205 | Security-related changes or vulnerabilities | Issues, PRs              |
 | `dependencies`          | #0366d6 | Pull requests that update a dependency file | PRs (often auto-labeled) |
-| `breaking-change`       | #ededed | Changes that break backward compatibility   | PRs, Issues              |
+| `breaking-change`       | #d93f0b | Changes that break backward compatibility   | PRs, Issues              |
 | `developer-experience`  | #ededed | Improvements to developer experience (DX)   | Issues, PRs              |
 | `legal`                 | #ededed | Legal compliance, licensing, CLA            | Issues, PRs              |
 
@@ -144,7 +144,8 @@ Before creating a **new label**:
 
 We follow a consistent color scheme:
 
-- **Red (#d73a4a)**: Problems/Bugs
+- **Red (#d73a4a, #b60205)**: Problems/Bugs/Security
+- **Orange-Red (#d93f0b)**: Breaking changes (critical warnings)
 - **Blue (#0075ca, #0366d6)**: Documentation/Dependencies
 - **Green (#008672)**: Help/Community
 - **Purple (#7057ff, #d876e3)**: Newcomers/Questions
