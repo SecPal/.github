@@ -145,6 +145,16 @@ Keep PRs **≤ 600 changed lines** for maintainability. If larger, split into se
 2. Core implementation
 3. Tests and documentation
 
+**Exceptions:**
+
+Large PRs (> 600 lines) are acceptable for:
+
+- **Dependency updates** (e.g., `package-lock.json`, `Cargo.lock`)
+- **Generated code** (e.g., OpenAPI clients, database migrations)
+- **Boilerplate/templates** that cannot be reasonably split
+
+In these cases, add the `large-pr-approved` label to bypass the size check. See [Organization Label Standards](https://github.com/SecPal/.github/blob/main/docs/labels.md) for details.
+
 ## Branch Naming Convention
 
 Use the following prefixes for your branch names:

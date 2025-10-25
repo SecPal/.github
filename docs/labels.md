@@ -98,7 +98,7 @@ Labels: bug, security, priority: high
 **Optional:**
 
 - `breaking-change` if backward incompatible
-- `large-pr-approved` if > 600 lines and legitimate
+- `large-pr-approved` if > 600 lines and legitimate (see [CONTRIBUTING.md](../CONTRIBUTING.md#pr-size-limit))
 - `dependencies` (usually auto-added by Dependabot)
 
 **Example:**
