@@ -211,7 +211,7 @@ Choose the **primary** type. If a PR is both `enhancement` and `documentation`, 
 ### 2025-10-25
 
 - Initial label standards documentation
-- Defined 19 standard labels across 4 categories
+- Defined 20 standard labels across 4 categories
 - Created `large-pr-approved` for legitimate large PRs
 - Added label sync script
 

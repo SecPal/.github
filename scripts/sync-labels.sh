@@ -97,13 +97,16 @@ for label_spec in "${LABELS[@]}"; do
       ((SKIPPED++))
     else
       # Update needed
-      gh label edit "$name" --repo "$ORG/$REPO" --color "$color" --description "$description" &> /dev/null || true
-      echo "🔄 Updated: $name"
-      ((UPDATED++))
+      if gh label edit "$name" --repo "$ORG/$REPO" --color "$color" --description "$description" &> /dev/null; then
+        echo "🔄 Updated: $name"
+        ((UPDATED++))
+      else
+        echo "❌ Failed to update: $name"
+      fi
     fi
   else
     # Label doesn't exist, create it
-    if gh label create "$name" --repo "$ORG/$REPO" --color "$color" --description "$description" 2>&1; then
+    if gh label create "$name" --repo "$ORG/$REPO" --color "$color" --description "$description" &> /dev/null; then
       echo "✨ Created: $name"
       ((CREATED++))
     else
