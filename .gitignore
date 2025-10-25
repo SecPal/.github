@@ -9,6 +9,21 @@ vendor/
 dist/
 build/
 
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+*.jks
+.npmrc
+.yarnrc
+
 # IDE
 .idea/
 .vscode/
