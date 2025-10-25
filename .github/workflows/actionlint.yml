@@ -15,6 +15,9 @@ on:
     paths:
       - ".github/workflows/**"
 
+permissions:
+  contents: read
+
 jobs:
   actionlint:
     name: Lint GitHub Actions Workflows

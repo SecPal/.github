@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+
+# SPDX-License-Identifier: CC0-1.0
+
+# Code Owners - Single Maintainer Setup
+
+#
+
+# This file defines code ownership for automatic review requests.
+
+# As this is currently a single-maintainer project, all areas are owned
+
+# by the project maintainer. This can be expanded as the team grows.
+
+#
+
+# For more information: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Global owner - will be requested for review on all PRs
+
+- @SecPal/maintainers
+
+# Documentation
+
+\*.md @SecPal/maintainers
+/docs/ @SecPal/maintainers
+
+# GitHub configurations
+
+/.github/ @SecPal/maintainers
+
+# Security-sensitive files
+
+SECURITY.md @SecPal/maintainers
+/LICENSES/ @SecPal/maintainers
+
+# CI/CD Workflows
+
+/.github/workflows/ @SecPal/maintainers
