@@ -675,7 +675,7 @@ MUST complete ALL passes before creating PR:
 Verify ALL items before commit. ZERO exceptions.
 
 - [ ] Workflow permissions explicitly set to minimum required (`contents: read`)
-- [ ] .gitignore includes: .env*, *.key, _.pem, secrets/, credentials/, _.secret
+- [ ] .gitignore includes: `.env*`, `*.key`, `*.pem`, `secrets/`, `credentials/`, `*.secret`
 - [ ] Zero secrets in code (API keys, passwords, tokens)
 - [ ] Pre-push hook configured (preflight.sh blocks on failure)
 
