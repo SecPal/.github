@@ -411,7 +411,7 @@ When Instructions were insufficient:
 
 ### 1. Multi-Layer Review Strategy (MANDATORY)
 
-**WHAT:** Execute minimum 3 review passes with different perspectives before creating PR.
+**WHAT:** Execute 4 review passes with different perspectives before creating PR.
 
 **WHY:** Single-pass reviews miss 60%+ of issues (domain errors, security gaps, missing best practices).
 
@@ -470,8 +470,8 @@ ln -s ../.github/CONTRIBUTING.md .
 ln -s ../.github/SECURITY.md .
 ln -s ../.github/CODE_OF_CONDUCT.md .
 ln -s ../.github/CODEOWNERS .
-ln -s .github/.editorconfig .editorconfig
-ln -s .github/.gitattributes .gitattributes
+ln -s ../.github/.editorconfig .editorconfig
+ln -s ../.github/.gitattributes .gitattributes
 ```
 
 **VALIDATION:** Run `file CONTRIBUTING.md` - must show "symbolic link". NO plain files allowed.
@@ -561,6 +561,7 @@ components:
   parameters: # Reusable params
   examples: # Request/response examples
   securitySchemes: # Auth methods
+paths: # API endpoints
 ```
 
 **VALIDATION:** Every OpenAPI file MUST have all 7 top-level sections before merge.
@@ -674,7 +675,7 @@ MUST complete ALL passes before creating PR:
 Verify ALL items before commit. ZERO exceptions.
 
 - [ ] Workflow permissions explicitly set to minimum required (`contents: read`)
-- [ ] .gitignore includes: .env\*, \*.key, \*.pem, secrets/, credentials/, \*.secret
+- [ ] .gitignore includes: .env*, *.key, _.pem, secrets/, credentials/, _.secret
 - [ ] Zero secrets in code (API keys, passwords, tokens)
 - [ ] Pre-push hook configured (preflight.sh blocks on failure)
 
