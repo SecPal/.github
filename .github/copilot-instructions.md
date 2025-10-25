@@ -147,7 +147,14 @@ Deprecation: 6 months minimum for stable APIs
 
 ## Licensing
 
-**Default:** AGPL-3.0-or-later
+**Dual-Licensing Model:**
+
+SecPal uses a **dual-licensing strategy**:
+
+1. **Open Source (AGPL-3.0-or-later)**: Default for all code, ensuring copyleft compliance
+2. **Commercial License**: Available for customers requiring proprietary use
+
+**Default License:** AGPL-3.0-or-later
 
 **By File Type:**
 
@@ -170,6 +177,16 @@ Deprecation: 6 months minimum for stable APIs
 - Creative Commons (except CC0)
 
 Whitelist: `.github/license-whitelist.txt`
+
+**Contributor License Agreement (CLA):**
+
+All contributors must sign the [CLA](../CLA.md) to:
+
+- Grant rights for both AGPL and commercial distribution
+- Retain copyright ownership of contributions
+- Enable dual-licensing business model
+
+CLA signing is **automated** via CLA Assistant bot on pull requests.
 
 ## Repository Visibility
 
