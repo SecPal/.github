@@ -29,7 +29,11 @@ jobs:
         uses: contributor-assistant/github-action@v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Store signatures in a dedicated branch
+          # CLA_BOT_TOKEN: Personal Access Token (PAT) with 'repo' scope
+          # Required to commit signatures to the cla-signatures branch
+          # Setup: Repository Settings → Secrets → New repository secret
+          # Name: CLA_BOT_TOKEN | Value: Your PAT
+          # The workflow will fail if this secret is not configured
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_BOT_TOKEN }}
         with:
           # Path to CLA document

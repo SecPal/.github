@@ -2,6 +2,10 @@
 SPDX-FileCopyrightText: 2025 SecPal
 
 SPDX-License-Identifier: CC0-1.0
+
+NOTE: This document intentionally contains duplicate headings (e.g., "Definitions", "Support")
+for legal clarity in the Individual and Corporate CLA sections. The markdownlint rule MD024
+(no-duplicate-heading) is disabled in .markdownlint.json to accommodate this structure.
 -->
 
 # Contributor License Agreement (CLA)
