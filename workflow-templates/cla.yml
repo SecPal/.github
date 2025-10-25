@@ -1,6 +1,16 @@
 # SPDX-FileCopyrightText: 2025 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
+# This workflow enforces CLA signatures for all pull requests
+# It uses a centralized reusable workflow from SecPal/.github
+#
+# Setup required:
+# 1. Add CLA_BOT_TOKEN as an organization secret (Settings → Secrets → Actions) - RECOMMENDED
+#    (Alternative: Add as repository secret in each repo - less convenient)
+# 2. The token must be a Personal Access Token with 'repo' scope
+#
+# All CLA signatures are stored centrally in SecPal/.github (branch: cla-signatures)
+
 name: CLA Assistant
 
 on:
