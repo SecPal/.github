@@ -172,7 +172,21 @@ By contributing to SecPal projects, you agree to our [Contributor License Agreem
 - Allows you to **retain copyright** ownership
 - Ensures your work can benefit both open source and commercial users
 
+The CLA Assistant bot will automatically guide you through signing when you submit your first pull request.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+---
+
+### For Repository Maintainers
+
+To enable CLA checks in your SecPal repository:
+
+1. Copy the [CLA workflow template](workflow-templates/cla.yml) to your repo's `.github/workflows/` directory
+2. The `CLA_BOT_TOKEN` secret is configured organization-wide - no additional setup needed
+3. The workflow will automatically run on all new pull requests
+
+All CLA signatures are stored centrally in this repository (branch: `cla-signatures`).
 
 ---
 
