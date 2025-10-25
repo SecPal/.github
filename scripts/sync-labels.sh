@@ -91,7 +91,7 @@ for label_spec in "${LABELS[@]}"; do
   IFS='|' read -r name color description <<< "$label_spec"
 
   # Check if label exists (using cached data)
-  LABEL_DATA=$(echo "$EXISTING_LABELS" | jq -r ".[] | select(.name==\"$name\")")
+  LABEL_DATA=$(echo "$EXISTING_LABELS" | jq -r --arg name "$name" '.[] | select(.name==$name)')
 
   if [ -n "$LABEL_DATA" ]; then
     # Label exists, check if update needed
