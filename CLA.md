@@ -148,15 +148,18 @@ You agree to notify SecPal of any facts or circumstances of which you become awa
 
 ### Automated Signing (Recommended)
 
-We use [CLA Assistant](https://cla-assistant.io/) to manage CLA signatures. When you submit your first pull request, the CLA Assistant bot will automatically comment on your PR with instructions to sign the CLA electronically.
+We use **[CLA Assistant](https://cla-assistant.io/)** to manage CLA signatures. When you submit your first pull request, the CLA Assistant will automatically comment on your PR with instructions.
 
 **Steps:**
 
-1. Submit your pull request
-2. Wait for the CLA Assistant bot to comment
-3. Click the link provided by the bot
-4. Review and sign the appropriate CLA (Individual or Corporate)
-5. The bot will update your PR status once signed
+1. **Submit your pull request**
+2. **Wait for CLA Assistant** to comment on your PR
+3. **Click the link** in the comment to review the CLA
+4. **Sign in with GitHub** (OAuth authentication)
+5. **Click "I agree"** to sign the CLA
+6. **The PR status will update** automatically once signed
+
+The signature is stored securely in a database hosted in Europe (GDPR-compliant).
 
 ### Manual Signing (Alternative)
 

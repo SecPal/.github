@@ -8,37 +8,40 @@ SPDX-License-Identifier: CC0-1.0
 
 This directory contains reusable GitHub Actions workflow templates for SecPal repositories.
 
-## CLA Assistant (`cla.yml`)
+## CLA Assistant
 
-Enforces CLA signatures for all pull requests. All SecPal repositories should include this workflow.
+**Note:** SecPal uses the hosted [CLA Assistant service](https://cla-assistant.io/) for CLA management. This is configured organization-wide and does NOT require workflow files in individual repositories.
 
-### Quick Setup
+### How CLA Assistant Works
 
-1. Copy `cla.yml` to your repository's `.github/workflows/` directory
-2. Ensure `CLA_BOT_TOKEN` secret is configured (either organization-wide or per-repository)
-3. Commit and push - the workflow will automatically run on new pull requests
+1. **Automatic PR Comments**: When a contributor opens a pull request, CLA Assistant automatically posts a comment
+2. **Click-Through Signing**: Contributors click the link to sign the CLA on cla-assistant.io
+3. **OAuth Authentication**: GitHub OAuth ensures secure identity verification
+4. **Status Updates**: PR status is automatically updated when all contributors have signed
+5. **Centralized Management**: All signatures are stored in a database (Azure Europe, GDPR-compliant)
 
-### What it does
+### For Repository Maintainers
 
-- Automatically checks if contributors have signed the CLA
-- Posts helpful instructions for signing the CLA
-- Stores all signatures centrally in `SecPal/.github` (branch: `cla-signatures`)
-- Blocks merging until all contributors have signed
+**No setup required!** CLA Assistant is configured at the organization level:
 
-### Organization Secret (Recommended)
+- CLA document: Stored as a GitHub Gist and linked on cla-assistant.io
+- All repositories automatically protected
+- Contributors sign via https://cla-assistant.io/
+- Signatures are centrally managed
 
-For organization-wide setup, add `CLA_BOT_TOKEN` as an organization secret:
+### Adding CLA to a New Repository
 
-1. Go to: [GitHub Actions organization secrets settings](https://github.com/organizations/SecPal/settings/secrets/actions)
-2. Click "New organization secret"
-3. Name: `CLA_BOT_TOKEN`
-4. Value: Personal Access Token with `repo` scope
-5. Repository access: "All repositories" or select specific repos
+1. Go to https://cla-assistant.io/ (sign in with GitHub)
+2. Select your new repository
+3. Link it to the organization's CLA Gist
+4. Done! CLA Assistant will now monitor all pull requests
 
-This way, all repositories can use the same token without individual configuration.
+**No workflow files needed** - CLA Assistant uses GitHub webhooks directly.
 
 ## For More Information
 
 - [CLA Document](../CLA.md)
+- [CLA Assistant Service](https://cla-assistant.io/)
+- [CLA Assistant Documentation](https://github.com/cla-assistant/cla-assistant)
 - [Dual-Licensing Documentation](../README.md#licensing)
 - [Contributing Guidelines](../CONTRIBUTING.md)
