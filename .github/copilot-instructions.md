@@ -186,7 +186,7 @@ All contributors must sign the [CLA](../CLA.md) to:
 - Retain copyright ownership of contributions
 - Enable dual-licensing business model
 
-CLA signing is **automated** via CLA Assistant bot on pull requests.
+**CLA Enforcement:** Automated via [CLA Assistant](https://cla-assistant.io) **hosted service** (NOT a GitHub Action workflow). OAuth click-through signing (§ 126b BGB compliant), GDPR-compliant storage (Azure West Europe). GitHub status check: `license/cla`. See [CLA.md](../CLA.md) for signing instructions.
 
 ## Repository Visibility
 
