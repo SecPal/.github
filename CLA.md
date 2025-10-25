@@ -159,7 +159,7 @@ We use **[CLA Assistant](https://cla-assistant.io/)** to manage CLA signatures. 
 5. **Click "I agree"** to sign the CLA
 6. **The PR status will update** automatically once signed
 
-The signature is stored securely in a database hosted in Europe (GDPR-compliant).
+The signature is stored securely in a database hosted in the Azure Europe region ("West Europe" - Netherlands) and is GDPR-compliant.
 
 ### Manual Signing (Alternative)
 

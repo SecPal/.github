@@ -197,7 +197,7 @@ To enable CLA checks in your SecPal repository:
 4. Link it to the SecPal CLA Gist (ask an organization admin for the Gist URL)
 5. Done! CLA Assistant will automatically monitor all pull requests
 
-**No workflow files needed** - CLA Assistant uses GitHub webhooks directly.
+**Unlike the previous GitHub Action approach, no workflow files are needed** – CLA Assistant uses GitHub webhooks directly.
 
 All CLA signatures are stored centrally in a secure database (Azure Europe, GDPR-compliant).
 

@@ -10,7 +10,7 @@ This directory contains reusable GitHub Actions workflow templates for SecPal re
 
 ## CLA Assistant
 
-**Note:** SecPal uses the hosted [CLA Assistant service](https://cla-assistant.io/) for CLA management. This is configured organization-wide and does NOT require workflow files in individual repositories.
+**Note:** SecPal uses the hosted [CLA Assistant service](https://cla-assistant.io/) for CLA management. This is configured organization-wide and does **not** require workflow files in individual repositories.
 
 ### How CLA Assistant Works
 
