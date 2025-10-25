@@ -21,10 +21,8 @@ This Commercial License Agreement ("Agreement") is entered into between:
 **Licensor:**
 SecPal
 [ADDRESS - Germany]
-Email: legal@secpal.app
-VAT ID: [DE123456789]
-
-**Licensee (Business Customer):**
+Email: <legal@secpal.app>
+VAT ID: [DE123456789]**Licensee (Business Customer):**
 [COMPANY_NAME]
 [COMPANY_ADDRESS]
 Email: [COMPANY_EMAIL]
@@ -362,7 +360,7 @@ Amendments must be in **writing** (Schriftform) and signed by authorized represe
 
 **Support Channels:**
 
-- Email: support@secpal.app
+- Email: <support@secpal.app>
 - Ticketing System: [URL]
 
 ---
@@ -385,7 +383,7 @@ Amendments must be in **writing** (Schriftform) and signed by authorized represe
 
 ## Signature
 
-**LICENSOR: SecPal**
+### LICENSOR: SecPal
 
 Signature: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
@@ -395,7 +393,7 @@ Date: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
 ---
 
-**LICENSEE: [COMPANY_NAME]**
+### LICENSEE: [COMPANY_NAME]
 
 Signature: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
@@ -407,5 +405,5 @@ Date: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
 **For questions about this Commercial License, contact:**
 
-- **Email**: legal@secpal.app
-- **Website**: [https://secpal.app](https://secpal.app)
+- **Email**: <legal@secpal.app>
+- **Website**: <https://secpal.app>

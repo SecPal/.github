@@ -387,7 +387,7 @@ Diese Vereinbarung stellt die gesamte Vereinbarung zwischen den Parteien dar und
 
 ## Unterschrift
 
-**LIZENZGEBER: SecPal**
+### LIZENZGEBER: SecPal
 
 Unterschrift: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
@@ -397,7 +397,7 @@ Datum: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
 ---
 
-**LIZENZNEHMER: [FIRMENNAME]**
+### LIZENZNEHMER: [FIRMENNAME]
 
 Unterschrift: \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
 
