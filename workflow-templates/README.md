@@ -29,7 +29,7 @@ Enforces CLA signatures for all pull requests. All SecPal repositories should in
 
 For organization-wide setup, add `CLA_BOT_TOKEN` as an organization secret:
 
-1. Go to: <https://github.com/organizations/SecPal/settings/secrets/actions>
+1. Go to: [GitHub Actions organization secrets settings](https://github.com/organizations/SecPal/settings/secrets/actions)
 2. Click "New organization secret"
 3. Name: `CLA_BOT_TOKEN`
 4. Value: Personal Access Token with `repo` scope
