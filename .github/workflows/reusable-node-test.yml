@@ -26,6 +26,10 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    # Skip tests for spike branches (exploration/prototyping)
+    # Spike branches are for experimentation and cannot be merged to main
+    # See: .github/CONTRIBUTING.md - Spike Branch Policy
+    if: ${{ !startsWith(github.head_ref, 'spike/') && !startsWith(github.ref, 'refs/heads/spike/') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
