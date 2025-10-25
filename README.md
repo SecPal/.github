@@ -131,6 +131,49 @@ reuse annotate --copyright "SecPal" --license "AGPL-3.0-or-later" <file>
 
 ## License
 
-All projects within the SecPal organization are licensed under the [AGPL-3.0-or-later](LICENSES/AGPL-3.0-or-later.txt).
+### Dual-Licensing Model
+
+SecPal projects use a **dual-licensing** model:
+
+#### 1. Open Source License (AGPL-3.0-or-later)
+
+All projects are licensed under the [AGPL-3.0-or-later](LICENSES/AGPL-3.0-or-later.txt) for:
+
+- ✅ **Open source projects** that comply with AGPL terms
+- ✅ **Personal use** and experimentation
+- ✅ **Educational purposes**
+- ✅ **Community contributions**
+
+**Key AGPL Requirements:**
+
+- Distribute source code to users (including network users)
+- Share modifications under AGPL
+- Preserve copyright and license notices
+
+#### 2. Commercial License
+
+For use cases **incompatible with AGPL**, we offer commercial licenses that allow:
+
+- ❌ **No requirement** to disclose source code
+- ❌ **No copyleft obligations** for your applications
+- ✅ **Proprietary** product integration
+- ✅ **SaaS** offerings without AGPL compliance
+- ✅ **Commercial support** and maintenance
+
+**Interested in a commercial license?** Contact us at [legal@secpal.app](mailto:legal@secpal.app)
+
+---
+
+### Contributing
+
+By contributing to SecPal projects, you agree to our [Contributor License Agreement (CLA)](CLA.md), which:
+
+- Grants us rights to distribute your contributions under **both** licensing models
+- Allows you to **retain copyright** ownership
+- Ensures your work can benefit both open source and commercial users
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+---
 
 For full license information, see the [LICENSES](LICENSES/) directory.
