@@ -10,11 +10,11 @@ cd "$ROOT_DIR"
 # Auto-detect default branch (fallback to main)
 BASE="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
 [ -z "${BASE:-}" ] && BASE="main"
-if ! git fetch origin "$BASE" 2>/dev/null; then
-  echo "Warning: Failed to fetch origin/$BASE - PR size check may use stale data" >&2
-fi
 
 echo "Using base branch: $BASE"
+
+# Fetch base branch for PR size check (failure is handled later)
+git fetch origin "$BASE" 2>/dev/null || true
 
 # 0) Formatting & Compliance
 FORMAT_EXIT=0
@@ -105,7 +105,8 @@ fi
 
 # 4) Check PR size locally (against BASE)
 if ! git rev-parse -q --verify "origin/$BASE" >/dev/null 2>&1; then
-  echo "Warning: Cannot verify base branch origin/$BASE. Skipping PR size check. (Run 'git fetch origin $BASE' to enable.)" >&2
+  echo "Warning: Cannot verify base branch origin/$BASE - skipping PR size check." >&2
+  echo "Tip: Run 'git fetch origin $BASE' to enable PR size checking." >&2
 else
   MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null)
   if [ -z "$MERGE_BASE" ]; then
