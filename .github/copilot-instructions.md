@@ -180,7 +180,7 @@ Whitelist: `.github/license-whitelist.txt`
 
 **Contributor License Agreement (CLA):**
 
-All contributors must sign the [CLA](../../CLA.md) to:
+All contributors must sign the [CLA](../CLA.md) to:
 
 - Grant rights for both AGPL and commercial distribution
 - Retain copyright ownership of contributions
