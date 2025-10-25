@@ -187,15 +187,21 @@ git checkout -b spike/auth-library-evaluation
 
 # 3. Document findings (in PR description or issue comment)
 
-# 4. Create feature branch WITH tests for production
+# 4. If you opened a PR for the spike branch:
+#    - Add a summary of findings to the PR description or linked issue
+#    - Close the PR before deleting the branch
+
+# 5. Create feature branch WITH tests for production
 git checkout main
 git checkout -b feature/implement-auth-library
 # ... implement with TDD ...
 
-# 5. Delete spike branch
+# 6. Delete spike branch (after closing any open PRs)
 git branch -D spike/auth-library-evaluation
 git push origin --delete spike/auth-library-evaluation
 ```
+
+> **Note:** If you opened a PR for your spike branch, always close it and document your findings in the PR description or a related issue before deleting the branch. This keeps the repository clean and ensures knowledge is preserved.
 
 **Examples:**
 
