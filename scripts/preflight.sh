@@ -8,7 +8,8 @@ ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
 # Auto-detect default branch (fallback to main)
-BASE="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
+# Use symbolic-ref instead of remote show to avoid network hang
+BASE="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
 [ -z "${BASE:-}" ] && BASE="main"
 
 echo "Using base branch: $BASE"
