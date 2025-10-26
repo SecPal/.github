@@ -33,4 +33,4 @@ pnpm-lock.yaml
 
 # License files (boilerplate)
 
-^LICENSES/.\*\.txt$
+^LICENSES/.*\.txt$

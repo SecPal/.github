@@ -119,11 +119,11 @@ else
     # Load exclude patterns from .preflight-exclude if it exists
     if [ -f "$ROOT_DIR/.preflight-exclude" ]; then
       # Extract non-comment, non-empty lines as patterns
-      EXCLUDE_PATTERNS=$(grep -v '^#' "$ROOT_DIR/.preflight-exclude" | grep -v '^[[:space:]]*$' || true)
+      EXCLUDE_PATTERNS=$(grep -vE '^(#|[[:space:]]*$)' "$ROOT_DIR/.preflight-exclude" || true)
 
       if [ -n "$EXCLUDE_PATTERNS" ]; then
-        # Build regex alternation for efficient filtering
-        EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | tr '\n' '|' | sed 's/|$//')
+        # Build regex alternation for efficient filtering (escape special regex chars)
+        EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | sed 's/[.^$*+?{}()|[\]\\]/\\&/g' | tr '\n' '|' | sed 's/|$//')
         DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
       fi
     fi
@@ -132,6 +132,7 @@ else
     if [ -n "$RAW_DIFF_OUTPUT" ] && [ -z "$DIFF_OUTPUT" ]; then
       echo "⚠️  All changed files are excluded (lock files, license files, etc.)"
       echo "Preflight OK · Changed lines: 0 (after exclusions)"
+      exit 0
     else
       # Use --numstat for locale-independent parsing (sum insertions + deletions)
       CHANGED=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
