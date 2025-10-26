@@ -48,28 +48,28 @@ jobs:
           # Calculate merge base
           MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
 
-          # Build exclude patterns
-          EXCLUDE_PATTERNS=(
-            'package-lock.json'
-            'composer.lock'
-            'yarn.lock'
-            'pnpm-lock.yaml'
-            '^LICENSES/.*\.txt$'
-          )
-
-          # Add custom exclude patterns if provided
-          if [ -n "${{ inputs.exclude-patterns }}" ]; then
-            IFS=',' read -ra CUSTOM_PATTERNS <<< "${{ inputs.exclude-patterns }}"
-            EXCLUDE_PATTERNS+=("${CUSTOM_PATTERNS[@]}")
-          fi
-
-          # Count changed lines with exclusions
+          # Get raw diff output
           RAW_DIFF_OUTPUT=$(git diff --numstat "$MERGE_BASE"..HEAD)
           DIFF_OUTPUT="$RAW_DIFF_OUTPUT"
 
-          # Build single regex alternation for efficient filtering
-          EXCLUDE_REGEX=$(printf "%s|" "${EXCLUDE_PATTERNS[@]}" | sed 's/|$//')
-          DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
+          # Load exclude patterns from .preflight-exclude if it exists
+          if [ -f ".preflight-exclude" ]; then
+            # Extract non-comment, non-empty lines as grep-compatible regex patterns
+            EXCLUDE_PATTERNS=$(grep -vE '^(#|[[:space:]]*$)' ".preflight-exclude" || true)
+
+            if [ -n "$EXCLUDE_PATTERNS" ]; then
+              # Build regex alternation for efficient filtering (patterns are used as-is)
+              EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | tr '\n' '|' | sed 's/|$//')
+              DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
+            fi
+          fi
+
+          # Add custom exclude patterns if provided via input
+          if [ -n "${{ inputs.exclude-patterns }}" ]; then
+            IFS=',' read -ra CUSTOM_PATTERNS <<< "${{ inputs.exclude-patterns }}"
+            CUSTOM_REGEX=$(printf "%s|" "${CUSTOM_PATTERNS[@]}" | sed 's/[.^$*+?{}()|[\]\\]/\\&/g' | sed 's/|$//')
+            DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$CUSTOM_REGEX" || true)
+          fi
 
           # Validate that not all files were filtered out
           if [ -n "$RAW_DIFF_OUTPUT" ] && [ -z "$DIFF_OUTPUT" ]; then
@@ -81,12 +81,12 @@ jobs:
 
           CHANGED=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
 
-          echo "Changed lines (excluding lock files, license texts, and custom patterns): $CHANGED"
+          echo "Changed lines (after exclusions from .preflight-exclude): $CHANGED"
           echo "Maximum allowed: $MAX_LINES"
 
           if [ "$CHANGED" -gt "$MAX_LINES" ]; then
             echo "::error::PR too large ($CHANGED > $MAX_LINES lines). Please split into smaller changes."
-            echo "Tip: Auto-generated files (package-lock.json, composer.lock, etc.) and license texts are excluded from this count."
+            echo "Tip: Lock files and license files are excluded via .preflight-exclude"
             echo "For legitimate large PRs (e.g., boilerplate templates), request the 'large-pr-approved' label from a maintainer."
             exit 1
           fi

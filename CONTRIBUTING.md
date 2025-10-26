@@ -89,7 +89,16 @@ This script runs automatically before every `git push` via the pre-push hook.
 - PHP linting and tests (if applicable)
 - Node.js linting and tests (if applicable)
 - OpenAPI validation (if applicable)
-- PR size (< 600 lines recommended)
+- PR size (< 600 lines recommended, excluding lock files and license files)
+
+**Excluded from PR size calculation:**
+
+The following files are automatically excluded from the 600-line limit because they are auto-generated or boilerplate:
+
+- `package-lock.json`, `composer.lock`, `yarn.lock`, `pnpm-lock.yaml` (dependency lock files)
+- `LICENSES/*.txt` (license boilerplate files)
+
+These exclusions are configured in `.preflight-exclude` and match the GitHub CI workflow. You can add project-specific patterns by editing this file.
 
 **Bypassing the PR size check locally:**
 
