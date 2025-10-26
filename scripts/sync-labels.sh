@@ -8,6 +8,8 @@ set -euo pipefail
 # Usage: ./sync-labels.sh <repository-name>
 # Example: ./sync-labels.sh contracts
 
+# SCRIPT_DIR is reserved for future use (e.g., loading label definitions from file)
+# shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORG="SecPal"
 
