@@ -465,13 +465,15 @@ CODEOWNERS
 
 **Update Process:**
 
-When updating governance files in `.github` repository, copy them to all other repositories:
+After merging changes to governance files in the `.github` repository, copy them to all other repositories to maintain consistency:
 
 ```bash
 # From SecPal workspace root
 cp .github/CONTRIBUTING.md frontend/
 cp .github/CONTRIBUTING.md contracts/
-# ... repeat for other files
+cp .github/SECURITY.md frontend/
+cp .github/SECURITY.md contracts/
+# ... repeat for other files as needed
 ```
 
 **Note:** Yes, this violates pure DRY, but it's a pragmatic trade-off for usability on GitHub.com.
