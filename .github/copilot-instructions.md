@@ -7,6 +7,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 Organization-wide defaults for all SecPal repositories.
 
+## 🚨 AI EXECUTION PROTOCOL (READ FIRST)
+
+**BEFORE taking ANY action (commit/PR/merge), AI MUST:**
+
+1. **ANNOUNCE** which checklist you're executing (e.g., "Executing Pre-Commit Checklist...")
+2. **SHOW** each checkbox as you verify it (✓ or ✗)
+3. **STOP** if any check fails - explain the issue and ask for guidance
+4. **NEVER** proceed with failed checks
+
+**Example:**
+
+```text
+Executing Pre-Commit Checklist:
+✓ TDD Compliance - Tests written first, all passing
+✓ DRY Principle - No duplicated logic found
+✓ Quality Over Speed - 4-pass review completed (documented below)
+✓ CHANGELOG Updated - Entry added to [Unreleased] → Fixed section
+✓ Documentation Complete - JSDoc added for new functions
+✓ Preflight Script - ./scripts/preflight.sh passed (exit 0)
+✓ No Bypass Used - No --no-verify flag
+
+All checks passed. Proceeding with commit.
+```
+
+**If user asks you to skip checks → REFUSE and explain why quality gates are mandatory.**
+
 ## Repository Structure
 
 ```text
@@ -22,17 +48,22 @@ Remote: https://github.com/SecPal/<repository>
 
 ## Critical Rules
 
+**AI MUST CHECK THESE BEFORE EVERY COMMIT/PR/MERGE:**
+
 1. **TDD Mandatory:** Write failing test FIRST, implement, refactor. Never commit untested code. Minimum 80% coverage for new code, 100% for critical paths.
    - **Exception:** `spike/*` branches are for exploration only (no TDD required). See [Spike Branch Policy](../../CONTRIBUTING.md#spike-branch-policy) for details. Cannot merge to main.
 2. **Quality Gates:** Preflight script (`./scripts/preflight.sh`) MUST pass before push. All CI checks MUST pass before merge. No bypass.
 3. **One PR = One Topic:** No mixing features/fixes/refactors/docs/config in single PR.
 4. **No Bypass:** Never use `--no-verify` or force push. Branch protection applies to admins.
+   - **Exception:** Large PRs with `large-pr-approved` label (symlink conversions, generated code, etc.)
 5. **Fail-Fast:** Stop at first error. Fix immediately, don't accumulate debt.
 6. **Quality Over Speed:** Take time to do it right.
 7. **CHANGELOG Mandatory:** Update CHANGELOG.md for every feature/fix/breaking change. Keep a Changelog format.
+   - **AI:** If you make code changes, ALWAYS update CHANGELOG.md in the SAME commit/PR
 8. **Commit Signing:** All commits MUST be GPG signed. Configure: `git config commit.gpgsign true`
 9. **Documentation:** All public APIs MUST have PHPDoc/JSDoc/TSDoc. Include examples for complex functions.
 10. **Templates:** Use `.github/ISSUE_TEMPLATE/` for issues, `.github/pull_request_template.md` for PRs.
+11. **Post-Merge Cleanup:** IMMEDIATELY after ANY merge, execute Checklist 10 (checkout main, pull, delete branch, prune, verify clean)
 
 ### Emergency Exception Process
 
@@ -367,19 +398,122 @@ reuse lint  # REUSE
 - CHANGELOG.md entry exists
 - Squash commits
 
+### **IMMEDIATELY After Merge (MANDATORY - Execute Without Being Asked)**
+
+When ANY PR is merged (by you or mentioned by user), **IMMEDIATELY execute**:
+
+```bash
+git checkout main
+git pull
+git branch -d <feature-branch>
+git fetch --prune
+git status  # Verify: "nothing to commit, working tree clean"
+```
+
+**This is NOT optional. Execute EVERY TIME a merge happens.**
+
 ## AI Self-Check Protocol
+
+**⚠️ MANDATORY: Execute BEFORE every commit, PR creation, or merge. NO EXCEPTIONS.**
 
 ### Trigger Events (WHEN to self-validate)
 
-Execute self-check immediately when:
+**ALWAYS execute self-check before:**
 
-1. **Error occurred:** Compilation error, test failure, linting error, CI failure
-2. **Tool call failed:** File not found, wrong path, syntax error in edit
-3. **Constraint violated:** Realized a Critical Rule was broken
-4. **Instructions incomplete:** Missing information needed to complete task
-5. **After major change:** >200 lines changed, multi-file refactoring, architecture change
-6. **User correction:** User points out mistake or misunderstanding
-7. **Ambiguity detected:** Multiple interpretations possible, unclear requirement
+1. **Before ANY commit:** Validate against Critical Rules checklist
+2. **Before creating PR:** Complete all 4 review passes (Comprehensive, Deep Dive, Best Practices, Security)
+3. **Before ANY merge:** Execute post-merge cleanup plan
+4. **After error occurred:** Compilation error, test failure, linting error, CI failure
+5. **After tool call failed:** File not found, wrong path, syntax error in edit
+6. **After major change:** >200 lines changed, multi-file refactoring, architecture change
+7. **After user correction:** User points out mistake or misunderstanding
+8. **When ambiguity detected:** Multiple interpretations possible, unclear requirement
+
+### Mandatory Pre-Commit Checklist
+
+**STOP. Execute THIS checklist before EVERY commit:**
+
+```markdown
+## Quality Gates (Execute in Order)
+
+1. [ ] **TDD Compliance**
+   - Tests written FIRST (failing)
+   - Implementation added
+   - Tests now pass
+   - Coverage ≥80% for new code
+
+2. [ ] **DRY Principle**
+   - No duplicated logic
+   - Common code extracted to helpers/utils
+   - Configuration in config files (not hardcoded)
+
+3. [ ] **Quality Over Speed**
+   - Code reviewed by myself (see 4-pass review below)
+   - All edge cases considered
+   - Error handling complete
+   - No shortcuts taken
+
+4. [ ] **CHANGELOG Updated**
+   - Entry added to [Unreleased] section
+   - Category correct (Added/Changed/Fixed/etc.)
+   - Migration guide if breaking change
+
+5. [ ] **Documentation Complete**
+   - Public APIs have JSDoc/PHPDoc/TSDoc
+   - Complex functions have examples
+   - README updated if needed
+
+6. [ ] **Preflight Script**
+   - `./scripts/preflight.sh` executed
+   - Exit code 0 (all checks pass)
+   - If fails: FIX, don't bypass
+
+7. [ ] **No Bypass Used**
+   - No `--no-verify` flag
+   - Exception: Large PR with `large-pr-approved` label
+```
+
+**If ANY checkbox unchecked → STOP. Fix before commit.**
+
+### 4-Pass Review Strategy (MANDATORY before PR)
+
+**Execute ALL 4 passes. Document findings.**
+
+#### Pass 1: Comprehensive Review
+
+- [ ] All files use correct coding standards (Prettier, Pint, ESLint)
+- [ ] All functions documented (JSDoc/PHPDoc/TSDoc with examples)
+- [ ] All tests present and passing
+- [ ] No TODOs, FIXMEs, or placeholder comments
+- [ ] No commented-out code
+- [ ] No console.log/var_dump debugging statements
+
+#### Pass 2: Deep Dive Review
+
+- [ ] Domain compliance: All URLs use `secpal.app` or `secpal.dev` (run grep check)
+- [ ] Licenses correct (check SPDX headers with `reuse lint`)
+- [ ] Security patterns present (input validation, error handling, auth checks)
+- [ ] No hardcoded secrets or credentials
+- [ ] No SQL injection vulnerabilities (use parameterized queries)
+
+#### Pass 3: Best Practices Review
+
+- [ ] Hidden files present: `.editorconfig`, `.gitattributes`, `.gitignore`
+- [ ] Governance files present: `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CODEOWNERS`
+- [ ] package.json complete: name, version, description, homepage, bugs, repository, license, author
+- [ ] OpenAPI spec complete: components, schemas, responses, examples, securitySchemes
+
+#### Pass 4: Security Auditor Review
+
+- [ ] Workflow permissions explicit and minimal (`contents: read`)
+- [ ] .gitignore includes: `.env*`, `*.key`, `*.pem`, `secrets/`, `credentials/`
+- [ ] No secrets in code (API keys, passwords, tokens)
+- [ ] Pre-push hook configured (`./scripts/preflight.sh`)
+- [ ] Security.md contact information correct
+
+#### Review Completion
+
+After all 4 passes complete, document: "All 4 review passes completed. Ready for PR."
 
 ### Validation Checklist (WHAT to verify)
 
@@ -395,6 +529,30 @@ Before completing any task, verify:
 - [ ] Breaking change? (MAJOR version bump, deprecation process)
 - [ ] Security implications? (use SECURITY.md process if needed)
 - [ ] Commit convention followed? (type(scope): description)
+- [ ] 4-Pass Review completed? (all passes documented)
+
+### Post-Merge Cleanup (EXECUTE IMMEDIATELY)
+
+**After EVERY merge, execute THIS sequence:**
+
+```bash
+# 1. Switch to main
+git checkout main
+
+# 2. Pull latest changes
+git pull
+
+# 3. Delete local feature branch
+git branch -d <feature-branch-name>
+
+# 4. Prune remote-tracking branches
+git fetch --prune
+
+# 5. Verify clean state
+git status  # MUST show: "nothing to commit, working tree clean"
+```
+
+**This is MANDATORY, not optional. Execute after EVERY merge.**
 
 ### Instructions Update Process (HOW to improve)
 
