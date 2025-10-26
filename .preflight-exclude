@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+
+# SPDX-License-Identifier: CC0-1.0
+
+# Preflight PR Size Check - Excluded Files
+
+# ==========================================
+
+# Files matching these patterns are excluded from the 600-line PR size check.
+
+# Each line is a grep-compatible regex pattern.
+
+#
+
+# Why exclude these files?
+
+# - Lock files are auto-generated and can be very large
+
+# - License files are boilerplate and not meaningful code changes
+
+#
+
+# This file should match the exclusions in:
+
+# .github/workflows/reusable-pr-size.yml
+
+# Dependency lock files (auto-generated)
+
+package-lock.json
+composer.lock
+yarn.lock
+pnpm-lock.yaml
+
+# License files (boilerplate)
+
+^LICENSES/.\*\.txt$
