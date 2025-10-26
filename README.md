@@ -72,7 +72,7 @@ Or run the setup script:
 
 - Code formatting (Prettier, markdownlint)
 - REUSE 3.3 compliance
-- Workflow linting (actionlint - **disabled locally**, runs in CI only due to network timeout issues)
+- Workflow linting (actionlint - **disabled locally**, runs in CI only due to network timeout issues when checking workflows; actionlint attempts to fetch GitHub API metadata which can hang indefinitely in some network configurations)
 - Language-specific checks:
   - **PHP/Laravel**: Pint, PHPStan, tests
   - **Node.js**: ESLint, TypeScript, tests, npm audit
