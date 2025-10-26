@@ -48,6 +48,43 @@ pre-commit autoupdate
 **Included Checks:**
 
 - REUSE 3.3 compliance
+
+### Pre-push Hooks
+
+We use a pre-push hook to run comprehensive quality checks before pushing to GitHub. This includes formatting, linting, testing, and PR size checks.
+
+**Installation:**
+
+```bash
+# Run the setup script (automatic)
+./scripts/setup-pre-push.sh
+```
+
+This creates a symlink from `.git/hooks/pre-push` to `scripts/preflight.sh`.
+
+**What it checks:**
+
+- Code formatting (Prettier, markdownlint)
+- REUSE 3.3 compliance
+- Workflow linting (actionlint - runs in CI only)
+- Language-specific checks:
+  - **PHP/Laravel**: Pint, PHPStan, tests
+  - **Node.js**: ESLint, TypeScript, tests, npm audit
+  - **OpenAPI**: Spectral/Redocly linting
+- PR size limit (600 lines, configurable with `.preflight-allow-large-pr`)
+
+**Manual Usage:**
+
+```bash
+# Run preflight checks manually
+./scripts/preflight.sh
+
+# Skip checks (not recommended)
+git push --no-verify
+```
+
+**Included Checks (pre-commit):**
+
 - Prettier formatting (Markdown, YAML, JSON)
 - Markdownlint
 - yamllint
