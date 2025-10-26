@@ -12,7 +12,7 @@ on:
         type: number
         default: 600
       exclude-patterns:
-        description: "Additional file patterns to exclude (comma-separated)"
+        description: "Additional file patterns to exclude (comma-separated grep-compatible regex)"
         required: false
         type: string
         default: ""
@@ -55,20 +55,84 @@ jobs:
           # Load exclude patterns from .preflight-exclude if it exists
           if [ -f ".preflight-exclude" ]; then
             # Extract non-comment, non-empty lines as grep-compatible regex patterns
-            EXCLUDE_PATTERNS=$(grep -vE '^(#|[[:space:]]*$)' ".preflight-exclude" || true)
+            # Strip CR for Windows/CRLF compatibility
+            EXCLUDE_PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' ".preflight-exclude" | tr -d '\r' || true)
 
             if [ -n "$EXCLUDE_PATTERNS" ]; then
               # Build regex alternation for efficient filtering (patterns are used as-is)
               EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | tr '\n' '|' | sed 's/|$//')
-              DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
+
+              # NOTE: The regex validation logic below is duplicated from scripts/preflight.sh.
+              # This duplication is necessary because GitHub Actions workflows cannot reliably source external shell scripts.
+              # If you update the validation logic here, you MUST also update scripts/preflight.sh to keep them in sync.
+
+              # Validate regex and warn about dangerous patterns
+              # grep exit codes: 0=match, 1=no match, 2=error (invalid regex)
+              set +e  # Temporarily disable exit-on-error to capture grep's exit code
+              echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null
+              GREP_EXIT=$?
+              set -e  # Re-enable exit-on-error
+              if [ $GREP_EXIT -ne 2 ]; then
+                # Pattern is valid (exit 0 or 1), check if it matches everything
+                # Test against diverse filenames to detect overly broad patterns
+                # Include various cases: lowercase, uppercase, numbers, special chars, hidden files
+                if echo "test-file.txt" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo "another-file.js" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo "random.md" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo "README.md" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo "package.json" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo ".hidden" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo "File123.py" | grep -qE -- "$EXCLUDE_REGEX" && \
+                   echo "UPPERCASE" | grep -qE -- "$EXCLUDE_REGEX"; then
+                  echo "::warning::⚠️  .preflight-exclude contains pattern that matches EVERYTHING (e.g., '.*')"
+                  echo "::warning::This will exclude all files from PR size calculation!"
+                fi
+              else
+                # Invalid regex - grep failed even on empty input
+                echo "::warning::⚠️  .preflight-exclude contains invalid regex pattern(s)"
+                echo "::warning::The pattern will be ignored. Please check your .preflight-exclude file."
+                echo "::warning::Common issues: unbalanced brackets [, unmatched (, trailing backslash \\"
+              fi
+
+              # Use -- to prevent patterns starting with - from being interpreted as flags
+              # || true prevents workflow failure if pattern is invalid
+              DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
             fi
           fi
 
           # Add custom exclude patterns if provided via input
           if [ -n "${{ inputs.exclude-patterns }}" ]; then
             IFS=',' read -ra CUSTOM_PATTERNS <<< "${{ inputs.exclude-patterns }}"
-            CUSTOM_REGEX=$(printf "%s|" "${CUSTOM_PATTERNS[@]}" | sed 's/[.^$*+?{}()|[\]\\]/\\&/g' | sed 's/|$//')
-            DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$CUSTOM_REGEX" || true)
+
+            # Validate and sanitize custom patterns: remove empty/comment patterns, trim whitespace, strip CR
+            VALID_CUSTOM_PATTERNS=()
+            for pattern in "${CUSTOM_PATTERNS[@]}"; do
+              # Remove leading/trailing whitespace and CR
+              pattern=$(echo "$pattern" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\r//g')
+              # Skip empty or comment patterns
+              if [ -n "$pattern" ] && [[ ! "$pattern" =~ ^# ]]; then
+                VALID_CUSTOM_PATTERNS+=("$pattern")
+              fi
+            done
+
+            if [ ${#VALID_CUSTOM_PATTERNS[@]} -gt 0 ]; then
+              # Build regex alternation (patterns are used as-is, like .preflight-exclude)
+              CUSTOM_REGEX=$(printf "%s|" "${VALID_CUSTOM_PATTERNS[@]}" | sed 's/|$//')
+
+              # Validate custom patterns with same logic as .preflight-exclude
+              set +e
+              echo "" | grep -qE -- "$CUSTOM_REGEX" 2>/dev/null
+              CUSTOM_GREP_EXIT=$?
+              set -e
+
+              if [ $CUSTOM_GREP_EXIT -eq 2 ]; then
+                echo "::warning::⚠️  Custom exclude patterns contain invalid regex"
+                echo "::warning::Invalid patterns will be ignored. Check workflow input exclude-patterns."
+              else
+                # Use validated patterns
+                DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$CUSTOM_REGEX" 2>/dev/null || true)
+              fi
+            fi
           fi
 
           # Validate that not all files were filtered out

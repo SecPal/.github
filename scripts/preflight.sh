@@ -8,7 +8,8 @@ ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
 # Auto-detect default branch (fallback to main)
-BASE="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
+# Use symbolic-ref instead of remote show to avoid network hang
+BASE="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
 [ -z "${BASE:-}" ] && BASE="main"
 
 echo "Using base branch: $BASE"
@@ -23,9 +24,13 @@ if command -v npx >/dev/null 2>&1; then
   npx --yes markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
 fi
 # Workflow linting (part of documented gates)
+# NOTE: actionlint is disabled in local preflight due to known hanging issues
+# It runs in CI via .github/workflows/actionlint.yml instead
 if [ -d .github/workflows ]; then
   if command -v actionlint >/dev/null 2>&1; then
-    actionlint || FORMAT_EXIT=1
+    echo "ℹ️  Skipping actionlint in local preflight (runs in CI)" >&2
+    # Uncomment below to enable (may hang):
+    # timeout 30 actionlint || FORMAT_EXIT=1
   else
     echo "Warning: .github/workflows found but actionlint not installed - skipping workflow lint" >&2
   fi
@@ -119,12 +124,44 @@ else
     # Load exclude patterns from .preflight-exclude if it exists
     if [ -f "$ROOT_DIR/.preflight-exclude" ]; then
       # Extract non-comment, non-empty lines as grep-compatible regex patterns
-      EXCLUDE_PATTERNS=$(grep -vE '^(#|[[:space:]]*$)' "$ROOT_DIR/.preflight-exclude" || true)
+      # Strip CR for Windows/CRLF compatibility
+      EXCLUDE_PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' "$ROOT_DIR/.preflight-exclude" | tr -d '\r' || true)
 
       if [ -n "$EXCLUDE_PATTERNS" ]; then
         # Build regex alternation for efficient filtering (patterns are used as-is)
         EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | tr '\n' '|' | sed 's/|$//')
-        DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
+
+        # Validate regex and warn about dangerous patterns
+        # grep exit codes: 0=match, 1=no match, 2=error (invalid regex)
+        set +e  # Temporarily disable exit-on-error to capture grep's exit code
+        echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null
+        GREP_EXIT=$?
+        set -e  # Re-enable exit-on-error
+        if [ $GREP_EXIT -ne 2 ]; then
+          # Pattern is valid (exit 0 or 1), check if it matches everything
+          # Test against diverse filenames to detect overly broad patterns
+          # Include various cases: lowercase, uppercase, numbers, special chars, hidden files
+          if echo "test-file.txt" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "another-file.js" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "random.md" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "README.md" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "package.json" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo ".hidden" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "File123.py" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "UPPERCASE" | grep -qE -- "$EXCLUDE_REGEX"; then
+            echo "⚠️  WARNING: .preflight-exclude contains pattern that matches EVERYTHING (e.g., '.*')" >&2
+            echo "This will exclude all files from PR size calculation!" >&2
+          fi
+        else
+          # Invalid regex - grep failed even on empty input
+          echo "⚠️  WARNING: .preflight-exclude contains invalid regex pattern(s)" >&2
+          echo "The pattern will be ignored. Please check your .preflight-exclude file." >&2
+          echo "Common issues: unbalanced brackets [, unmatched (, trailing backslash \\" >&2
+        fi
+
+        # Use -- to prevent patterns starting with - from being interpreted as flags
+        # || true prevents script exit if pattern is invalid
+        DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
       fi
     fi
 
