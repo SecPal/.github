@@ -429,7 +429,6 @@ See [Post-Merge Cleanup (EXECUTE IMMEDIATELY)](#post-merge-cleanup-execute-immed
 ## Quality Gates (Execute in Order)
 
 1. [ ] **TDD Compliance**
-
    - Tests written FIRST (failing)
    - Implementation added
    - Tests now pass
@@ -437,32 +436,27 @@ See [Post-Merge Cleanup (EXECUTE IMMEDIATELY)](#post-merge-cleanup-execute-immed
    - Coverage 100% for critical paths (see Critical Rule #1)
 
 2. [ ] **DRY Principle**
-
    - No duplicated logic
    - Common code extracted to helpers/utils
    - Configuration in config files (not hardcoded)
 
 3. [ ] **Quality Over Speed**
-
    - Code reviewed by myself (see 4-pass review below)
    - All edge cases considered
    - Error handling complete
    - No shortcuts taken
 
 4. [ ] **CHANGELOG Updated**
-
    - Entry added to [Unreleased] section
    - Category correct (Added/Changed/Fixed/etc.)
    - Migration guide if breaking change
 
 5. [ ] **Documentation Complete**
-
    - Public APIs have JSDoc/PHPDoc/TSDoc
    - Complex functions have examples
    - README updated if needed
 
 6. [ ] **Preflight Script**
-
    - `./scripts/preflight.sh` executed
    - Exit code 0 (all checks pass)
    - If fails: FIX, don't bypass
