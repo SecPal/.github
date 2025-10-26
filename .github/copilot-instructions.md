@@ -444,7 +444,7 @@ When Instructions were insufficient:
 
 **VALIDATION:** `grep` returns ONLY secpal.app and secpal.dev. Any other match = PR rejected.
 
-### 3. DRY Principle over Repositories
+### 3. Governance File Distribution
 
 **WHAT:** Governance files are copied from .github repo to maintain consistency.
 
@@ -476,9 +476,20 @@ cp .github/SECURITY.md contracts/
 # ... repeat for other files as needed
 ```
 
+**Automation Note:** For future improvement, consider creating a sync script (e.g., `.github/scripts/sync-governance.sh`) to automate this process and reduce manual errors.
+
 **Note:** Yes, this violates pure DRY, but it's a pragmatic trade-off for usability on GitHub.com.
 
-**VALIDATION:** Ensure all governance files exist and are readable in each repository.
+**VALIDATION:** Verify governance files exist and match across repositories:
+
+```bash
+# Quick check for file existence
+for repo in frontend contracts; do
+  for file in CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md CODEOWNERS .editorconfig .gitattributes; do
+    [ -f "$repo/$file" ] && echo "✅ $repo/$file" || echo "❌ $repo/$file missing"
+  done
+done
+```
 
 ### 4. Security by Default, not by Addition (MANDATORY)
 
