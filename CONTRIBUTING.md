@@ -91,6 +91,25 @@ This script runs automatically before every `git push` via the pre-push hook.
 - OpenAPI validation (if applicable)
 - PR size (< 600 lines recommended)
 
+**Bypassing the PR size check locally:**
+
+If you need to work on a large PR that is justified (see exceptions below), you can temporarily bypass the 600-line limit:
+
+```bash
+# Create override file to allow large PR
+touch .preflight-allow-large-pr
+
+# Work on your changes
+git add .
+git commit -m "Your changes"
+git push
+
+# Clean up after merge
+rm .preflight-allow-large-pr
+```
+
+⚠️ **Important:** The override file is automatically ignored by git and should only be used for exceptional cases that match the criteria below.
+
 ## How to Contribute
 
 1. **Fork the repository** and create a new branch from `main`.
@@ -153,7 +172,9 @@ Large PRs (> 600 lines) are acceptable for:
 - **Generated code** (e.g., OpenAPI clients, database migrations)
 - **Boilerplate/templates** that cannot be reasonably split
 
-In these cases, add the `large-pr-approved` label to bypass the size check. See [Organization Label Standards](https://github.com/SecPal/.github/blob/main/docs/labels.md) for details.
+**On GitHub:** Add the `large-pr-approved` label to bypass the size check. See [Organization Label Standards](https://github.com/SecPal/.github/blob/main/docs/labels.md) for details.
+
+**Locally:** Create a `.preflight-allow-large-pr` file in the repository root to bypass the preflight check (see "Bypassing the PR size check locally" above).
 
 ## Branch Naming Convention
 
