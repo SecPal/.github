@@ -22,6 +22,34 @@ permissions:
   contents: read
 
 jobs:
+  reuse:
+    name: Check REUSE Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v5
+
+  license-compatibility:
+    name: Check License Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install licensecheck
+        run: pip install licensecheck
+
+      - name: Run License Compatibility Check
+        run: licensecheck
+
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest
