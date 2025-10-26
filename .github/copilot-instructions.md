@@ -55,15 +55,19 @@ Remote: https://github.com/SecPal/<repository>
 2. **Quality Gates:** Preflight script (`./scripts/preflight.sh`) MUST pass before push. All CI checks MUST pass before merge. No bypass.
 3. **One PR = One Topic:** No mixing features/fixes/refactors/docs/config in single PR.
 4. **No Bypass:** Never use `--no-verify` or force push. Branch protection applies to admins.
-   - **Exception:** Large PRs with `large-pr-approved` label (symlink conversions, generated code, etc.)
+   - **Exception:** Large PRs (defined as >500 lines changed, or bulk symlink/generated code conversions) may bypass this rule **ONLY** if:
+     - The PR has the `large-pr-approved` label
+     - Approval is granted by a lead maintainer (see [MAINTAINERS.md](../../MAINTAINERS.md)) or designated reviewer
+     - All other bypass restrictions STILL apply: tests and CI **MUST** pass, preflight script **MUST** pass, and CHANGELOG **MUST** be updated
+     - Document in the PR description why the exception is needed and what was reviewed
 5. **Fail-Fast:** Stop at first error. Fix immediately, don't accumulate debt.
 6. **Quality Over Speed:** Take time to do it right.
 7. **CHANGELOG Mandatory:** Update CHANGELOG.md for every feature/fix/breaking change. Keep a Changelog format.
-   - **AI:** If you make code changes, ALWAYS update CHANGELOG.md in the SAME commit/PR
+   - **AI:** For every commit that changes code, you MUST update CHANGELOG.md in the same commit. Do not batch changelog updates separately from code changes.
 8. **Commit Signing:** All commits MUST be GPG signed. Configure: `git config commit.gpgsign true`
 9. **Documentation:** All public APIs MUST have PHPDoc/JSDoc/TSDoc. Include examples for complex functions.
 10. **Templates:** Use `.github/ISSUE_TEMPLATE/` for issues, `.github/pull_request_template.md` for PRs.
-11. **Post-Merge Cleanup:** IMMEDIATELY after ANY merge, execute Checklist 10 (checkout main, pull, delete branch, prune, verify clean)
+11. **Post-Merge Cleanup:** IMMEDIATELY after ANY merge, execute the steps in [Post-Merge Cleanup (EXECUTE IMMEDIATELY)](#post-merge-cleanup-execute-immediately) (checkout main, pull, delete branch, prune, verify clean)
 
 ### Emergency Exception Process
 
@@ -398,19 +402,7 @@ reuse lint  # REUSE
 - CHANGELOG.md entry exists
 - Squash commits
 
-### **IMMEDIATELY After Merge (MANDATORY - Execute Without Being Asked)**
-
-When ANY PR is merged (by you or mentioned by user), **IMMEDIATELY execute**:
-
-```bash
-git checkout main
-git pull
-git branch -d <feature-branch>
-git fetch --prune
-git status  # Verify: "nothing to commit, working tree clean"
-```
-
-**This is NOT optional. Execute EVERY TIME a merge happens.**
+See [Post-Merge Cleanup (EXECUTE IMMEDIATELY)](#post-merge-cleanup-execute-immediately) for required steps.
 
 ## AI Self-Check Protocol
 
@@ -437,33 +429,40 @@ git status  # Verify: "nothing to commit, working tree clean"
 ## Quality Gates (Execute in Order)
 
 1. [ ] **TDD Compliance**
+
    - Tests written FIRST (failing)
    - Implementation added
    - Tests now pass
    - Coverage ≥80% for new code
+   - Coverage 100% for critical paths (see Critical Rule #1)
 
 2. [ ] **DRY Principle**
+
    - No duplicated logic
    - Common code extracted to helpers/utils
    - Configuration in config files (not hardcoded)
 
 3. [ ] **Quality Over Speed**
+
    - Code reviewed by myself (see 4-pass review below)
    - All edge cases considered
    - Error handling complete
    - No shortcuts taken
 
 4. [ ] **CHANGELOG Updated**
+
    - Entry added to [Unreleased] section
    - Category correct (Added/Changed/Fixed/etc.)
    - Migration guide if breaking change
 
 5. [ ] **Documentation Complete**
+
    - Public APIs have JSDoc/PHPDoc/TSDoc
    - Complex functions have examples
    - README updated if needed
 
 6. [ ] **Preflight Script**
+
    - `./scripts/preflight.sh` executed
    - Exit code 0 (all checks pass)
    - If fails: FIX, don't bypass
