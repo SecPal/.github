@@ -19,6 +19,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Problem:**
 Security companies have different organizational structures and job titles:
+
 - "Objektleiter" vs. "Schichtleiter" vs. "Einsatzleiter"
 - Flat organizations vs. deep hierarchies
 - Different permission needs per client/location
@@ -26,14 +27,17 @@ Security companies have different organizational structures and job titles:
 **Requirements:**
 
 1. **Predefined Roles (Templates):**
+
    - System Administrator (full access)
    - Company Manager (organization-wide access)
    - Operations Manager (shift planning, reporting)
    - Team Lead (shift supervision, limited admin)
    - Security Guard (field operations only)
+   - Works Council / Betriebsrat (co-determination rights, audit access)
    - Client (read-only, restricted)
 
 2. **Custom Roles:**
+
    - ✅ Users can create custom roles
    - ✅ Define permissions per role (granular)
    - ✅ Rename roles to match company terminology
@@ -70,7 +74,7 @@ class Role extends Model {
         'permissions',       // JSONB: ['guard_book.create', 'shifts.read', ...]
         'organization_id',   // Custom roles are org-specific
     ];
-    
+
     protected $casts = [
         'permissions' => 'array',
     ];
@@ -81,11 +85,11 @@ class GuardBookEntryPolicy {
     public function viewAny(User $user): bool {
         return $user->hasPermission('guard_book.read');
     }
-    
+
     public function create(User $user): bool {
         return $user->hasPermission('guard_book.create');
     }
-    
+
     // Event sourcing: No update/delete allowed!
     public function update(User $user, GuardBookEntry $entry): bool {
         return false; // Immutable by design
@@ -94,6 +98,7 @@ class GuardBookEntryPolicy {
 ```
 
 **Laravel Packages to Consider:**
+
 - `spatie/laravel-permission` (popular, flexible)
 - `silber/bouncer` (simpler)
 - Custom implementation (more control)
@@ -101,8 +106,340 @@ class GuardBookEntryPolicy {
 **Priority:** 🔴 P0 (Blocker) - Required before multi-user testing
 
 **Related:**
-- Future ADR: RBAC Architecture
+
+- Future ADR-004: RBAC Architecture
+- Section below: Works Council (Betriebsrat) Permissions
 - legal-compliance.md: GDPR access control requirements
+
+---
+
+## 🏛️ Works Council (Betriebsrat) Integration
+
+### Requirement: Co-Determination Rights & Compliance
+
+**Context:**
+
+German labor law (BetrVG - Betriebsverfassungsgesetz) grants works councils (Betriebsrat) **co-determination rights** in various areas, including:
+
+- Shift planning (§87 BetrVG)
+- Working time arrangements
+- Overtime distribution
+- Employee data access (for performing their duties)
+
+**Important:** Not all organizations have a works council (companies with ≥5 permanent employees can elect one), but **when present, their rights are legally binding**.
+
+**SecPal Approach:**
+
+- ✅ Optional Betriebsrat role (can be disabled if no works council exists)
+- ✅ Configurable per organization
+- ✅ Compliance workflows when enabled
+
+### Features:
+
+#### 1. Shift Plan Approval (Dienstplanausschuss)
+
+**Workflow:**
+
+```
+Manager creates shift plan for next month
+  ↓
+System marks plan as "Pending BR Approval"
+  ↓
+BR receives notification
+  ↓
+BR reviews plan (reads all shifts, assignments)
+  ↓
+BR can:
+  - ✅ Approve → Plan becomes "Active"
+  - ❌ Reject → Plan blocked, manager must revise
+  - 💬 Request Changes → Collaboration mode
+  ↓
+If approved: Shifts visible to employees
+If rejected: Plan cannot be published
+```
+
+**Implementation:**
+
+```php
+Schema::create('shift_plans', function (Blueprint $table) {
+    $table->uuid('id')->primary();
+    $table->foreignUuid('organization_id');
+    $table->string('name'); // "November 2025"
+    $table->date('period_start');
+    $table->date('period_end');
+
+    // Betriebsrat approval workflow
+    $table->enum('br_status', [
+        'draft',              // Not yet submitted to BR
+        'pending_br',         // Awaiting BR review
+        'br_approved',        // BR approved
+        'br_rejected',        // BR rejected
+        'br_not_required',    // No BR in this organization
+    ])->default('draft');
+
+    $table->foreignUuid('br_reviewed_by')->nullable(); // Which BR member
+    $table->timestamp('br_reviewed_at')->nullable();
+    $table->text('br_rejection_reason')->nullable();
+
+    // Deadlines
+    $table->timestamp('br_approval_deadline')->nullable(); // Must be approved by X
+
+    $table->timestamps();
+});
+```
+
+**Business Rules:**
+
+```php
+class ShiftPlanPolicy {
+    public function publish(User $user, ShiftPlan $plan): bool {
+        // Cannot publish without BR approval (if BR exists)
+        if ($plan->organization->has_works_council) {
+            return $plan->br_status === 'br_approved';
+        }
+
+        return $user->hasPermission('shift_plans.publish');
+    }
+
+    public function approve(User $user, ShiftPlan $plan): bool {
+        return $user->hasRole('works_council')
+            && $plan->br_status === 'pending_br';
+    }
+}
+```
+
+#### 2. Approval Deadlines
+
+**Configuration:**
+
+```php
+// Organization settings
+$organization->settings = [
+    'works_council' => [
+        'enabled' => true,
+        'approval_required_for' => ['shift_plans', 'overtime_rules'],
+        'approval_deadline_days' => 14, // BR must approve 14 days before period start
+        'auto_reject_on_deadline' => false, // Or auto-approve?
+    ],
+];
+```
+
+**Deadline Alerts:**
+
+```php
+// app/Console/Commands/CheckBRApprovalDeadlines.php
+class CheckBRApprovalDeadlines extends Command {
+    public function handle() {
+        $approaching = ShiftPlan::where('br_status', 'pending_br')
+            ->whereBetween('br_approval_deadline', [
+                now(),
+                now()->addDays(3),
+            ])
+            ->get();
+
+        foreach ($approaching as $plan) {
+            Notification::send(
+                $plan->organization->worksCouncilMembers,
+                new BRApprovalDeadlineApproaching($plan)
+            );
+        }
+    }
+}
+```
+
+#### 3. Employee File Access (Mitarbeiterdaten)
+
+**Context:**
+
+Works councils have the right to access employee data **when necessary for performing their duties** (§99 BetrVG).
+
+**SecPal Implementation:**
+
+**Option A: Permanent Access**
+
+```php
+class EmployeePolicy {
+    public function viewAny(User $user): bool {
+        return $user->hasRole('works_council')
+            || $user->hasPermission('employees.read');
+    }
+}
+```
+
+**Option B: Request-Based Access (More Privacy-Friendly)**
+
+```php
+Schema::create('br_data_access_requests', function (Blueprint $table) {
+    $table->uuid('id')->primary();
+    $table->foreignUuid('requester_id'); // BR member
+    $table->foreignUuid('employee_id')->nullable(); // Specific employee or null for all
+    $table->enum('request_type', ['employee_file', 'shift_history', 'time_records']);
+    $table->text('justification'); // "Prüfung Überstundenvergütung"
+    $table->enum('status', ['pending', 'approved', 'rejected']);
+    $table->foreignUuid('approved_by')->nullable(); // Manager/Admin
+    $table->timestamp('approved_at')->nullable();
+    $table->timestamp('access_expires_at')->nullable(); // Temporary access
+    $table->timestamps();
+});
+```
+
+**Workflow:**
+
+```
+BR member requests access to employee file
+  ↓
+Justification required: "Warum benötigt?"
+  ↓
+Manager/Admin reviews request
+  ↓
+If approved: Temporary access granted (e.g., 7 days)
+  ↓
+All BR access logged (audit trail)
+```
+
+#### 4. Access Logging (Zugriffsprotokolle)
+
+**Legal Requirement:**
+
+When works councils access employee data, this must be logged (transparency, data protection).
+
+```php
+Schema::create('br_access_logs', function (Blueprint $table) {
+    $table->uuid('id')->primary();
+    $table->foreignUuid('br_member_id');
+    $table->foreignUuid('accessed_employee_id')->nullable();
+    $table->string('action'); // 'viewed_employee_file', 'exported_shift_plan'
+    $table->jsonb('metadata'); // What exactly was accessed
+    $table->timestamp('accessed_at');
+    $table->string('ip_address', 45);
+    $table->text('user_agent');
+});
+
+// Automatic logging via middleware
+class LogBRAccess {
+    public function handle(Request $request, Closure $next) {
+        if ($request->user()->hasRole('works_council')) {
+            BRAccessLog::create([
+                'br_member_id' => $request->user()->id,
+                'action' => $request->route()->getName(),
+                'accessed_at' => now(),
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ]);
+        }
+
+        return $next($request);
+    }
+}
+```
+
+**Access Log Export:**
+
+Managers/Admins can export BR access logs (for compliance audits).
+
+#### 5. Co-Determination Workflows
+
+**Example: Overtime Rules**
+
+```
+Manager wants to change overtime compensation rules
+  ↓
+System requires BR approval (§87 BetrVG)
+  ↓
+BR reviews proposal
+  ↓
+BR approves/rejects
+  ↓
+If approved: Rules take effect
+If rejected: Rules blocked
+```
+
+**Implementation:**
+
+```php
+Schema::create('br_approval_workflows', function (Blueprint $table) {
+    $table->uuid('id')->primary();
+    $table->foreignUuid('organization_id');
+    $table->string('subject_type'); // 'ShiftPlan', 'OvertimeRule', 'WorkingTimeModel'
+    $table->uuid('subject_id');
+    $table->enum('status', ['pending_br', 'br_approved', 'br_rejected']);
+    $table->text('br_comments')->nullable();
+    $table->timestamps();
+});
+```
+
+### Works Council Dashboard
+
+**BR Members see:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Betriebsrat Dashboard                               │
+├─────────────────────────────────────────────────────┤
+│ Offene Freigaben (3):                               │
+│                                                     │
+│ 🕐 Dienstplan Dezember 2025                        │
+│    Deadline: 15.11.2025                             │
+│    [Prüfen] [Freigeben] [Ablehnen]                 │
+│                                                     │
+│ 🕐 Überstundenregelung Änderung                    │
+│    Deadline: 01.11.2025                             │
+│    [Prüfen] [Freigeben] [Ablehnen]                 │
+│                                                     │
+│ Zugriffsprotokolle (letzte 30 Tage):               │
+│    27.10.2025 - Mitarbeiterakte Max M. eingesehen  │
+│    25.10.2025 - Dienstplan Oktober exportiert      │
+│                                                     │
+│ [Datenzugriff beantragen]                          │
+└─────────────────────────────────────────────────────┘
+```
+
+### Works Council Permissions Matrix
+
+| Resource         | Read | Approve | Reject | Export | Comment |
+| ---------------- | ---- | ------- | ------ | ------ | ------- |
+| Shift Plans      | ✅   | ✅      | ✅     | ✅     | ✅      |
+| Employee Files   | 🔐\* | ❌      | ❌     | 🔐\*   | ❌      |
+| Working Time     | ✅   | ✅      | ✅     | ✅     | ✅      |
+| Overtime Records | ✅   | ❌      | ❌     | ✅     | ❌      |
+| Guard Book       | ❌   | ❌      | ❌     | ❌     | ❌      |
+| System Settings  | ❌   | ❌      | ❌     | ❌     | ❌      |
+
+_\* 🔐 = Request-based access with justification required_
+
+### Configuration
+
+**Enable/Disable per Organization:**
+
+```php
+// Database migration
+Schema::table('organizations', function (Blueprint $table) {
+    $table->boolean('has_works_council')->default(false);
+    $table->jsonb('works_council_settings')->nullable();
+});
+
+// Settings example
+{
+    "enabled": true,
+    "approval_required": {
+        "shift_plans": true,
+        "overtime_rules": true,
+        "working_time_models": true
+    },
+    "approval_deadline_days": 14,
+    "data_access_model": "request_based", // or "permanent"
+    "access_log_retention_days": 365
+}
+```
+
+**Priority:** 🔴 P0 (Blocker if targeting German market)
+
+**Legal Risk:** 🟡 Medium (requires correct implementation of BetrVG)
+
+**Related:**
+
+- legal-compliance.md: BetrVG compliance
+- Future: Betriebsrat training documentation
 
 ---
 
@@ -112,6 +449,7 @@ class GuardBookEntryPolicy {
 
 **Context:**
 Security companies need employee data for:
+
 - Legal compliance (BewachV §34a: Qualification proof)
 - Shift planning (availability, qualifications)
 - Contract management (employment status, working hours)
@@ -170,27 +508,27 @@ Schema::create('employees', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->uuid('organization_id');
     $table->string('employee_number')->unique();
-    
+
     // Personal (encrypted)
     $table->text('first_name_encrypted');
     $table->text('last_name_encrypted');
     $table->date('date_of_birth_encrypted')->nullable();
-    
+
     // Employment
     $table->enum('status', ['active', 'inactive', 'on_leave', 'terminated']);
     $table->enum('contract_type', ['full_time', 'part_time', 'minijob', 'freelance']);
     $table->date('hire_date');
     $table->date('termination_date')->nullable();
     $table->decimal('weekly_hours', 5, 2)->nullable();
-    
+
     // Legal (BewachV)
     $table->string('sachkunde_certificate')->nullable();
     $table->date('sachkunde_expiry')->nullable();
     $table->date('criminal_record_check_date')->nullable();
-    
+
     // System
     $table->foreignUuid('user_id')->nullable(); // Link to auth user
-    
+
     $table->timestamps();
     $table->softDeletes();
 });
@@ -205,28 +543,50 @@ Schema::create('employees', function (Blueprint $table) {
 ### Requirement: Track Training & Certifications
 
 **Context:**
-Security guards require various qualifications:
-- Mandatory: §34a Sachkundeprüfung (IHK certificate)
-- Optional but valuable: First aid, fire safety, dog handling, weapons license
-- Recurring: First aid (every 2 years), fire safety training
+Security guards require various qualifications according to §34a GewO (Gewerbeordnung):
+
+- **Mandatory (for certain activities):**
+  - §34a Sachkundeunterrichtung (40-hour training course)
+  - §34a Sachkundeprüfung (IHK examination, more comprehensive)
+- **Advanced Certifications:**
+  - Geprüfte Schutz- und Sicherheitskraft (GSSK) - IHK certified specialist
+  - Servicekraft für Schutz und Sicherheit - Basic IHK certification
+  - Fachkraft für Schutz und Sicherheit - Advanced IHK certification
+  - Meister für Schutz und Sicherheit - Master craftsman level
+- **Additional Qualifications:**
+  - First aid (Erste Hilfe)
+  - Fire safety (Brandschutzhelfer)
+  - Specialized skills (weapons, dogs, etc.)
+- **Recurring:** Many qualifications require periodic renewal
 
 **Features:**
 
 ### 1. Qualification Types
 
-**Predefined Qualifications:**
-- §34a Sachkundeprüfung (mandatory)
-- First Aid (Erste Hilfe)
-- Fire Safety Officer (Brandschutzhelfer)
+**Predefined Qualifications (§34a GewO):**
+
+- **§34a Sachkundeunterrichtung** (40h training, no exam)
+- **§34a Sachkundeprüfung** (IHK exam, higher qualification)
+- **Geprüfte Schutz- und Sicherheitskraft (GSSK)** - IHK specialist
+- **Servicekraft für Schutz und Sicherheit** - IHK basic
+- **Fachkraft für Schutz und Sicherheit** - IHK advanced
+- **Meister für Schutz und Sicherheit** - Master level
+
+**Additional Predefined Qualifications:**
+
+- First Aid (Erste Hilfe) - Renewal: 2 years
+- Fire Safety Officer (Brandschutzhelfer) - Renewal: 3-5 years
 - Safety Officer (Sicherheitsbeauftragter)
 - Dog Handler (Hundeführer)
-- Weapons License (Waffenschein)
-- NSL Certification (Geprüfte Schutz- und Sicherheitskraft)
+- Weapons License (Waffenschein) - Various types
+- Intervention Services (Interventionsdienst)
 
 **Custom Qualifications:**
+
 - ✅ Add organization-specific qualifications
 - ✅ Define if mandatory or optional
 - ✅ Set renewal period (e.g., every 2 years)
+- ✅ Define prerequisites (e.g., "Meister requires Fachkraft")
 
 ### 2. Employee Qualifications
 
@@ -248,16 +608,16 @@ Schema::create('employee_qualifications', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('employee_id');
     $table->foreignUuid('qualification_id');
-    
+
     $table->date('obtained_date');
     $table->date('expiry_date')->nullable();
     $table->string('certificate_number')->nullable();
     $table->string('issuing_authority')->nullable(); // "IHK Berlin", "DRK"
     $table->text('notes')->nullable();
-    
+
     // Document storage
     $table->string('certificate_file_path')->nullable(); // PDF scan
-    
+
     $table->enum('status', ['valid', 'expiring_soon', 'expired']);
     $table->timestamps();
 });
@@ -275,14 +635,14 @@ class CheckQualificationExpiry extends Command {
             now(),
             now()->addDays(30),
         ])->get();
-        
+
         foreach ($expiringIn30Days as $qual) {
             Notification::send(
                 [$qual->employee->manager, $qual->employee],
                 new QualificationExpiringNotification($qual)
             );
         }
-        
+
         // Update status
         $qual->update(['status' => 'expiring_soon']);
     }
@@ -290,6 +650,7 @@ class CheckQualificationExpiry extends Command {
 ```
 
 **Dashboard Widgets:**
+
 - "Qualifications expiring this month" (sortable by date)
 - "Employees missing mandatory qualifications"
 - "Upcoming group trainings" (coordinate renewals)
@@ -299,6 +660,7 @@ class CheckQualificationExpiry extends Command {
 **Feature:** Schedule group courses when multiple employees need renewal
 
 **Logic:**
+
 1. Find all employees with qualification expiring in next 3 months
 2. Group by qualification type
 3. Suggest training dates when ≥5 employees need same course
@@ -328,10 +690,32 @@ class CheckQualificationExpiry extends Command {
 
 **Context:**
 Manual shift planning is time-consuming and error-prone:
+
 - Ensuring coverage (enough staff per shift)
 - Matching qualifications to requirements
 - Respecting employee preferences (vacation, availability)
 - Legal compliance (working time law, rest periods)
+- Different planning horizons: Weekly, monthly, or annual
+
+**Planning Frequencies:**
+
+- **Weekly Planning:** Short-term flexibility, quick adjustments
+- **Monthly Planning:** Most common, balance of predictability and flexibility
+- **Annual Planning:** Long-term framework (especially for large contracts)
+
+**SecPal Support:**
+
+```php
+Schema::create('shift_plan_periods', function (Blueprint $table) {
+    $table->uuid('id')->primary();
+    $table->foreignUuid('organization_id');
+    $table->enum('period_type', ['weekly', 'monthly', 'quarterly', 'annual']);
+    $table->date('period_start');
+    $table->date('period_end');
+    $table->enum('status', ['draft', 'published', 'locked']);
+    $table->timestamps();
+});
+```
 
 **Features:**
 
@@ -358,22 +742,24 @@ Schema::create('shift_requirements', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('shift_template_id')->nullable();
     $table->foreignUuid('location_id')->nullable();
-    
+
     // Example: "Always 1 first aid certified guard on site"
     $table->foreignUuid('qualification_id');
     $table->integer('min_count')->default(1);
-    
+
     $table->timestamps();
 });
 ```
 
 **Validation:**
+
 - ⚠️ Warning when scheduling shift without required qualifications
 - 🚨 Error when confirming shift with missing requirements
 
 ### 3. Auto-Scheduling Algorithm
 
 **Input:**
+
 - Shift templates (when/where/requirements)
 - Employee availability (vacation, preferences, working time law)
 - Employee qualifications
@@ -389,17 +775,17 @@ class ShiftScheduler {
         array $constraints
     ): Schedule {
         $shifts = $this->generateShifts($startDate, $endDate);
-        
+
         foreach ($shifts as $shift) {
             $candidates = $this->findEligibleEmployees($shift);
             $selected = $this->optimizeSelection($candidates, $shift, $constraints);
-            
+
             $shift->assignEmployees($selected);
         }
-        
+
         return new Schedule($shifts);
     }
-    
+
     private function findEligibleEmployees(Shift $shift): Collection {
         return Employee::where('status', 'active')
             ->whereDoesntHave('shifts', function ($q) use ($shift) {
@@ -412,7 +798,7 @@ class ShiftScheduler {
             })
             ->get();
     }
-    
+
     private function optimizeSelection(
         Collection $candidates,
         Shift $shift,
@@ -423,13 +809,14 @@ class ShiftScheduler {
         // +5 points: Lives nearby (reduce travel time)
         // +3 points: No overtime this week (distribute evenly)
         // -5 points: Explicitly prefers not to work this time
-        
+
         return $candidates->sortByDesc('score')->take($shift->required_count);
     }
 }
 ```
 
 **Constraints:**
+
 - Working Time Law (ArbZG): Max 10h/day, 48h/week (avg over 6 months)
 - Rest periods: Min 11h between shifts
 - Employee preferences: Preferred shifts, blocked times
@@ -438,6 +825,7 @@ class ShiftScheduler {
 ### 4. Employee Self-Service
 
 **Mobile app features:**
+
 - 📅 View own shifts (calendar view)
 - 📝 Request vacation / time off
 - 🔄 Request shift swaps (with colleague approval)
@@ -470,12 +858,12 @@ class CheckShiftCoverage extends Command {
                              ->where('start_time', '<', now()->addDays(14))
                              ->whereRaw('assigned_count < required_count')
                              ->get();
-        
+
         foreach ($futureShifts as $shift) {
-            $urgency = $shift->start_time->diffInDays(now()) < 3 
-                ? 'critical' 
+            $urgency = $shift->start_time->diffInDays(now()) < 3
+                ? 'critical'
                 : 'warning';
-            
+
             Notification::send(
                 $shift->location->managers,
                 new UnderstaffedShiftNotification($shift, $urgency)
@@ -511,6 +899,7 @@ class CheckShiftCoverage extends Command {
 
 **Context:**
 Clients want to see what happens on their premises:
+
 - Incident reports
 - Patrol logs
 - Guard attendance
@@ -529,9 +918,9 @@ Clients want to see what happens on their premises:
     "location": "Objekt A",
     "guards": [
       {
-        "guard_id": "G-1234",  // Pseudonym
+        "guard_id": "G-1234", // Pseudonym
         "guard_alias": "Wache 1",
-        "qualifications": ["§34a", "Erste Hilfe"]  // No names!
+        "qualifications": ["§34a", "Erste Hilfe"] // No names!
       },
       {
         "guard_id": "G-5678",
@@ -545,13 +934,14 @@ Clients want to see what happens on their premises:
       "time": "23:45",
       "type": "Routine Patrol",
       "description": "Rundgang ohne Befund",
-      "reported_by": "Wache 1"  // No real name
+      "reported_by": "Wache 1" // No real name
     }
   ]
 }
 ```
 
 **Client Portal Features:**
+
 - ✅ View shifts for their locations only
 - ✅ View incident reports (anonymized reporters)
 - ✅ View patrol logs
@@ -567,10 +957,10 @@ Clients want to see what happens on their premises:
 class ClientPolicy {
     public function viewShift(User $user, Shift $shift): bool {
         // Client can only see shifts at their own locations
-        return $user->hasRole('client') 
+        return $user->hasRole('client')
             && $user->client->locations->contains($shift->location_id);
     }
-    
+
     public function viewEmployeeDetails(User $user): bool {
         // Clients never see employee details
         return $user->hasRole('client') ? false : true;
@@ -628,6 +1018,7 @@ Shift reassigned
 - Download certificates
 
 **Technology:**
+
 - PWA (Progressive Web App) - Same as admin frontend
 - Offline-first (ADR-003)
 - Responsive design (mobile-first)
@@ -647,20 +1038,47 @@ Guards must patrol routes and scan checkpoints to prove presence.
 
 **Technologies:**
 
-1. **QR Codes** (cheapest)
-   - Print QR codes, mount at checkpoints
+1. **NFC Tags** (**Primary - Recommended**)
+
+   - NFC tags mounted at checkpoints (tamper-resistant housing)
+   - Guard taps phone to scan
+   - **Advantages:**
+     - Works completely offline
+     - Fast and reliable
+     - Not forgeable (each tag has unique ID)
+     - Weather-resistant mounting options
+     - Long lifespan (10+ years passive tags)
+   - **Cost:** ~€2-5 per tag (one-time investment)
+   - **Use Case:** Professional installations where reliability matters
+
+2. **QR Codes** (Cost-Effective Alternative)
+
+   - Print QR codes, mount at checkpoints (laminated/weatherproof)
    - Guard scans with phone camera
-   - App records: Time, Location, Guard ID
+   - **Advantages:**
+     - Very cheap (~€0.50 per checkpoint with printing/lamination)
+     - Easy to replace if damaged
+     - No special hardware needed
+   - **Disadvantages:**
+     - ⚠️ Can be forged (photo/print of QR code)
+     - Requires good lighting
+     - Camera quality dependent
+     - Lamination can degrade
+   - **Use Case:** Budget-constrained deployments, indoor locations
 
-2. **NFC Tags** (more robust)
-   - NFC tags mounted at checkpoints
-   - Guard taps phone
-   - Works offline
+3. **Bluetooth Beacons** (Under Consideration)
+   - Beacons detect nearby phones (automatic check-in)
+   - **Advantages:**
+     - No manual scanning required
+     - Can estimate proximity
+   - **Disadvantages:**
+     - Higher cost (~€20-40 per beacon + batteries)
+     - Battery replacement needed (~1-2 years)
+     - Connection reliability issues
+     - Power consumption on mobile device
+   - **Priority:** Future consideration (P4)
 
-3. **Bluetooth Beacons** (automatic)
-   - Beacons detect nearby phones
-   - Automatic check-in (no manual scan)
-   - Higher cost
+**Recommendation:** Start with NFC for professional clients, offer QR as budget option. Include security warning about QR code forgery in client education materials.
 
 **Implementation:**
 
@@ -700,6 +1118,7 @@ Schema::create('checkpoint_scans', function (Blueprint $table) {
 ```
 
 **Analytics:**
+
 - Missed checkpoints (alert manager)
 - Patrol route deviations
 - Average patrol duration
@@ -714,6 +1133,7 @@ Schema::create('checkpoint_scans', function (Blueprint $table) {
 ### Requirement: Ensure Guards Use Company Devices
 
 **Problem:**
+
 - Guards should use company devices (not personal phones)
 - Guards must be at location when clocking in/out
 - GPS tracking raises data protection concerns
@@ -730,7 +1150,7 @@ async function registerDevice(employeeId: string) {
       challenge: new Uint8Array(32),
       rp: { name: "SecPal", id: "secpal.app" },
       user: {
-        id: Uint8Array.from(employeeId, c => c.charCodeAt(0)),
+        id: Uint8Array.from(employeeId, (c) => c.charCodeAt(0)),
         name: employee.email,
         displayName: employee.name,
       },
@@ -741,9 +1161,9 @@ async function registerDevice(employeeId: string) {
       },
     },
   });
-  
+
   // Store credential ID in database
-  await api.post('/devices/register', {
+  await api.post("/devices/register", {
     employee_id: employeeId,
     credential_id: credential.id,
     device_name: "Samsung Galaxy A52", // From User-Agent
@@ -752,6 +1172,7 @@ async function registerDevice(employeeId: string) {
 ```
 
 **Benefits:**
+
 - ✅ Device-bound authentication (can't use different device)
 - ✅ No passwords (more secure)
 - ✅ Biometric unlock (fingerprint/face)
@@ -797,21 +1218,21 @@ class ClockInService {
         float $lon
     ): ShiftAttendance {
         $location = $shift->location;
-        
+
         if ($location->require_geofence_check) {
             $distance = $this->calculateDistance(
                 $lat, $lon,
                 $location->gps_center['lat'],
                 $location->gps_center['lon']
             );
-            
+
             if ($distance > $location->geofence_radius_meters) {
                 throw new GeofenceViolationException(
                     "Sie sind {$distance}m vom Objekt entfernt. Maximal {$location->geofence_radius_meters}m erlaubt."
                 );
             }
         }
-        
+
         return ShiftAttendance::create([
             'employee_id' => $employee->id,
             'shift_id' => $shift->id,
@@ -827,6 +1248,7 @@ class ClockInService {
 **⚠️ GPS Tracking is HIGHLY SENSITIVE under German labor law!**
 
 **Legal Requirements:**
+
 - ✅ Betriebsrat approval required (Works council)
 - ✅ Employee consent required
 - ✅ Only location at clock in/out (not continuous tracking)
@@ -877,17 +1299,17 @@ Datum: __________ Unterschrift: __________
 
 ## 📊 Feature Prioritization Matrix
 
-| Feature                    | Business Value | Complexity | Legal Risk | Priority | Target Version |
-| -------------------------- | -------------- | ---------- | ---------- | -------- | -------------- |
-| RBAC (Roles & Permissions) | 🔴 Critical    | Medium     | Low        | P0       | 0.2.0          |
-| Employee Management        | 🔴 Critical    | Medium     | Medium     | P0       | 0.2.0          |
-| Qualification Management   | 🟠 High        | Low        | Low        | P1       | 0.3.0          |
-| Shift Planning (Manual)    | 🟠 High        | Medium     | Low        | P1       | 0.3.0          |
-| Client Portal              | 🟡 Medium      | Low        | Medium     | P2       | 0.4.0          |
-| Mobile App (Self-Service)  | 🟡 Medium      | High       | Low        | P2       | 0.5.0          |
-| Auto-Scheduling            | 🟢 Nice        | Very High  | Low        | P3       | 1.1.0+         |
-| OWKS / Checkpoints         | 🟢 Nice        | Medium     | Low        | P3       | 1.2.0+         |
-| Device Management          | 🟢 Nice        | Medium     | Low        | P3       | 1.2.0+         |
+| Feature                    | Business Value | Complexity | Legal Risk | Priority | Target Version       |
+| -------------------------- | -------------- | ---------- | ---------- | -------- | -------------------- |
+| RBAC (Roles & Permissions) | 🔴 Critical    | Medium     | Low        | P0       | 0.2.0                |
+| Employee Management        | 🔴 Critical    | Medium     | Medium     | P0       | 0.2.0                |
+| Qualification Management   | 🟠 High        | Low        | Low        | P1       | 0.3.0                |
+| Shift Planning (Manual)    | 🟠 High        | Medium     | Low        | P1       | 0.3.0                |
+| Client Portal              | 🟡 Medium      | Low        | Medium     | P2       | 0.4.0                |
+| Mobile App (Self-Service)  | 🟡 Medium      | High       | Low        | P2       | 0.5.0                |
+| Auto-Scheduling            | 🟢 Nice        | Very High  | Low        | P3       | 1.1.0+               |
+| OWKS / Checkpoints         | 🟢 Nice        | Medium     | Low        | P3       | 1.2.0+               |
+| Device Management          | 🟢 Nice        | Medium     | Low        | P3       | 1.2.0+               |
 | Geofencing                 | 🟢 Nice        | Low        | 🔴 High    | P3       | 2.0.0+ (After legal) |
 
 ---
@@ -895,44 +1317,52 @@ Datum: __________ Unterschrift: __________
 ## 🚀 Implementation Roadmap
 
 ### Version 0.2.0 - "Multi-User Foundation"
+
 - [ ] RBAC system with predefined + custom roles
 - [ ] Employee management (CRUD)
 - [ ] Basic access control (who sees what)
 
 ### Version 0.3.0 - "Compliance & Planning"
+
 - [ ] Qualification management
 - [ ] Qualification expiry alerts
 - [ ] Manual shift planning
 - [ ] Shift templates
 
 ### Version 0.4.0 - "Client Features"
+
 - [ ] Client portal (read-only)
 - [ ] Pseudonymized guard book for clients
 - [ ] Report exports (PDF/CSV)
 
 ### Version 0.5.0 - "Employee Empowerment"
+
 - [ ] Mobile app (PWA)
 - [ ] Shift calendar view
 - [ ] Vacation requests
 - [ ] Document access
 
 ### Version 1.0.0 - "Production Ready"
+
 - [ ] All above features tested
 - [ ] Legal review completed
 - [ ] Performance optimization
 - [ ] Security audit
 
 ### Version 1.1.0+ - "Advanced Features"
+
 - [ ] Auto-scheduling algorithm
 - [ ] Group training planner
 - [ ] Advanced analytics
 
 ### Version 1.2.0+ - "Field Operations"
+
 - [ ] OWKS checkpoint scanning
 - [ ] Device management (Passkeys)
 - [ ] Patrol route optimization
 
 ### Version 2.0.0+ - "Enterprise Features"
+
 - [ ] Geofencing (after legal/Betriebsrat approval)
 - [ ] Multi-organization support
 - [ ] White-label capabilities
