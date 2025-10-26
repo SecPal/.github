@@ -133,13 +133,18 @@ else
 
         # Validate regex and warn about dangerous patterns
         # grep exit codes: 0=match, 1=no match, 2=error (invalid regex)
-        echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null || true
+        set +e  # Temporarily disable exit-on-error to capture grep's exit code
+        echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null
         GREP_EXIT=$?
+        set -e  # Re-enable exit-on-error
         if [ $GREP_EXIT -ne 2 ]; then
           # Pattern is valid (exit 0 or 1), check if it matches everything
+          # Test against diverse filenames to detect overly broad patterns
           if echo "test-file.txt" | grep -qE -- "$EXCLUDE_REGEX" && \
              echo "another-file.js" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "random.md" | grep -qE -- "$EXCLUDE_REGEX"; then
+             echo "random.md" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "README.md" | grep -qE -- "$EXCLUDE_REGEX" && \
+             echo "package.json" | grep -qE -- "$EXCLUDE_REGEX"; then
             echo "⚠️  WARNING: .preflight-exclude contains pattern that matches EVERYTHING (e.g., '.*')" >&2
             echo "This will exclude all files from PR size calculation!" >&2
           fi

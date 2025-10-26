@@ -28,7 +28,6 @@ fi
 
 # Create the symlink
 ln -sf "$TARGET_PATH" "$HOOK_PATH"
-chmod +x "$HOOK_PATH"
 
 echo "✅ Pre-push hook installed successfully!"
 echo ""
