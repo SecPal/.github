@@ -116,10 +116,17 @@ else
     CHANGED=$(git diff --numstat "$MERGE_BASE"..HEAD 2>/dev/null | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
     [ -z "$CHANGED" ] && CHANGED=0
     if [ "$CHANGED" -gt 600 ]; then
-      echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
-      exit 2
+      # Check for override file (similar to GitHub label for exceptional cases)
+      if [ -f "$ROOT_DIR/.preflight-allow-large-pr" ]; then
+        echo "⚠️  Large PR override active ($CHANGED > 600 lines). Remove .preflight-allow-large-pr when done." >&2
+      else
+        echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
+        echo "For exceptional cases, create .preflight-allow-large-pr to override this check." >&2
+        exit 2
+      fi
+    else
+      echo "Preflight OK · Changed lines: $CHANGED"
     fi
-    echo "Preflight OK · Changed lines: $CHANGED"
   fi
 fi
 

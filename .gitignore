@@ -46,3 +46,6 @@ yarn-error.log*
 *.tmp
 *.temp
 .cache/
+
+# Preflight overrides (local only)
+.preflight-allow-large-pr
