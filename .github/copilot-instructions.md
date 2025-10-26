@@ -11,10 +11,10 @@ Organization-wide defaults for all SecPal repositories.
 
 ```text
 SecPal Organization:
-├── .github/     - Organization defaults (this repo)
+├── .github/     - Organization-wide settings and documentation
 ├── api/         - Laravel backend (planned)
-├── frontend/    - React frontend (planned)
-└── contracts/   - OpenAPI contracts (planned)
+├── frontend/    - React/TypeScript frontend
+└── contracts/   - OpenAPI 3.1 specifications
 
 Local: <workspace>/SecPal/<repository>
 Remote: https://github.com/SecPal/<repository>
@@ -444,38 +444,52 @@ When Instructions were insufficient:
 
 **VALIDATION:** `grep` returns ONLY secpal.app and secpal.dev. Any other match = PR rejected.
 
-### 3. DRY Principle over Repositories (MANDATORY)
+### 3. Governance File Distribution
 
-**WHAT:** Governance files MUST be symlinked from .github repo, NOT duplicated.
+**WHAT:** Governance files are copied from .github repo to maintain consistency.
 
-**WHY:** Duplicates cause drift, maintenance burden, inconsistency across repos.
+**WHY:** While symlinks would be ideal for DRY, they don't render properly on GitHub.com web interface (only show as text paths). Real file copies ensure proper display for all users.
 
 **HOW:**
 
-**Symlinked files (contracts → .github):**
+**Copied files (from .github to frontend/contracts):**
 
 ```bash
-CONTRIBUTING.md -> ../.github/CONTRIBUTING.md
-SECURITY.md -> ../.github/SECURITY.md
-CODE_OF_CONDUCT.md -> ../.github/CODE_OF_CONDUCT.md
-CODEOWNERS -> ../.github/CODEOWNERS
-.editorconfig -> ../.github/.editorconfig
-.gitattributes -> ../.github/.gitattributes
+CONTRIBUTING.md
+SECURITY.md
+CODE_OF_CONDUCT.md
+CODEOWNERS
+.editorconfig
+.gitattributes
 ```
 
-**Implementation:**
+**Update Process:**
+
+After merging changes to governance files in the `.github` repository, copy them to all other repositories to maintain consistency:
 
 ```bash
-cd contracts/
-ln -s ../.github/CONTRIBUTING.md .
-ln -s ../.github/SECURITY.md .
-ln -s ../.github/CODE_OF_CONDUCT.md .
-ln -s ../.github/CODEOWNERS .
-ln -s ../.github/.editorconfig .editorconfig
-ln -s ../.github/.gitattributes .gitattributes
+# From SecPal workspace root
+cp .github/CONTRIBUTING.md frontend/
+cp .github/CONTRIBUTING.md contracts/
+cp .github/SECURITY.md frontend/
+cp .github/SECURITY.md contracts/
+# ... repeat for other files as needed
 ```
 
-**VALIDATION:** Run `file CONTRIBUTING.md` - must show "symbolic link". NO plain files allowed.
+**Automation Note:** For future improvement, consider creating a sync script (e.g., `.github/scripts/sync-governance.sh`) to automate this process and reduce manual errors.
+
+**Note:** Yes, this violates pure DRY, but it's a pragmatic trade-off for usability on GitHub.com.
+
+**VALIDATION:** Verify governance files exist and match across repositories:
+
+```bash
+# Quick check for file existence
+for repo in frontend contracts; do
+  for file in CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md CODEOWNERS .editorconfig .gitattributes; do
+    [ -f "$repo/$file" ] && echo "✅ $repo/$file" || echo "❌ $repo/$file missing"
+  done
+done
+```
 
 ### 4. Security by Default, not by Addition (MANDATORY)
 
@@ -696,7 +710,7 @@ Verify ALL items before PR creation.
 
 - [ ] OpenAPI specs include: components, schemas, responses, parameters, examples, securitySchemes, servers
 - [ ] package.json includes: name, version, description, keywords, homepage, bugs, repository, license, author
-- [ ] Governance files present and symlinked (NOT duplicated): CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS
+- [ ] Governance files present (copied from .github): CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS
 - [ ] Hidden files present: .editorconfig, .gitattributes, .gitignore
 
 ### Checklist 4: Quality Gates

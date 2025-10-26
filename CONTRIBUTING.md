@@ -26,10 +26,10 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
 
 ```bash
 <your-workspace>/SecPal/
-├── .github/          # This repository
+├── .github/          # Organization-wide settings and documentation
 ├── api/              # Laravel backend (planned)
-├── frontend/         # React frontend (planned)
-└── contracts/        # OpenAPI contracts (planned)
+├── frontend/         # React/TypeScript frontend
+└── contracts/        # OpenAPI 3.1 specifications
 ```
 
 **Examples:**
