@@ -11,6 +11,8 @@ SPDX-License-Identifier: CC0-1.0
 
 **Last Updated:** 2025-10-27
 
+> **Note:** Core features (RBAC, Employee Management, Shift Planning) have been moved to `feature-requirements.md` for detailed specification. This document focuses on long-term/experimental ideas.
+
 ---
 
 ## 📱 Mobile Apps
