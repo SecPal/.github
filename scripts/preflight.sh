@@ -24,9 +24,13 @@ if command -v npx >/dev/null 2>&1; then
   npx --yes markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
 fi
 # Workflow linting (part of documented gates)
+# NOTE: actionlint is disabled in local preflight due to known hanging issues
+# It runs in CI via .github/workflows/actionlint.yml instead
 if [ -d .github/workflows ]; then
   if command -v actionlint >/dev/null 2>&1; then
-    actionlint || FORMAT_EXIT=1
+    echo "ℹ️  Skipping actionlint in local preflight (runs in CI)" >&2
+    # Uncomment below to enable (may hang):
+    # timeout 30 actionlint || FORMAT_EXIT=1
   else
     echo "Warning: .github/workflows found but actionlint not installed - skipping workflow lint" >&2
   fi
