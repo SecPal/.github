@@ -119,12 +119,14 @@ else
     # Load exclude patterns from .preflight-exclude if it exists
     if [ -f "$ROOT_DIR/.preflight-exclude" ]; then
       # Extract non-comment, non-empty lines as grep-compatible regex patterns
-      EXCLUDE_PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' "$ROOT_DIR/.preflight-exclude" || true)
+      # Strip CR for Windows/CRLF compatibility
+      EXCLUDE_PATTERNS=$(grep -vE '^[[:space:]]*(#|$)' "$ROOT_DIR/.preflight-exclude" | tr -d '\r' || true)
 
       if [ -n "$EXCLUDE_PATTERNS" ]; then
         # Build regex alternation for efficient filtering (patterns are used as-is)
         EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | tr '\n' '|' | sed 's/|$//')
-        DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE "$EXCLUDE_REGEX" || true)
+        # Use -- to prevent patterns starting with - from being interpreted as flags
+        DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" || true)
       fi
     fi
 
