@@ -55,18 +55,24 @@ We use a pre-push hook to run comprehensive quality checks before pushing to Git
 
 **Installation:**
 
+The pre-push hook is already configured in `.githooks/pre-push` (version controlled). To enable it:
+
 ```bash
-# Run the setup script (automatic)
-./scripts/setup-pre-push.sh
+# Configure Git to use .githooks directory
+git config core.hooksPath .githooks
 ```
 
-This creates a symlink from `.git/hooks/pre-push` to `scripts/preflight.sh`.
+Or run the setup script:
+
+```bash
+./scripts/setup-pre-push.sh
+```
 
 **What it checks:**
 
 - Code formatting (Prettier, markdownlint)
 - REUSE 3.3 compliance
-- Workflow linting (actionlint - runs in CI only)
+- Workflow linting (actionlint - **disabled locally**, runs in CI only due to network timeout issues)
 - Language-specific checks:
   - **PHP/Laravel**: Pint, PHPStan, tests
   - **Node.js**: ESLint, TypeScript, tests, npm audit
