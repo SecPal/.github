@@ -1,0 +1,211 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: 🎯 Core Feature Implementation
+description: Create a tracked issue for a core feature from feature-requirements.md
+title: "[Feature]: "
+labels: ["enhancement", "core-feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Core Feature Implementation
+
+        This template is for features **already specified** in `docs/feature-requirements.md`.
+
+        For new ideas, use the **Feature Request** template instead.
+
+  - type: input
+    id: feature-ref
+    attributes:
+      label: Feature Reference
+      description: Reference to the feature in documentation (e.g., "Employee Management - BWR Integration")
+      placeholder: "Section in feature-requirements.md or ideas-backlog.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: Brief overview of what this feature does
+      placeholder: |
+        This feature enables...
+
+        Business Value:
+        - ...
+
+        Key Capabilities:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-stories
+    attributes:
+      label: User Stories
+      description: List the user stories this feature implements
+      placeholder: |
+        **As a** facility manager
+        **I want to** assign guards to shifts
+        **So that** I can ensure proper site coverage
+
+        **As a** guard
+        **I want to** view my upcoming shifts
+        **So that** I know when and where to work
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What needs to be true for this feature to be considered "done"?
+      placeholder: |
+        - [ ] User can create/edit/delete shifts
+        - [ ] Guards receive shift notifications
+        - [ ] Shifts respect guard qualifications
+        - [ ] Compliance checks are enforced
+        - [ ] Unit tests cover core logic (>80%)
+        - [ ] API documentation is updated
+        - [ ] Frontend UI is responsive
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Implementation priority (aligned with roadmap)
+      options:
+        - "P0: Critical - Phase 1 (MVP)"
+        - "P1: High - Phase 2"
+        - "P2: Medium - Phase 3"
+        - "P3: Low - Phase 4+"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Feature Area
+      description: Primary system area
+      options:
+        - "RBAC (Role-Based Access Control)"
+        - "Employee Management"
+        - "Qualifications & Certifications"
+        - "Shift Planning & Scheduling"
+        - "Guard Book & Incident Reporting"
+        - "Digital Signatures"
+        - "Work Instructions"
+        - "Works Council Management"
+        - "Client Portal"
+        - "Compliance & Legal (BWR, DSGVO)"
+        - "System & Infrastructure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected-repos
+    attributes:
+      label: Affected Repositories
+      description: Which repositories need changes?
+      multiple: true
+      options:
+        - "api (Laravel Backend)"
+        - "frontend (React/TypeScript)"
+        - "contracts (OpenAPI)"
+        - ".github (Documentation/CI)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical-notes
+    attributes:
+      label: Technical Considerations
+      description: Dependencies, technical constraints, API design notes
+      placeholder: |
+        **Dependencies:**
+        - Requires RBAC system (#...)
+        - Needs Employee entity (#...)
+
+        **Database Changes:**
+        - New table: `shifts`
+        - Migration: `create_shifts_table`
+
+        **API Endpoints:**
+        - POST /api/v1/shifts
+        - GET /api/v1/shifts/{id}
+        - PATCH /api/v1/shifts/{id}
+        - DELETE /api/v1/shifts/{id}
+
+        **Security:**
+        - Permission: `shifts.create`, `shifts.view`, `shifts.edit`
+    validations:
+      required: false
+
+  - type: textarea
+    id: sub-tasks
+    attributes:
+      label: Implementation Sub-Tasks
+      description: Break down the feature into smaller, trackable tasks
+      placeholder: |
+        - [ ] API: Create database schema and migrations
+        - [ ] API: Implement shift CRUD endpoints
+        - [ ] API: Add authorization checks
+        - [ ] API: Write unit/integration tests
+        - [ ] Contracts: Define OpenAPI spec for shifts
+        - [ ] Frontend: Create shift management UI
+        - [ ] Frontend: Add shift calendar view
+        - [ ] Frontend: Implement shift assignment
+        - [ ] Docs: Update user guide
+        - [ ] Docs: Update API documentation
+    validations:
+      required: false
+
+  - type: dropdown
+    id: size-estimate
+    attributes:
+      label: Size Estimate
+      description: Rough effort estimation
+      options:
+        - "XS (1-2 days)"
+        - "S (3-5 days)"
+        - "M (1-2 weeks)"
+        - "L (2-4 weeks)"
+        - "XL (1-2 months)"
+        - "XXL (2+ months, consider splitting)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: related-issues
+    attributes:
+      label: Related Issues
+      description: Link to related features, dependencies, or blockers
+      placeholder: |
+        Depends on:
+        - #... (RBAC implementation)
+        - #... (Employee Management)
+
+        Blocks:
+        - #... (Shift Reporting)
+
+        Related:
+        - #... (Qualifications)
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: This feature is documented in `feature-requirements.md` or `ideas-backlog.md`
+          required: true
+        - label: I have defined clear acceptance criteria
+          required: true
+        - label: I have identified affected repositories
+          required: true
+        - label: Dependencies and blockers are identified (if any)
+          required: false
