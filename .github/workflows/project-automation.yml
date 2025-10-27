@@ -31,7 +31,7 @@ jobs:
       - name: Set outcome output
         id: set-outcome
         if: always()
-        run: echo "outcome=${{ steps.add-to-project.outcome }}" >> "$GITHUB_OUTPUT"
+        run: echo "outcome=\"${{ steps.add-to-project.outcome }}\"" >> "$GITHUB_OUTPUT"
 
       - name: Comment if project add failed
         if: steps.add-to-project.outcome == 'failure'
