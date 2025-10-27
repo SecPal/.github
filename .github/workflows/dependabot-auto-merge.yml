@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   auto-merge:
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
     with:
       phase: "1" # Phase 1: Only PATCH updates auto-merge
       merge-method: "squash" # Use squash merge for cleaner history
