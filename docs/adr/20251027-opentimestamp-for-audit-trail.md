@@ -144,6 +144,7 @@ Schema::table('guard_book_events', function (Blueprint $table) {
    ```
 
 4. **Verification (Anytime):**
+
    ```php
    public function verifyTimestamp(GuardBookEvent $event): bool {
        $proof = OpenTimestamps\Proof::deserialize($event->ots_proof);

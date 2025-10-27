@@ -216,9 +216,10 @@ export class SyncManager {
 
     for (const serverEntry of response.data) {
       // Check if we have this entry locally
+      // .first() returns undefined if no entry is found
       const local = await db.guardBookEntries.where("serverId").equals(serverEntry.id).first();
 
-      if (!local) {
+      if (local == null) {
         // New entry from server (created by other device/user)
         await db.guardBookEntries.add({
           id: crypto.randomUUID(),

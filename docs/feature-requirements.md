@@ -27,7 +27,6 @@ Security companies have different organizational structures and job titles:
 **Requirements:**
 
 1. **Predefined Roles (Templates):**
-
    - System Administrator (full access)
    - Company Manager (organization-wide access)
    - Operations Manager (shift planning, reporting)
@@ -37,7 +36,6 @@ Security companies have different organizational structures and job titles:
    - Client (read-only, restricted)
 
 2. **Custom Roles:**
-
    - ✅ Users can create custom roles
    - ✅ Define permissions per role (granular)
    - ✅ Rename roles to match company terminology
@@ -64,6 +62,7 @@ Security companies have different organizational structures and job titles:
 **Technical Implementation:**
 
 ```php
+// Example implementation (not production code)
 // app/Models/Role.php
 class Role extends Model {
     protected $fillable = [
@@ -2287,7 +2286,6 @@ Guards must patrol routes and scan checkpoints to prove presence.
 **Technologies:**
 
 1. **NFC Tags** (**Primary - Recommended**)
-
    - NFC tags mounted at checkpoints (tamper-resistant housing)
    - Guard taps phone to scan
    - **Advantages:**
@@ -2300,7 +2298,6 @@ Guards must patrol routes and scan checkpoints to prove presence.
    - **Use Case:** Professional installations where reliability matters
 
 2. **QR Codes** (Cost-Effective Alternative)
-
    - Print QR codes, mount at checkpoints (laminated/weatherproof)
    - Guard scans with phone camera
    - **Advantages:**

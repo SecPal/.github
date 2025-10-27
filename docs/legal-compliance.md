@@ -54,10 +54,13 @@ by Union or Member State law"
 **Implementation (Crypto-Shredding):**
 
 ```php
-// Encrypt personal data with user-specific key
-$encryptedName = encrypt($user->name, $user->encryption_key);
+use Illuminate\Support\Facades\Crypt;
 
-// On erasure request:
+// Encrypt personal data with Laravel's Crypt facade
+$encryptedName = Crypt::encryptString($user->name);
+
+// On erasure request (crypto-shredding approach):
+// Delete user's encryption key to make data unreadable
 DB::table('users')->where('id', $user->id)->update([
     'encryption_key' => null, // Delete key = data unreadable
     'name' => null,

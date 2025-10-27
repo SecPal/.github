@@ -67,21 +67,18 @@ Write Side (Commands)          Read Side (Queries)
 ### Implementation Components
 
 1. **Event Store Table** (`guard_book_events`):
-
    - Stores ALL changes as immutable events
    - SHA-256 checksum per event
    - Chain linking (previous_event_id)
    - PostgreSQL Row-Level Security (RLS) for append-only enforcement
 
 2. **Projection Tables** (e.g., `guard_book_entries`):
-
    - Materialized views for fast queries
    - Built from event stream
    - Can be rebuilt anytime via event replay
    - Allows soft deletes (events remain!)
 
 3. **Event Store Service**:
-
    - `appendEvent()` - Write new events
    - `verifyIntegrity()` - Check chain integrity
    - `replayEvents()` - Rebuild projections

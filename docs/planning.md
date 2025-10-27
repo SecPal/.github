@@ -257,8 +257,11 @@ As a single-maintainer project, you (kevalyq) make all decisions. However:
 2. **Add CODEOWNERS:**
 
    ```
-   * @kevalyq
-   /api/database/ @kevalyq @future-db-expert
+   # SPDX-FileCopyrightText: 2025 SecPal
+   # SPDX-License-Identifier: CC0-1.0
+   # Example CODEOWNERS file
+   *                @kevalyq
+   /api/database/*  @kevalyq @future-db-expert
    ```
 
 3. **Enable Discussions:**
