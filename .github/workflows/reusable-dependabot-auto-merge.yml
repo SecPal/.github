@@ -181,7 +181,7 @@ jobs:
           echo "✅ Auto-merge enabled! PR will merge when all checks pass."
 
       - name: Add comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const phase = '${{ inputs.phase }}';
@@ -220,7 +220,7 @@ jobs:
     if: needs.check-eligibility.outputs.should-auto-merge != 'true' && github.actor == 'dependabot[bot]'
     steps:
       - name: Add comment for manual review
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const updateType = '${{ needs.check-eligibility.outputs.update-type }}';
