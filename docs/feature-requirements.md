@@ -1286,7 +1286,7 @@ Schema::create('work_instruction_templates', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('organization_id')->nullable(); // Null = system template
 
-    $table->string('name'); // "Verhaltenskodex", "Zugangskontr olle Vorlage"
+    $table->string('name'); // "Verhaltenskodex", "Zugangskontrolle Vorlage"
     $table->string('category'); // "general", "site_specific", "safety"
     $table->text('description')->nullable();
 
