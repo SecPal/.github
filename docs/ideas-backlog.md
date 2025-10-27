@@ -550,8 +550,115 @@ Run Laravel with Swoole/RoadRunner for massive performance gains.
 
 ---
 
+## 🏢 Sub-Contractor Management
+
+### Idea: Multi-Level Subcontractor Hierarchy
+
+**Context:**
+Security companies frequently collaborate with subcontractors who provide personnel for specific sites or shifts. These subcontractors must also be managed, qualified, and billed separately.
+
+**Concept:**
+
+- **Hierarchical Company Structure:**
+  - Prime Contractor (main company)
+  - Subcontractors - multiple levels possible
+  - Separate cost centers and billing
+- **Subcontractor Profile:**
+  - Company name, registration, IHK number (German Chamber of Commerce)
+  - Contact persons, contracts, insurance policies
+  - Authorized activity areas
+  - Rating/evaluation (quality, reliability)
+- **Personnel Assignment:**
+  - Employees belong to subcontractor
+  - Automatic labeling in shift schedules
+  - Separate billing per subcontractor
+- **Compliance:**
+  - Verification of subcontractor licenses
+  - Minimum standards for qualifications
+  - Liability issues, insurance verification
+- **Reporting:**
+  - Costs broken down by subcontractor
+  - Deployment statistics per subcontractor
+  - Performance metrics
+
+**When to revisit:**
+
+- After Employee Management v1.0
+- When client projects require subcontractors
+- Coordinate with legal/tax advisors
+
+**Complexity:** High (Multi-Tenancy, Hierarchies, Billing Logic)
+**Priority:** Later (Phase 3-4)
+
+**Related:**
+
+- Employee Management (Core Feature)
+- Shift Planning (Core Feature)
+- Client Portal (ideas-backlog.md)
+
+---
+
+## 🆔 BWR Integration (Security Service Register)
+
+### Idea: BWR Registry Integration in Employee Records
+
+**Context:**
+According to §11b BewachV (German Security Services Act), security companies must ensure their employees are registered in the Bewachungsregister (BWR - Security Service Register). Manual verification is error-prone and time-consuming.
+
+**Concept:**
+
+- **BWR-ID in Employee Record:**
+  - Required field for employees with guard responsibilities
+  - Automatic format validation
+  - Link to IHK portal (if API available)
+- **BWR Status Tracking:**
+  - Status: `active`, `suspended`, `expired`, `not_registered`
+  - Registration expiry date
+  - Automatic notifications before expiry (30/60/90 days advance)
+  - Block shift planning if status invalid
+- **Activity Areas (§34a GewO Paragraphs):**
+  - Paragraph 1: Patrol duties (all guards)
+  - Paragraph 2: Protection against shoplifting
+  - Paragraph 3: Security at entry areas (bouncers)
+  - Paragraph 4: Security at refugee accommodations
+  - Paragraph 5: City patrol
+  - Mapping to SecPal qualifications
+- **Compliance Dashboard:**
+  - Overview: How many employees have valid BWR entries?
+  - Warnings for expiring registrations
+  - Reports for authorities/clients
+- **Optional: API Integration (if available):**
+  - Automatic synchronization with IHK database
+  - Real-time status updates
+  - Eliminate manual data entry
+
+**When to revisit:**
+
+- After Employee Management v1.0
+- When official BWR-API becomes available
+- Coordinate with IHK/authorities
+
+**Complexity:** Medium (Data Model) to High (with API)
+**Priority:** Soon (important for compliance!)
+
+**Related:**
+
+- Employee Management (Core Feature)
+- Qualifications System (Core Feature)
+- Legal Compliance (docs/legal-compliance.md)
+- Issue #... (to be created for detailed specification)
+
+**Technical Notes:**
+
+- BWR-ID Format: Check if standardized format exists
+- Data Privacy: Clarify if BWR status is personal data (GDPR)
+- API: Check IHK-API availability (may be manual only)
+
+---
+
 **Next Actions:**
 
 - Move Event Sourcing idea → ADR-001 ✅ Done
 - Review this doc every 3 months
 - Create GitHub Issues for "Now" or "Soon" priorities
+- **NEW:** BWR-Integration → Move to feature-requirements.md (Soon)

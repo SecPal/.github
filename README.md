@@ -20,6 +20,34 @@ SecPal is a digital guard book and much more. It's the "guard's friend" in every
 
 ## Development Setup
 
+### Feature Management & Project Tracking
+
+SecPal uses a structured approach to feature planning and tracking:
+
+- **📝 Documentation**: Features start in `docs/ideas-backlog.md` and mature to `docs/feature-requirements.md`
+- **🎫 Issue Templates**: Use structured templates (`core_feature.yml`, `feature_request.yml`) for consistency
+- **📊 Project Board**: Kanban-style tracking with automatic issue assignment
+- **🏷️ Labels**: Organized by area (`area: RBAC`, `area: employee-mgmt`), priority (`P0-P3`), and status
+
+**Quick Start:**
+
+```bash
+# Set up project board integration and labels
+./scripts/setup-project-board.sh
+
+# Read the full workflow guide
+cat docs/project-board-integration.md
+```
+
+**Workflow:**
+
+1. **New Idea** → Add to `docs/ideas-backlog.md`
+2. **Ready to Specify** → Detail in `docs/feature-requirements.md`
+3. **Ready to Build** → Create issue via template → Auto-added to Project Board
+4. **Track Progress** → Move through Kanban columns: Ideas → Backlog → Ready → In Progress → Done
+
+See [docs/project-board-integration.md](docs/project-board-integration.md) for detailed instructions.
+
 ### Pre-commit Hooks
 
 We use pre-commit hooks to ensure code quality before commits are made. This catches issues locally before CI/CD runs.

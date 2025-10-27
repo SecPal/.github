@@ -44,10 +44,45 @@ body:
       label: Priority
       description: How important is this feature to you?
       options:
-        - Critical (blocks my use of the product)
-        - High (significantly improves my workflow)
-        - Medium (nice to have)
-        - Low (minor improvement)
+        - "P0: Critical (blocks product usage)"
+        - "P1: High (significantly improves workflow)"
+        - "P2: Medium (nice to have)"
+        - "P3: Low (minor improvement)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Feature Area
+      description: Which part of SecPal does this feature relate to?
+      options:
+        - "RBAC (Role-Based Access Control)"
+        - "Employee Management"
+        - "Qualifications & Certifications"
+        - "Shift Planning & Scheduling"
+        - "Guard Book & Incident Reporting"
+        - "Digital Signatures"
+        - "Work Instructions"
+        - "Works Council Management"
+        - "Client Portal"
+        - "Compliance & Legal (BWR, DSGVO)"
+        - "System & Infrastructure"
+        - "Other / Cross-cutting"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-status
+    attributes:
+      label: Current Status
+      description: Where is this feature in the planning process?
+      options:
+        - "💡 Idea (just brainstorming)"
+        - "📋 Backlog (needs specification)"
+        - "📄 Specified (documented in feature-requirements.md)"
+        - "🎯 Ready for Development"
+      default: 0
     validations:
       required: true
 
