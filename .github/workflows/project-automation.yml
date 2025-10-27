@@ -30,7 +30,7 @@ jobs:
     name: Set initial status based on labels
     runs-on: ubuntu-latest
     needs: add-to-project
-    if: contains(github.event.issue.labels.*.name, 'enhancement')
+    if: contains(github.event.issue.labels.*.name, 'enhancement') || contains(github.event.issue.labels.*.name, 'core-feature')
     steps:
       - name: Determine initial status
         id: status

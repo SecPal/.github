@@ -267,13 +267,13 @@ Create Issue using **Core Feature Template**:
 
 ### 2. Update Automation Workflow
 
-Edit `.github/workflows/project-automation.yml`:
+The workflow is already configured for Project #1:
 
 ```yaml
-project-url: https://github.com/orgs/SecPal/projects/YOUR_PROJECT_NUMBER
+project-url: https://github.com/orgs/SecPal/projects/1
 ```
 
-Replace `YOUR_PROJECT_NUMBER` with the actual number (found in the project URL).
+If you create a different project number, edit `.github/workflows/project-automation.yml` and update the URL accordingly.
 
 ### 3. Create Area Labels
 

@@ -174,109 +174,19 @@ fi
 
 echo ""
 
-# Offer to create recommended fields
+echo ""
+
+# Note about project configuration
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Would you like to add recommended custom fields?"
+echo "💡 Your project is already well-configured!"
 echo ""
-read -p "Add missing fields? (y/N) " -n 1 -r
+echo "All recommended fields are present. If you need to:"
+echo "  • Add more field options"
+echo "  • Modify existing fields"
+echo "  • Create new custom fields"
 echo ""
-
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo ""
-    echo "🔧 Creating custom fields..."
-    echo ""
-
-    # Priority field
-    if [ -z "$PRIORITY_FIELD" ] || [ "$PRIORITY_FIELD" == "null" ]; then
-        echo "Creating Priority field..."
-        gh api graphql -f query="
-          mutation {
-            createProjectV2Field(input: {
-              projectId: \"${PROJECT_ID}\"
-              dataType: SINGLE_SELECT
-              name: \"Priority\"
-            }) {
-              projectV2Field {
-                ... on ProjectV2SingleSelectField {
-                  id
-                  name
-                }
-              }
-            }
-          }
-        " > /dev/null 2>&1 && echo -e "${GREEN}✅ Priority field created${NC}" || echo -e "${RED}❌ Failed to create Priority field${NC}"
-
-        # Add options (requires field ID from previous mutation)
-        PRIORITY_FIELD_ID=$(gh api graphql -f query="query { organization(login: \"${ORG}\") { projectV2(number: ${PROJECT_NUMBER}) { fields(first: 20) { nodes { ... on ProjectV2SingleSelectField { id name } } } } } }" | jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Priority") | .id')
-
-        if [ -n "$PRIORITY_FIELD_ID" ]; then
-            for option in "P0: Critical (MVP)" "P1: High" "P2: Medium" "P3: Low"; do
-                gh api graphql -f query="
-                  mutation {
-                    addProjectV2ItemFieldValue(input: {
-                      projectId: \"${PROJECT_ID}\"
-                      fieldId: \"${PRIORITY_FIELD_ID}\"
-                      value: {
-                        singleSelectOptionId: \"${option}\"
-                      }
-                    }) {
-                      projectV2Item {
-                        id
-                      }
-                    }
-                  }
-                " > /dev/null 2>&1
-            done
-        fi
-    fi
-
-    # Area field
-    if [ -z "$AREA_FIELD" ] || [ "$AREA_FIELD" == "null" ]; then
-        echo "Creating Area field..."
-        gh api graphql -f query="
-          mutation {
-            createProjectV2Field(input: {
-              projectId: \"${PROJECT_ID}\"
-              dataType: SINGLE_SELECT
-              name: \"Area\"
-            }) {
-              projectV2Field {
-                ... on ProjectV2SingleSelectField {
-                  id
-                  name
-                }
-              }
-            }
-          }
-        " > /dev/null 2>&1 && echo -e "${GREEN}✅ Area field created${NC}" || echo -e "${RED}❌ Failed to create Area field${NC}"
-    fi
-
-    # Size field
-    if [ -z "$SIZE_FIELD" ] || [ "$SIZE_FIELD" == "null" ]; then
-        echo "Creating Size field..."
-        gh api graphql -f query="
-          mutation {
-            createProjectV2Field(input: {
-              projectId: \"${PROJECT_ID}\"
-              dataType: SINGLE_SELECT
-              name: \"Size\"
-            }) {
-              projectV2Field {
-                ... on ProjectV2SingleSelectField {
-                  id
-                  name
-                }
-              }
-            }
-          }
-        " > /dev/null 2>&1 && echo -e "${GREEN}✅ Size field created${NC}" || echo -e "${RED}❌ Failed to create Size field${NC}"
-    fi
-
-    echo ""
-    echo -e "${GREEN}✅ Custom fields setup complete!${NC}"
-fi
-
+echo "Visit: ${PROJECT_URL}/settings"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
