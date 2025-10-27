@@ -19,18 +19,32 @@ jobs:
       contents: read
     steps:
       - name: Add to project
-        uses: actions/add-to-project@v0.5.0
+        id: add-to-project
+        continue-on-error: true
+        uses: actions/add-to-project@v1.0.2
         with:
-          # Replace with your actual project URL
-          # Find it at: https://github.com/orgs/SecPal/projects/YOUR_PROJECT_NUMBER
           project-url: https://github.com/orgs/SecPal/projects/1
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment if project add failed
+        if: steps.add-to-project.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `⚠️ **Manual Action Required**\n\nThis issue could not be automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) due to missing permissions.\n\n**To add manually:**\n\`\`\`bash\ngh project item-add 1 --owner SecPal --url ${context.payload.issue.html_url}\n\`\`\`\n\n**To enable automation:** An organization admin needs to:\n1. Create a fine-grained Personal Access Token with \`Contents: Read\` and \`Projects: Read & Write\` permissions\n2. Add it as a repository secret named \`PROJECT_TOKEN\`\n3. Update this workflow to use \`github-token: \${{ secrets.PROJECT_TOKEN }}\`\n\nSee: https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects`
+            });
 
   set-status-field:
     name: Set initial status based on labels
     runs-on: ubuntu-latest
     needs: add-to-project
-    if: contains(github.event.issue.labels.*.name, 'enhancement') || contains(github.event.issue.labels.*.name, 'core-feature')
+    if: |
+      (success() || failure()) &&
+      (contains(github.event.issue.labels.*.name, 'enhancement') || contains(github.event.issue.labels.*.name, 'core-feature'))
     steps:
       - name: Determine initial status
         id: status
@@ -52,9 +66,14 @@ jobs:
         with:
           script: |
             const status = '${{ steps.status.outputs.status }}';
+            const projectAdded = '${{ needs.add-to-project.result }}' === 'success';
+            const message = projectAdded
+              ? `✅ This issue has been automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) with status: **${status}**`
+              : `📋 Suggested status for [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1): **${status}**`;
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `✅ This issue has been automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) with status: **${status}**\n\nNext steps:\n- Review and refine the issue description\n- Add relevant labels (area, priority)\n- Link related issues/PRs\n- Move to appropriate project column as needed`
+              body: `${message}\n\nNext steps:\n- Review and refine the issue description\n- Add relevant labels (area, priority)\n- Link related issues/PRs\n- Move to appropriate project column as needed`
             });
