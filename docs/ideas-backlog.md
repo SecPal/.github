@@ -608,7 +608,7 @@ According to §11b BewachV (German Security Services Act), security companies mu
 **Concept:**
 
 - **BWR-ID in Employee Record:**
-  - Required field for guards (guard role)
+  - Required field for employees with guard responsibilities
   - Automatic format validation
   - Link to IHK portal (if API available)
 - **BWR Status Tracking:**

@@ -50,7 +50,7 @@ labels=(
 for label in "${labels[@]}"; do
     IFS='|' read -r name color description <<< "$label"
 
-    if gh label list --repo SecPal/.github | grep -q "^${name}"; then
+    if gh label list --repo SecPal/.github | grep -Fxq "$name"; then
         echo -e "${YELLOW}⚠️  Label '${name}' already exists, skipping...${NC}"
     else
         gh label create "$name" --color "$color" --description "$description" --repo SecPal/.github
@@ -74,7 +74,7 @@ status_labels=(
 for label in "${status_labels[@]}"; do
     IFS='|' read -r name color description <<< "$label"
 
-    if gh label list --repo SecPal/.github | grep -q "^${name}"; then
+    if gh label list --repo SecPal/.github | grep -Fxq "$name"; then
         echo -e "${YELLOW}⚠️  Label '${name}' already exists, skipping...${NC}"
     else
         gh label create "$name" --color "$color" --description "$description" --repo SecPal/.github
