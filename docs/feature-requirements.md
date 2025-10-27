@@ -875,26 +875,26 @@ Security companies need documented proof of various employee acknowledgments and
 
 ```typescript
 // Signature pad component (React)
-import SignatureCanvas from 'react-signature-canvas';
+import SignatureCanvas from "react-signature-canvas";
 
 const DigitalSignaturePad: React.FC<Props> = ({ onSign }) => {
   const sigCanvas = useRef<SignatureCanvas>(null);
-  
+
   const handleSign = () => {
     if (sigCanvas.current) {
       const dataURL = sigCanvas.current.toDataURL(); // Base64 PNG
       onSign(dataURL);
     }
   };
-  
+
   return (
     <div className="signature-container">
-      <SignatureCanvas 
+      <SignatureCanvas
         ref={sigCanvas}
-        canvasProps={{ 
-          width: 400, 
+        canvasProps={{
+          width: 400,
           height: 200,
-          className: 'signature-canvas' 
+          className: "signature-canvas",
         }}
       />
       <button onClick={() => sigCanvas.current?.clear()}>Löschen</button>
@@ -911,7 +911,7 @@ const DigitalSignaturePad: React.FC<Props> = ({ onSign }) => {
 const AccountLinkedAcknowledgment: React.FC<Props> = ({ documentId, employeeId }) => {
   const handleAcknowledge = async () => {
     // User must be authenticated
-    await api.post('/acknowledgments', {
+    await api.post("/acknowledgments", {
       document_id: documentId,
       employee_id: employeeId,
       acknowledged_at: new Date(),
@@ -920,14 +920,10 @@ const AccountLinkedAcknowledgment: React.FC<Props> = ({ documentId, employeeId }
       // No visual signature, but legally binding via account link
     });
   };
-  
+
   return (
     <div className="acknowledgment">
-      <input 
-        type="checkbox" 
-        id="acknowledge"
-        onChange={handleAcknowledge}
-      />
+      <input type="checkbox" id="acknowledge" onChange={handleAcknowledge} />
       <label htmlFor="acknowledge">
         Ich bestätige, dass ich dieses Dokument gelesen und verstanden habe.
       </label>
@@ -950,11 +946,11 @@ const AccountLinkedAcknowledgment: React.FC<Props> = ({ documentId, employeeId }
 Schema::create('digital_signatures', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('organization_id');
-    
+
     // Who signed?
     $table->foreignUuid('employee_id');
     $table->foreignUuid('user_id'); // Account that was logged in
-    
+
     // What was signed?
     $table->enum('signature_type', [
         'equipment_handover',
@@ -965,28 +961,28 @@ Schema::create('digital_signatures', function (Blueprint $table) {
         'incident_witness',
         'custom'
     ]);
-    
+
     $table->foreignUuid('related_document_id')->nullable(); // Links to work_instructions, etc.
     $table->string('related_document_type')->nullable(); // Polymorphic
-    
+
     // Signature data
     $table->text('signature_image_base64')->nullable(); // Visual signature (if used)
     $table->boolean('is_visual_signature')->default(false);
-    
+
     // Tamper-proofing
     $table->timestamp('signed_at');
     $table->string('signature_hash', 64); // SHA-256 of signature data + metadata
     $table->string('opentimestamp_proof')->nullable(); // OTS proof file
-    
+
     // Context (forensics)
     $table->string('ip_address')->nullable();
     $table->string('device_fingerprint')->nullable();
     $table->string('geolocation')->nullable(); // Optional GPS coordinates
-    
+
     // Witness (optional, for critical signatures)
     $table->foreignUuid('witness_user_id')->nullable();
     $table->timestamp('witness_signed_at')->nullable();
-    
+
     $table->timestamps();
 });
 ```
@@ -998,20 +994,20 @@ Schema::create('digital_signatures', function (Blueprint $table) {
 ```
 1. Manager creates equipment handover record
    → Items: 2x Uniform, 1x Radio, 1x Flashlight, 1x ID Badge
-   
+
 2. Employee receives items
-   
+
 3. Employee signs on tablet/phone:
    - Visual signature OR account-linked checkbox
    - Optional: Photo of received items
-   
+
 4. System records:
    - Timestamp
    - Employee ID (from login)
    - IP address, device
    - Creates SHA-256 hash of all data
    - Submits to OpenTimestamp (blockchain proof)
-   
+
 5. Both parties receive email confirmation with PDF
 ```
 
@@ -1023,17 +1019,17 @@ Schema::create('equipment_handovers', function (Blueprint $table) {
     $table->foreignUuid('organization_id');
     $table->foreignUuid('employee_id');
     $table->foreignUuid('issued_by_user_id'); // Manager who handed over
-    
+
     $table->jsonb('items'); // ["Uniform (2x)", "Radio Motorola XPR7550", ...]
     $table->text('notes')->nullable();
-    
+
     $table->enum('handover_type', ['issue', 'return', 'exchange']);
     $table->timestamp('handover_date');
-    
+
     // Signature link
     $table->foreignUuid('employee_signature_id')->nullable();
     $table->foreignUuid('issuer_signature_id')->nullable();
-    
+
     $table->enum('status', ['pending', 'signed', 'returned']);
     $table->timestamps();
 });
@@ -1043,23 +1039,23 @@ class EquipmentHandoverService {
     public function createHandover(array $data): EquipmentHandover {
         return DB::transaction(function () use ($data) {
             $handover = EquipmentHandover::create($data);
-            
+
             // Generate PDF
             $pdf = $this->generateHandoverPDF($handover);
-            
+
             // Notify employee
             Notification::send(
                 $handover->employee,
                 new EquipmentHandoverPending($handover)
             );
-            
+
             return $handover;
         });
     }
-    
+
     public function recordSignature(
-        EquipmentHandover $handover, 
-        User $user, 
+        EquipmentHandover $handover,
+        User $user,
         ?string $signatureData
     ): DigitalSignature {
         $signature = DigitalSignature::create([
@@ -1075,26 +1071,26 @@ class EquipmentHandoverService {
             'ip_address' => request()->ip(),
             'device_fingerprint' => $this->getDeviceFingerprint(),
         ]);
-        
+
         // Update handover
         $handover->update([
             'employee_signature_id' => $signature->id,
             'status' => 'signed',
         ]);
-        
+
         // Submit to OpenTimestamp (background job)
         SubmitToOpenTimestamp::dispatch($signature);
-        
+
         // Email confirmation
         Mail::to($handover->employee->email)->send(
             new EquipmentHandoverConfirmation($handover, $signature)
         );
-        
+
         return $signature;
     }
-    
+
     private function generateSignatureHash(
-        EquipmentHandover $handover, 
+        EquipmentHandover $handover,
         User $user
     ): string {
         $data = json_encode([
@@ -1103,7 +1099,7 @@ class EquipmentHandoverService {
             'items' => $handover->items,
             'timestamp' => now()->toIso8601String(),
         ]);
-        
+
         return hash('sha256', $data);
     }
 }
@@ -1121,12 +1117,12 @@ class HandoverPDFGenerator {
             'signature' => $handover->employeeSignature,
             'timestamp_proof' => $handover->employeeSignature?->opentimestamp_proof,
         ];
-        
+
         $pdf = Pdf::loadView('pdfs.equipment_handover', $data);
-        
+
         $path = storage_path("app/handovers/{$handover->id}.pdf");
         $pdf->save($path);
-        
+
         return $path;
     }
 }
@@ -1148,42 +1144,42 @@ class HandoverPDFGenerator {
 </head>
 <body>
     <h1>Ausgabequittung</h1>
-    
+
     <p><strong>Mitarbeiter:</strong> {{ $handover->employee->full_name }}</p>
     <p><strong>Datum:</strong> {{ $handover->handover_date->format('d.m.Y H:i') }}</p>
     <p><strong>Ausgegeben von:</strong> {{ $handover->issuedBy->name }}</p>
-    
+
     <h2>Ausgegebene Gegenstände:</h2>
     <ul>
         @foreach($handover->items as $item)
             <li>{{ $item }}</li>
         @endforeach
     </ul>
-    
+
     @if($signature)
         <div class="signature-box">
             <h3>Digitale Unterschrift</h3>
-            
+
             @if($signature->is_visual_signature)
-                <img src="{{ $signature->signature_image_base64 }}" 
-                     alt="Unterschrift" 
+                <img src="{{ $signature->signature_image_base64 }}"
+                     alt="Unterschrift"
                      class="signature-image">
             @else
                 <p>✓ Bestätigt via Account-Login am {{ $signature->signed_at->format('d.m.Y H:i:s') }}</p>
             @endif
-            
+
             <p><strong>Signatur-Hash:</strong> <code>{{ $signature->signature_hash }}</code></p>
             <p><strong>IP-Adresse:</strong> {{ $signature->ip_address }}</p>
-            
+
             @if($timestamp_proof)
                 <p><strong>OpenTimestamp-Nachweis:</strong> Verifiziert via Bitcoin-Blockchain</p>
                 <small>OTS-Datei verfügbar für unabhängige Verifikation</small>
             @endif
         </div>
     @endif
-    
+
     <p style="margin-top: 40px; font-size: 10px; color: #666;">
-        Dieses Dokument wurde digital erstellt und signiert. Die Integrität kann über den 
+        Dieses Dokument wurde digital erstellt und signiert. Die Integrität kann über den
         Signatur-Hash und OpenTimestamp-Nachweis verifiziert werden.
     </p>
 </body>
@@ -1196,11 +1192,11 @@ class HandoverPDFGenerator {
 class SignatureVerificationService {
     public function verify(DigitalSignature $signature): array {
         $results = [];
-        
+
         // 1. Check hash integrity
         $currentHash = $this->recalculateHash($signature);
         $results['hash_valid'] = $currentHash === $signature->signature_hash;
-        
+
         // 2. Check OpenTimestamp proof (if available)
         if ($signature->opentimestamp_proof) {
             $results['timestamp_valid'] = $this->verifyOpenTimestamp(
@@ -1208,13 +1204,13 @@ class SignatureVerificationService {
                 $signature->opentimestamp_proof
             );
         }
-        
+
         // 3. Check user account validity at time of signing
         $results['user_existed'] = User::withTrashed()
             ->where('id', $signature->user_id)
             ->where('created_at', '<=', $signature->signed_at)
             ->exists();
-        
+
         return $results;
     }
 }
@@ -1269,13 +1265,13 @@ Allgemeine Dienstanweisungen (General Instructions):
   - Datenschutz-Richtlinie (Data Protection)
   - Meldepflichten (Reporting Obligations)
   - Notfallprozeduren (Emergency Procedures)
-  
+
 Objektbezogene Dienstanweisungen (Site-Specific):
   - Zugangskontrollen (Access Control)
   - Rundgangspläne (Patrol Routes)
   - Besondere Gefahren (Specific Hazards)
   - Ansprechpartner Objekt (Client Contacts)
-  
+
 Sicherheitstechnische Anweisungen (Safety):
   - Brandschutz (Fire Safety)
   - Erste Hilfe (First Aid)
@@ -1289,18 +1285,18 @@ Sicherheitstechnische Anweisungen (Safety):
 Schema::create('work_instruction_templates', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('organization_id')->nullable(); // Null = system template
-    
+
     $table->string('name'); // "Verhaltenskodex", "Zugangskontr olle Vorlage"
     $table->string('category'); // "general", "site_specific", "safety"
     $table->text('description')->nullable();
-    
+
     // Template structure (JSON)
     $table->jsonb('sections'); // Array of editable sections
     $table->jsonb('standard_blocks'); // Pre-filled text blocks
-    
+
     $table->boolean('is_system_template')->default(false); // Can't be deleted
     $table->boolean('is_active')->default(true);
-    
+
     $table->timestamps();
 });
 
@@ -1308,30 +1304,30 @@ Schema::create('work_instructions', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('organization_id');
     $table->foreignUuid('template_id')->nullable(); // If created from template
-    
+
     $table->string('title'); // "Dienstanweisung Objekt A"
     $table->string('instruction_number')->unique(); // "DA-2025-001"
     $table->integer('version')->default(1); // Version control
-    
+
     // Content
     $table->jsonb('content'); // Structured content (sections, paragraphs)
     $table->text('content_html'); // Rendered HTML for display
     $table->text('content_pdf_path')->nullable(); // Generated PDF
-    
+
     // Metadata
     $table->foreignUuid('created_by_user_id');
     $table->date('valid_from');
     $table->date('valid_until')->nullable();
     $table->enum('status', ['draft', 'review', 'published', 'archived']);
-    
+
     // Acknowledgment requirements
     $table->boolean('requires_acknowledgment')->default(true);
     $table->integer('acknowledgment_deadline_days')->default(7); // Must ack within 7 days
-    
+
     // Scope: Who must read this?
     $table->enum('scope', ['all_employees', 'specific_employees', 'by_role', 'by_location']);
     $table->jsonb('scope_criteria')->nullable(); // Employee IDs, roles, or location IDs
-    
+
     $table->timestamps();
     $table->softDeletes();
 });
@@ -1340,21 +1336,21 @@ Schema::create('work_instruction_acknowledgments', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('work_instruction_id');
     $table->foreignUuid('employee_id');
-    
+
     // Digital signature link
     $table->foreignUuid('signature_id'); // Links to digital_signatures table
-    
+
     $table->timestamp('acknowledged_at');
     $table->timestamp('deadline')->nullable(); // When must it be acknowledged?
     $table->boolean('is_overdue')->default(false);
-    
+
     // Quiz/Test (optional)
     $table->jsonb('quiz_answers')->nullable(); // If instruction has comprehension test
     $table->integer('quiz_score')->nullable();
     $table->boolean('quiz_passed')->nullable();
-    
+
     $table->timestamps();
-    
+
     $table->unique(['work_instruction_id', 'employee_id']); // One ack per employee
 });
 ```
@@ -1367,33 +1363,33 @@ Schema::create('work_instruction_acknowledgments', function (Blueprint $table) {
 // React component structure
 const WorkInstructionBuilder: React.FC = () => {
   const [sections, setSections] = useState<Section[]>([]);
-  
-  const addSection = (type: 'heading' | 'paragraph' | 'list' | 'standard_block') => {
+
+  const addSection = (type: "heading" | "paragraph" | "list" | "standard_block") => {
     // Add new editable section
   };
-  
+
   const insertStandardBlock = (blockId: string) => {
     // Insert pre-written legal/standard text
   };
-  
+
   return (
     <div className="instruction-builder">
       <div className="sidebar">
         <h3>Vorlagen</h3>
         <TemplateList onSelect={loadTemplate} />
-        
+
         <h3>Standardbausteine</h3>
         <StandardBlockList onSelect={insertStandardBlock} />
       </div>
-      
+
       <div className="editor">
-        <input 
-          type="text" 
+        <input
+          type="text"
           placeholder="Titel der Dienstanweisung"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
-        
+
         <DragDropContext onDragEnd={handleDragEnd}>
           <Droppable droppableId="sections">
             {(provided) => (
@@ -1415,12 +1411,12 @@ const WorkInstructionBuilder: React.FC = () => {
             )}
           </Droppable>
         </DragDropContext>
-        
-        <button onClick={() => addSection('paragraph')}>+ Absatz</button>
-        <button onClick={() => addSection('list')}>+ Liste</button>
-        <button onClick={() => addSection('standard_block')}>+ Standardbaustein</button>
+
+        <button onClick={() => addSection("paragraph")}>+ Absatz</button>
+        <button onClick={() => addSection("list")}>+ Liste</button>
+        <button onClick={() => addSection("standard_block")}>+ Standardbaustein</button>
       </div>
-      
+
       <div className="preview">
         <h3>Vorschau</h3>
         <InstructionPreview content={sections} />
@@ -1482,31 +1478,31 @@ class WorkInstructionPublisher {
         DB::transaction(function () use ($instruction) {
             // Update status
             $instruction->update(['status' => 'published']);
-            
+
             // Determine target employees
             $employees = $this->getTargetEmployees($instruction);
-            
+
             // Create acknowledgment tasks
             foreach ($employees as $employee) {
                 $deadline = now()->addDays($instruction->acknowledgment_deadline_days);
-                
+
                 WorkInstructionAcknowledgment::create([
                     'work_instruction_id' => $instruction->id,
                     'employee_id' => $employee->id,
                     'deadline' => $deadline,
                 ]);
-                
+
                 // Notify employee
-                Notification::send($employee, 
+                Notification::send($employee,
                     new NewWorkInstructionNotification($instruction, $deadline)
                 );
             }
-            
+
             // Event for audit log
             event(new WorkInstructionPublished($instruction, $employees->count()));
         });
     }
-    
+
     private function getTargetEmployees(WorkInstruction $instruction): Collection {
         return match($instruction->scope) {
             'all_employees' => Employee::where('status', 'active')->get(),
@@ -1528,16 +1524,16 @@ class CheckOverdueAcknowledgments extends Command {
             ->where('deadline', '<', now())
             ->where('is_overdue', false)
             ->get();
-        
+
         foreach ($overdue as $ack) {
             // Mark as overdue
             $ack->update(['is_overdue' => true]);
-            
+
             // Send urgent reminder
-            Notification::send($ack->employee, 
+            Notification::send($ack->employee,
                 new WorkInstructionOverdueNotification($ack)
             );
-            
+
             // Notify manager
             Notification::send($ack->employee->manager,
                 new EmployeeHasOverdueAcknowledgment($ack)
@@ -1554,7 +1550,7 @@ const WorkInstructionAcknowledgment: React.FC<Props> = ({ instruction }) => {
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({});
   const contentRef = useRef<HTMLDivElement>(null);
-  
+
   useEffect(() => {
     const handleScroll = () => {
       if (contentRef.current) {
@@ -1564,38 +1560,38 @@ const WorkInstructionAcknowledgment: React.FC<Props> = ({ instruction }) => {
         }
       }
     };
-    
-    contentRef.current?.addEventListener('scroll', handleScroll);
-    return () => contentRef.current?.removeEventListener('scroll', handleScroll);
+
+    contentRef.current?.addEventListener("scroll", handleScroll);
+    return () => contentRef.current?.removeEventListener("scroll", handleScroll);
   }, []);
-  
+
   const handleAcknowledge = async () => {
     await api.post(`/work-instructions/${instruction.id}/acknowledge`, {
       quiz_answers: quizAnswers,
     });
-    
+
     // Redirect or show success
   };
-  
+
   return (
     <div className="instruction-acknowledgment">
       <div className="instruction-header">
         <h1>{instruction.title}</h1>
-        <p>Dienstanweisung Nr. {instruction.instruction_number} (Version {instruction.version})</p>
+        <p>
+          Dienstanweisung Nr. {instruction.instruction_number} (Version {instruction.version})
+        </p>
         <p>Gültig ab: {instruction.valid_from}</p>
         {instruction.deadline && (
-          <Alert variant="warning">
-            ⚠️ Kenntnisnahme erforderlich bis: {instruction.deadline}
-          </Alert>
+          <Alert variant="warning">⚠️ Kenntnisnahme erforderlich bis: {instruction.deadline}</Alert>
         )}
       </div>
-      
-      <div 
+
+      <div
         ref={contentRef}
         className="instruction-content"
         dangerouslySetInnerHTML={{ __html: instruction.content_html }}
       />
-      
+
       {instruction.quiz && (
         <div className="comprehension-quiz">
           <h3>Verständnisfragen</h3>
@@ -1608,28 +1604,20 @@ const WorkInstructionAcknowledgment: React.FC<Props> = ({ instruction }) => {
           ))}
         </div>
       )}
-      
+
       <div className="acknowledgment-actions">
         <label>
-          <input 
-            type="checkbox" 
-            checked={hasScrolledToBottom}
-            disabled={!hasScrolledToBottom}
-          />
+          <input type="checkbox" checked={hasScrolledToBottom} disabled={!hasScrolledToBottom} />
           Ich bestätige, dass ich diese Dienstanweisung vollständig gelesen und verstanden habe.
         </label>
-        
-        <button 
-          onClick={handleAcknowledge}
-          disabled={!hasScrolledToBottom}
-          className="btn-primary"
-        >
+
+        <button onClick={handleAcknowledge} disabled={!hasScrolledToBottom} className="btn-primary">
           Kenntnisnahme bestätigen
         </button>
-        
+
         <p className="legal-notice">
-          Ihre Bestätigung wird digital signiert und ist rechtlich bindend. 
-          Die Integrität wird via OpenTimestamp gesichert.
+          Ihre Bestätigung wird digital signiert und ist rechtlich bindend. Die Integrität wird via
+          OpenTimestamp gesichert.
         </p>
       </div>
     </div>
