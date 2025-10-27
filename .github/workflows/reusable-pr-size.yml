@@ -31,10 +31,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MAX_LINES: ${{ inputs.max-lines }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_REF: ${{ github.base_ref }}
         run: |
           # Check if PR has 'large-pr-approved' label
+          PR_NUMBER="${{ github.event.pull_request.number }}"
           LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
 
           if echo "$LABELS" | grep -q "large-pr-approved"; then
@@ -44,10 +43,10 @@ jobs:
           fi
 
           # Fetch base branch
-          git fetch origin "$BASE_REF"
+          git fetch origin ${{ github.base_ref }}
 
           # Calculate merge base
-          MERGE_BASE=$(git merge-base "origin/$BASE_REF" HEAD)
+          MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
 
           # Get raw diff output
           RAW_DIFF_OUTPUT=$(git diff --numstat "$MERGE_BASE"..HEAD)
