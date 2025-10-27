@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: add-to-project
     if: |
-      always() &&
+      (success() || failure()) &&
       (contains(github.event.issue.labels.*.name, 'enhancement') || contains(github.event.issue.labels.*.name, 'core-feature'))
     steps:
       - name: Determine initial status
