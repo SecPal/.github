@@ -17,6 +17,8 @@ jobs:
     permissions:
       issues: write
       contents: read
+    outputs:
+      project-add-outcome: ${{ steps.add-to-project.outcome }}
     steps:
       - name: Add to project
         id: add-to-project
@@ -87,7 +89,7 @@ jobs:
         with:
           script: |
             const status = '${{ steps.status.outputs.status }}';
-            const projectAdded = '${{ needs.add-to-project.result }}' === 'success';
+            const projectAdded = '${{ needs.add-to-project.outputs.project-add-outcome }}' === 'success';
             const message = projectAdded
               ? `✅ This issue has been automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) with status: **${status}**`
               : `📋 Suggested status for [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1): **${status}**`;
