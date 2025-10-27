@@ -124,7 +124,7 @@ echo ""
 
 STATUS_FIELD=$(echo "$PROJECT_DATA" | jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Status")')
 
-if [ -z "$STATUS_FIELD" ] || [ "$STATUS_FIELD" == "null" ]; then
+if [ -z "$STATUS_FIELD" ] || [ "$STATUS_FIELD" = "null" ]; then
     echo -e "${YELLOW}⚠️  No 'Status' field found${NC}"
     echo ""
     echo "Recommended Status field options:"
@@ -151,21 +151,21 @@ SIZE_FIELD=$(echo "$PROJECT_DATA" | jq -r '.data.organization.projectV2.fields.n
 echo "📊 Recommended Custom Fields:"
 echo ""
 
-if [ -n "$PRIORITY_FIELD" ] && [ "$PRIORITY_FIELD" != "null" ]; then
+if [ -n "$PRIORITY_FIELD" ] && [ ! "$PRIORITY_FIELD" = "null" ]; then
     echo -e "   ${GREEN}✅ Priority field exists${NC}"
 else
     echo -e "   ${YELLOW}⚠️  Priority field missing${NC}"
     echo "      Recommended options: P0, P1, P2, P3"
 fi
 
-if [ -n "$AREA_FIELD" ] && [ "$AREA_FIELD" != "null" ]; then
+if [ -n "$AREA_FIELD" ] && [ ! "$AREA_FIELD" = "null" ]; then
     echo -e "   ${GREEN}✅ Area field exists${NC}"
 else
     echo -e "   ${YELLOW}⚠️  Area field missing${NC}"
     echo "      Recommended options: RBAC, Employee Management, Shift Planning, etc."
 fi
 
-if [ -n "$SIZE_FIELD" ] && [ "$SIZE_FIELD" != "null" ]; then
+if [ -n "$SIZE_FIELD" ] && [ ! "$SIZE_FIELD" = "null" ]; then
     echo -e "   ${GREEN}✅ Size field exists${NC}"
 else
     echo -e "   ${YELLOW}⚠️  Size field missing${NC}"
