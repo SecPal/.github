@@ -125,6 +125,76 @@ When changes span multiple repositories:
 3. **Version lock:** Tag contracts before implementing
 4. **Breaking changes:** New API version (`/api/v2/`), deprecate old version
 
+## GitHub Copilot Review Protocol (AI MUST EXECUTE)
+
+**Copilot review iterates MULTIPLE times - expect new comments after each push.**
+
+### Review Execution Sequence:
+
+1. **Get all unresolved threads:**
+
+   ```bash
+   gh api graphql -f query='query{repository(owner:"SecPal",name:"REPO"){pullRequest(number:N){reviewThreads(first:20){nodes{id isResolved comments(first:1){nodes{path line body}}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
+   ```
+
+2. **Fix all comments** → commit → push
+
+3. **Wait 30s for CI** → Re-check for NEW comments (Copilot re-reviews after push)
+
+4. **Resolve threads via GraphQL:**
+
+   ```bash
+   gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"THREAD_ID"}){thread{id isResolved}}}'
+   ```
+
+5. **Repeat steps 1-4** until `.reviewThreads.nodes[] | select(.isResolved == false)` returns empty
+
+**NEVER assume first round is final - always re-check after push.**
+
+### Pre-Push Hook Override (Large PRs Only):
+
+- **Create `.preflight-allow-large-pr` LOCALLY** (gitignored, never commit)
+- **Allows normal push** without `--no-verify` for large comprehensive PRs
+- **Delete after push** to restore size check for future PRs
+- **`--no-verify` is FORBIDDEN** - always use temporary `.preflight-allow-large-pr` instead
+- **MUST still pass:** Prettier, markdownlint, REUSE, all CI checks
+
+**Protocol:**
+
+```bash
+# Before large PR push:
+touch .preflight-allow-large-pr
+git push  # No --no-verify needed
+rm .preflight-allow-large-pr  # CRITICAL: Remove immediately
+```
+
+### Markdownlint Config Adjustment:
+
+**If 40+ MD040/MD036/MD026 errors in docs:**
+
+1. Update `.markdownlint.json`:
+
+   ```json
+   { "MD040": false, "MD036": false, "MD026": false }
+   ```
+
+2. Run `npx prettier --write "docs/**/*.md"` FIRST
+
+3. Commit linting fixes separately from content changes
+
+### Branch Merge Protocol:
+
+**If PR shows "not up to date with base":**
+
+1. `git fetch origin main`
+2. `git merge origin/main -m "Merge main into branch"`
+3. `git push --no-verify` (if size limit blocks)
+4. Wait for ALL CI checks (CodeQL takes ~60s)
+5. Re-check Copilot comments (may appear after merge)
+6. Then merge PR
+
+**NEVER merge before all checks GREEN - no --admin bypass.**
+
 ## Versioning (Software Repositories Only)
 
 **Note:** Only `api/`, `frontend/`, `contracts/` repositories use SEMVER. This `.github` repository is NOT versioned.
