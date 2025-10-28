@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+name: Test Calling Workflow
+
+on:
+  issues:
+    types:
+      - opened
+
+jobs:
+  call-test:
+    name: Call test reusable workflow
+    uses: ./.github/workflows/test-reusable.yml

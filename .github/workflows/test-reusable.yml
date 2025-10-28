@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+name: Test Reusable Workflow
+
+on:
+  workflow_call:
+
+jobs:
+  test-job:
+    name: Minimal test job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo test
+        run: |
+          echo "Reusable workflow is working!"
+          echo "Event name: ${{ github.event_name }}"
+          echo "Has issue: ${{ github.event.issue != null }}"
+          echo "Has PR: ${{ github.event.pull_request != null }}"
