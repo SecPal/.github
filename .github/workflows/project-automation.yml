@@ -26,7 +26,14 @@ jobs:
         uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/orgs/SecPal/projects/1
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # NOTE: A fine-grained Personal Access Token is required here because GITHUB_TOKEN
+          # lacks organization-level project permissions.
+          # Required permissions for PROJECT_TOKEN (configured as org secret):
+          #   - Projects: Read & Write (org-level)
+          #   - Contents: Read
+          #   - Issues: Read & Write
+          # Fallback: If this step fails, a helpful error comment is posted (see step: Comment if project add failed)
+          github-token: ${{ secrets.PROJECT_TOKEN }}
 
       - name: Set outcome output
         id: set-outcome
