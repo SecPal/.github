@@ -35,6 +35,17 @@ jobs:
       issues: write
       contents: read
     steps:
+      - name: Debug - Check if PROJECT_TOKEN is available
+        run: |
+          if [ -z "${{ secrets.PROJECT_TOKEN }}" ]; then
+            echo "❌ PROJECT_TOKEN is EMPTY or not available"
+            echo "This indicates the secret was not passed to the reusable workflow"
+          else
+            echo "✅ PROJECT_TOKEN is available (length: ${#PROJECT_TOKEN})"
+          fi
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      
       - name: Add issue to project (if opened/reopened)
         id: add-to-project
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
