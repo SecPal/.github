@@ -7,6 +7,29 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
+# Check if pushing from a protected branch
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
+PROTECTED_BRANCHES=("main" "master" "production")
+
+for branch in "${PROTECTED_BRANCHES[@]}"; do
+  if [ "$CURRENT_BRANCH" = "$branch" ]; then
+    echo ""
+    echo "❌ BLOCKED: Direct push from protected branch '$branch' is not allowed!"
+    echo ""
+    echo "Protected branches should only be updated via pull requests."
+    echo "Please create a feature branch and submit a PR instead:"
+    echo ""
+    echo "  git checkout -b feat/your-feature-name"
+    echo "  git commit -am 'Your changes'"
+    echo "  git push -u origin feat/your-feature-name"
+    echo ""
+    echo "If you absolutely must bypass this check (emergency only):"
+    echo "  git push --no-verify"
+    echo ""
+    exit 1
+  fi
+done
+
 # Auto-detect default branch (fallback to main)
 # Use symbolic-ref instead of remote show to avoid network hang
 BASE="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
