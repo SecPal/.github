@@ -37,6 +37,14 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
+      - name: Setup Node.js for Octokit
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Octokit dependencies
+        run: npm install @octokit/core
+
       - name: Debug - Check if PROJECT_TOKEN is available
         run: |
           if [ -z "$PROJECT_TOKEN" ]; then
@@ -284,6 +292,14 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
+      - name: Setup Node.js for Octokit
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Octokit dependencies
+        run: npm install @octokit/core
+
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
@@ -438,6 +454,14 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
+      - name: Setup Node.js for Octokit
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Octokit dependencies
+        run: npm install @octokit/core
+
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
