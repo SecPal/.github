@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+# This file shows how to use the reusable workflows from SecPal/.github
+# Copy this to: api/.github/workflows/project-automation.yml
+#              frontend/.github/workflows/project-automation.yml
+#              contracts/.github/workflows/project-automation.yml
+
+name: Project Board Automation
+
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+      - closed
+  pull_request:
+    types:
+      - opened
+      - ready_for_review
+      - closed
+  pull_request_review:
+    types:
+      - submitted
+
+jobs:
+  # Automatic project board status updates
+  project-automation:
+    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+
+  # Friendly reminder about draft PRs
+  draft-reminder:
+    uses: SecPal/.github/.github/workflows/draft-pr-reminder.yml@main

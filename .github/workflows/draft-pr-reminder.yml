@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+name: Draft PR Reminder
+
+on:
+  workflow_call:
+  pull_request:
+    types:
+      - opened
+
+jobs:
+  remind-draft:
+    name: Remind about draft PRs
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post reminder comment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const message = [
+              '## 💡 Tip: Consider Using Draft PRs',
+              '',
+              '**Benefits of opening PRs as drafts initially:**',
+              '',
+              '- 💰 Saves CI runtime and Copilot review credits',
+              '- 🎯 Automatically sets linked issues to "🚧 In Progress" status',
+              '- 🚀 Mark "Ready for review" when done to trigger full CI pipeline',
+              '',
+              '**How to convert:**',
+              '1. Click "Still in progress? Convert to draft" in the sidebar, OR',
+              '2. Use `gh pr ready` when ready for review',
+              '',
+              '_This is just a friendly reminder - feel free to continue as is! 😊_'
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
+            });
