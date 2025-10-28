@@ -12,7 +12,8 @@ on:
 
 env:
   # Project ID for SecPal Roadmap (organization project)
-  # To find your project ID: gh api graphql -f query='query{organization(login:"SecPal"){projectV2(number:1){id}}}'
+  # To find your project ID: gh api graphql -f query='query{organization(login:"YOUR_ORG"){projectV2(number:YOUR_PROJECT_NUMBER){id}}}'
+  # Replace "YOUR_ORG" with your organization login, and "YOUR_PROJECT_NUMBER" with your project number.
   PROJECT_ID: PVT_kwDOCUodoc4BGgjL
 
 jobs:
@@ -59,7 +60,7 @@ jobs:
               });
               console.log('✅ Successfully added to project:', result);
             } catch (error) {
-              console.error('❌ Failed to add to project:', error.message);
+              console.error('❌ Failed to add to project:', error.message, error.status, error.response, error);
               throw error;
             }
 
