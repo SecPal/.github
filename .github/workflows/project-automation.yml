@@ -24,6 +24,7 @@ jobs:
       contents: read
     outputs:
       project-add-outcome: ${{ steps.set-outcome.outputs.outcome }}
+      project-item-id: ${{ steps.add-to-project.outputs.itemId }}
     steps:
       - name: Add to project
         id: add-to-project
@@ -58,6 +59,9 @@ jobs:
                 contentId
               });
               console.log('✅ Successfully added to project:', result);
+              const itemId = result.addProjectV2ItemById.item.id;
+              core.setOutput('itemId', itemId);
+              return itemId;
             } catch (error) {
               console.error('❌ Failed to add to project:', error.message, error.status, error.response, error);
               throw error;
@@ -117,15 +121,63 @@ jobs:
           BLOCKER="${{ contains(github.event.issue.labels.*.name, 'priority: blocker') }}"
 
           if [[ "$CORE_FEATURE" == "true" ]]; then
-            echo "status=📋 Planned" >> "$GITHUB_OUTPUT"
-            echo "description=Core feature - scheduled for implementation" >> "$GITHUB_OUTPUT"
+            {
+              echo "status=📋 Planned"
+              echo "status-id=aa8c7fe5"
+              echo "description=Core feature - scheduled for implementation"
+            } >> "$GITHUB_OUTPUT"
           elif [[ "$BLOCKER" == "true" ]]; then
-            echo "status=📥 Backlog" >> "$GITHUB_OUTPUT"
-            echo "description=High priority - needs immediate attention" >> "$GITHUB_OUTPUT"
+            {
+              echo "status=📥 Backlog"
+              echo "status-id=53395960"
+              echo "description=High priority - needs immediate attention"
+            } >> "$GITHUB_OUTPUT"
           else
-            echo "status=💡 Ideas" >> "$GITHUB_OUTPUT"
-            echo "description=New idea - needs discussion and evaluation" >> "$GITHUB_OUTPUT"
+            {
+              echo "status=💡 Ideas"
+              echo "status-id=88b56a57"
+              echo "description=New idea - needs discussion and evaluation"
+            } >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Set project status
+        if: needs.add-to-project.outputs.project-add-outcome == 'success'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const projectId = process.env.PROJECT_ID;
+            const itemId = '${{ needs.add-to-project.outputs.project-item-id }}';
+            const fieldId = 'PVTSSF_lADOCUodoc4BGgjLzg3iI0Y'; // Status field ID
+            const optionId = '${{ steps.status.outputs.status-id }}';
+
+            const mutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `;
+
+            try {
+              await github.graphql(mutation, {
+                projectId,
+                itemId,
+                fieldId,
+                optionId
+              });
+              console.log('✅ Status set to:', '${{ steps.status.outputs.status }}');
+            } catch (error) {
+              console.error('❌ Failed to set status:', error.message);
+              // Don't fail the workflow if status update fails
+            }
 
       - name: Comment on issue
         uses: actions/github-script@v8
