@@ -20,7 +20,7 @@ jobs:
   # ============================================================================
   handle-issue:
     name: Handle issue lifecycle events
-    if: github.event_name == 'issues'
+    if: github.event.issue != null
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -240,7 +240,7 @@ jobs:
   # ============================================================================
   handle-pull-request:
     name: Handle pull request lifecycle events
-    if: github.event_name == 'pull_request'
+    if: github.event.pull_request != null
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
@@ -385,7 +385,7 @@ jobs:
   # ============================================================================
   handle-pr-review:
     name: Handle pull request review events
-    if: github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested'
+    if: github.event.review != null && github.event.review.state == 'changes_requested'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
