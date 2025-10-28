@@ -9,6 +9,18 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-10-28 - GitHub App Authentication Migration
+
+**Project Board Automation migrated to GitHub App:**
+
+- Replaced Fine-grained Personal Access Token with GitHub App authentication
+- Created "SecPal" GitHub App (ID: 2196125) with organization-wide installation
+- Updated all workflow callers to use `APP_ID` and `APP_PRIVATE_KEY` secrets
+- Implemented dynamic token generation using `actions/create-github-app-token@v1`
+- Benefits: Auto-rotating tokens, bot identity ("SecPal[bot]"), improved reliability
+- Resolved cross-repository API authentication issues
+- Affected workflows: `.github/workflows/project-automation-core.yml`, caller workflows in all repos
+
 ## 2025-10-23 - Copilot Instructions Optimization
 
 **copilot-instructions.md compressed and enhanced:**
