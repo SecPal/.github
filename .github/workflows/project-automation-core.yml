@@ -71,7 +71,6 @@ jobs:
 
             // DEBUG: Check if GH_TOKEN is available
             console.log('DEBUG: GH_TOKEN length:', process.env.GH_TOKEN ? process.env.GH_TOKEN.length : 'UNDEFINED');
-            console.log('DEBUG: GH_TOKEN first 10 chars:', process.env.GH_TOKEN ? process.env.GH_TOKEN.substring(0, 10) : 'N/A');
 
             const octokitWithToken = new Octokit({ auth: process.env.GH_TOKEN });
 
