@@ -68,6 +68,10 @@ jobs:
           script: |
             // Use token from environment variable
             const { Octokit } = require("@octokit/core");
+
+            // DEBUG: Check if GH_TOKEN is available
+            console.log('DEBUG: GH_TOKEN length:', process.env.GH_TOKEN ? process.env.GH_TOKEN.length : 'UNDEFINED');
+
             const octokitWithToken = new Octokit({ auth: process.env.GH_TOKEN });
 
             const projectId = process.env.PROJECT_ID;
