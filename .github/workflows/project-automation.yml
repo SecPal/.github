@@ -58,7 +58,7 @@ jobs:
               '**To enable automation:** An organization admin needs to:',
               '1. Create a fine-grained Personal Access Token with `Contents: Read` and `Projects: Read & Write` permissions',
               '2. Add it as a repository secret named `PROJECT_TOKEN`',
-              '3. Update this workflow to use `github-token: ${{ secrets.PROJECT_TOKEN }}`',
+              '3. Update this workflow to use `github-token: \\${{ secrets.PROJECT_TOKEN }}`',
               '',
               'See: https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects'
             ].join('\n');
