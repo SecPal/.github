@@ -46,7 +46,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Setup Node.js for Octokit
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -316,7 +316,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Setup Node.js for Octokit
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -491,7 +491,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Setup Node.js for Octokit
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
