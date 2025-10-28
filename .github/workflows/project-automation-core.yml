@@ -58,14 +58,6 @@ jobs:
             const { Octokit } = require("@octokit/core");
             const octokit = new Octokit({ auth: process.env.GH_TOKEN });
 
-            // Use token from environment variable
-            const { Octokit } = require("@octokit/core");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
-
-            // Use token from environment variable
-            const { Octokit } = require("@octokit/core");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
-
             const projectId = process.env.PROJECT_ID;
             const contentId = context.payload.issue.node_id;
 
@@ -168,10 +160,6 @@ jobs:
             const { Octokit } = require("@octokit/core");
             const octokit = new Octokit({ auth: process.env.GH_TOKEN });
 
-            // Use token from environment variable
-            const { Octokit } = require("@octokit/core");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
-
             const issueNodeId = context.payload.issue.node_id;
             const projectId = process.env.PROJECT_ID;
 
@@ -257,10 +245,6 @@ jobs:
             const { Octokit } = require("@octokit/core");
             const octokit = new Octokit({ auth: process.env.GH_TOKEN });
 
-            // Use token from environment variable
-            const { Octokit } = require("@octokit/core");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
-
             const action = context.payload.action;
             const status = '${{ steps.determine-status.outputs.status }}';
             const reason = '${{ steps.determine-status.outputs.reason }}';
@@ -297,16 +281,14 @@ jobs:
       pull-requests: read
       issues: write
       contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
         with:
           script: |
-            // Use token from environment variable
-            const { Octokit } = require("@octokit/core");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
-
             // Use token from environment variable
             const { Octokit } = require("@octokit/core");
             const octokit = new Octokit({ auth: process.env.GH_TOKEN });
@@ -453,16 +435,14 @@ jobs:
       pull-requests: read
       issues: write
       contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
         with:
           script: |
-            // Use token from environment variable
-            const { Octokit } = require("@octokit/core");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
-
             // Use token from environment variable
             const { Octokit } = require("@octokit/core");
             const octokit = new Octokit({ auth: process.env.GH_TOKEN });
