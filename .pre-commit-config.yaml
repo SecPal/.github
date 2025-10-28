@@ -58,3 +58,5 @@ repos:
       - id: trailing-whitespace
       - id: mixed-line-ending
         args: ["--fix=lf"]
+      - id: no-commit-to-branch
+        args: ["--branch", "main", "--branch", "master", "--branch", "production"]
