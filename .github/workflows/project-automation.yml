@@ -23,17 +23,33 @@ jobs:
       - name: Add to project
         id: add-to-project
         continue-on-error: true
-        uses: actions/add-to-project@v1.0.2
+        uses: actions/github-script@v7
         with:
-          project-url: https://github.com/orgs/SecPal/projects/1
-          # NOTE: A fine-grained Personal Access Token is required here because GITHUB_TOKEN
-          # lacks organization-level project permissions.
-          # Required permissions for PROJECT_TOKEN (configured as org secret):
-          #   - Projects: Read & Write (org-level)
-          #   - Contents: Read
-          #   - Issues: Read & Write
-          # Fallback: If this step fails, a helpful error comment is posted (see step: Comment if project add failed)
           github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const projectId = 'PVT_kwDOCUodoc4BGgjL'; // SecPal Roadmap
+            const contentId = context.payload.issue.node_id;
+
+            const mutation = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `;
+
+            try {
+              const result = await github.graphql(mutation, {
+                projectId,
+                contentId
+              });
+              console.log('✅ Successfully added to project:', result);
+            } catch (error) {
+              console.error('❌ Failed to add to project:', error.message);
+              throw error;
+            }
 
       - name: Set outcome output
         id: set-outcome
