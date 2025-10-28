@@ -8,7 +8,7 @@ on:
     secrets:
       PROJECT_TOKEN:
         description: "Fine-grained PAT with Projects (Read & Write) and Issues (Read & Write) permissions"
-        required: true
+        required: false # Changed from true - allows direct events to use repo secrets
   issues:
     types:
       - opened
