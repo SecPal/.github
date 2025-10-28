@@ -33,7 +33,7 @@ jobs:
   # ============================================================================
   handle-issue:
     name: Handle issue lifecycle events
-    if: github.event_name == 'issues'
+    if: github.event.issue != null
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -253,7 +253,7 @@ jobs:
   # ============================================================================
   handle-pull-request:
     name: Handle pull request lifecycle events
-    if: github.event_name == 'pull_request'
+    if: github.event.pull_request != null
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
@@ -305,6 +305,14 @@ jobs:
               echo "status=👀 In Review"
               echo "statusId=fc39b4e9"
               echo "reason=Pull request ready for review"
+              echo "shouldUpdate=true"
+            } >> "$GITHUB_OUTPUT"
+          elif [[ "$ACTION" == "converted_to_draft" ]]; then
+            # PR converted to draft → In Progress
+            {
+              echo "status=🚧 In Progress"
+              echo "statusId=d20ace06"
+              echo "reason=Converted to draft - changes in progress"
               echo "shouldUpdate=true"
             } >> "$GITHUB_OUTPUT"
           else
@@ -390,7 +398,7 @@ jobs:
   # ============================================================================
   handle-pr-review:
     name: Handle pull request review events
-    if: github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested'
+    if: github.event.review != null && github.event.review.state == 'changes_requested'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
