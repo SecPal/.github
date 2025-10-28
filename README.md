@@ -48,6 +48,60 @@ cat docs/project-board-integration.md
 
 See [docs/project-board-integration.md](docs/project-board-integration.md) for detailed instructions.
 
+### 🤖 Automated Project Board Management
+
+SecPal uses automated workflows to manage the [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) project board. Issues and pull requests are automatically added and their status is updated based on labels, PR state, and review activity.
+
+**Status Flow:**
+
+```mermaid
+graph LR
+    Enhancement[Enhancement Issue] --> Ideas[💡 Ideas]
+    CoreFeature[Core Feature] --> Planned[📋 Planned]
+    Blocker[Priority: Blocker] --> Backlog[📥 Backlog]
+    Ideas --> Discussion[💬 Discussion]
+    Discussion --> Planned
+    Planned --> InProgress[🚧 In Progress]
+    InProgress --> InReview[👀 In Review]
+    InReview --> Done[✅ Done]
+    InReview -.convert to draft.-> InProgress
+    Any --> WontDo[🚫 Won't Do]
+```
+
+**Key Features:**
+
+- **Automatic issue assignment** to project board based on labels
+- **Draft PR workflow**: Draft PRs → In Progress, Ready PRs → In Review
+- **Single-maintainer support**: Convert to draft to signal "changes needed"
+- **Auto-close on merge**: Linked issues automatically marked as Done
+
+**Quick Commands:**
+
+```bash
+# Create enhancement (→ Ideas)
+gh issue create --label "enhancement" --title "..."
+
+# Create core feature (→ Planned)
+gh issue create --label "core-feature" --title "..."
+
+# Create blocker (→ Backlog)
+gh issue create --label "priority: blocker" --title "..."
+
+# Draft PR workflow (recommended)
+gh pr create --draft --body "Closes #123"  # → In Progress
+gh pr ready <PR>                            # → In Review
+gh pr ready --undo <PR>                     # → In Progress (changes needed)
+gh pr merge <PR> --squash                   # → Done (auto-closes issue)
+```
+
+**Documentation:**
+
+- [📖 Project Automation Guide](docs/workflows/PROJECT_AUTOMATION.md) - Complete documentation
+- [📋 Quick Reference](docs/workflows/QUICK_REFERENCE.md) - Daily usage commands
+- [🚀 Rollout Guide](docs/workflows/ROLLOUT_GUIDE.md) - Deployment to repositories
+
+See [docs/project-board-integration.md](docs/project-board-integration.md) for detailed instructions.
+
 ### Pre-commit Hooks
 
 We use pre-commit hooks to ensure code quality before commits are made. This catches issues locally before CI/CD runs.
