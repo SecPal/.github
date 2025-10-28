@@ -34,6 +34,8 @@ jobs:
     permissions:
       issues: write
       contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
       - name: Debug - Check if PROJECT_TOKEN is available
         run: |
@@ -51,8 +53,11 @@ jobs:
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+            
             const projectId = process.env.PROJECT_ID;
             const contentId = context.payload.issue.node_id;
 
@@ -65,7 +70,7 @@ jobs:
             `;
 
             try {
-              const result = await github.graphql(mutation, { projectId, contentId });
+              const result = await octokit.graphql(mutation, { projectId, contentId });
               const itemId = result.addProjectV2ItemById.item.id;
               core.setOutput('itemId', itemId);
               core.setOutput('success', 'true');
