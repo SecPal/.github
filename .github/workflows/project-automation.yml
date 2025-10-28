@@ -10,6 +10,12 @@ on:
       - reopened
       - labeled
 
+env:
+  # Project ID for SecPal Roadmap (organization project)
+  # To find your project ID: gh api graphql -f query='query{organization(login:"YOUR_ORG"){projectV2(number:YOUR_PROJECT_NUMBER){id}}}'
+  # Replace "YOUR_ORG" with your organization login, and "YOUR_PROJECT_NUMBER" with your project number.
+  PROJECT_ID: PVT_kwDOCUodoc4BGgjL
+
 jobs:
   add-to-project:
     name: Add issue to project board
@@ -23,17 +29,40 @@ jobs:
       - name: Add to project
         id: add-to-project
         continue-on-error: true
-        uses: actions/add-to-project@v1.0.2
+        uses: actions/github-script@v7
         with:
-          project-url: https://github.com/orgs/SecPal/projects/1
           # NOTE: A fine-grained Personal Access Token is required here because GITHUB_TOKEN
           # lacks organization-level project permissions.
           # Required permissions for PROJECT_TOKEN (configured as org secret):
-          #   - Projects: Read & Write (org-level)
-          #   - Contents: Read
-          #   - Issues: Read & Write
+          #   - Organization: Projects (Read & Write)
+          #   - Repository: Issues (Read & Write)
+          #   - Repository: Metadata (Read-only, automatically included)
           # Fallback: If this step fails, a helpful error comment is posted (see step: Comment if project add failed)
           github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const projectId = process.env.PROJECT_ID;
+            const contentId = context.payload.issue.node_id;
+
+            const mutation = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `;
+
+            try {
+              const result = await github.graphql(mutation, {
+                projectId,
+                contentId
+              });
+              console.log('✅ Successfully added to project:', result);
+            } catch (error) {
+              console.error('❌ Failed to add to project:', error.message, error.status, error.response, error);
+              throw error;
+            }
 
       - name: Set outcome output
         id: set-outcome
