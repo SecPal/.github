@@ -8,6 +8,7 @@ ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
 # Check if pushing from a protected branch
+# NOTE: Keep this list in sync with .pre-commit-config.yaml (no-commit-to-branch hook)
 CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 PROTECTED_BRANCHES=("main" "master" "production")
 
@@ -23,8 +24,11 @@ for branch in "${PROTECTED_BRANCHES[@]}"; do
     echo "  git commit -am 'Your changes'"
     echo "  git push -u origin feat/your-feature-name"
     echo ""
-    echo "If you absolutely must bypass this check (emergency only):"
-    echo "  git push --no-verify"
+    echo "EMERGENCY EXCEPTION: If you must bypass this check:"
+    echo "  1. Document the reason for the bypass"
+    echo "  2. Create an issue to track the technical debt"
+    echo "  3. Fix the underlying issue within 24 hours"
+    echo "  4. Use: git push --no-verify"
     echo ""
     exit 1
   fi
