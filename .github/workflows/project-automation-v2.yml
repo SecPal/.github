@@ -35,4 +35,5 @@ jobs:
     name: Project automation
     uses: ./.github/workflows/project-automation-core.yml
     secrets:
-      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
