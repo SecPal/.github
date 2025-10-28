@@ -10,6 +10,11 @@ on:
       - reopened
       - labeled
 
+env:
+  # Project ID for SecPal Roadmap (organization project)
+  # To find your project ID: gh api graphql -f query='query{organization(login:"SecPal"){projectV2(number:1){id}}}'
+  PROJECT_ID: PVT_kwDOCUodoc4BGgjL
+
 jobs:
   add-to-project:
     name: Add issue to project board
@@ -25,9 +30,16 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@v7
         with:
+          # NOTE: A fine-grained Personal Access Token is required here because GITHUB_TOKEN
+          # lacks organization-level project permissions.
+          # Required permissions for PROJECT_TOKEN (configured as org secret):
+          #   - Organization: Projects (Read & Write)
+          #   - Repository: Issues (Read & Write)
+          #   - Repository: Metadata (Read-only, automatically included)
+          # Fallback: If this step fails, a helpful error comment is posted (see step: Comment if project add failed)
           github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
-            const projectId = 'PVT_kwDOCUodoc4BGgjL'; // SecPal Roadmap
+            const projectId = process.env.PROJECT_ID;
             const contentId = context.payload.issue.node_id;
 
             const mutation = `
