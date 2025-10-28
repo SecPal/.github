@@ -15,9 +15,12 @@ name: Project Board Automation (Core)
 on:
   workflow_call:
     secrets:
-      PROJECT_TOKEN:
-        description: "Fine-grained PAT with Projects (Read & Write) and Issues (Read & Write) permissions"
-        required: false
+      APP_ID:
+        description: "GitHub App ID for SecPal Bot"
+        required: true
+      APP_PRIVATE_KEY:
+        description: "GitHub App Private Key for SecPal Bot"
+        required: true
 
 env:
   PROJECT_ID: PVT_kwDOCUodoc4BGgjL
@@ -34,9 +37,14 @@ jobs:
     permissions:
       issues: write
       contents: read
-    env:
-      PROJECT_GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Setup Node.js for Octokit
         uses: actions/setup-node@v4
         with:
@@ -45,23 +53,12 @@ jobs:
       - name: Install Octokit dependencies
         run: npm install @octokit/core
 
-      - name: Debug - Check if PROJECT_TOKEN is available
-        run: |
-          if [ -z "$PROJECT_TOKEN" ]; then
-            echo "❌ PROJECT_TOKEN is EMPTY or not available"
-            echo "This indicates the secret was not passed to the reusable workflow"
-          else
-            echo "✅ PROJECT_TOKEN is available (length: $(echo -n "$PROJECT_TOKEN" | wc -c))"
-          fi
-        env:
-          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-
       - name: Add issue to project (if opened/reopened)
         id: add-to-project
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -171,7 +168,7 @@ jobs:
         if: github.event.action == 'closed'
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -224,7 +221,7 @@ jobs:
           (steps.get-item-id.outputs.found == 'true' && steps.determine-closed-status.outputs.statusId)
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -264,7 +261,7 @@ jobs:
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -309,9 +306,14 @@ jobs:
       pull-requests: read
       issues: write
       contents: read
-    env:
-      PROJECT_GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Setup Node.js for Octokit
         uses: actions/setup-node@v4
         with:
@@ -324,7 +326,7 @@ jobs:
         id: linked-issues
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -392,7 +394,7 @@ jobs:
         if: steps.linked-issues.outputs.count != '0' && steps.pr-status.outputs.shouldUpdate == 'true'
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -479,9 +481,14 @@ jobs:
       pull-requests: read
       issues: write
       contents: read
-    env:
-      PROJECT_GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Setup Node.js for Octokit
         uses: actions/setup-node@v4
         with:
@@ -494,7 +501,7 @@ jobs:
         id: linked-issues
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
@@ -515,7 +522,7 @@ jobs:
         if: steps.linked-issues.outputs.count != '0'
         uses: actions/github-script@v8
         env:
-          PROJECT_GH_TOKEN: ${{ env.PROJECT_GH_TOKEN }}
+          PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
