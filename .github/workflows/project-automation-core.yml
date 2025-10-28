@@ -60,6 +60,10 @@ jobs:
         id: add-to-project
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -162,6 +166,10 @@ jobs:
         id: get-item-id
         if: github.event.action == 'closed'
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -211,6 +219,10 @@ jobs:
           (steps.add-to-project.outputs.success == 'true' && steps.determine-status.outputs.statusId) ||
           (steps.get-item-id.outputs.found == 'true' && steps.determine-closed-status.outputs.statusId)
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -247,6 +259,10 @@ jobs:
       - name: Comment on issue
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -303,6 +319,10 @@ jobs:
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -367,6 +387,10 @@ jobs:
       - name: Update linked issues status
         if: steps.linked-issues.outputs.count != '0' && steps.pr-status.outputs.shouldUpdate == 'true'
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -465,6 +489,10 @@ jobs:
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
@@ -482,6 +510,10 @@ jobs:
       - name: Update linked issues to In Progress
         if: steps.linked-issues.outputs.count != '0'
         uses: actions/github-script@v8
+        env:
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
         with:
           script: |
             // Use token from environment variable
