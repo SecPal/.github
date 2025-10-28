@@ -19,6 +19,7 @@ on:
       - opened
       - ready_for_review
       - closed
+      - converted_to_draft
   pull_request_review:
     types:
       - submitted
@@ -305,6 +306,14 @@ jobs:
               echo "status=👀 In Review"
               echo "statusId=fc39b4e9"
               echo "reason=Pull request ready for review"
+              echo "shouldUpdate=true"
+            } >> "$GITHUB_OUTPUT"
+          elif [[ "$ACTION" == "converted_to_draft" ]]; then
+            # PR converted back to draft → In Progress (needs more work)
+            {
+              echo "status=🚧 In Progress"
+              echo "statusId=d20ace06"
+              echo "reason=Converted to draft - changes in progress"
               echo "shouldUpdate=true"
             } >> "$GITHUB_OUTPUT"
           else
