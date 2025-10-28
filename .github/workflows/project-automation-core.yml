@@ -34,6 +34,8 @@ jobs:
     permissions:
       issues: write
       contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
       - name: Debug - Check if PROJECT_TOKEN is available
         run: |
@@ -51,8 +53,11 @@ jobs:
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const projectId = process.env.PROJECT_ID;
             const contentId = context.payload.issue.node_id;
 
@@ -65,7 +70,7 @@ jobs:
             `;
 
             try {
-              const result = await github.graphql(mutation, { projectId, contentId });
+              const result = await octokit.graphql(mutation, { projectId, contentId });
               const itemId = result.addProjectV2ItemById.item.id;
               core.setOutput('itemId', itemId);
               core.setOutput('success', 'true');
@@ -150,8 +155,11 @@ jobs:
         if: github.event.action == 'closed'
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const issueNodeId = context.payload.issue.node_id;
             const projectId = process.env.PROJECT_ID;
 
@@ -173,7 +181,7 @@ jobs:
             `;
 
             try {
-              const result = await github.graphql(query, { issueNodeId });
+              const result = await octokit.graphql(query, { issueNodeId });
               const items = result.node.projectItems.nodes;
               const projectItem = items.find(item => item.project.id === projectId);
 
@@ -196,8 +204,11 @@ jobs:
           (steps.get-item-id.outputs.found == 'true' && steps.determine-closed-status.outputs.statusId)
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const projectId = process.env.PROJECT_ID;
             const fieldId = process.env.STATUS_FIELD_ID;
             const itemId = '${{ steps.add-to-project.outputs.itemId || steps.get-item-id.outputs.itemId }}';
@@ -218,7 +229,7 @@ jobs:
             `;
 
             try {
-              await github.graphql(mutation, { projectId, itemId, fieldId, optionId });
+              await octokit.graphql(mutation, { projectId, itemId, fieldId, optionId });
               console.log('✅ Status updated to:', status);
             } catch (error) {
               console.error('❌ Failed to update status:', error.message);
@@ -230,6 +241,10 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const action = context.payload.action;
             const status = '${{ steps.determine-status.outputs.status }}';
             const reason = '${{ steps.determine-status.outputs.reason }}';
@@ -266,12 +281,18 @@ jobs:
       pull-requests: read
       issues: write
       contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
         with:
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const body = context.payload.pull_request.body || '';
 
             // Regex to find "closes #123", "fixes #456", etc.
@@ -331,8 +352,11 @@ jobs:
         if: steps.linked-issues.outputs.count != '0' && steps.pr-status.outputs.shouldUpdate == 'true'
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const issueNumbers = JSON.parse('${{ steps.linked-issues.outputs.issues }}');
             const projectId = process.env.PROJECT_ID;
             const fieldId = process.env.STATUS_FIELD_ID;
@@ -364,7 +388,7 @@ jobs:
                   }
                 `;
 
-                const result = await github.graphql(query, { issueNodeId: issue.node_id });
+                const result = await octokit.graphql(query, { issueNodeId: issue.node_id });
                 const items = result.node.projectItems.nodes;
                 const projectItem = items.find(item => item.project.id === projectId);
 
@@ -387,7 +411,7 @@ jobs:
                   }
                 `;
 
-                await github.graphql(mutation, {
+                await octokit.graphql(mutation, {
                   projectId,
                   itemId: projectItem.id,
                   fieldId,
@@ -411,12 +435,18 @@ jobs:
       pull-requests: read
       issues: write
       contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     steps:
       - name: Extract linked issues
         id: linked-issues
         uses: actions/github-script@v8
         with:
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const body = context.payload.pull_request.body || '';
             const regex = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
             const matches = [...body.matchAll(regex)];
@@ -429,8 +459,11 @@ jobs:
         if: steps.linked-issues.outputs.count != '0'
         uses: actions/github-script@v8
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
+            // Use token from environment variable
+            const { Octokit } = require("@octokit/core");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
             const issueNumbers = JSON.parse('${{ steps.linked-issues.outputs.issues }}');
             const projectId = process.env.PROJECT_ID;
             const fieldId = process.env.STATUS_FIELD_ID;
@@ -459,7 +492,7 @@ jobs:
                   }
                 `;
 
-                const result = await github.graphql(query, { issueNodeId: issue.node_id });
+                const result = await octokit.graphql(query, { issueNodeId: issue.node_id });
                 const items = result.node.projectItems.nodes;
                 const projectItem = items.find(item => item.project.id === projectId);
 
@@ -481,7 +514,7 @@ jobs:
                   }
                 `;
 
-                await github.graphql(mutation, {
+                await octokit.graphql(mutation, {
                   projectId,
                   itemId: projectItem.id,
                   fieldId,
