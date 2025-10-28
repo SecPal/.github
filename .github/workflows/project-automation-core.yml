@@ -300,7 +300,8 @@ jobs:
   # ============================================================================
   handle-pull-request:
     name: Handle pull request lifecycle events
-    if: github.event.pull_request != null
+    # Skip for bot-created PRs (Dependabot, etc.) - they don't have access to secrets
+    if: github.event.pull_request != null && github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
