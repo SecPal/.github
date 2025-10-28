@@ -22,6 +22,6 @@ on:
 jobs:
   project-automation:
     name: Project automation
-    uses: ./.github/workflows/project-automation-v2.yml
+    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main
     secrets:
       PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
