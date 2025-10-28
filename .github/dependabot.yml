@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2025 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
-# Dependabot configuration for SecPal
+# Dependabot configuration for SecPal .github repository
 # Automatically creates PRs for ALL dependency updates (including Major versions)
 # Security updates are prioritized and checked daily in early morning hours
 version: 2
@@ -21,89 +21,6 @@ updates:
       - "github-actions"
       - "dependabot"
     open-pull-requests-limit: 10
-    rebase-strategy: "auto"
-    target-branch: "main"
-    pull-request-branch-name:
-      separator: "-"
-
-  # npm - JavaScript/TypeScript dependencies (Frontend, Node.js projects)
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "daily"
-      time: "04:00"
-      timezone: "Europe/Berlin"
-    versioning-strategy: "increase"
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "dependabot"
-    open-pull-requests-limit: 10
-    rebase-strategy: "auto"
-    target-branch: "main"
-    pull-request-branch-name:
-      separator: "-"
-
-  # Composer - PHP dependencies (Laravel backend)
-  - package-ecosystem: "composer"
-    directory: "/"
-    schedule:
-      interval: "daily"
-      time: "04:00"
-      timezone: "Europe/Berlin"
-    versioning-strategy: "increase"
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "php"
-      - "dependabot"
-    open-pull-requests-limit: 10
-    rebase-strategy: "auto"
-    target-branch: "main"
-    pull-request-branch-name:
-      separator: "-"
-
-  # pip - Python dependencies (if used for tooling/scripts)
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "daily"
-      time: "04:00"
-      timezone: "Europe/Berlin"
-    versioning-strategy: "increase"
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "python"
-      - "dependabot"
-    open-pull-requests-limit: 10
-    rebase-strategy: "auto"
-    target-branch: "main"
-    pull-request-branch-name:
-      separator: "-"
-
-  # Docker - Container image updates (if Docker is used)
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "daily"
-      time: "04:00"
-      timezone: "Europe/Berlin"
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "docker"
-      - "dependabot"
-    open-pull-requests-limit: 5
     rebase-strategy: "auto"
     target-branch: "main"
     pull-request-branch-name:
