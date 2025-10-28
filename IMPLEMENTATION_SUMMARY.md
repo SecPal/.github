@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2025 SecPal -->
 <!-- SPDX-License-Identifier: CC0-1.0 -->
 
-# Implementation Summary: Draft PR Workflow
+# Implementation Summary: Project Automation Enhancements
 
 ## 🎯 Implemented Changes
 

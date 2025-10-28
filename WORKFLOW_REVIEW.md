@@ -403,7 +403,7 @@ gh pr close $PR
 ### Phase 1: Test in `.github` repo
 
 1. Merge this workflow
-2. Run all 10 test scenarios
+2. Run all 12 test scenarios
 3. Fix any issues found
 4. Iterate until perfect
 
