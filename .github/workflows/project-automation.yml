@@ -117,11 +117,14 @@ jobs:
           BLOCKER="${{ contains(github.event.issue.labels.*.name, 'priority: blocker') }}"
 
           if [[ "$CORE_FEATURE" == "true" ]]; then
-            echo "status=📋 Backlog" >> "$GITHUB_OUTPUT"
+            echo "status=📋 Planned" >> "$GITHUB_OUTPUT"
+            echo "description=Core feature - scheduled for implementation" >> "$GITHUB_OUTPUT"
           elif [[ "$BLOCKER" == "true" ]]; then
-            echo "status=🎯 Ready" >> "$GITHUB_OUTPUT"
+            echo "status=📥 Backlog" >> "$GITHUB_OUTPUT"
+            echo "description=High priority - needs immediate attention" >> "$GITHUB_OUTPUT"
           else
             echo "status=💡 Ideas" >> "$GITHUB_OUTPUT"
+            echo "description=New idea - needs discussion and evaluation" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Comment on issue
@@ -129,14 +132,21 @@ jobs:
         with:
           script: |
             const status = '${{ steps.status.outputs.status }}';
+            const description = '${{ steps.status.outputs.description }}';
             const projectAdded = '${{ needs.add-to-project.outputs.project-add-outcome }}' === 'success';
             const message = projectAdded
-              ? `✅ This issue has been automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) with status: **${status}**`
-              : `📋 Suggested status for [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1): **${status}**`;
+              ? `✅ This issue has been automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) with status: **${status}**\n\n_${description}_`
+              : `📋 Suggested status for [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1): **${status}**\n\n_${description}_`;
+
+            const statusFlow = `
+            **Status Flow:**
+            💡 Ideas → 💬 Discussion → 📥 Backlog → 📋 Planned → 🚧 In Progress → 👀 In Review → ✅ Done
+
+            _Note: Ideas that won't be implemented should be moved to 🚫 Won't Do with a reason._`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `${message}\n\nNext steps:\n- Review and refine the issue description\n- Add relevant labels (area, priority)\n- Link related issues/PRs\n- Move to appropriate project column as needed`
+              body: `${message}\n${statusFlow}\n\n**Next steps:**\n- Review and refine the issue description\n- Add relevant labels (area, priority)\n- Discuss feasibility and approach\n- Move through status flow as work progresses`
             });
