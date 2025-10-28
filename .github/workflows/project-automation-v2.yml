@@ -195,7 +195,7 @@ jobs:
             const fieldId = process.env.STATUS_FIELD_ID;
             const itemId = '${{ steps.add-to-project.outputs.itemId || steps.get-item-id.outputs.itemId }}';
             const optionId = '${{ steps.determine-status.outputs.statusId || steps.determine-closed-status.outputs.statusId }}';
-            const status = '${{ steps.determine-status.outputs.status || steps.determine-closed-status.outputs.status }}';
+            const status = `${{ steps.determine-status.outputs.status || steps.determine-closed-status.outputs.status }}`;
 
             const mutation = `
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
@@ -224,8 +224,8 @@ jobs:
         with:
           script: |
             const action = context.payload.action;
-            const status = '${{ steps.determine-status.outputs.status }}';
-            const reason = '${{ steps.determine-status.outputs.reason }}';
+            const status = `${{ steps.determine-status.outputs.status }}`;
+            const reason = `${{ steps.determine-status.outputs.reason }}`;
             const addedToProject = '${{ steps.add-to-project.outputs.success }}' === 'true';
 
             const emoji = addedToProject ? '✅' : '⚠️';
@@ -322,7 +322,7 @@ jobs:
             const projectId = process.env.PROJECT_ID;
             const fieldId = process.env.STATUS_FIELD_ID;
             const optionId = '${{ steps.pr-status.outputs.statusId }}';
-            const status = '${{ steps.pr-status.outputs.status }}';
+            const status = `${{ steps.pr-status.outputs.status }}`;
 
             for (const issueNumber of issueNumbers) {
               try {
