@@ -9,20 +9,6 @@ on:
       PROJECT_TOKEN:
         description: "Fine-grained PAT with Projects (Read & Write) and Issues (Read & Write) permissions"
         required: false # Changed from true - allows direct events to use repo secrets
-  issues:
-    types:
-      - opened
-      - reopened
-      - closed
-  pull_request:
-    types:
-      - opened
-      - ready_for_review
-      - closed
-      - converted_to_draft
-  pull_request_review:
-    types:
-      - submitted
 
 env:
   PROJECT_ID: PVT_kwDOCUodoc4BGgjL
