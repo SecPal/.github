@@ -1,204 +1,27 @@
 # SPDX-FileCopyrightText: 2025 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
-name: Add Issues to Project
+name: Project Board Automation
 
 on:
   issues:
     types:
       - opened
       - reopened
-
-env:
-  # Project ID for SecPal Roadmap (organization project)
-  # To find your project ID: gh api graphql -f query='query{organization(login:"YOUR_ORG"){projectV2(number:YOUR_PROJECT_NUMBER){id}}}'
-  # Replace "YOUR_ORG" with your organization login, and "YOUR_PROJECT_NUMBER" with your project number.
-  PROJECT_ID: PVT_kwDOCUodoc4BGgjL
+      - closed
+  pull_request:
+    types:
+      - opened
+      - ready_for_review
+      - closed
+      - converted_to_draft
+  pull_request_review:
+    types:
+      - submitted
 
 jobs:
-  add-to-project:
-    name: Add issue to project board
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      contents: read
-    outputs:
-      project-add-outcome: ${{ steps.set-outcome.outputs.outcome }}
-      project-item-id: ${{ steps.add-to-project.outputs.itemId }}
-    steps:
-      - name: Add to project
-        id: add-to-project
-        continue-on-error: true
-        uses: actions/github-script@v8
-        with:
-          # NOTE: A fine-grained Personal Access Token is required here because GITHUB_TOKEN
-          # lacks organization-level project permissions.
-          # Required permissions for PROJECT_TOKEN (configured as org secret):
-          #   - Organization: Projects (Read & Write)
-          #   - Repository: Issues (Read & Write)
-          #   - Repository: Metadata (Read-only, automatically included)
-          # Fallback: If this step fails, a helpful error comment is posted (see step: Comment if project add failed)
-          github-token: ${{ secrets.PROJECT_TOKEN }}
-          script: |
-            const projectId = process.env.PROJECT_ID;
-            const contentId = context.payload.issue.node_id;
-
-            const mutation = `
-              mutation($projectId: ID!, $contentId: ID!) {
-                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
-                  item {
-                    id
-                  }
-                }
-              }
-            `;
-
-            try {
-              const result = await github.graphql(mutation, {
-                projectId,
-                contentId
-              });
-              console.log('✅ Successfully added to project:', result);
-              const itemId = result.addProjectV2ItemById.item.id;
-              core.setOutput('itemId', itemId);
-              return itemId;
-            } catch (error) {
-              console.error('❌ Failed to add to project:', error.message, error.status, error.response, error);
-              throw error;
-            }
-
-      - name: Set outcome output
-        id: set-outcome
-        if: always()
-        run: echo "outcome=\"${{ steps.add-to-project.outcome }}\"" >> "$GITHUB_OUTPUT"
-
-      - name: Comment if project add failed
-        if: steps.add-to-project.outcome == 'failure'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const body = [
-              '⚠️ **Manual Action Required**',
-              '',
-              'This issue could not be automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) due to missing permissions.',
-              '',
-              '**To add manually:**',
-              '```bash',
-              `gh project item-add 1 --owner SecPal --url ${context.payload.issue.html_url}`,
-              '```',
-              '',
-              '**To enable automation:** An organization admin needs to:',
-              '1. Create a fine-grained Personal Access Token with `Contents: Read` and `Projects: Read & Write` permissions',
-              '2. Add it as a repository secret named `PROJECT_TOKEN`',
-              '3. Update this workflow to use `github-token: \\${{ secrets.PROJECT_TOKEN }}`',
-              '',
-              'See: https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects'
-            ].join('\n');
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
-
-  set-status-field:
-    name: Set initial status based on labels
-    runs-on: ubuntu-latest
-    needs: add-to-project
-    permissions:
-      issues: write
-      contents: read
-    if: |
-      (success() || failure()) &&
-      (contains(github.event.issue.labels.*.name, 'enhancement') || contains(github.event.issue.labels.*.name, 'core-feature'))
-    steps:
-      - name: Determine initial status
-        id: status
-        run: |
-          # Check labels to determine initial project status
-          CORE_FEATURE="${{ contains(github.event.issue.labels.*.name, 'core-feature') }}"
-          BLOCKER="${{ contains(github.event.issue.labels.*.name, 'priority: blocker') }}"
-
-          if [[ "$CORE_FEATURE" == "true" ]]; then
-            {
-              echo "status=📋 Planned"
-              echo "status-id=aa8c7fe5"
-              echo "description=Core feature - scheduled for implementation"
-            } >> "$GITHUB_OUTPUT"
-          elif [[ "$BLOCKER" == "true" ]]; then
-            {
-              echo "status=📥 Backlog"
-              echo "status-id=53395960"
-              echo "description=High priority - needs immediate attention"
-            } >> "$GITHUB_OUTPUT"
-          else
-            {
-              echo "status=💡 Ideas"
-              echo "status-id=88b56a57"
-              echo "description=New idea - needs discussion and evaluation"
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set project status
-        if: needs.add-to-project.outputs.project-add-outcome == 'success'
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
-          script: |
-            const projectId = process.env.PROJECT_ID;
-            const itemId = '${{ needs.add-to-project.outputs.project-item-id }}';
-            const fieldId = 'PVTSSF_lADOCUodoc4BGgjLzg3iI0Y'; // Status field ID
-            const optionId = '${{ steps.status.outputs.status-id }}';
-
-            const mutation = `
-              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                updateProjectV2ItemFieldValue(input: {
-                  projectId: $projectId
-                  itemId: $itemId
-                  fieldId: $fieldId
-                  value: { singleSelectOptionId: $optionId }
-                }) {
-                  projectV2Item {
-                    id
-                  }
-                }
-              }
-            `;
-
-            try {
-              await github.graphql(mutation, {
-                projectId,
-                itemId,
-                fieldId,
-                optionId
-              });
-              console.log('✅ Status set to:', '${{ steps.status.outputs.status }}');
-            } catch (error) {
-              console.error('❌ Failed to set status:', error.message);
-              // Don't fail the workflow if status update fails
-            }
-
-      - name: Comment on issue
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const status = '${{ steps.status.outputs.status }}';
-            const description = '${{ steps.status.outputs.description }}';
-            const projectAdded = '${{ needs.add-to-project.outputs.project-add-outcome }}' === 'success';
-            const message = projectAdded
-              ? `✅ This issue has been automatically added to the [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1) with status: **${status}**\n\n_${description}_`
-              : `📋 Suggested status for [SecPal Feature Roadmap](https://github.com/orgs/SecPal/projects/1): **${status}**\n\n_${description}_`;
-
-            const statusFlow = `
-            **Status Flow:**
-            💡 Ideas → 💬 Discussion → 📥 Backlog → 📋 Planned → 🚧 In Progress → 👀 In Review → ✅ Done
-
-            _Note: Ideas that won't be implemented should be moved to 🚫 Won't Do with a reason._`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `${message}\n${statusFlow}\n\n**Next steps:**\n- Review and refine the issue description\n- Add relevant labels (area, priority)\n- Discuss feasibility and approach\n- Move through status flow as work progresses`
-            });
+  project-automation:
+    name: Project automation
+    uses: ./.github/workflows/project-automation-v2.yml
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
