@@ -127,11 +127,11 @@ When changes span multiple repositories:
 
 ## GitHub Copilot Review Protocol (AI MUST EXECUTE)
 
-**Copilot review iterates MULTIPLE times - expect new comments after each push.**
+**CRITICAL: Copilot review = iterative process. Multiple rounds expected after each push.**
 
 ### Review Execution Sequence:
 
-1. **Get all unresolved threads:**
+1. **Query unresolved threads (GraphQL):**
 
    ```bash
    gh api graphql -f query='query{repository(owner:"SecPal",name:"REPO"){pullRequest(number:N){reviewThreads(first:20){nodes{id isResolved comments(first:1){nodes{path line body}}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
@@ -139,17 +139,19 @@ When changes span multiple repositories:
 
 2. **Fix all comments** → commit → push
 
-3. **Wait 30s for CI** → Re-check for NEW comments (Copilot re-reviews after push)
+3. **Wait 30s for CI** → Re-query step 1 (Copilot re-reviews after push, may add NEW threads)
 
-4. **Resolve threads via GraphQL:**
+4. **Resolve threads (GraphQL mutation):**
 
    ```bash
    gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"THREAD_ID"}){thread{id isResolved}}}'
    ```
 
-5. **Repeat steps 1-4** until `.reviewThreads.nodes[] | select(.isResolved == false)` returns empty
+   **NEVER resolve via PR comment** - GraphQL mutation only.
 
-**NEVER assume first round is final - always re-check after push.**
+5. **Repeat 1-4** until step 1 returns empty array
+
+**LEARNED LESSON:** Bot-created PRs (e.g., copilot/sub-pr-\*) = noise. Close immediately if redundant/irrelevant to current project scope (e.g., Rust lockfiles when no Rust used). Copilot may auto-create PRs from review suggestions - validate necessity before accepting.
 
 ### Pre-Push Hook Override (Large PRs Only):
 
@@ -904,6 +906,27 @@ git status  # MUST output: "nothing to commit, working tree clean"
 **HOW:** Execute ALL 5 commands sequentially after EVERY merge. No exceptions.
 
 **VALIDATION:** Execute `git branch -a` - MUST show ONLY main locally, ZERO feature/fix branches.
+
+### 11. Bot PR Validation (CRITICAL)
+
+**WHAT:** GitHub bots (Copilot, Dependabot) may auto-create PRs. MUST validate before merge.
+
+**WHY:** Bot PRs may be redundant (duplicate fix already merged), irrelevant (suggest tech not used in project), or conflict with project scope.
+
+**EXAMPLES - Auto-reject:**
+
+- Rust/Cargo.lock fixes when project uses NO Rust
+- Duplicate lockfile excludes when already fixed in main
+- Language-specific config for languages not in tech stack
+
+**HOW:**
+
+1. Check PR branch name: `copilot/sub-pr-*` = bot-created from review suggestion
+2. Validate against current tech stack + merged PRs
+3. If redundant/irrelevant: Close with explanation comment
+4. If valid: Review like human PR (full checklist)
+
+**VALIDATION:** Before accepting ANY bot PR, grep project for relevant tech (e.g., `find . -name "Cargo.toml"` for Rust). ZERO matches = reject PR.
 
 ## Mandatory Checklists (Pre-PR Gates)
 
