@@ -656,9 +656,607 @@ According to §11b BewachV (German Security Services Act), security companies mu
 
 ---
 
+## 📅 Advanced Shift Planning Features
+
+### Idea: (Semi-)Automated Shift Planning with Employee Suggestions
+
+**Context:**
+Manual shift planning is time-consuming. Managers need support to find available employees who meet all requirements (qualifications, working time law, preferences). Current `feature-requirements.md` includes basic auto-scheduling, but advanced AI-driven suggestions are not yet specified.
+
+**Concept:**
+
+**1. Intelligent Employee Suggestions:**
+
+- **Context-Aware Recommendations:**
+  - Manager starts planning a shift (e.g., "Night shift, Object A, 22:00-06:00")
+  - System analyzes requirements: Qualifications (§34a, First Aid), location, time
+  - System suggests **ranked list** of suitable employees:
+
+```
+🟢 Max Mustermann (Optimal Match)
+   ✅ §34a certification valid
+   ✅ First Aid certification valid
+   ✅ Available (no vacation, no conflicting shift)
+   ✅ Preferred shift time (marked "Night shifts OK")
+   ✅ Recently worked at Object A (familiar with location)
+   💰 Regular rate (no overtime premium)
+
+🟡 Anna Schmidt (Good Match)
+   ✅ §34a certification valid
+   ✅ First Aid certification valid
+   ✅ Available (no conflicts)
+   ⚠️ Prefers day shifts (but not blocked)
+   ⚠️ New to Object A (requires briefing)
+   💰 Regular rate
+
+🔴 Tom Müller (Possible, but issues)
+   ✅ §34a certification valid
+   ❌ First Aid expired (needs renewal)
+   ⚠️ Would exceed 48h/week (requires approval)
+   ⚠️ Last shift ended 10h ago (min 11h rest period)
+```
+
+**2. AI-Powered Optimization:**
+
+- **Machine Learning Suggestions:**
+  - Learn from historical data: "Max and Anna work well together"
+  - Predict employee availability based on patterns
+  - Optimize for cost (minimize overtime, travel expenses)
+  - Fairness algorithm: Distribute unpopular shifts equitably
+- **Multi-Week Planning:**
+  - Plan entire month in one go
+  - System generates multiple scenarios
+  - Manager reviews and adjusts
+- **Conflict Resolution:**
+  - Highlight conflicts before they occur
+  - Suggest alternative assignments
+  - Explain why certain assignments are not possible
+
+**3. Rule-Based Constraints:**
+
+- **Hard Constraints (must be met):**
+  - Working Time Law (ArbZG): Max 10h/day, 48h/week average
+  - Rest periods: Min 11h between shifts
+  - Qualifications: Must have required certificates
+  - Availability: Not on vacation, not sick
+- **Soft Constraints (preferred but not mandatory):**
+  - Employee preferences (preferred times, locations)
+  - Familiarity with location (worked there before)
+  - Team composition (prefer known team members)
+  - Cost optimization (avoid overtime if possible)
+
+**4. "What-If" Scenarios:**
+
+- Manager can test different configurations
+- "What if Anna takes vacation on 05.11?"
+- System recalculates and shows impact
+- Helps with contingency planning
+
+**When to revisit:**
+
+- After basic shift planning (feature-requirements.md) is implemented
+- When historical data is available for ML training
+- When managers report bottlenecks in manual planning
+
+**Complexity:** Very High (AI/ML, Optimization Algorithms)
+**Priority:** Later (Phase 3-4, after MVP)
+
+**Technical Notes:**
+
+- Could use constraint satisfaction problem (CSP) solvers
+- ML models require 6-12 months of historical data
+- Consider external libraries: OR-Tools (Google), OptaPlanner, etc.
+
+---
+
+### Idea: Shift Plan Distribution via Push Notifications & Email
+
+**Context:**
+Employees need timely notification when new shift plans are published. While basic email notifications are mentioned in `feature-requirements.md`, advanced distribution features are not yet specified.
+
+**Concept:**
+
+**1. Multi-Channel Notifications:**
+
+- **Email Notifications:**
+  - Automatic email when shift plan is published
+  - Include PDF attachment of personal schedule
+  - Link to web/mobile app for details
+  - Customizable templates (per organization)
+- **Push Notifications (Mobile App):**
+  - Instant notification when shift plan changes
+  - Reminder 24h before shift starts
+  - Badge count on app icon for unread shifts
+- **SMS Notifications (Optional):**
+  - Fallback for employees without smartphones
+  - Short summary: "Your shift: Mon 04.11, 22:00-06:00, Object A"
+  - Billable feature (SMS costs)
+
+**2. Notification Triggers:**
+
+- **Shift Plan Published:**
+  - "Your shift plan for November 2025 is now available"
+  - List all assigned shifts
+- **Shift Changed:**
+  - "Your shift on 05.11 has been changed"
+  - Show old vs. new time/location
+- **Shift Swapped:**
+  - "Your shift swap request was approved"
+  - Confirm new assignment
+- **Shift Reminder:**
+  - "Reminder: Your shift starts in 24 hours"
+  - Include location, time, special instructions
+- **Understaffed Shift Alert:**
+  - "Urgent: Can you cover a shift on 07.11?"
+  - Voluntary pickup opportunity (with bonus pay?)
+
+**3. Personalization & Preferences:**
+
+- **Employee Preferences:**
+  - Opt in/out of specific notification types
+  - Choose preferred channels (email, push, SMS)
+  - Set "Do Not Disturb" hours (no notifications at night)
+- **Language Support:**
+  - Multilingual templates (German, English, Turkish, Polish, etc.)
+  - Automatic language detection based on employee profile
+
+**4. Delivery Tracking:**
+
+- **Audit Log:**
+  - Track when notification was sent
+  - Track when employee read notification (push: opened app, email: tracking pixel)
+  - Proof of delivery for legal disputes
+- **Failed Delivery Alerts:**
+  - If email bounces or push token invalid
+  - Manager gets alert to contact employee directly
+
+**When to revisit:**
+
+- After mobile app is launched (Phase 2)
+- When organizations report communication issues
+- When legal requirements demand proof of notification
+
+**Complexity:** Medium (Infrastructure for Push/SMS)
+**Priority:** Soon (Phase 2, after basic shift planning)
+
+**Technical Notes:**
+
+- Push: Firebase Cloud Messaging (FCM) or Apple Push Notification Service (APNs)
+- SMS: Twilio, AWS SNS, or local provider
+- Email: Laravel Mail with queue for batch sending
+
+---
+
+### Idea: Mass Communication & Broadcast Messaging
+
+**Context:**
+Managers need to send important information to all employees or specific groups (e.g., "Office closed due to weather," "New safety policy," "Meeting invitation"). Email lists are cumbersome and lack targeting.
+
+**Concept:**
+
+**1. Broadcast Messaging System:**
+
+- **Create Broadcast Message:**
+  - Subject & body (rich text editor)
+  - Optional: Attach files (PDF, images)
+  - Optional: Mark as urgent (high priority notification)
+- **Target Audience Selection:**
+  - **All Employees:** Company-wide announcement
+  - **By Location/Object:** "All employees at Object A"
+  - **By Qualification:** "All §34a certified guards"
+  - **By Employment Type:** "All full-time employees"
+  - **By Branch Office:** "All employees in Berlin office"
+  - **By Team/Manager:** "All employees under Manager X"
+  - **Custom Selection:** Manually select individual employees
+
+**2. Delivery Channels:**
+
+- **Email (Primary):**
+  - HTML email with organization branding
+  - Automatic fallback to plain text
+- **Mobile App Push Notification:**
+  - Short summary in notification
+  - Full message in app inbox
+- **In-App Inbox:**
+  - Persistent message history
+  - Mark as read/unread
+  - Archive old messages
+
+**3. Read Receipts & Acknowledgment:**
+
+- **Optional Acknowledgment:**
+  - "Please acknowledge that you have read this message"
+  - Employees must click "I have read and understood"
+  - Manager sees list of who acknowledged
+- **Delivery Statistics:**
+  - Sent: 150 employees
+  - Delivered: 148 (2 bounced emails)
+  - Read: 120 (80% open rate)
+  - Acknowledged: 95 (if acknowledgment required)
+
+**4. Scheduled Broadcasts:**
+
+- **Schedule for Later:**
+  - Compose message now, send tomorrow at 08:00
+  - Useful for announcements during office hours
+- **Recurring Messages:**
+  - "Monthly safety reminder" (auto-send on 1st of each month)
+  - "Weekly schedule preview" (auto-send every Friday)
+
+**5. Templates & Quick Actions:**
+
+- **Predefined Templates:**
+  - "Office closure announcement"
+  - "Weather alert"
+  - "Policy update notification"
+  - "Meeting invitation"
+- **Quick Filters:**
+  - "Last-minute shift coverage needed" → Auto-targets available employees
+
+**6. Compliance & Legal:**
+
+- **Audit Trail:**
+  - Who sent the message, when, to whom
+  - Who read it, who acknowledged it
+  - Legal proof for important communications (e.g., policy changes)
+- **Unsubscribe Handling:**
+  - Employees can opt out of **non-essential** messages
+  - But **cannot** opt out of critical/legal messages (policy updates, safety alerts)
+
+**When to revisit:**
+
+- After basic employee management is in place (Phase 1)
+- When organizations request "mass email" feature
+- When mobile app inbox is available
+
+**Complexity:** Medium (Email queuing, targeting logic, read receipts)
+**Priority:** Soon (Phase 2, high user demand)
+
+**Technical Notes:**
+
+- Laravel Notifications for multi-channel support
+- Queue system for batch email sending (avoid rate limits)
+- Database tables: `broadcasts`, `broadcast_recipients`, `broadcast_reads`
+- Consider integration with external newsletter tools (Mailchimp, SendGrid) for advanced features
+
+**Example Use Cases:**
+
+1. **Weather Emergency:**
+   - "Due to heavy snowfall, Object B is closed today. Scheduled employees will be reassigned."
+   - Target: All employees scheduled for Object B today
+   - Urgent flag: Yes
+   - Channels: Email + Push + SMS
+
+2. **Policy Update:**
+   - "New GDPR training required for all employees. Deadline: 30.11.2025."
+   - Target: All active employees
+   - Acknowledgment required: Yes
+   - Channels: Email + In-App Inbox
+   - Attach: PDF of new policy
+
+3. **Shift Coverage Request:**
+   - "Urgent: Looking for volunteer to cover night shift on 05.11 at Object A."
+   - Target: Employees with §34a, available on 05.11, prefer night shifts
+   - Channels: Push notification + Email
+   - Quick action: "I can cover this shift" button
+
+---
+
+## 👔 Uniform & Clothing Management
+
+### Idea: Multi-Location Clothing Warehouse Management
+
+**Context:**
+Security companies must provide uniforms and equipment to employees. With multiple branch offices, managing clothing inventory, sizes, issuance, and returns becomes complex. Additionally, permissions must be managed so that employees can only access their respective locations.
+
+**Concept:**
+
+**1. Clothing Warehouse Structure:**
+
+- **Multi-Location Support:**
+  - Multiple warehouses/rooms (e.g., per branch office, regional office)
+  - Each location has its own inventory
+  - Inter-location transfers trackable
+  - Hierarchical structure: Headquarters → Regional offices → Branch offices
+
+**2. Employee Clothing Sizes:**
+
+- **Size Profile per Employee:**
+  - Shirt (neck, sleeve length)
+  - Pants (waist, length, inseam)
+  - Jacket (chest, sleeve length, height)
+  - Shoes (EU size, width)
+  - Hat/cap (head circumference)
+  - Special requirements (tall sizes, wide sizes, specific fits)
+- **Size History:**
+  - Track size changes over time
+  - Helpful for reorders
+  - Notice trends (seasonal weight changes)
+
+**3. Inventory Management:**
+
+- **Item Types:**
+  - Uniform shirts/blouses
+  - Pants/trousers
+  - Jackets (summer/winter)
+  - Safety vests/reflective gear
+  - Shoes/boots
+  - Accessories (belts, ties, badges, name tags)
+  - PPE (Personal Protective Equipment)
+- **Clothing Catalog (Available Items):**
+  - Master catalog of generally orderable items
+  - Item specifications (material, colors, sizes available)
+  - Standard vs. special order items
+  - Seasonal availability
+  - Discontinued items marking
+  - Replacement/successor items
+- **Stock Management:**
+  - Current inventory per location and size
+  - Minimum stock levels with warnings
+  - Reorder suggestions based on distribution
+  - Cost tracking per item
+- **Multiple Suppliers per Item:**
+  - Primary and alternative suppliers
+  - Price comparison per supplier
+  - Lead times per supplier
+  - Quality ratings/reviews
+  - Automatic supplier selection (cheapest/fastest/preferred)
+  - Supplier contact information and terms
+
+**4. Issuance Management:**
+
+- **Issue Tracking:**
+  - Who received which items when
+  - New vs. used condition documentation
+  - Deposit system (if applicable - refundable upon return)
+  - Photo documentation of condition
+- **Employee Receipt/Acknowledgment:**
+  - Digital signature on tablet/mobile device
+  - Email confirmation with issued items list
+  - PDF receipt generation for employee records
+  - Timestamp and issuer documentation
+  - Optional: Photo of employee with issued items
+  - Multi-language support (German, English, Turkish, Polish)
+- **Return Management:**
+  - Return upon termination/transfer
+  - Condition assessment (good/worn/damaged)
+  - Cleaning required before return?
+  - Lost items handling
+  - Replacement costs billing
+  - Return receipt/confirmation for employee
+
+**5. Maintenance & Lifecycle:**
+
+- **Cleaning Cycles:**
+  - Track when items were cleaned
+  - Schedule regular maintenance
+  - External laundry service integration?
+- **Wear & Replacement:**
+  - Track usage duration
+  - Automatic replacement intervals (e.g., every 12 months)
+  - Damage/defect logging
+  - Repair tracking
+
+**6. Ordering & Procurement:**
+
+- **Order Status Tracking:**
+  - Status: `draft`, `pending_approval`, `ordered`, `partially_delivered`, `delivered`, `cancelled`
+  - Expected delivery date
+  - Partial deliveries tracking
+  - Backorder management
+  - Delivery confirmations
+  - Automatic notifications on status changes
+- **Bulk Orders:**
+  - Automatic collection of requirements from all locations
+  - Size distribution analysis for optimal ordering
+  - Order history and lead times
+- **Cost Centers (if applicable):**
+  - Assign orders to specific cost centers
+  - Cost center budget tracking
+  - Approval workflows per cost center
+  - Cost center reporting (per location, per department)
+  - Budget alerts when limits approached
+  - Split orders across multiple cost centers
+- **Supplier Selection:**
+  - Choose from multiple suppliers per item
+  - Automatic best-price selection
+  - Preferred supplier designation
+  - Emergency/fallback suppliers
+  - Supplier performance tracking
+- **Just-in-Time vs. Stock:**
+  - Balance between storage costs and availability
+  - Seasonal planning (winter jackets, summer shirts)
+
+**7. Multi-Location Permissions & Access Control:**
+
+- **Role-Based Access Control (RBAC):**
+  - **View permissions:**
+    - See all locations (HQ management)
+    - See only specific locations (regional managers)
+    - See only own location (branch managers)
+  - **Edit permissions:**
+    - Manage all locations (HQ warehouse manager)
+    - Manage specific locations only (regional warehouse staff)
+    - Issue items at own location (branch office staff)
+    - View-only access (accountants, auditors)
+  - **Special permissions:**
+    - Inter-location transfers (specific role)
+    - Order approval workflows
+    - Inventory adjustment authorization
+- **Audit Trail:**
+  - Every action logged (who, what, when, where)
+  - Stock discrepancies traceable
+  - Accountability for issued items
+
+**8. Reporting & Analytics:**
+
+- **Stock Reports:**
+  - Current inventory by location/size/item
+  - Stock value per location
+  - Inventory turnover rate
+- **Issuance Reports:**
+  - Most frequently issued items
+  - Return compliance rate
+  - Outstanding items per employee
+- **Cost Analysis:**
+  - Clothing costs per employee
+  - Costs per location
+  - Budget vs. actual spending
+- **Compliance:**
+  - All employees properly equipped?
+  - Missing sizes/items?
+  - Expired PPE items?
+
+**When to revisit:**
+
+- After Employee Management v1.0 is complete
+- When client feedback indicates demand
+- When multiple branch offices are operational
+- After RBAC system is fully implemented
+
+**Complexity:** High (Multi-location, inventory tracking, permissions)
+**Priority:** Later (Phase 3-4)
+
+**9. Service ID Cards (Dienstausweise) Management:**
+
+- **ID Card Lifecycle:**
+  - Issuance tracking (card number, issue date, issuer)
+  - Expiry date management
+  - Automatic renewal reminders (30/60/90 days)
+  - Card status: `active`, `expired`, `lost`, `stolen`, `suspended`, `returned`
+  - Photo documentation (card photo + employee photo)
+  - Security features tracking (hologram, chip, etc.)
+- **ID Card Types:**
+  - Company ID cards
+  - §34a GewO security ID (IHK-issued)
+  - Client-specific access cards
+  - Vehicle access cards
+  - Building access cards
+- **Loss/Theft Management:**
+  - Immediate suspension capability
+  - Report generation for authorities
+  - Replacement process workflow
+  - Cost tracking for replacements
+  - Liability assignment (employee vs. company)
+- **Return Management:**
+  - Mandatory return upon termination
+  - Return confirmation/receipt
+  - Deactivation upon return
+  - Destruction/archival process
+- **Multi-Location:**
+  - Cards issued at different locations
+  - Location-specific access rights
+  - Inter-location transfers
+- **Compliance:**
+  - All active employees have valid cards?
+  - Expired cards report
+  - Missing cards report
+  - Audit trail of all card actions
+
+**10. Employee Acknowledgment System:**
+
+- **Clothing & Equipment Receipt:**
+  - Digital signature for received items
+  - List of all issued items
+  - Condition documentation
+  - Employee copy (PDF/Email)
+- **Service ID Card Receipt:**
+  - Acknowledgment of card issuance
+  - Security responsibilities agreement
+  - Loss/theft reporting obligations
+  - Return obligations upon termination
+- **Instructions & Policies Acknowledgment:**
+  - **Work Instructions (Dienstanweisungen):**
+    - Safety procedures
+    - Emergency protocols
+    - Client-specific instructions
+    - Equipment usage guidelines
+  - **Company Policies:**
+    - Code of conduct
+    - Confidentiality agreements
+    - Data protection (GDPR training)
+    - Workplace safety regulations
+    - Anti-discrimination policies
+  - **Acknowledgment Tracking:**
+    - Which documents acknowledged by whom and when
+    - Version control (new policy = new acknowledgment required)
+    - Expiry/renewal (e.g., annual safety training acknowledgment)
+    - Reminder system for overdue acknowledgments
+    - Compliance reports (who hasn't acknowledged?)
+  - **Delivery Methods:**
+    - In-person with tablet/mobile signature
+    - Email with click-to-acknowledge link
+    - Portal with mandatory read-and-sign before access
+    - Multi-language support for instructions
+  - **Legal Validity:**
+    - Timestamp and IP logging
+    - Document version tracking
+    - Immutable audit trail
+    - PDF generation for records
+    - Electronic signature compliance (eIDAS Textform §126b BGB)
+
+**Technical Considerations:**
+
+- Integrate with existing RBAC system
+- Event sourcing for inventory changes? (audit trail)
+- Barcode/QR code scanning for items and ID cards
+- Mobile app support for field issuance
+- Integration with laundry/cleaning services?
+- Photo upload for condition documentation
+- E-signature integration (DocuSign, Adobe Sign, or custom)
+- Document versioning system
+- Notification system (email, SMS, push notifications)
+
+**Legal/Compliance:**
+
+- Employee data privacy (size data is sensitive)
+- Deposit regulations (Germany: Pfand-Regelungen)
+- Tax implications of issued items (geldwerter Vorteil?)
+- Liability for lost/damaged items
+- ID card data protection (§34a data is sensitive)
+- Electronic signature validity (§126b BGB - Textform)
+- Document retention requirements (acknowledgments must be kept)
+- GDPR compliance for acknowledgment tracking
+
+**Related:**
+
+- Employee Management (Core Feature)
+- RBAC System (Core Feature)
+- Multi-Branch Office Structure (if planned)
+- Mobile Apps (ideas-backlog.md - for field issuance)
+- Document Management System (for instructions/policies)
+- BWR Integration (§34a ID cards)
+
+**Estimated Development Effort:**
+
+**MVP (Basic Inventory + Issuance):**
+
+- Backend: 6-8 weeks (data model, business logic, permissions)
+- Frontend: 4-6 weeks (inventory UI, issuance flows, reports)
+- Testing & Refinement: 2-3 weeks
+- **Total:** ~3-4 months for basic MVP
+
+**Full Feature Set (with ID Cards, Acknowledgments, Multi-Supplier):**
+
+- Backend: 12-16 weeks (extended data model, workflow logic, e-signatures)
+- Frontend: 8-10 weeks (extended UI, acknowledgment flows, ID card management)
+- Mobile App (optional): 6-8 weeks (field issuance, signature capture)
+- Integration: 4-6 weeks (suppliers, e-signature providers, document management)
+- Testing & Refinement: 4-6 weeks
+- **Total:** ~6-9 months for full feature set
+
+**Phased Approach Recommended:**
+
+1. **Phase 1 (3-4 months):** Basic clothing inventory + issuance
+2. **Phase 2 (2-3 months):** ID card management + basic acknowledgments
+3. **Phase 3 (2-3 months):** Advanced features (multi-supplier, cost centers, full acknowledgment system)
+
+---
+
 **Next Actions:**
 
 - Move Event Sourcing idea → ADR-001 ✅ Done
 - Review this doc every 3 months
 - Create GitHub Issues for "Now" or "Soon" priorities
 - **NEW:** BWR-Integration → Move to feature-requirements.md (Soon)
+- **NEW:** Clothing Management → Evaluate with stakeholders (Phase 3+)
