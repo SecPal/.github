@@ -9,6 +9,18 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-10-31 - Copilot Review Protocol Enhancement
+
+**`copilot-instructions.md` - Added bot PR validation + GraphQL review resolution:**
+
+- **GraphQL Review Resolution:** Clarified review threads MUST be resolved via GraphQL mutation (`resolveReviewThread`), NEVER via regular PR comments
+- **Bot PR Validation (Lesson #11):** Added critical validation protocol for bot-created PRs (Copilot, Dependabot)
+  - Auto-created PRs with pattern `copilot/sub-pr-*` require validation against tech stack
+  - Reject if: redundant (duplicate of merged PR), irrelevant (suggests tech not used), out-of-scope (e.g., Rust when PHP/TS/JS only)
+  - Example: Rejected Copilot PRs #155 (.github) and #45 (api) - redundant lockfile excludes + invalid JS/TS suggestions for PHP repo
+- **Workflow:** Check branch name → validate tech stack → close with explanation if invalid → full review checklist if valid
+- Context: Copilot auto-created PRs after review comments mentioned Cargo.lock (future-proofing suggestion) despite SecPal using no Rust
+
 ## 2025-10-28 - GitHub App Authentication Migration
 
 **Project Board Automation migrated to GitHub App:**
