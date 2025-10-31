@@ -11,7 +11,7 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ## 2025-10-31 - Copilot Review Protocol Enhancement
 
-**copilot-instructions.md - Added bot PR validation + GraphQL review resolution:**
+**`copilot-instructions.md` - Added bot PR validation + GraphQL review resolution:**
 
 - **GraphQL Review Resolution:** Clarified review threads MUST be resolved via GraphQL mutation (`resolveReviewThread`), NEVER via regular PR comments
 - **Bot PR Validation (Lesson #11):** Added critical validation protocol for bot-created PRs (Copilot, Dependabot)

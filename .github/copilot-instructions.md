@@ -151,7 +151,7 @@ When changes span multiple repositories:
 
 5. **Repeat 1-4** until step 1 returns empty array
 
-**LEARNED LESSON:** Bot-created PRs (e.g., copilot/sub-pr-\*) = noise. Close immediately if redundant/irrelevant to current project scope (e.g., Rust lockfiles when no Rust used). Copilot may auto-create PRs from review suggestions - validate necessity before accepting.
+**See Lesson #11 below for bot PR validation protocol.**
 
 ### Pre-Push Hook Override (Large PRs Only):
 
@@ -910,6 +910,8 @@ git status  # MUST output: "nothing to commit, working tree clean"
 ### 11. Bot PR Validation (CRITICAL)
 
 **WHAT:** GitHub bots (Copilot, Dependabot) may auto-create PRs. MUST validate before merge.
+
+**VALIDATION SCOPE:** MUST validate against tech stack and existing fixes. Bot PRs must be checked to ensure they are relevant to the project's technology stack and do not duplicate fixes already present in main or merged PRs.
 
 **WHY:** Bot PRs may be redundant (duplicate fix already merged), irrelevant (suggest tech not used in project), or conflict with project scope.
 
