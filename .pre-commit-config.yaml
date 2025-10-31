@@ -19,6 +19,7 @@ repos:
     hooks:
       - id: prettier
         types_or: [markdown, yaml, json]
+        exclude: 'package-lock\.json|composer\.lock|yarn\.lock|pnpm-lock\.yaml'
 
   # Markdown linting
   - repo: https://github.com/DavidAnson/markdownlint-cli2
