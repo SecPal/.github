@@ -198,18 +198,37 @@ else
       echo "Preflight OK · Changed lines: 0 (after exclusions)"
       exit 0
     else
-      # Use --numstat for locale-independent parsing (sum insertions + deletions)
-      CHANGED=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1; del+=$2} END {print ins+del+0}')
-      [ -z "$CHANGED" ] && CHANGED=0
+      # Use --numstat for locale-independent parsing
+      INSERTIONS=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1} END {print ins+0}')
+      DELETIONS=$(echo "$DIFF_OUTPUT" | awk '{del+=$2} END {print del+0}')
+      CHANGED=$((INSERTIONS + DELETIONS))
 
       if [ "$CHANGED" -gt 600 ]; then
         # Check for override file (similar to GitHub label for exceptional cases)
         if [ -f "$ROOT_DIR/.preflight-allow-large-pr" ]; then
           echo "⚠️  Large PR override active ($CHANGED > 600 lines). Remove .preflight-allow-large-pr when done." >&2
         else
-          echo "PR too large ($CHANGED > 600 lines). Please split into smaller slices." >&2
-          echo "Tip: Lock files and license files are already excluded. See .preflight-exclude for details." >&2
-          echo "For exceptional cases, create .preflight-allow-large-pr to override this check." >&2
+          echo "" >&2
+          echo "═══════════════════════════════════════════════════════════════" >&2
+          echo "❌ PRE-PUSH CHECK FAILED: PR TOO LARGE" >&2
+          echo "═══════════════════════════════════════════════════════════════" >&2
+          echo "" >&2
+          echo "Your changes: $CHANGED lines ($INSERTIONS insertions, $DELETIONS deletions)" >&2
+          echo "Maximum allowed: 600 lines per PR" >&2
+          echo "" >&2
+          echo "Action required: Split changes into smaller, focused PRs" >&2
+          echo "" >&2
+          echo "💡 Available options:" >&2
+          echo "  1. Split PR: Recommended approach" >&2
+          echo "  2. Override check: touch .preflight-allow-large-pr" >&2
+          echo "" >&2
+          echo "Note: Lock files and license files are already excluded" >&2
+          echo "      See .preflight-exclude for custom exclusion patterns" >&2
+          echo "" >&2
+          echo "═══════════════════════════════════════════════════════════════" >&2
+          echo "Push aborted. Fix the issue above and try again." >&2
+          echo "═══════════════════════════════════════════════════════════════" >&2
+          echo "" >&2
           exit 2
         fi
       else
