@@ -145,6 +145,25 @@ test_critical_rules() {
     fi
 }
 
+# Test 9: Check for org-wide instructions reminder (repo-specific only)
+test_org_reminder() {
+    local repo_type="${1:-org}"
+
+    if [ "$repo_type" != "org" ]; then
+        if [ -f ".github/copilot-instructions.md" ]; then
+            if grep -q "🚨 AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md; then
+                print_result "repo-specific instructions have org-wide reminder" "PASS"
+            else
+                print_result "repo-specific instructions have org-wide reminder" "FAIL" "Missing reminder block - see templates/copilot-instructions-reminder.md"
+            fi
+        else
+            print_result "repo-specific instructions have org-wide reminder" "FAIL" "Instructions file not found"
+        fi
+    else
+        print_result "repo-specific instructions have org-wide reminder" "PASS" "Skipped (org-level instructions)"
+    fi
+}
+
 # Main execution
 main() {
     echo "========================================="
@@ -194,6 +213,7 @@ main() {
     test_yaml_syntax
     test_extends_reference "$repo_type"
     test_critical_rules
+    test_org_reminder "$repo_type"
 
     # Summary
     echo ""
