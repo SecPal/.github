@@ -176,12 +176,6 @@ git push  # No --no-verify needed
 rm .preflight-allow-large-pr  # CRITICAL: Remove immediately
 ```
 
-### Branch Merge Protocol
-
-**Required post-merge actions:**
-
-````
-
 ### Markdownlint Config Adjustment
 
 **If 40+ MD040/MD036/MD026 errors in docs:**
@@ -190,13 +184,13 @@ rm .preflight-allow-large-pr  # CRITICAL: Remove immediately
 
    ```json
    { "MD040": false, "MD036": false, "MD026": false }
-````
+   ```
 
-1. Run `npx prettier --write "docs/**/*.md"` FIRST
+2. Run `npx prettier --write "docs/**/*.md"` FIRST
 
-2. Commit linting fixes separately from content changes
+3. Commit linting fixes separately from content changes
 
-### Branch Merge Protocol:
+### Branch Merge Protocol
 
 **If PR shows "not up to date with base":**
 
