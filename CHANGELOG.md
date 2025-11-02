@@ -9,6 +9,17 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-02 - Allow Tailwind Plus License in Compatibility Check
+
+**`reusable-license-compatibility.yml` - Added LicenseRef-TailwindPlus:**
+
+- Added `LicenseRef-TailwindPlus` to list of AGPL-3.0-compatible licenses
+- Catalyst UI Kit (Tailwind Plus) explicitly permits use in open source End Products
+- License reference: <https://tailwindcss.com/plus/license>
+- Components remain under Tailwind Plus License but usage in AGPL projects is allowed per license terms
+
+---
+
 ## 2025-10-31 - Copilot Review Protocol Enhancement
 
 **`copilot-instructions.md` - Added bot PR validation + GraphQL review resolution:**
