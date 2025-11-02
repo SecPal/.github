@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: 📦 Sub-Issue (Part of Epic)
+description: Individual task/PR within a larger epic
+title: "PR-X: "
+labels: ["type/sub-issue"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Sub-Issue Template
+
+        Use this template for individual tasks within an epic.
+
+        **What is a Sub-Issue?**
+        - One task within a larger epic
+        - Typically results in one PR (~400-600 LOC)
+        - Focused on a single logical unit of work
+
+        **Workflow:**
+        1. This sub-issue should be linked in the parent epic's tasklist
+        2. Your PR should close THIS sub-issue: `Fixes #<this-sub-issue-number>`
+        3. Your PR should reference the epic: `Part of: #<epic-number>`
+        4. Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
+
+        📚 Full documentation: See `docs/EPIC_WORKFLOW.md` in the api repository
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: 📌 Parent Epic
+      description: Issue number of the parent epic
+      placeholder: "#50"
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 🎯 Goal
+      description: Specific goal for THIS sub-issue/PR (keep focused and small ~400-600 LOC)
+      placeholder: |
+        Implement database migrations for tenant_keys and person tables...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation_tasks
+    attributes:
+      label: 📋 Implementation Tasks
+      description: Checklist of tasks to complete for this sub-issue
+      value: |
+        - [ ] Task 1
+        - [ ] Task 2
+        - [ ] Task 3
+        - [ ] Tests written
+        - [ ] Documentation updated
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: ✅ Acceptance Criteria
+      description: What must be true for this specific sub-issue to be considered complete?
+      value: |
+        - [ ] All tests passing
+        - [ ] Code follows project style guidelines (Pint, PHPStan, etc.)
+        - [ ] Test coverage maintained or improved
+        - [ ] No breaking changes (or documented if necessary)
+        - [ ] LOC count ≤ 600 (excluding tests, or marked with `large-pr-approved` label)
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 🔗 Dependencies
+      description: Does this depend on or block other sub-issues?
+      placeholder: |
+        - Depends on: #52 (migrations must exist first)
+        - Blocks: #55, #60 (middleware needs these keys)
+    validations:
+      required: false
+
+  - type: textarea
+    id: technical_notes
+    attributes:
+      label: 📝 Technical Notes
+      description: Implementation details, design decisions, security considerations
+      placeholder: |
+        - Use libsodium XChaCha20-Poly1305 for encryption
+        - Store blind indexes as BYTEA in PostgreSQL
+    validations:
+      required: false
+
+  - type: textarea
+    id: testing_strategy
+    attributes:
+      label: 🧪 Testing Strategy
+      description: How will this be tested?
+      placeholder: |
+        - Unit tests for encryption/decryption functions
+        - Integration tests for database operations
+        - Feature tests for API endpoints
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        ## 📝 PR Linking Instructions
+
+        When creating the PR for this sub-issue, use this in your PR description:
+
+        ```markdown
+        Fixes #<this-sub-issue-number>
+        Part of: #<epic-number>
+        ```
+
+        **⚠️ Important:**
+        - Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
+        - The epic should only close when ALL sub-issues are complete
+        - If you're unsure, ask in the epic discussion thread

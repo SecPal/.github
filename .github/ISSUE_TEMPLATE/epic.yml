@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: 🗺️ Epic (Multi-PR Feature)
+description: Large feature that requires multiple PRs with sub-issues for tracking
+title: "[EPIC] "
+labels: ["type/epic"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Epic Issue Template
+
+        Use this template for large features that require multiple PRs (3+).
+
+        **What is an Epic?**
+        - Large feature requiring multiple PRs
+        - Multi-phase implementation (setup → core → integration → docs)
+        - Work spanning multiple areas (DB, API, auth, etc.)
+
+        **Workflow:**
+        1. Create this epic first
+        2. Create individual sub-issues for each PR (use "Sub-Issue" template)
+        3. Link sub-issues in the tasklist below
+        4. Each PR closes its sub-issue: `Fixes #<sub-issue-number>`
+        5. Only the LAST PR closes this epic: `Closes #<epic-number>`
+
+        📚 Full documentation: See `docs/EPIC_WORKFLOW.md` in the api repository
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 🎯 Goal
+      description: High-level description of what this epic aims to achieve
+      placeholder: |
+        Implement multi-tenant security with envelope encryption...
+    validations:
+      required: true
+
+  - type: textarea
+    id: sub_issues
+    attributes:
+      label: 📋 Sub-Issues & Work Plan
+      description: |
+        Create sub-issues and link them here. GitHub will automatically track progress.
+        Use the "Sub-Issue (Part of Epic)" template to create individual tasks.
+      value: |
+        ### Implementation Tasks
+
+        - [ ] #<!-- issue number --> PR-0: Setup & Prerequisites
+        - [ ] #<!-- issue number --> PR-1: Core Implementation Part 1
+        - [ ] #<!-- issue number --> PR-2: Core Implementation Part 2
+        - [ ] #<!-- issue number --> PR-3: Integration & Testing
+        - [ ] #<!-- issue number --> PR-4: Documentation & Hardening
+
+        <!-- Add or remove items as needed. Keep PRs small (~400-600 LOC where feasible) -->
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical_approach
+    attributes:
+      label: 🎨 Technical Approach
+      description: High-level technical decisions, architecture, patterns to use
+      placeholder: |
+        - Use libsodium for encryption
+        - PostgreSQL for database
+        - TDD approach with PEST
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: ✅ Acceptance Criteria
+      description: What must be true for this epic to be considered complete?
+      value: |
+        - [ ] All sub-issues are closed
+        - [ ] All PRs merged to main
+        - [ ] CI/CD passing on all PRs
+        - [ ] Documentation complete
+        - [ ] Test coverage ≥80% (or project standard)
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: 🚫 Non-Goals
+      description: What is explicitly out of scope for this epic?
+      placeholder: |
+        - User interface implementation (separate epic)
+        - External API integrations (future work)
+    validations:
+      required: false
+
+  - type: textarea
+    id: related_resources
+    attributes:
+      label: 🔗 Related Resources
+      description: Links to design docs, RFCs, related epics, external resources
+      placeholder: |
+        - Design doc: https://...
+        - Related epic: #123
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+
+        ## 📝 Next Steps After Creating This Issue
+
+        1. **Create Sub-Issues**: Use the "Sub-Issue (Part of Epic)" template for each planned PR
+        2. **Update This Epic**: Edit the "Sub-Issues & Work Plan" section with actual issue numbers
+        3. **Start Work**: Begin with the first sub-issue
+        4. **PR Linking**: Each PR should reference its sub-issue (`Fixes #<sub-issue>`), not this epic
+        5. **Close Epic**: Only the LAST PR should close this epic (`Closes #<epic-number>`)
+
+        **Example:** See Issue #50 in the api repository for a real-world example.
