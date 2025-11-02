@@ -190,6 +190,59 @@ validation:
     exec: "ddev exec <command>"
     ssh: "ddev ssh"
     logs: "ddev logs"
+    mailpit: "http://localhost:8026 (DDEV Mailpit UI)"
+
+# Mail System (Laravel + Mailpit)
+mail:
+  development:
+    service: Mailpit
+    access: "http://localhost:8026"
+    note: "Integrated with DDEV, no configuration needed"
+
+  configuration:
+    mailer: smtp
+    host: localhost
+    port: 1025
+    from_address: "noreply@secpal.app"
+    queue: database
+
+  patterns:
+    mailable_location: "app/Mail/**/*Mail.php"
+    template_location: "resources/views/emails/*.blade.php"
+    queue_dispatch: "Mail::to($user)->queue(new SomeMail())"
+    testing: "Mail::fake() + Mail::assertQueued()"
+
+  security:
+    rules:
+      - "NEVER include sensitive tokens in email subject"
+      - "ALWAYS queue emails (never send immediately)"
+      - "Use URL encoding for query parameters"
+      - "Include expiry warnings for time-sensitive links"
+      - "No PII in logs (token, email, phone)"
+
+  example_mailable: |
+    class PasswordResetMail extends Mailable {
+        use Queueable, SerializesModels;
+
+        public function __construct(
+            public User $user,
+            public string $token
+        ) {}
+
+        public function content(): Content {
+            return new Content(
+                markdown: 'emails.password-reset',
+                with: ['user' => $this->user, 'resetUrl' => $this->buildUrl()]
+            );
+        }
+    }
+
+  testing_pattern: |
+    Mail::fake();
+    // Trigger action that sends email
+    Mail::assertQueued(PasswordResetMail::class, function ($mail) use ($user) {
+        return $mail->hasTo($user->email);
+    });
 
 # Data Protection (GDPR/DSGVO)
 data_protection:

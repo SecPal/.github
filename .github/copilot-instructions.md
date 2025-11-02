@@ -113,6 +113,65 @@ If bypass REQUIRED (production down):
 - PostgreSQL 16 (via DDEV)
 - Migrations: Laravel migrations, MUST be reversible (up/down)
 
+### Mail System
+
+- **Service:** Mailpit (DDEV integrated, no config needed)
+- **Access:** http://localhost:8026 (local development UI)
+- **Pattern:** Queue-based email dispatch (NEVER send immediately)
+- **Testing:** `Mail::fake()` + `Mail::assertQueued()`
+- **Security:**
+  - No sensitive tokens in email subjects
+  - Always use URL encoding for query parameters
+  - Include expiry warnings for time-sensitive links
+  - Never log PII (tokens, emails, phones)
+
+**Example Mailable:**
+
+```php
+use Illuminate\Mail\Mailable;
+use Illuminate\Queue\SerializesModels;
+
+class PasswordResetMail extends Mailable
+{
+    use Queueable, SerializesModels;
+
+    public function __construct(
+        public User $user,
+        public string $token
+    ) {}
+
+    public function content(): Content
+    {
+        return new Content(
+            markdown: 'emails.password-reset',
+            with: [
+                'user' => $this->user,
+                'resetUrl' => $this->buildResetUrl(),
+            ]
+        );
+    }
+}
+
+// Usage in controller:
+Mail::to($user)->queue(new PasswordResetMail($user, $token));
+```
+
+**Testing Pattern:**
+
+```php
+Mail::fake();
+
+// Trigger action that sends email
+$this->postJson('/api/auth/password/reset-request', [
+    'email' => 'test@example.com'
+]);
+
+// Assert email was queued (async)
+Mail::assertQueued(PasswordResetMail::class, function ($mail) use ($user) {
+    return $mail->hasTo($user->email);
+});
+```
+
 ### Data Protection (GDPR/DSGVO)
 
 **CRITICAL: All personal data MUST be encrypted at rest.**
@@ -573,6 +632,7 @@ See [Post-Merge Cleanup (EXECUTE IMMEDIATELY)](#post-merge-cleanup-execute-immed
 ## Quality Gates (Execute in Order)
 
 1. [ ] **TDD Compliance**
+
    - Tests written FIRST (failing)
    - Implementation added
    - Tests now pass
@@ -580,27 +640,32 @@ See [Post-Merge Cleanup (EXECUTE IMMEDIATELY)](#post-merge-cleanup-execute-immed
    - Coverage 100% for critical paths (see Critical Rule #1)
 
 2. [ ] **DRY Principle**
+
    - No duplicated logic
    - Common code extracted to helpers/utils
    - Configuration in config files (not hardcoded)
 
 3. [ ] **Quality Over Speed**
+
    - Code reviewed by myself (see 4-pass review below)
    - All edge cases considered
    - Error handling complete
    - No shortcuts taken
 
 4. [ ] **CHANGELOG Updated**
+
    - Entry added to [Unreleased] section
    - Category correct (Added/Changed/Fixed/etc.)
    - Migration guide if breaking change
 
 5. [ ] **Documentation Complete**
+
    - Public APIs have JSDoc/PHPDoc/TSDoc
    - Complex functions have examples
    - README updated if needed
 
 6. [ ] **Preflight Script**
+
    - `./scripts/preflight.sh` executed
    - Exit code 0 (all checks pass)
    - If fails: FIX, don't bypass
