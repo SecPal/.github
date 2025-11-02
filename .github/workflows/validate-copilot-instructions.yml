@@ -25,6 +25,8 @@ jobs:
   validate:
     name: Validate Copilot Instructions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -44,12 +46,13 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
 
       - name: Run validation script
+        id: validation
         run: ./scripts/validate-copilot-instructions.sh
 
       - name: Summary
         if: always()
         run: |
-          if [ $? -eq 0 ]; then
+          if [ "${{ steps.validation.outcome }}" = "success" ]; then
             echo "✅ All Copilot instructions validation tests passed"
           else
             echo "❌ Some Copilot instructions validation tests failed"

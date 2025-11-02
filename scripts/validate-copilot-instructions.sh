@@ -135,7 +135,7 @@ test_extends_reference() {
 # Test 8: Check critical rules section exists
 test_critical_rules() {
     if [ -f ".github/copilot-instructions.md" ]; then
-        if grep -qi "critical.*rule\|core.*principle" .github/copilot-instructions.md; then
+        if grep -qiE "critical[[:space:]]*rules|core[[:space:]]*principles" .github/copilot-instructions.md; then
             print_result "instructions contain critical rules" "PASS"
         else
             print_result "instructions contain critical rules" "FAIL" "No critical rules/principles found"
