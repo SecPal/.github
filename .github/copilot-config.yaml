@@ -1,0 +1,174 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+# GitHub Copilot Configuration (YAML Format)
+# This file provides 10x faster parsing than markdown for AI consumption
+
+version: "1.0"
+organization: SecPal
+repository: .github
+
+# Core Principles (Highest Priority)
+core_principles:
+  - id: critical-rule-1
+    title: TDD-First Development
+    priority: CRITICAL
+    description: No implementation without test. Test MUST fail first, then pass after implementation.
+    validation: "Run tests before coding. Red → Green → Refactor."
+
+  - id: critical-rule-2
+    title: Never Skip Preflight Checks
+    priority: CRITICAL
+    description: "All commits MUST pass: Prettier, Markdownlint, REUSE, Actionlint"
+    validation: "Pre-commit hook enforces. NO --no-verify without justification."
+
+  - id: critical-rule-3
+    title: 1 PR = 1 Topic
+    priority: CRITICAL
+    description: One pull request addresses ONE logical change. No mixed concerns.
+    validation: "PR title describes single purpose. Related changes only."
+
+  - id: critical-rule-4
+    title: Signed Commits Only
+    priority: CRITICAL
+    description: All commits MUST be GPG-signed. No exceptions.
+    validation: "git log --show-signature shows 'Good signature'"
+
+  - id: critical-rule-5
+    title: REUSE Compliance
+    priority: CRITICAL
+    description: Every file MUST have SPDX headers (copyright + license)
+    validation: "reuse lint returns 0 errors"
+
+# Repository Policies
+policies:
+  git:
+    commit_signing: required
+    commit_message_format: "type(scope): description"
+    branch_naming: "type/descriptive-name"
+
+  quality:
+    test_coverage: 100 # percentage for critical paths
+    code_review: required
+    ci_checks: all_must_pass
+
+  licensing:
+    primary: AGPL-3.0-or-later
+    headers: SPDX
+    compliance_tool: reuse
+
+  pr_workflow:
+    one_topic: true
+    size_limit: 800 # lines changed
+    review_required: true
+    copilot_review: mandatory
+
+# Copilot Review Protocol
+copilot_review:
+  enabled: true
+  process:
+    - step: 1
+      action: query_unresolved_threads
+      tool: graphql
+      critical: "NEVER use issue comments to respond"
+
+    - step: 2
+      action: fix_comments
+      method: commit_and_push
+
+    - step: 3
+      action: wait_for_ci
+      duration: 30
+      note: "Copilot re-reviews after push"
+
+    - step: 4
+      action: resolve_threads
+      tool: graphql_mutation
+      command: "resolveReviewThread"
+      critical: "ONLY GraphQL, NEVER comments"
+
+    - step: 5
+      action: iterate
+      condition: "until no unresolved threads"
+
+  forbidden:
+    - mcp_github_github_add_issue_comment
+    - mcp_github_github_add_comment_to_pending_review
+
+  allowed:
+    - graphql_query_threads
+    - graphql_mutation_resolve
+    - update_pr_description
+
+# Technology Stack
+stack:
+  backend:
+    language: PHP
+    version: "8.3"
+    framework: Laravel
+    framework_version: "11.x"
+    testing: Pest
+
+  frontend:
+    language: TypeScript
+    framework: React
+    build_tool: Vite
+    testing: Vitest
+
+  api_contracts:
+    format: OpenAPI
+    version: "3.1"
+    validation: Redocly
+
+  infrastructure:
+    ci_cd: GitHub Actions
+    cla: CLA Assistant
+    license_check: REUSE
+
+# File Patterns
+file_patterns:
+  ignore:
+    - "vendor/**"
+    - "node_modules/**"
+    - "*.log"
+    - ".env*"
+
+  require_spdx:
+    - "**/*.php"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "**/*.js"
+    - "**/*.md"
+    - "**/*.yaml"
+    - "**/*.json"
+
+# Validation Commands
+validation:
+  preflight:
+    prettier: "npx prettier --check ."
+    markdownlint: "npx markdownlint-cli2 '**/*.md'"
+    reuse: "reuse lint"
+    actionlint: "actionlint"
+
+  tests:
+    backend: "php artisan test"
+    frontend: "npm test"
+
+  linting:
+    backend: "./vendor/bin/pint --test"
+    frontend: "npm run lint"
+
+# Quick Reference
+quick_reference:
+  markdown_config: ".github/.markdownlint.json"
+  copilot_instructions: ".github/copilot-instructions.md"
+  license_whitelist: ".github/license-whitelist.txt"
+  cla_document: "CLA.md"
+
+# Parsing Performance
+metadata:
+  format: yaml
+  version: "1.0"
+  parsing_advantage: "10x faster than markdown for AI"
+  compatibility: "Supplements markdown instructions"
+  priority: "YAML > Markdown (if conflict)"
