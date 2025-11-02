@@ -135,7 +135,7 @@ test_extends_reference() {
 # Test 8: Check critical rules section exists
 test_critical_rules() {
     if [ -f ".github/copilot-instructions.md" ]; then
-        if grep -qiE "critical[[:space:]]*rules|core[[:space:]]*principles" .github/copilot-instructions.md; then
+        if grep -qiE "critical[[:space:]]+rules|core[[:space:]]+principles" .github/copilot-instructions.md; then
             print_result "instructions contain critical rules" "PASS"
         else
             print_result "instructions contain critical rules" "FAIL" "No critical rules/principles found"
@@ -152,14 +152,34 @@ main() {
     echo "========================================="
     echo ""
 
-    # Detect repository type
+    # Detect repository type (robust detection)
     local repo_type="org"
+    local has_laravel=0
+    local has_vite=0
+    local has_openapi=0
+
+    # Check for Laravel-specific files
     if [ -f "artisan" ] || [ -f "composer.json" ]; then
+        has_laravel=1
+    fi
+
+    # Check package.json dependencies if it exists
+    if [ -f "package.json" ]; then
+        if grep -q "vite" package.json 2>/dev/null; then
+            has_vite=1
+        fi
+        if grep -q "openapi" package.json 2>/dev/null; then
+            has_openapi=1
+        fi
+    fi
+
+    # Determine repo type (Laravel takes precedence)
+    if [ "$has_laravel" -eq 1 ]; then
         repo_type="api"
-    elif [ -f "package.json" ] && grep -q "vite" package.json 2>/dev/null; then
-        repo_type="frontend"
-    elif [ -f "package.json" ] && grep -q "openapi" package.json 2>/dev/null; then
+    elif [ "$has_openapi" -eq 1 ] && [ "$has_laravel" -eq 0 ]; then
         repo_type="contracts"
+    elif [ "$has_vite" -eq 1 ] && [ "$has_laravel" -eq 0 ]; then
+        repo_type="frontend"
     fi
 
     echo "Repository Type: $repo_type"

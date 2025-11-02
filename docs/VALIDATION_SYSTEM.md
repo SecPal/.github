@@ -149,7 +149,7 @@ The Validation System ensures that Copilot instructions and configuration files 
 
 **Purpose:** Ensure core principles documented
 
-**Search Pattern:** `critical[[:space:]]*rules|core[[:space:]]*principles` (matches variants, not just exact phrases)
+**Search Pattern:** `critical[[:space:]]+rules|core[[:space:]]+principles` (requires at least one space between words)
 
 **Failure Impact:** HIGH - Missing essential content
 
