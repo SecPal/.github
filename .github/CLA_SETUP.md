@@ -59,7 +59,8 @@ All signatures are stored in the CLA Assistant database (hosted by SAP). You can
 
 ## Alternative: Per-Repository Configuration
 
-If organization-level linking is not desired, you can configure CLA Assistant for individual repositories by selecting specific repositories instead of linking the entire organization. However, this requires manual configuration for each new repository.
+If organization-level linking is not desired, you can configure CLA Assistant for individual repositories by selecting specific repositories instead of linking the entire organization.
+However, this requires manual configuration for each new repository.
 
 ## Active Repositories
 

@@ -129,7 +129,7 @@ When changes span multiple repositories:
 
 **CRITICAL: Copilot review = iterative process. Multiple rounds expected after each push.**
 
-### Review Execution Sequence:
+### Review Execution Sequence
 
 1. **Query unresolved threads (GraphQL):**
 
@@ -159,7 +159,7 @@ When changes span multiple repositories:
 
 **See Lesson #11 below for bot PR validation protocol.**
 
-### Pre-Push Hook Override (Large PRs Only):
+### Pre-Push Hook Override (Large PRs Only)
 
 - **Create `.preflight-allow-large-pr` LOCALLY** (gitignored, never commit)
 - **Allows normal push** without `--no-verify` for large comprehensive PRs
@@ -176,7 +176,13 @@ git push  # No --no-verify needed
 rm .preflight-allow-large-pr  # CRITICAL: Remove immediately
 ```
 
-### Markdownlint Config Adjustment:
+### Branch Merge Protocol
+
+**Required post-merge actions:**
+
+````
+
+### Markdownlint Config Adjustment
 
 **If 40+ MD040/MD036/MD026 errors in docs:**
 
@@ -184,11 +190,11 @@ rm .preflight-allow-large-pr  # CRITICAL: Remove immediately
 
    ```json
    { "MD040": false, "MD036": false, "MD026": false }
-   ```
+````
 
-2. Run `npx prettier --write "docs/**/*.md"` FIRST
+1. Run `npx prettier --write "docs/**/*.md"` FIRST
 
-3. Commit linting fixes separately from content changes
+2. Commit linting fixes separately from content changes
 
 ### Branch Merge Protocol:
 
