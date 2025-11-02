@@ -182,6 +182,54 @@ git push --no-verify
 - Trailing whitespace
 - Line ending normalization
 
+### 🤖 Copilot Instructions & Templates
+
+SecPal uses a **two-tier Copilot instructions system**:
+
+1. **Organization-wide rules** (`.github/copilot-instructions.md` in this repo)
+2. **Repository-specific rules** (`.github/copilot-instructions.md` in each repo)
+
+**All repository-specific instruction files MUST include a reminder** to read the org-wide instructions first.
+
+#### Using the Template
+
+When setting up Copilot instructions in a new repository:
+
+1. **Copy the reminder block** from `templates/copilot-instructions-reminder.md`
+2. **Place it at the top** of `.github/copilot-instructions.md` (after SPDX headers)
+3. **Add repo-specific rules** below the reminder
+4. **Create a PR** with title pattern: `docs: add org-wide instructions reminder`
+
+**Template Location:** [`templates/copilot-instructions-reminder.md`](templates/copilot-instructions-reminder.md)
+
+**Example Implementations:**
+
+- [SecPal/api #76](https://github.com/SecPal/api/pull/76) ✅ Merged
+- [SecPal/frontend #54](https://github.com/SecPal/frontend/pull/54) ✅ Merged
+- [SecPal/contracts #38](https://github.com/SecPal/contracts/pull/38) ✅ Merged
+
+#### Validation
+
+The reminder is **required** in all repositories. CI validates its presence:
+
+```bash
+# Check for reminder marker
+grep -q "🚨 AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md
+```
+
+See: [`.github/workflows/validate-copilot-instructions.yml`](.github/workflows/validate-copilot-instructions.yml)
+
+#### Why This Matters
+
+**Without the reminder:** AI assistants might read repo-specific rules without seeing critical org-wide policies, leading to:
+
+- Quality gate bypasses
+- Missing Copilot PR reviews
+- TDD policy violations
+- Security requirement oversights
+
+**With the reminder:** AI **always** reads organization-wide rules (Copilot Review Protocol, Quality Gates, TDD Policy, Security) before processing repo-specific instructions.
+
 ## Build & Test Commands
 
 Quick reference commands for local development across SecPal projects.
