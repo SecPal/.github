@@ -151,10 +151,11 @@ test_org_reminder() {
 
     if [ "$repo_type" != "org" ]; then
         if [ -f ".github/copilot-instructions.md" ]; then
-            if grep -q "🚨 AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md; then
+            # Use text-only pattern for portability (omit emoji for encoding safety)
+            if grep -q "AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md; then
                 print_result "repo-specific instructions have org-wide reminder" "PASS"
             else
-                print_result "repo-specific instructions have org-wide reminder" "FAIL" "Missing reminder block - see templates/copilot-instructions-reminder.md"
+                print_result "repo-specific instructions have org-wide reminder" "FAIL" "Missing reminder block for org-wide instructions"
             fi
         else
             print_result "repo-specific instructions have org-wide reminder" "FAIL" "Instructions file not found"
