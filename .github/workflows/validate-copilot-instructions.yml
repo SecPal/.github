@@ -1,0 +1,60 @@
+name: Validate Copilot Instructions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/copilot-instructions.md"
+      - ".github/copilot-instructions.md.license"
+      - ".github/copilot-config.yaml"
+      - ".github/copilot-config.yaml.license"
+      - ".github/workflows/validate-copilot-instructions.yml"
+      - "scripts/validate-copilot-instructions.sh"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/copilot-instructions.md"
+      - ".github/copilot-instructions.md.license"
+      - ".github/copilot-config.yaml"
+      - ".github/copilot-config.yaml.license"
+      - ".github/workflows/validate-copilot-instructions.yml"
+      - "scripts/validate-copilot-instructions.sh"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Copilot Instructions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install markdownlint-cli2
+        run: npm install -g markdownlint-cli2
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Run validation script
+        id: validation
+        run: ./scripts/validate-copilot-instructions.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.validation.outcome }}" = "success" ]; then
+            echo "✅ All Copilot instructions validation tests passed"
+          else
+            echo "❌ Some Copilot instructions validation tests failed"
+            exit 1
+          fi
