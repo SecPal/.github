@@ -149,7 +149,7 @@ reuse lint .github/copilot-config.yaml
 
 # Markdown Compatible
 grep -c "copilot-config.yaml" .github/copilot-instructions.md
-# Output: 0 references (TODO: Add references to instructions)
+# Output: 2 references
 ```
 
 ## Conclusion
