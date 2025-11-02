@@ -190,6 +190,7 @@ validation:
     exec: "ddev exec <command>"
     ssh: "ddev ssh"
     logs: "ddev logs"
+    mailpit: "http://localhost:8026 (DDEV Mailpit UI)"
 
 # Data Protection (GDPR/DSGVO)
 data_protection:
@@ -204,21 +205,19 @@ data_protection:
       - phone_idx # Searchable phone index (hashed)
 
     transient_properties:
-      - email_plain # Write-only plaintext email (auto-encrypts to email_enc)
-      - phone_plain # Write-only plaintext phone (auto-encrypts to phone_enc)
+      - email_plain # Write-only plaintext email (auto-encrypts)
+      - phone_plain # Write-only plaintext phone (auto-encrypts)
 
-    pattern: |
-      ALWAYS use transient properties in tests/factories:
-      Person::factory()->create(['email_plain' => 'test@example.com'])
-
-      NEVER directly access encrypted fields:
-      ❌ $person->email_enc (returns encrypted blob)
-      ✅ Use blind index for queries: where('email_idx', \hash('sha256', strtolower($email)))
+    rules:
+      - "ALWAYS use transient properties (_plain) in tests/factories"
+      - "NEVER directly access encrypted fields (_enc)"
+      - "Use blind indexes (_idx) for queries with hash('sha256', strtolower($value))"
+      - "Observer auto-generates indexes on save"
 
     implementation:
       cast: "App\\Casts\\EncryptedWithDek"
-      observer: "App\\Observers\\PersonObserver (auto-generates blind indexes)"
-      documentation: "See DEVELOPMENT.md for encryption architecture"
+      observer: "App\\Observers\\PersonObserver"
+      documentation: "api/DEVELOPMENT.md"
 
 # Quick Reference
 quick_reference:
