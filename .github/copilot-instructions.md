@@ -113,125 +113,26 @@ If bypass REQUIRED (production down):
 - PostgreSQL 16 (via DDEV)
 - Migrations: Laravel migrations, MUST be reversible (up/down)
 
-### Mail System
-
-- **Service:** Mailpit (DDEV integrated, no config needed)
-- **Access:** <http://localhost:8026> (local development UI)
-- **Pattern:** Queue-based email dispatch (NEVER send immediately)
-- **Testing:** `Mail::fake()` + `Mail::assertQueued()`
-- **Security:**
-  - No sensitive tokens in email subjects
-  - Always use URL encoding for query parameters
-  - Include expiry warnings for time-sensitive links
-  - Never log PII (tokens, emails, phones)
-
-**Example Mailable:**
-
-```php
-use Illuminate\Mail\Mailable;
-use Illuminate\Queue\SerializesModels;
-
-class PasswordResetMail extends Mailable
-{
-    use Queueable, SerializesModels;
-
-    public function __construct(
-        public User $user,
-        public string $token
-    ) {}
-
-    public function content(): Content
-    {
-        return new Content(
-            markdown: 'emails.password-reset',
-            with: [
-                'user' => $this->user,
-                'resetUrl' => $this->buildResetUrl(),
-            ]
-        );
-    }
-}
-
-// Usage in controller:
-Mail::to($user)->queue(new PasswordResetMail($user, $token));
-```
-
-**Testing Pattern:**
-
-```php
-Mail::fake();
-
-// Trigger action that sends email
-$this->postJson('/api/auth/password/reset-request', [
-    'email' => 'test@example.com'
-]);
-
-// Assert email was queued (async)
-Mail::assertQueued(PasswordResetMail::class, function ($mail) use ($user) {
-    return $mail->hasTo($user->email);
-});
-```
-
 ### Data Protection (GDPR/DSGVO)
 
 **CRITICAL: All personal data MUST be encrypted at rest.**
 
-#### Encryption Pattern
+#### Field Naming Convention
 
-**Encrypted Fields** (suffix: `_enc`):
-
-- `email_enc` - Encrypted email storage
-- `phone_enc` - Encrypted phone storage
-- `note_enc` - Encrypted notes (full-text searchable via PostgreSQL tsvector, no blind index needed)
-
-**Blind Indexes** (suffix: `_idx`):
-
-- `email_idx` - Searchable email hash
-- `phone_idx` - Searchable phone hash
-- **NOTE**: `note_enc` uses PostgreSQL `note_tsv` (tsvector) for full-text search, not blind index
-
-**Transient Properties** (suffix: `_plain`):
-
-- `email_plain` - Write-only plaintext (auto-encrypts to `email_enc`, generates `email_idx`)
-- `phone_plain` - Write-only plaintext (auto-encrypts to `phone_enc`, generates `phone_idx`)
+- `*_enc` - Encrypted storage (NEVER access directly)
+- `*_idx` - Blind index for queries (hashed with sha256)
+- `*_plain` - Transient property (write-only, auto-encrypts)
 
 #### Usage Rules
 
-✅ **CORRECT - Use transient properties:**
+- ✅ **ALWAYS** use `_plain` properties in tests/factories/controllers
+- ❌ **NEVER** access `_enc` fields directly (returns encrypted blob)
+- ✅ Query using `_idx` with `hash('sha256', strtolower($value))`
+- ✅ Observer auto-generates indexes on save
 
-```php
-// Tests & Factories
-Person::factory()->create(['email_plain' => 'test@example.com']);
+**Implementation:** `App\Casts\EncryptedWithDek` + `App\Observers\PersonObserver`
 
-// Controllers
-$person->email_plain = $request->input('email');
-$person->save();
-```
-
-❌ **WRONG - Never access encrypted fields directly:**
-
-```php
-// Returns encrypted blob
-$email = $person->email_enc;
-
-// Queries won't work
-Person::where('email_enc', $email)->first();
-```
-
-✅ **CORRECT - Query using blind indexes:**
-
-```php
-// Note: Using PHP's native hash(), not Laravel's Hash facade
-$emailIdx = \hash('sha256', strtolower($email));
-$person = Person::where('email_idx', $emailIdx)->first();
-```
-
-**Implementation:**
-
-- **Cast:** `App\Casts\EncryptedWithDek`
-- **Observer:** `App\Observers\PersonObserver` (auto-generates blind indexes)
-- **Documentation:** See `DEVELOPMENT.md` for full encryption architecture
-- Seeds: Separate for dev/test/prod
+**Documentation:** See `api/DEVELOPMENT.md` for full encryption architecture and code examples
 
 ### Version Control
 
