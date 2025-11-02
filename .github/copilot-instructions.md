@@ -48,6 +48,8 @@ Remote: https://github.com/SecPal/<repository>
 
 ## Critical Rules
 
+> **Note:** Structured format available in `.github/copilot-config.yaml` (10x faster parsing).
+
 **AI MUST CHECK THESE BEFORE EVERY COMMIT/PR/MERGE:**
 
 1. **TDD Mandatory:** Write failing test FIRST, implement, refactor. Never commit untested code. Minimum 80% coverage for new code, 100% for critical paths.
@@ -79,6 +81,8 @@ If bypass REQUIRED (production down):
 4. All checks must retroactively pass
 
 ## Tech Stack
+
+> **Note:** Complete technology stack details are available in `.github/copilot-config.yaml` for faster AI parsing.
 
 ### Backend
 

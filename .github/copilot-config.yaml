@@ -20,7 +20,7 @@ core_principles:
     title: Never Skip Preflight Checks
     priority: CRITICAL
     description: "All commits MUST pass: Prettier, Markdownlint, REUSE, Actionlint"
-    validation: "Pre-commit hook enforces. NO --no-verify without justification."
+    validation: "Pre-commit hook enforces. NO --no-verify (see Critical Rule #4 for exceptions)."
 
   - id: critical-rule-3
     title: 1 PR = 1 Topic
@@ -59,7 +59,7 @@ policies:
 
   pr_workflow:
     one_topic: true
-    size_limit: 800 # lines changed
+    size_limit: 600 # lines changed (consistent with instructions)
     review_required: true
     copilot_review: mandatory
 
@@ -104,9 +104,9 @@ copilot_review:
 stack:
   backend:
     language: PHP
-    version: "8.3"
+    version: "8.4"
     framework: Laravel
-    framework_version: "11.x"
+    framework_version: "12.x"
     testing: Pest
 
   frontend:
