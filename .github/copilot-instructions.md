@@ -134,6 +134,7 @@ When changes span multiple repositories:
 1. **Query unresolved threads (GraphQL):**
 
    ```bash
+   # Replace REPO with actual repo name, N with PR number
    gh api graphql -f query='query{repository(owner:"SecPal",name:"REPO"){pullRequest(number:N){reviewThreads(first:20){nodes{id isResolved comments(first:1){nodes{path line body}}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
    ```
 
@@ -144,10 +145,15 @@ When changes span multiple repositories:
 4. **Resolve threads (GraphQL mutation):**
 
    ```bash
+   # Use thread ID from step 1 (format: PRRT_...)
    gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"THREAD_ID"}){thread{id isResolved}}}'
    ```
 
-   **NEVER resolve via PR comment** - GraphQL mutation only.
+   **🚨 CRITICAL: NEVER use `mcp_github_github_add_issue_comment` or `mcp_github_github_add_comment_to_pending_review` to respond to Copilot review comments!**
+
+   **✅ ONLY use GraphQL mutation `resolveReviewThread` above.**
+
+   **📝 Update PR description for documentation, NOT comments. Creating comments triggers unwanted bot PRs!**
 
 5. **Repeat 1-4** until step 1 returns empty array
 
