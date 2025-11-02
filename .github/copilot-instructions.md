@@ -123,17 +123,18 @@ If bypass REQUIRED (production down):
 
 - `email_enc` - Encrypted email storage
 - `phone_enc` - Encrypted phone storage
-- `note_enc` - Encrypted notes
+- `note_enc` - Encrypted notes (full-text searchable via PostgreSQL tsvector, no blind index needed)
 
 **Blind Indexes** (suffix: `_idx`):
 
 - `email_idx` - Searchable email hash
 - `phone_idx` - Searchable phone hash
+- **NOTE**: `note_enc` uses PostgreSQL `note_tsv` (tsvector) for full-text search, not blind index
 
 **Transient Properties** (suffix: `_plain`):
 
-- `email_plain` - Write-only plaintext (auto-encrypts)
-- `phone_plain` - Write-only plaintext (auto-encrypts)
+- `email_plain` - Write-only plaintext (auto-encrypts to `email_enc`, generates `email_idx`)
+- `phone_plain` - Write-only plaintext (auto-encrypts to `phone_enc`, generates `phone_idx`)
 
 #### Usage Rules
 
@@ -161,9 +162,8 @@ Person::where('email_enc', $email)->first();
 ✅ **CORRECT - Query using blind indexes:**
 
 ```php
-use Illuminate\Support\Facades\Hash;
-
-$emailIdx = hash('sha256', strtolower($email));
+// Note: Using PHP's native hash(), not Laravel's Hash facade
+$emailIdx = \hash('sha256', strtolower($email));
 $person = Person::where('email_idx', $emailIdx)->first();
 ```
 

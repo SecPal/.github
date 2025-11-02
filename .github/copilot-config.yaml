@@ -137,11 +137,11 @@ testing:
     coverage_critical: 100
     patterns:
       - "NEVER write PHPUnit classes directly"
-      - "ALWAYS use Pest's it/test functions"
+      - "ALWAYS use Pest's test() or it() functions"
       - "Feature tests: tests/Feature/**/*Test.php"
       - "Unit tests: tests/Unit/**/*Test.php"
       - "TDD REQUIRED: Test MUST fail first"
-    
+
   frontend:
     framework: Vitest
     runner: "npm test"
@@ -213,7 +213,7 @@ data_protection:
 
       NEVER directly access encrypted fields:
       ❌ $person->email_enc (returns encrypted blob)
-      ✅ Use blind index for queries: where('email_idx', hash($email))
+      ✅ Use blind index for queries: where('email_idx', \hash('sha256', strtolower($email)))
 
     implementation:
       cast: "App\\Casts\\EncryptedWithDek"
