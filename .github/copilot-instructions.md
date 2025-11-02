@@ -87,10 +87,11 @@ If bypass REQUIRED (production down):
 ### Backend
 
 - PHP 8.4, Laravel 12
-- Testing: Pest/PHPUnit
+- **Development Environment: DDEV** (use `ddev exec` for commands)
+- **Testing: Pest ONLY** (never use PHPUnit directly - run via `ddev exec php artisan test`)
 - Static Analysis: PHPStan (level: max)
 - Style: Laravel Pint
-- Database: PostgreSQL (planned)
+- Database: PostgreSQL 16
 
 ### Frontend
 
@@ -109,9 +110,68 @@ If bypass REQUIRED (production down):
 
 ### Database
 
-- PostgreSQL (production)
-- SQLite (testing)
+- PostgreSQL 16 (via DDEV)
 - Migrations: Laravel migrations, MUST be reversible (up/down)
+
+### Data Protection (GDPR/DSGVO)
+
+**CRITICAL: All personal data MUST be encrypted at rest.**
+
+#### Encryption Pattern
+
+**Encrypted Fields** (suffix: `_enc`):
+
+- `email_enc` - Encrypted email storage
+- `phone_enc` - Encrypted phone storage
+- `note_enc` - Encrypted notes
+
+**Blind Indexes** (suffix: `_idx`):
+
+- `email_idx` - Searchable email hash
+- `phone_idx` - Searchable phone hash
+
+**Transient Properties** (suffix: `_plain`):
+
+- `email_plain` - Write-only plaintext (auto-encrypts)
+- `phone_plain` - Write-only plaintext (auto-encrypts)
+
+#### Usage Rules
+
+✅ **CORRECT - Use transient properties:**
+
+```php
+// Tests & Factories
+Person::factory()->create(['email_plain' => 'test@example.com']);
+
+// Controllers
+$person->email_plain = $request->input('email');
+$person->save();
+```
+
+❌ **WRONG - Never access encrypted fields directly:**
+
+```php
+// Returns encrypted blob
+$email = $person->email_enc;
+
+// Queries won't work
+Person::where('email_enc', $email)->first();
+```
+
+✅ **CORRECT - Query using blind indexes:**
+
+```php
+use Illuminate\Support\Facades\Hash;
+
+$emailIdx = hash('sha256', strtolower($email));
+$person = Person::where('email_idx', $emailIdx)->first();
+```
+
+**Implementation:**
+
+- **Cast:** `App\Casts\EncryptedWithDek`
+- **Observer:** `App\Observers\PersonObserver` (auto-generates blind indexes)
+- **Documentation:** See `DEVELOPMENT.md` for full encryption architecture
 - Seeds: Separate for dev/test/prod
 
 ### Version Control
@@ -356,7 +416,7 @@ GitHub status check: `license/cla`. See [CLA.md](../CLA.md) for signing instruct
 
 - All pre-commit checks
 - PHPStan / ESLint
-- All tests (Pest/Vitest)
+- All tests (Pest for PHP, Vitest for TypeScript)
 - OpenAPI validation
 - Script: `scripts/preflight.sh`
 
