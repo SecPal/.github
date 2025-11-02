@@ -107,7 +107,10 @@ stack:
     version: "8.4"
     framework: Laravel
     framework_version: "12.x"
-    testing: Pest
+    testing: Pest # EXCLUSIVE: Only Pest, never PHPUnit directly
+    test_runner: "ddev exec php artisan test"
+    development_environment: DDEV
+    database: PostgreSQL 16
 
   frontend:
     language: TypeScript
@@ -124,6 +127,28 @@ stack:
     ci_cd: GitHub Actions
     cla: CLA Assistant
     license_check: REUSE
+
+# Testing Standards
+testing:
+  backend:
+    framework: Pest
+    runner: "ddev exec php artisan test"
+    coverage_minimum: 80
+    coverage_critical: 100
+    patterns:
+      - "NEVER write PHPUnit classes directly"
+      - "ALWAYS use Pest's test() or it() functions"
+      - "Feature tests: tests/Feature/**/*Test.php"
+      - "Unit tests: tests/Unit/**/*Test.php"
+      - "TDD REQUIRED: Test MUST fail first"
+
+  frontend:
+    framework: Vitest
+    runner: "npm test"
+    library: React Testing Library
+    patterns:
+      - "Component tests: *.test.tsx"
+      - "Integration tests: *.integration.test.tsx"
 
 # File Patterns
 file_patterns:
@@ -151,12 +176,49 @@ validation:
     actionlint: "actionlint"
 
   tests:
-    backend: "php artisan test"
+    backend: "ddev exec php artisan test"
+    backend_local: "php artisan test"
     frontend: "npm test"
 
   linting:
     backend: "./vendor/bin/pint --test"
     frontend: "npm run lint"
+
+  development:
+    start: "ddev start"
+    stop: "ddev stop"
+    exec: "ddev exec <command>"
+    ssh: "ddev ssh"
+    logs: "ddev logs"
+
+# Data Protection (GDPR/DSGVO)
+data_protection:
+  encryption:
+    personal_data_fields:
+      - email_enc # Encrypted email storage
+      - phone_enc # Encrypted phone storage
+      - note_enc # Encrypted notes
+
+    blind_indexes:
+      - email_idx # Searchable email index (hashed)
+      - phone_idx # Searchable phone index (hashed)
+
+    transient_properties:
+      - email_plain # Write-only plaintext email (auto-encrypts to email_enc)
+      - phone_plain # Write-only plaintext phone (auto-encrypts to phone_enc)
+
+    pattern: |
+      ALWAYS use transient properties in tests/factories:
+      Person::factory()->create(['email_plain' => 'test@example.com'])
+
+      NEVER directly access encrypted fields:
+      ❌ $person->email_enc (returns encrypted blob)
+      ✅ Use blind index for queries: where('email_idx', \hash('sha256', strtolower($email)))
+
+    implementation:
+      cast: "App\\Casts\\EncryptedWithDek"
+      observer: "App\\Observers\\PersonObserver (auto-generates blind indexes)"
+      documentation: "See DEVELOPMENT.md for encryption architecture"
 
 # Quick Reference
 quick_reference:
