@@ -98,7 +98,7 @@ Use **RFC 7807 Problem Details** format (`application/problem+json`):
 
 ```json
 {
-  "type": "https://api.secpal.example/errors/validation-error",
+  "type": "https://api.secpal.dev/errors/validation-error",
   "title": "Validation Failed",
   "status": 400,
   "detail": "The request body contains invalid data",
