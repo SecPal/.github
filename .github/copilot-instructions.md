@@ -194,12 +194,26 @@ See `copilot-config.yaml:checklists.pre_commit` for complete checklist with vali
 
 See `copilot-config.yaml:checklists.review_passes` for complete passes with all checks.
 
-**Execute ALL 4 passes before PR creation:**
+**Execute ALL 4 passes MULTIPLE TIMES before creating PR:**
 
 1. **Comprehensive Review:** Coding standards, documentation, tests, no TODOs
 2. **Deep Dive Review:** Domain policy (secpal.app/secpal.dev ONLY), licenses, security patterns
 3. **Best Practices Review:** Hidden files, governance files, package.json metadata, OpenAPI completeness
 4. **Security Auditor Review:** Workflow permissions explicit, .gitignore complete, no secrets
+
+**CRITICAL Workflow (15 steps):** See `copilot-config.yaml:review_automation`
+
+1. Write code
+2. **2x full 4-pass reviews** (minimum) → Fix issues → Review again
+3. Commit & push ONLY after ZERO issues found
+4. **Create PR as DRAFT** (`gh pr create --draft`)
+5. Final self-review in GitHub UI
+6. **Mark ready** (`gh pr ready`) → **Copilot review starts NOW**
+7. Wait for Copilot → Query ALL comments → Analyze critically → Fix valid issues → Update PR description
+
+**Why DRAFT first?** Copilot only reviews non-draft PRs. Draft allows final self-review before external review. Integrates with project automation script.
+
+**Why multiple reviews?** First review finds obvious issues. Second review finds issues introduced by fixes. Third+ review catches DRY violations in fix code. Continue until ZERO issues found.
 
 ### Post-Merge Cleanup
 
@@ -260,9 +274,19 @@ auto_delete_branches: true
 
 **One Topic Rule:** See `copilot-config.yaml:policies.pr_workflow.one_topic` for prohibited/allowed combinations.
 
+**If local review finds UNRELATED issues:** Create separate (sub-)issues! Don't mix topics in one PR. See `copilot-config.yaml:review_automation.issue_management`
+
 **Branch Naming:** `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`
 
 **Commit Convention:** `type(scope): description`
+
+**DRAFT Workflow:**
+
+1. Create PR as DRAFT: `gh pr create --draft`
+2. Mark ready ONLY when local reviews find ZERO issues: `gh pr ready`
+3. Expectation: Copilot should find ZERO issues (local review = quality gate)
+
+**EPIC/Sub-Issue Structure:** Complex work → EPIC issue + multiple sub-issues → 1 PR per sub-issue
 
 **PR Checklist:**
 

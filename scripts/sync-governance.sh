@@ -115,13 +115,13 @@ for repo in "${TARGET_REPOS[@]}"; do
             else
                 # Sync mode: copy file
                 # Check if target exists BEFORE copying to determine correct message
+                local msg="created"
                 if [[ -f "$target_file" ]]; then
-                    cp "$source_file" "$target_file"
-                    echo -e "${GREEN}✅ $file (updated)${NC}"
-                else
-                    cp "$source_file" "$target_file"
-                    echo -e "${GREEN}✅ $file (created)${NC}"
+                    msg="updated"
                 fi
+
+                cp "$source_file" "$target_file"
+                echo -e "${GREEN}✅ $file ($msg)${NC}"
                 synced_count=$((synced_count + 1))
             fi
         fi
