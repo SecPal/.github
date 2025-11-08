@@ -469,7 +469,7 @@ checklists:
           - "Governance files present: CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS"
           - "package.json complete: name, version, description, homepage, bugs, repository, license, author"
           - "OpenAPI spec complete: components, schemas, responses, examples, securitySchemes"
-        validation: "ls -la | grep '^\\.'"
+        validation: 'ls -la | grep "^\\."'
 
       - id: pass-4
         name: Security Auditor Review

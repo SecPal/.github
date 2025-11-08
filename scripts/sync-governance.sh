@@ -67,7 +67,7 @@ files_match() {
         return 1  # Target doesn't exist
     fi
 
-    # Compare file content (exact match, including whitespace)
+    # Compare file content (exact, including whitespace)
     if diff -q "$source" "$target" > /dev/null 2>&1; then
         return 0  # Files match
     else
@@ -116,12 +116,30 @@ for repo in "${TARGET_REPOS[@]}"; do
                 # Sync mode: copy file
                 # Check if target exists BEFORE copying to determine correct message
                 if [[ -f "$target_file" ]]; then
+<<<<<<< Updated upstream
                     cp "$source_file" "$target_file"
                     echo -e "${GREEN}✅ $file (updated)${NC}"
                 else
                     cp "$source_file" "$target_file"
                     echo -e "${GREEN}✅ $file (created)${NC}"
                 fi
+=======
+                    if cp "$source_file" "$target_file"; then
+                        echo -e "${GREEN}✅ $file (updated)${NC}"
+                    else
+                        echo -e "${RED}❌ $file (update failed)${NC}"
+                        exit 1
+                    fi
+                else
+                    if cp "$source_file" "$target_file"; then
+                        echo -e "${GREEN}✅ $file (created)${NC}"
+                    else
+                        echo -e "${RED}❌ $file (creation failed)${NC}"
+                        exit 1
+                    fi
+                fi
+                synced_count=$((synced_count + 1))
+>>>>>>> Stashed changes
                 synced_count=$((synced_count + 1))
             fi
         fi
