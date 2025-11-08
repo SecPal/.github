@@ -29,6 +29,7 @@ GOVERNANCE_FILES=(
     "CODEOWNERS"
     ".editorconfig"
     ".gitattributes"
+    "scripts/check-domains.sh"
 )
 
 # Mode: sync (copy files) or check (verify only)
@@ -115,7 +116,7 @@ for repo in "${TARGET_REPOS[@]}"; do
             else
                 # Sync mode: copy file
                 # Check if target exists BEFORE copying to determine correct message
-                local msg="created"
+                msg="created"
                 if [[ -f "$target_file" ]]; then
                     msg="updated"
                 fi
