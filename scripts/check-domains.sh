@@ -48,7 +48,7 @@ violations=$(grep -r "secpal\." \
     grep -v -- "Forbidden:" | \
     grep -v -- "FORBIDDEN:" | \
     grep -v -- '- "secpal\.' | \
-    grep -v -- '^[[:space:]]*- \[' || true)
+    grep -v -- '- \[ \]' || true)
 
 if [[ -z "$violations" ]]; then
     echo -e "${GREEN}✅ Domain Policy Check PASSED${NC}"
