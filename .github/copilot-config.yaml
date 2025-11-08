@@ -549,6 +549,163 @@ review_automation:
     validation: "If external reviewer finds issues → process failed"
     learning: "Each external finding = lesson to improve local review process"
 
+# Enforcement Mechanisms (Technical Controls)
+enforcement_mechanisms:
+  critical: true
+  philosophy: "Automate what can be automated, document what cannot"
+
+  automated_enforcement:
+    git_hooks:
+      pre_commit:
+        script: ".git/hooks/pre-commit"
+        enforces:
+          - "REUSE compliance"
+          - "No secrets in code"
+        bypass: "git commit --no-verify (FORBIDDEN except large PR)"
+
+      pre_push:
+        script: ".git/hooks/pre-push"
+        runs: "./scripts/preflight.sh"
+        enforces:
+          - "Prettier formatting"
+          - "Linting (markdownlint, ESLint, PHPStan)"
+          - "Tests pass"
+          - "REUSE compliance"
+          - "PR size limit (with override)"
+          - "Domain policy (NEW - to be added)"
+        bypass: "git push --no-verify (FORBIDDEN)"
+        exit_code: "Non-zero = push blocked"
+
+    github_actions:
+      required_checks:
+        - name: "Prettier"
+          workflow: "reusable-prettier.yml"
+          blocks_merge: true
+
+        - name: "Markdownlint"
+          workflow: "reusable-markdown-lint.yml"
+          blocks_merge: true
+
+        - name: "REUSE"
+          workflow: "reusable-reuse.yml"
+          blocks_merge: true
+
+        - name: "PR Size"
+          workflow: "reusable-pr-size.yml"
+          blocks_merge: true
+          can_override: ".preflight-allow-large-pr file"
+
+        - name: "Tests"
+          workflow: "reusable-*-test.yml (per repo)"
+          blocks_merge: true
+
+      recommended_additions:
+        - name: "Domain Policy Check"
+          description: "Validate only secpal.app/secpal.dev used"
+          script: "./scripts/check-domains.sh (NEW)"
+          blocks_merge: true
+
+        - name: "Draft Enforcement"
+          description: "Validate PR created as draft first"
+          script: "Check PR timeline via API"
+          blocks_merge: false
+          action: "Warning only"
+
+        - name: "Commit Convention"
+          description: "Validate type(scope): format"
+          existing: "commitlint or semantic-pr-title"
+          blocks_merge: true
+
+    branch_protection:
+      required_settings:
+        - setting: "Require pull request before merging"
+          value: true
+          enforces: "No direct pushes to main"
+
+        - setting: "Require approvals"
+          value: 1
+          enforces: "Human review required"
+
+        - setting: "Require status checks to pass"
+          value: true
+          enforces: "All CI checks must be green"
+
+        - setting: "Require conversation resolution"
+          value: true
+          enforces: "All review comments addressed"
+
+        - setting: "Require signed commits"
+          value: true
+          enforces: "GPG signature on all commits"
+
+        - setting: "Do not allow bypassing the above settings"
+          value: true
+          enforces: "No admin override"
+
+        - setting: "Require linear history"
+          value: true
+          enforces: "Squash merge only"
+
+  semi_automated:
+    scriptable_validations:
+      - name: "Domain Policy Check"
+        script_path: "./scripts/check-domains.sh"
+        command: 'grep -r "secpal\\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh" | grep -v "secpal\\.app\\|secpal\\.dev"'
+        expected_output: "Empty (no matches)"
+        integration: "Add to preflight.sh"
+        exit_on_failure: true
+
+      - name: "One Topic Heuristic"
+        script_path: "./scripts/check-one-topic.sh"
+        logic: "Parse commit messages, detect mixed types (feat+fix, refactor+feature)"
+        accuracy: "Heuristic only, not 100% reliable"
+        integration: "Add to preflight.sh as warning"
+        exit_on_failure: false
+
+      - name: "Pre-PR Checklist"
+        script_path: "./scripts/pre-pr-checklist.sh"
+        type: "Interactive"
+        prompts:
+          - "Did you execute 2+ full 4-pass reviews? (y/n)"
+          - "Did all reviews find ZERO issues? (y/n)"
+          - "Is PR description complete? (y/n)"
+          - "Ready to create PR as DRAFT? (y/n)"
+        integration: "Manual execution before gh pr create"
+
+  not_automatable:
+    human_judgment_required:
+      - rule: "Multiple 4-pass reviews executed"
+        why: "Cannot verify AI internal review process"
+        enforcement: "Trust + verify via results (Copilot finds zero)"
+
+      - rule: "Issues created for unrelated findings"
+        why: "Cannot detect 'relatedness' automatically"
+        enforcement: "Human review in PR"
+
+      - rule: "EPIC/sub-issue structure"
+        why: "Requires understanding of problem domain"
+        enforcement: "Human project management"
+
+      - rule: "Critical thinking on Copilot comments"
+        why: "Requires context awareness and judgment"
+        enforcement: "Document analysis in PR description"
+
+  implementation_priority:
+    phase_1_immediate:
+      - "Add domain policy check to preflight.sh"
+      - "Document branch protection settings"
+      - "Create check-domains.sh script"
+
+    phase_2_next:
+      - "Add commit convention check (commitlint)"
+      - "Create pre-pr-checklist.sh (interactive)"
+      - "Add one-topic heuristic (warning only)"
+
+    phase_3_optional:
+      - "Draft enforcement GitHub Action"
+      - "PR timeline analyzer"
+      - "Automated issue creation for findings"
+
 # Checklists (Single Source of Truth)
 checklists:
   pre_commit:
