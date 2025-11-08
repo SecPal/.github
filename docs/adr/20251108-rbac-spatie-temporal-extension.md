@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2024 SecPal
+SPDX-FileCopyrightText: 2025 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Accepted
 
-**Date:** 2024-11-08
+**Date:** 2025-11-08
 
 **Deciders:** @kevalyq
 
