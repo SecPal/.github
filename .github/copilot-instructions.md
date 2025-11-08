@@ -278,9 +278,14 @@ auto_delete_branches: true
 
 See `copilot-config.yaml:domain_policy` for validation commands.
 
-**Allowed:** secpal.app (production/ALL emails) | secpal.dev (dev infrastructure only)
+**Use Cases:**
 
-**Forbidden:** secpal.com, secpal.org, secpal.net, secpal.io, ANY other domain
+- **secpal.app** → Production services, real APIs, **ALL emails** (including dev/test), official contact info
+- **secpal.dev** → Dev/staging infrastructure, testing, **examples**, OpenAPI specs, documentation examples
+
+**Allowed:** secpal.app (production/ALL emails) | secpal.dev (dev/examples/testing)
+
+**Forbidden:** secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, ANY other domain
 
 **Validation:** `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"` MUST return ONLY secpal.app and secpal.dev.
 

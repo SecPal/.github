@@ -568,11 +568,28 @@ domain_policy:
   production_domain: "secpal.app"
   development_domain: "secpal.dev"
   email_domain: "secpal.app" # ALL emails use this, including dev
+
+  # Use Case Rules
+  use_cases:
+    secpal_app:
+      - "Production services and APIs"
+      - "Real user-facing endpoints"
+      - "Email addresses (ALL, including dev/test)"
+      - "Official contact information"
+      - "Production documentation references"
+    secpal_dev:
+      - "Development/staging infrastructure"
+      - "Testing endpoints"
+      - "Code examples and tutorials"
+      - "OpenAPI specification examples"
+      - "Documentation examples (non-production)"
+
   forbidden_domains:
     - "secpal.com"
     - "secpal.org"
     - "secpal.net"
     - "secpal.io"
+    - "secpal.example" # Even in examples - use secpal.dev instead
   validation_command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"'
   validation_rule: "Command MUST return ONLY secpal.app and secpal.dev"
   enforcement: "Any other match = PR rejected"
