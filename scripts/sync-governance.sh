@@ -53,6 +53,12 @@ if [[ ! -d "$WORKSPACE_ROOT/$SOURCE_REPO" ]]; then
 fi
 
 # Function to check if file content matches
+# Args:
+#   $1 (source): Path to source file
+#   $2 (target): Path to target file
+# Returns:
+#   0 if files match exactly (including whitespace)
+#   1 if target doesn't exist or files differ
 files_match() {
     local source="$1"
     local target="$2"

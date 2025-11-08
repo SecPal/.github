@@ -341,4 +341,4 @@ See `copilot-config.yaml:bot_pr_validation` for validation process. Validate aga
 
 **For complete details, validation commands, and structured data:** See `.github/copilot-config.yaml`
 
-**Markdown length:** ~311 lines (target achieved) | **YAML contains:** All checklists, validations, multi-repo rules, complete tech stack
+**Markdown length:** ~344 lines (target ≤400 achieved) | **YAML contains:** All checklists, validations, multi-repo rules, complete tech stack

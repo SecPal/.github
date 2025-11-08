@@ -35,9 +35,9 @@ Chronological log of notable changes to SecPal organization defaults.
   - ONLY resolve via GraphQL mutation after fixing code
   - Commenting creates unwanted bot PRs and notification spam
 
-**copilot-instructions.md - Dramatically compressed (69% reduction):**
+**copilot-instructions.md - Dramatically compressed (66% reduction):**
 
-- **Line count:** 1019 → 311 lines (target was ≤400 lines, achieved better)
+- **Line count:** 1019 → 344 lines (target was ≤400 lines, achieved)
 - **DRY compliance:** Eliminated ~40% redundancy by referencing YAML as Single Source of Truth
 - **Structure:** All checklists, validations, tech stack details now reference `copilot-config.yaml` sections
 - **Improved readability:** Cleaner format with tables showing workflow-to-checklist mapping
