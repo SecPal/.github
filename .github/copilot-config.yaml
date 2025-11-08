@@ -126,6 +126,48 @@ policies:
     review_required: true
     copilot_review: mandatory
 
+  ai_autonomy:
+    critical_analysis_required: true
+    description: "AI must critically validate all suggestions and make autonomous decisions when answer is clear"
+    
+    copilot_comment_validation:
+      rule: "ALWAYS validate Copilot review comments critically before implementing"
+      rationale: "Copilot is extremely good but sometimes wrong - validation mandatory"
+      process:
+        - "Read comment and understand suggestion"
+        - "Check against our principles and documented rules"
+        - "Validate technical correctness (is this actually a bug?)"
+        - "Check context awareness (did Copilot miss project-specific rules?)"
+        - "Implement if valid, document rejection reason if invalid"
+      examples:
+        valid_comment: "Logic bug that would cause incorrect behavior"
+        invalid_comment: "Suggests pattern that violates documented project conventions"
+    
+    autonomous_decisions:
+      rule: "Make decisions autonomously when answer is clear from principles/docs"
+      rationale: "Reduces unnecessary back-and-forth, maintains flow"
+      when_to_decide_autonomously:
+        - "Fix clearly violates documented principle (e.g., DRY, TDD)"
+        - "Question answered in copilot-config.yaml or copilot-instructions.md"
+        - "Standard workflow documented (e.g., pre-commit checklist)"
+        - "Technical correctness is unambiguous (e.g., syntax error, logic bug)"
+        - "Security best practice applies (e.g., input validation required)"
+      when_to_ask:
+        - "Ambiguous requirement or multiple valid interpretations"
+        - "User preference needed (e.g., naming convention when both valid)"
+        - "Breaking change that affects user workflow"
+        - "Architectural decision with trade-offs"
+        - "Emergency exception to critical rule"
+      
+      examples:
+        autonomous:
+          - "Copilot suggests fixing logic bug → Fix it (technically correct)"
+          - "Pre-commit checklist item failed → Fix before committing (documented rule)"
+          - "Code violates DRY principle → Refactor (core principle)"
+        ask_user:
+          - "Two refactoring approaches possible → Ask which preferred"
+          - "Emergency production fix needs bypass → Confirm with user"
+
 # Copilot Review Protocol
 copilot_review:
   enabled: true

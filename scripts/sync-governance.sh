@@ -108,11 +108,13 @@ for repo in "${TARGET_REPOS[@]}"; do
                 fi
             else
                 # Sync mode: copy file
-                cp "$source_file" "$target_file"
-                if [[ ! -f "$target_file" ]]; then
-                    echo -e "${GREEN}✅ $file (created)${NC}"
-                else
+                # Check if target exists BEFORE copying to determine correct message
+                if [[ -f "$target_file" ]]; then
+                    cp "$source_file" "$target_file"
                     echo -e "${GREEN}✅ $file (updated)${NC}"
+                else
+                    cp "$source_file" "$target_file"
+                    echo -e "${GREEN}✅ $file (created)${NC}"
                 fi
                 ((synced_count++))
             fi
@@ -126,13 +128,15 @@ done
 echo -e "${BLUE}=== Summary ===${NC}"
 if [[ "$MODE" == "check" ]]; then
     total_issues=$((missing_count + outdated_count))
+    echo "Files in sync: $synced_count"
+    echo "Missing files: $missing_count"
+    echo "Outdated files: $outdated_count"
+    echo ""
     if [[ $total_issues -eq 0 ]]; then
         echo -e "${GREEN}✅ All governance files are in sync across repositories${NC}"
         exit 0
     else
-        echo -e "${RED}❌ Found $total_issues issue(s):${NC}"
-        echo "   - Missing files: $missing_count"
-        echo "   - Outdated files: $outdated_count"
+        echo -e "${RED}❌ Found $total_issues issue(s) that need attention${NC}"
         echo ""
         echo "Run without 'check' argument to sync files:"
         echo "  $0 $WORKSPACE_ROOT"

@@ -49,6 +49,34 @@ SecPal Organization:
 
 **Inheritance:** Repository-specific rules override organization-wide for non-critical rules. Critical rules ALWAYS apply across all repos.
 
+## AI Autonomy & Critical Thinking
+
+See `copilot-config.yaml:policies.ai_autonomy` for complete rules.
+
+**Copilot Comment Validation (MANDATORY):**
+
+- **ALWAYS validate Copilot review comments critically before implementing**
+- Copilot is extremely good but sometimes wrong - check against our principles
+- Process: Read → Validate against docs → Check technical correctness → Check context awareness
+- Implement if valid, document rejection if invalid (resolve with explanation via GraphQL)
+
+**Autonomous Decision-Making:**
+
+- **Make decisions autonomously when answer is clear from principles/docs**
+- Don't ask unnecessary questions when guidelines are documented
+- **Decide autonomously when:**
+  - Fix violates documented principle (DRY, TDD, etc.)
+  - Question answered in copilot-config.yaml/copilot-instructions.md
+  - Standard workflow documented (e.g., pre-commit checklist)
+  - Technical correctness unambiguous (syntax error, logic bug)
+  - Security best practice applies
+- **Ask user when:**
+  - Ambiguous requirement or multiple valid interpretations
+  - User preference needed (naming, approach)
+  - Breaking change affecting user workflow
+  - Architectural decision with trade-offs
+  - Emergency exception to critical rule
+
 ## Critical Rules (ALWAYS ENFORCED)
 
 See `copilot-config.yaml:core_principles` for complete list with validation commands.
