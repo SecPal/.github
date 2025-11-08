@@ -116,14 +116,6 @@ for repo in "${TARGET_REPOS[@]}"; do
                 # Sync mode: copy file
                 # Check if target exists BEFORE copying to determine correct message
                 if [[ -f "$target_file" ]]; then
-<<<<<<< Updated upstream
-                    cp "$source_file" "$target_file"
-                    echo -e "${GREEN}✅ $file (updated)${NC}"
-                else
-                    cp "$source_file" "$target_file"
-                    echo -e "${GREEN}✅ $file (created)${NC}"
-                fi
-=======
                     if cp "$source_file" "$target_file"; then
                         echo -e "${GREEN}✅ $file (updated)${NC}"
                     else
@@ -138,8 +130,6 @@ for repo in "${TARGET_REPOS[@]}"; do
                         exit 1
                     fi
                 fi
-                synced_count=$((synced_count + 1))
->>>>>>> Stashed changes
                 synced_count=$((synced_count + 1))
             fi
         fi
