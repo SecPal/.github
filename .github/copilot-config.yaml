@@ -8,6 +8,69 @@ version: "1.0"
 organization: SecPal
 repository: .github
 
+# Multi-Repository Structure
+multi_repo:
+  description: "SecPal uses multiple repositories with shared base rules and repo-specific overrides"
+  structure:
+    base: ".github"
+    repositories:
+      - name: ".github"
+        type: "organization-wide"
+        description: "Base rules, templates, workflows, governance files"
+        copilot_instructions: ".github/copilot-instructions.md"
+        config: ".github/copilot-config.yaml"
+        override_allowed: false
+
+      - name: "api"
+        type: "backend"
+        description: "Laravel backend application"
+        copilot_instructions: "api/.github/copilot-instructions.md"
+        extends: ".github/copilot-config.yaml"
+        override_allowed: true
+        specific_rules:
+          - "DDEV-specific commands (ddev exec)"
+          - "Pest testing framework (never PHPUnit directly)"
+          - "Data protection (GDPR encryption patterns)"
+
+      - name: "frontend"
+        type: "frontend"
+        description: "React/TypeScript frontend application"
+        copilot_instructions: "frontend/.github/copilot-instructions.md"
+        extends: ".github/copilot-config.yaml"
+        override_allowed: true
+        specific_rules:
+          - "React/TypeScript patterns"
+          - "Vitest testing framework"
+          - "PWA-specific requirements"
+
+      - name: "contracts"
+        type: "api-specification"
+        description: "OpenAPI 3.1 specifications"
+        copilot_instructions: "contracts/.github/copilot-instructions.md"
+        extends: ".github/copilot-config.yaml"
+        override_allowed: true
+        specific_rules:
+          - "OpenAPI validation (Redocly)"
+          - "Contract-first development"
+          - "Must be updated FIRST before api/frontend"
+
+  inheritance_rules:
+    priority: "Repository-specific > Organization-wide"
+    override_policy: "Repository can override non-critical rules only"
+    critical_rules_always_apply:
+      - "TDD-First Development"
+      - "Never Skip Preflight Checks"
+      - "1 PR = 1 Topic"
+      - "Signed Commits Only"
+      - "REUSE Compliance"
+      - "Domain Policy"
+      - "Copilot Review Protocol (NEVER comment on reviews)"
+
+  coordination:
+    breaking_changes: "Update contracts/ FIRST, then api/ and frontend/ in parallel"
+    version_locking: "Tag contracts before implementing in api/frontend"
+    new_api_version: "Create /api/v2/ for breaking changes, parallel support"
+
 # Core Principles (Highest Priority)
 core_principles:
   - id: critical-rule-1
@@ -66,39 +129,80 @@ policies:
 # Copilot Review Protocol
 copilot_review:
   enabled: true
+
+  # 🚨 CRITICAL RULE - NEVER VIOLATE 🚨
+  absolute_prohibition:
+    rule: "NEVER RESPOND TO COPILOT REVIEW COMMENTS USING GITHUB COMMENT TOOLS"
+    rationale: "Commenting creates unwanted bot PRs and notification spam"
+    enforcement: "HARD BLOCK - Any violation requires immediate rollback"
+    forbidden_actions:
+      - "Adding comments to review threads"
+      - "Replying to Copilot suggestions"
+      - "Using mcp_github_github_add_issue_comment"
+      - "Using mcp_github_github_add_comment_to_pending_review"
+      - "Any GitHub UI comment on review threads"
+
+    correct_workflow:
+      - "Fix the code based on Copilot comment"
+      - "Commit and push the fix"
+      - "Wait for Copilot to re-review (30s)"
+      - "Resolve thread via GraphQL mutation ONLY"
+      - "Update PR description for documentation (NOT comments)"
+
+    why_this_matters: "Copilot re-reviews after each push. Comments trigger bot PRs. Resolution via GraphQL is the ONLY correct method."
+
   process:
     - step: 1
       action: query_unresolved_threads
       tool: graphql
+      command: |
+        gh api graphql -f query='query{repository(owner:"SecPal",name:"REPO"){pullRequest(number:N){reviewThreads(first:20){nodes{id isResolved comments(first:1){nodes{path line body}}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
       critical: "NEVER use issue comments to respond"
 
     - step: 2
       action: fix_comments
       method: commit_and_push
+      note: "Fix code, do NOT reply to comment"
 
     - step: 3
       action: wait_for_ci
       duration: 30
-      note: "Copilot re-reviews after push"
+      note: "Copilot re-reviews after push, may add NEW threads"
 
     - step: 4
       action: resolve_threads
       tool: graphql_mutation
-      command: "resolveReviewThread"
-      critical: "ONLY GraphQL, NEVER comments"
+      command: |
+        gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"THREAD_ID"}){thread{id isResolved}}}'
+      critical: "ONLY GraphQL mutation, NEVER comments"
 
     - step: 5
       action: iterate
       condition: "until no unresolved threads"
+      note: "Repeat steps 1-4 until query returns empty array"
 
-  forbidden:
-    - mcp_github_github_add_issue_comment
-    - mcp_github_github_add_comment_to_pending_review
+  forbidden_tools:
+    - tool: mcp_github_github_add_issue_comment
+      reason: "Creates bot PRs"
+      alternative: "GraphQL resolveReviewThread mutation"
 
-  allowed:
+    - tool: mcp_github_github_add_comment_to_pending_review
+      reason: "Creates unwanted comment threads"
+      alternative: "Fix code, push, resolve via GraphQL"
+
+    - tool: "GitHub UI comment"
+      reason: "Triggers bot automation"
+      alternative: "Update PR description for documentation"
+
+  allowed_tools:
     - graphql_query_threads
     - graphql_mutation_resolve
     - update_pr_description
+
+  documentation_updates:
+    rule: "Use PR description for documentation, NEVER comments"
+    example: "Update PR description to explain why fix was chosen"
+    rationale: "PR description is documentation, comments trigger bots"
 
 # Technology Stack
 stack:
@@ -225,6 +329,262 @@ quick_reference:
   copilot_instructions: ".github/copilot-instructions.md"
   license_whitelist: ".github/license-whitelist.txt"
   cla_document: "CLA.md"
+
+# Checklists (Single Source of Truth)
+checklists:
+  pre_commit:
+    description: "Execute before EVERY commit. NO EXCEPTIONS."
+    checks:
+      - id: tdd-compliance
+        title: TDD Compliance
+        items:
+          - "Tests written FIRST (failing)"
+          - "Implementation added"
+          - "Tests now pass"
+          - "Coverage ≥80% for new code"
+          - "Coverage 100% for critical paths"
+        validation: "Run test suite and check coverage"
+
+      - id: dry-principle
+        title: DRY Principle
+        items:
+          - "No duplicated logic"
+          - "Common code extracted to helpers/utils"
+          - "Configuration in config files (not hardcoded)"
+        validation: "Code review for duplication"
+
+      - id: quality-over-speed
+        title: Quality Over Speed
+        items:
+          - "Code reviewed by myself (4-pass review)"
+          - "All edge cases considered"
+          - "Error handling complete"
+          - "No shortcuts taken"
+        validation: "Self-review checklist completed"
+
+      - id: changelog-updated
+        title: CHANGELOG Updated
+        items:
+          - "Entry added to appropriate section"
+          - "Category correct (Added/Changed/Fixed/etc.)"
+          - "Migration guide if breaking change"
+        validation: "CHANGELOG.md modified in commit"
+
+      - id: documentation-complete
+        title: Documentation Complete
+        items:
+          - "Public APIs have JSDoc/PHPDoc/TSDoc"
+          - "Complex functions have examples"
+          - "README updated if needed"
+        validation: "Documentation review"
+
+      - id: preflight-script
+        title: Preflight Script
+        items:
+          - "./scripts/preflight.sh executed"
+          - "Exit code 0 (all checks pass)"
+          - "If fails: FIX, don't bypass"
+        validation: "./scripts/preflight.sh"
+
+      - id: no-bypass
+        title: No Bypass Used
+        items:
+          - "No --no-verify flag"
+          - "Exception: Large PR with large-pr-approved label only"
+        validation: "Git history check"
+
+  review_passes:
+    description: "4-Pass Review Strategy - Execute ALL before PR creation"
+    passes:
+      - id: pass-1
+        name: Comprehensive Review
+        focus: "Coding standards and completeness"
+        checks:
+          - "All files use correct coding standards (Prettier, Pint, ESLint)"
+          - "All functions documented (JSDoc/PHPDoc/TSDoc with examples)"
+          - "All tests present and passing"
+          - "No TODOs, FIXMEs, or placeholder comments"
+          - "No commented-out code"
+          - "No console.log/var_dump debugging statements"
+
+      - id: pass-2
+        name: Deep Dive Review
+        focus: "Domain and security compliance"
+        checks:
+          - "Domain compliance: All URLs use secpal.app or secpal.dev"
+          - "All email addresses use @secpal.app (NO exceptions)"
+          - "Licenses correct (check SPDX headers with reuse lint)"
+          - "Security patterns present (input validation, error handling, auth)"
+          - "No hardcoded secrets or credentials"
+          - "No SQL injection vulnerabilities (parameterized queries only)"
+        validation: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json"'
+
+      - id: pass-3
+        name: Best Practices Review
+        focus: "Project infrastructure"
+        checks:
+          - "Hidden files present: .editorconfig, .gitattributes, .gitignore"
+          - "Governance files present: CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS"
+          - "package.json complete: name, version, description, homepage, bugs, repository, license, author"
+          - "OpenAPI spec complete: components, schemas, responses, examples, securitySchemes"
+        validation: "ls -la | grep '^\\.'"
+
+      - id: pass-4
+        name: Security Auditor Review
+        focus: "Security hardening"
+        checks:
+          - "Workflow permissions explicit and minimal (contents: read)"
+          - ".gitignore includes: .env*, *.key, *.pem, secrets/, credentials/"
+          - "No secrets in code (API keys, passwords, tokens)"
+          - "Pre-push hook configured (./scripts/preflight.sh)"
+          - "SECURITY.md contact information correct"
+        validation: 'grep -L "^permissions:" .github/workflows/*.yml must return empty'
+
+  post_merge_cleanup:
+    description: "Execute IMMEDIATELY after EVERY merge"
+    mandatory: true
+    steps:
+      - step: 1
+        command: "git checkout main"
+        description: "Switch to main branch"
+
+      - step: 2
+        command: "git pull"
+        description: "Pull latest changes"
+
+      - step: 3
+        command: "git branch -d <feature-branch-name>"
+        description: "Delete local feature branch"
+
+      - step: 4
+        command: "git fetch --prune"
+        description: "Prune remote-tracking branches"
+
+      - step: 5
+        command: "git status"
+        description: "Verify clean state"
+        expected_output: "nothing to commit, working tree clean"
+
+  validation:
+    description: "General validation checklist before completing any task"
+    checks:
+      - "All Critical Rules followed? (TDD, One Topic, No Bypass, CHANGELOG)"
+      - "Preflight script would pass? (formatting, linting, tests, REUSE)"
+      - "CHANGELOG.md updated? (if feature/fix/breaking change)"
+      - "Tests added/updated? (80% coverage minimum)"
+      - "Documentation updated? (if public API changed)"
+      - "Correct repository context? (api/ vs frontend/ vs contracts/)"
+      - "Multi-repo coordination needed? (contracts first?)"
+      - "Breaking change? (MAJOR version bump, deprecation process)"
+      - "Security implications? (use SECURITY.md process if needed)"
+      - "Commit convention followed? (type(scope): description)"
+      - "4-Pass Review completed? (all passes documented)"
+
+  copilot_proof_standard:
+    description: "Quality target: No AI reviewer can suggest ANY improvements"
+    target: "GitHub Copilot review returns ZERO suggestions"
+    checks:
+      - "All automated checks GREEN (REUSE, Prettier, linting, tests)"
+      - "Zero placeholder comments (TODO, FIXME, XXX) - all resolved before PR"
+      - "Zero commented-out code blocks"
+      - "No console.log / var_dump debugging statements"
+      - "No hardcoded values that should be config"
+      - "All functions documented (PHPDoc/JSDoc/TSDoc)"
+      - "All edge cases tested"
+      - "All error paths covered"
+      - "No magic numbers without explanation"
+      - "No violations of SOLID/DRY principles"
+    validation: "Request GitHub Copilot review - ZERO suggestions = standard achieved"
+
+# Workflow Mapping (When to use which checklist)
+workflows:
+  before_commit:
+    description: "Mandatory checks before git commit"
+    checklists: ["pre_commit"]
+    mandatory: true
+
+  before_pr:
+    description: "Mandatory checks before creating pull request"
+    checklists: ["pre_commit", "review_passes", "copilot_proof_standard"]
+    mandatory: true
+    sequence: true # Execute in order
+
+  before_merge:
+    description: "Mandatory checks before merging pull request"
+    checklists: ["copilot_proof_standard", "validation"]
+    mandatory: true
+
+  after_merge:
+    description: "Mandatory cleanup after merge"
+    checklists: ["post_merge_cleanup"]
+    mandatory: true
+    immediate: true # Execute IMMEDIATELY, no delay
+
+# Domain Policy (ZERO TOLERANCE)
+domain_policy:
+  critical: true
+  production_domain: "secpal.app"
+  development_domain: "secpal.dev"
+  email_domain: "secpal.app" # ALL emails use this, including dev
+  forbidden_domains:
+    - "secpal.com"
+    - "secpal.org"
+    - "secpal.net"
+    - "secpal.io"
+  validation_command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"'
+  validation_rule: "Command MUST return ONLY secpal.app and secpal.dev"
+  enforcement: "Any other match = PR rejected"
+
+# Bot PR Validation
+bot_pr_validation:
+  critical: true
+  scope: "Validate against tech stack and existing fixes"
+  auto_reject_criteria:
+    - "Technology not in project stack (e.g., Rust when no Rust used)"
+    - "Duplicate fix already merged in main"
+    - "Language-specific config for unused language"
+  validation_process:
+    - "Check PR branch name: copilot/sub-pr-* = bot-created"
+    - "Validate against current tech stack + merged PRs"
+    - "If redundant/irrelevant: Close with explanation"
+    - "If valid: Review like human PR (full checklist)"
+  tech_stack_check: 'find . -name "<tech-config-file>" | wc -l must be > 0'
+
+# Learned Lessons (Copilot-Proof Policies)
+learned_lessons:
+  governance_file_sync:
+    issue: "Symlinks don't render on GitHub.com web interface"
+    solution: "Copy files from .github/ to other repos"
+    files:
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - CODE_OF_CONDUCT.md
+      - CODEOWNERS
+      - .editorconfig
+      - .gitattributes
+    automation: "./scripts/sync-governance.sh"
+    validation: "Script checks file existence and content match"
+
+  security_by_default:
+    rule: "Security MUST be explicit from line 1, not added later"
+    workflow_permissions: "Explicit minimal permissions required (contents: read)"
+    gitignore_required:
+      - ".env*"
+      - "*.key"
+      - "*.pem"
+      - "secrets/"
+      - "credentials/"
+      - "*.secret"
+    validation: 'grep -L "^permissions:" .github/workflows/*.yml must be empty'
+
+  hidden_files_priority:
+    rule: "Hidden files (.editorconfig, .gitattributes, .gitignore, CODEOWNERS) are EQUALLY critical"
+    required_files:
+      - .editorconfig
+      - .gitattributes
+      - .gitignore
+      - CODEOWNERS
+    validation: 'ls -la | grep "^\\." must show all 4 files'
 
 # Parsing Performance
 metadata:
