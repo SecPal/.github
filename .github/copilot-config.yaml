@@ -129,7 +129,7 @@ policies:
   ai_autonomy:
     critical_analysis_required: true
     description: "AI must critically validate all suggestions and make autonomous decisions when answer is clear"
-    
+
     copilot_comment_validation:
       rule: "ALWAYS validate Copilot review comments critically before implementing"
       rationale: "Copilot is extremely good but sometimes wrong - validation mandatory"
@@ -142,7 +142,7 @@ policies:
       examples:
         valid_comment: "Logic bug that would cause incorrect behavior"
         invalid_comment: "Suggests pattern that violates documented project conventions"
-    
+
     autonomous_decisions:
       rule: "Make decisions autonomously when answer is clear from principles/docs"
       rationale: "Reduces unnecessary back-and-forth, maintains flow"
@@ -158,7 +158,7 @@ policies:
         - "Breaking change that affects user workflow"
         - "Architectural decision with trade-offs"
         - "Emergency exception to critical rule"
-      
+
       examples:
         autonomous:
           - "Copilot suggests fixing logic bug → Fix it (technically correct)"
@@ -590,7 +590,11 @@ bot_pr_validation:
     - "Validate against current tech stack + merged PRs"
     - "If redundant/irrelevant: Close with explanation"
     - "If valid: Review like human PR (full checklist)"
-  tech_stack_check: 'find . -name "<tech-config-file>" | wc -l must be > 0'
+  tech_stack_check_examples:
+    - 'Rust: find . -name "Cargo.toml" | wc -l must be > 0'
+    - 'Node.js: find . -name "package.json" | wc -l must be > 0'
+    - 'PHP/Laravel: find . -name "composer.json" | wc -l must be > 0'
+    - 'Python: find . -name "requirements.txt" -o -name "pyproject.toml" | wc -l must be > 0'
 
 # Learned Lessons (Copilot-Proof Policies)
 learned_lessons:
@@ -626,7 +630,7 @@ learned_lessons:
       - .gitattributes
       - .gitignore
       - CODEOWNERS
-    validation: 'ls -la | grep "^\\." must show all 4 files'
+    validation: 'ls -la | grep "^\\\\." must show all 4 files'
 
 # Parsing Performance
 metadata:

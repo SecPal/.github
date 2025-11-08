@@ -61,8 +61,8 @@ files_match() {
         return 1  # Target doesn't exist
     fi
 
-    # Compare file content (ignoring whitespace differences)
-    if diff -b "$source" "$target" > /dev/null 2>&1; then
+    # Compare file content (exact match, including whitespace)
+    if diff -q "$source" "$target" > /dev/null 2>&1; then
         return 0  # Files match
     else
         return 1  # Files differ
@@ -96,15 +96,15 @@ for repo in "${TARGET_REPOS[@]}"; do
         # Check if target matches source
         if files_match "$source_file" "$target_file"; then
             echo -e "${GREEN}✅ $file (already in sync)${NC}"
-            ((synced_count++))
+            synced_count=$((synced_count + 1))
         else
             if [[ "$MODE" == "check" ]]; then
                 if [[ ! -f "$target_file" ]]; then
                     echo -e "${RED}❌ $file (missing)${NC}"
-                    ((missing_count++))
+                    missing_count=$((missing_count + 1))
                 else
                     echo -e "${RED}❌ $file (outdated)${NC}"
-                    ((outdated_count++))
+                    outdated_count=$((outdated_count + 1))
                 fi
             else
                 # Sync mode: copy file
@@ -116,7 +116,7 @@ for repo in "${TARGET_REPOS[@]}"; do
                     cp "$source_file" "$target_file"
                     echo -e "${GREEN}✅ $file (created)${NC}"
                 fi
-                ((synced_count++))
+                synced_count=$((synced_count + 1))
             fi
         fi
     done
