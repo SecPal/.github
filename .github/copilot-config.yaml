@@ -572,7 +572,7 @@ enforcement_mechanisms:
           - "Tests pass"
           - "REUSE compliance"
           - "PR size limit (with override)"
-          - "Domain policy (NEW - to be added)"
+          - "Domain policy (IMPLEMENTED in this PR)"
         bypass: "git push --no-verify (FORBIDDEN)"
         exit_code: "Non-zero = push blocked"
 
@@ -602,7 +602,7 @@ enforcement_mechanisms:
       recommended_additions:
         - name: "Domain Policy Check"
           description: "Validate only secpal.app/secpal.dev used"
-          script: "./scripts/check-domains.sh (NEW)"
+          script: "./scripts/check-domains.sh (IMPLEMENTED in this PR)"
           blocks_merge: true
 
         - name: "Draft Enforcement"
@@ -650,9 +650,9 @@ enforcement_mechanisms:
     scriptable_validations:
       - name: "Domain Policy Check"
         script_path: "./scripts/check-domains.sh"
-        command: 'grep -r "secpal\\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh" | grep -v "secpal\\.app\\|secpal\\.dev"'
+        command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh" | grep -v "secpal\.app\|secpal\.dev"'
         expected_output: "Empty (no matches)"
-        integration: "Add to preflight.sh"
+        integration: "Integrated in preflight.sh (this PR)"
         exit_on_failure: true
 
       - name: "One Topic Heuristic"
@@ -691,10 +691,12 @@ enforcement_mechanisms:
         enforcement: "Document analysis in PR description"
 
   implementation_priority:
+    phase_1_immediate_completed:
+      - "✅ Add domain policy check to preflight.sh (completed in this PR)"
+      - "✅ Create check-domains.sh script (completed in this PR)"
+
     phase_1_immediate:
-      - "Add domain policy check to preflight.sh"
       - "Document branch protection settings"
-      - "Create check-domains.sh script"
 
     phase_2_next:
       - "Add commit convention check (commitlint)"
@@ -959,6 +961,7 @@ learned_lessons:
       - CODEOWNERS
       - .editorconfig
       - .gitattributes
+      - scripts/check-domains.sh
     automation: "./scripts/sync-governance.sh"
     validation: "Script checks file existence and content match"
 

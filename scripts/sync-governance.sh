@@ -121,6 +121,9 @@ for repo in "${TARGET_REPOS[@]}"; do
                     msg="updated"
                 fi
 
+                # Create parent directory if it doesn't exist
+                target_dir=$(dirname "$target_file")
+                mkdir -p "$target_dir"
                 cp "$source_file" "$target_file"
                 echo -e "${GREEN}✅ $file ($msg)${NC}"
                 synced_count=$((synced_count + 1))

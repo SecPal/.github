@@ -78,6 +78,13 @@ if [ -f .github/scripts/check-domains.sh ]; then
     echo "Fix the violations above before committing." >&2
     exit 1
   }
+elif [ -f scripts/check-domains.sh ]; then
+  bash scripts/check-domains.sh || {
+    echo "" >&2
+    echo "❌ Domain Policy Violation detected!" >&2
+    echo "Fix the violations above before committing." >&2
+    exit 1
+  }
 fi
 
 # 1) PHP / Laravel

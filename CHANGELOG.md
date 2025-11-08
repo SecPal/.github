@@ -35,9 +35,9 @@ Chronological log of notable changes to SecPal organization defaults.
   - ONLY resolve via GraphQL mutation after fixing code
   - Commenting creates unwanted bot PRs and notification spam
 
-**copilot-instructions.md - Dramatically compressed (66% reduction):**
+**copilot-instructions.md - Dramatically compressed (64% reduction):**
 
-- **Line count:** 1019 → 344 lines (target was ≤400 lines, achieved)
+- **Line count:** 1019 → 368 lines (target was ≤400 lines, achieved)
 - **DRY compliance:** Eliminated ~40% redundancy by referencing YAML as Single Source of Truth
 - **Structure:** All checklists, validations, tech stack details now reference `copilot-config.yaml` sections
 - **Improved readability:** Cleaner format with tables showing workflow-to-checklist mapping
@@ -46,7 +46,7 @@ Chronological log of notable changes to SecPal organization defaults.
 **scripts/sync-governance.sh - New automation script:**
 
 - **Purpose:** Sync governance files from `.github/` to other repos (addresses Learned Lesson #3)
-- **Files synced:** CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS, .editorconfig, .gitattributes
+- **Files synced:** CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS, .editorconfig, .gitattributes, scripts/check-domains.sh
 - **Modes:** `sync` (copy files) and `check` (validate only)
 - **Integration:** Can be added to preflight.sh for automated validation
 - **Why:** Symlinks don't render on GitHub.com, files must be copied for proper display
