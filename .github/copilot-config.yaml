@@ -372,6 +372,342 @@ quick_reference:
   license_whitelist: ".github/license-whitelist.txt"
   cla_document: "CLA.md"
 
+# Review Automation (ENFORCE THIS WORKFLOW)
+review_automation:
+  critical: true
+  rule: "ALWAYS execute multiple local review passes BEFORE creating PR"
+
+  mandatory_sequence:
+    - step: 1
+      name: "Write code/docs"
+      description: "Complete the feature/fix/refactoring"
+
+    - step: 2
+      name: "4-Pass Local Review #1"
+      description: "Execute ALL 4 passes (see checklists.review_passes)"
+      required: true
+      fix_issues: true
+
+    - step: 3
+      name: "Fix all issues found"
+      description: "Address ALL findings from review #1"
+
+    - step: 4
+      name: "4-Pass Local Review #2"
+      description: "Re-execute ALL 4 passes to catch new issues"
+      required: true
+
+    - step: 5
+      name: "Fix remaining issues"
+      description: "Address findings from review #2"
+
+    - step: 6
+      name: "Optional: 4-Pass Local Review #3+"
+      description: "Continue until ZERO issues found"
+      when: "Complex changes, multi-file refactoring, > 200 lines"
+
+    - step: 7
+      name: "Commit and push"
+      description: "ONLY after local reviews find ZERO issues"
+
+    - step: 8
+      name: "Create PR as DRAFT"
+      description: "gh pr create --draft (Copilot does NOT review drafts)"
+      critical: true
+      why: "Draft status prevents premature Copilot review"
+
+    - step: 9
+      name: "Final self-review in PR view"
+      description: "Review diff in GitHub UI, check description completeness"
+      when: "Always - UI shows things CLI doesn't"
+
+    - step: 10
+      name: "Mark PR as ready (removes draft)"
+      description: "gh pr ready - ONLY when local reviews find ZERO issues"
+      critical: true
+      conditions:
+        - "Multiple local 4-pass reviews completed"
+        - "ALL local reviews found ZERO issues"
+        - "Final self-review in GitHub UI complete"
+        - "100% confident Copilot will find ZERO issues"
+      triggers: "Copilot review starts NOW (automatic after draft removal)"
+      expectation: "If Copilot finds issues → local review process failed"
+
+    - step: 11
+      name: "Wait for Copilot review"
+      description: "Wait until Copilot review completes (check PR for comments)"
+      duration: "Usually 1-3 minutes after marking ready"
+
+    - step: 12
+      name: "Query ALL review comments"
+      description: "Get complete list via API, don't update PR yet"
+
+    - step: 13
+      name: "Critically analyze ALL comments"
+      description: "Validate each against principles, technical correctness, context"
+
+    - step: 14
+      name: "Fix valid issues in ONE commit"
+      description: "Address all valid findings together"
+
+    - step: 15
+      name: "Update PR description"
+      description: "Document review analysis and decisions"
+
+  draft_pr_workflow:
+    create_command: "gh pr create --draft --title '...' --body '...'"
+    mark_ready_command: "gh pr ready"
+    why_draft_first:
+      - "Prevents premature Copilot review"
+      - "Allows final self-review in GitHub UI"
+      - "Copilot only reviews non-draft PRs"
+      - "Can fix issues found in UI review before external review"
+      - "Integrates with project automation script"
+    when_to_mark_ready:
+      - "ONLY when multiple local reviews find ZERO issues"
+      - "After final self-review in GitHub UI complete"
+      - "When 100% confident Copilot will find ZERO issues"
+      - "NEVER mark ready if any uncertainty remains"
+    expectation: "Copilot finds ZERO issues = local review process succeeded"
+
+  issue_management:
+    critical: true
+    rule: "Use EPIC/MAIN issues with sub-issues for complex work"
+    one_topic_enforcement: "If review finds multiple unrelated issues → create separate (sub-)issues"
+
+    workflow:
+      - step: 1
+        description: "Local review finds issue during work"
+        action: "Assess: Related to current PR topic or not?"
+
+      - step: 2
+        description: "If UNRELATED to current PR topic"
+        action: "Create (sub-)issue for later PR"
+        why: "Maintains 1 PR = 1 Topic rule"
+        example: "Working on docs, find security bug → create security sub-issue"
+
+      - step: 3
+        description: "If RELATED to current PR topic"
+        action: "Fix in current PR"
+
+      - step: 4
+        description: "Complex work with multiple related issues"
+        action: "Create EPIC issue with multiple sub-issues, one PR per sub-issue"
+
+    epic_sub_issue_structure:
+      epic: "Parent issue tracking overall goal"
+      sub_issues: "Individual actionable tasks (one PR each)"
+      example:
+        epic: "Refactor authentication system"
+        sub_issues:
+          - "Extract authentication logic to service class"
+          - "Add unit tests for auth service"
+          - "Update documentation for auth flow"
+      pr_mapping: "1 sub-issue = 1 PR (maintains One Topic Rule)"
+
+    when_to_create_issues:
+      during_local_review:
+        - "Find security issue unrelated to current work"
+        - "Find missing test coverage (not part of current PR)"
+        - "Find documentation gap (not part of current PR)"
+        - "Discover technical debt to address later"
+      during_external_review:
+        - "Copilot suggests improvement outside current scope"
+        - "Teammate suggests additional feature"
+        - "Performance issue discovered (separate from current fix)"
+
+    issue_creation_commands:
+      main_issue: 'gh issue create --title "..." --body "..." --label "enhancement"'
+      sub_issue: 'gh issue create --title "..." --body "..." --label "sub-issue"'
+      link_to_parent: "Add 'Sub-issue of #123' in body"
+
+    examples_from_this_pr:
+      found_during_review: "19 workflows without explicit permissions (CRITICAL security issue)"
+      action_taken: "OUT OF SCOPE for docs refactoring PR"
+      correct_approach: "Create separate security issue/EPIC for workflow permissions"
+      reasoning: "Maintains One Topic Rule, separate PR for security fixes"
+
+  why_multiple_reviews:
+    - "First review finds obvious issues"
+    - "Second review finds issues introduced by fixes"
+    - "Third review catches DRY violations in fix code"
+    - "Each pass has different focus (standards, domain, best practices, security)"
+    - "Human reviewers (Copilot, teammates) should find ZERO issues"
+
+  anti_patterns:
+    - "Commit without local review"
+    - "Single-pass review only"
+    - "Create PR as ready (not draft) immediately"
+    - "Mark draft ready before final self-review"
+    - "Update PR description before all Copilot comments received"
+    - "Fix issues one-by-one with multiple commits"
+    - "Skip reviews because 'it's just docs'"
+
+  enforcement:
+    rule: "AI MUST execute minimum 2x 4-pass reviews before creating PR"
+    pr_rule: "AI MUST create PR as DRAFT first, mark ready ONLY after final self-review"
+    validation: "If external reviewer finds issues → process failed"
+    learning: "Each external finding = lesson to improve local review process"
+
+# Enforcement Mechanisms (Technical Controls)
+enforcement_mechanisms:
+  critical: true
+  philosophy: "Automate what can be automated, document what cannot"
+
+  automated_enforcement:
+    git_hooks:
+      pre_commit:
+        script: ".git/hooks/pre-commit"
+        enforces:
+          - "REUSE compliance"
+          - "No secrets in code"
+        bypass: "git commit --no-verify (FORBIDDEN except large PR)"
+
+      pre_push:
+        script: ".git/hooks/pre-push"
+        runs: "./scripts/preflight.sh"
+        enforces:
+          - "Prettier formatting"
+          - "Linting (markdownlint, ESLint, PHPStan)"
+          - "Tests pass"
+          - "REUSE compliance"
+          - "PR size limit (with override)"
+          - "Domain policy (IMPLEMENTED in this PR)"
+        bypass: "git push --no-verify (FORBIDDEN)"
+        exit_code: "Non-zero = push blocked"
+
+    github_actions:
+      required_checks:
+        - name: "Prettier"
+          workflow: "reusable-prettier.yml"
+          blocks_merge: true
+
+        - name: "Markdownlint"
+          workflow: "reusable-markdown-lint.yml"
+          blocks_merge: true
+
+        - name: "REUSE"
+          workflow: "reusable-reuse.yml"
+          blocks_merge: true
+
+        - name: "PR Size"
+          workflow: "reusable-pr-size.yml"
+          blocks_merge: true
+          can_override: ".preflight-allow-large-pr file"
+
+        - name: "Tests"
+          workflow: "reusable-*-test.yml (per repo)"
+          blocks_merge: true
+
+      recommended_additions:
+        - name: "Domain Policy Check"
+          description: "Validate only secpal.app/secpal.dev used"
+          script: "./scripts/check-domains.sh (IMPLEMENTED in this PR)"
+          blocks_merge: true
+
+        - name: "Draft Enforcement"
+          description: "Validate PR created as draft first"
+          script: "Check PR timeline via API"
+          blocks_merge: false
+          action: "Warning only"
+
+        - name: "Commit Convention"
+          description: "Validate type(scope): format"
+          existing: "commitlint or semantic-pr-title"
+          blocks_merge: true
+
+    branch_protection:
+      required_settings:
+        - setting: "Require pull request before merging"
+          value: true
+          enforces: "No direct pushes to main"
+
+        - setting: "Require approvals"
+          value: 1
+          enforces: "Human review required"
+
+        - setting: "Require status checks to pass"
+          value: true
+          enforces: "All CI checks must be green"
+
+        - setting: "Require conversation resolution"
+          value: true
+          enforces: "All review comments addressed"
+
+        - setting: "Require signed commits"
+          value: true
+          enforces: "GPG signature on all commits"
+
+        - setting: "Do not allow bypassing the above settings"
+          value: true
+          enforces: "No admin override"
+
+        - setting: "Require linear history"
+          value: true
+          enforces: "Squash merge only"
+
+  semi_automated:
+    scriptable_validations:
+      - name: "Domain Policy Check"
+        script_path: "./scripts/check-domains.sh"
+        command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh" | grep -v "secpal\.app\|secpal\.dev"'
+        expected_output: "Empty (no matches)"
+        integration: "Integrated in preflight.sh (this PR)"
+        exit_on_failure: true
+
+      - name: "One Topic Heuristic"
+        script_path: "./scripts/check-one-topic.sh"
+        logic: "Parse commit messages, detect mixed types (feat+fix, refactor+feature)"
+        accuracy: "Heuristic only, not 100% reliable"
+        integration: "Add to preflight.sh as warning"
+        exit_on_failure: false
+
+      - name: "Pre-PR Checklist"
+        script_path: "./scripts/pre-pr-checklist.sh"
+        type: "Interactive"
+        prompts:
+          - "Did you execute 2+ full 4-pass reviews? (y/n)"
+          - "Did all reviews find ZERO issues? (y/n)"
+          - "Is PR description complete? (y/n)"
+          - "Ready to create PR as DRAFT? (y/n)"
+        integration: "Manual execution before gh pr create"
+
+  not_automatable:
+    human_judgment_required:
+      - rule: "Multiple 4-pass reviews executed"
+        why: "Cannot verify AI internal review process"
+        enforcement: "Trust + verify via results (Copilot finds zero)"
+
+      - rule: "Issues created for unrelated findings"
+        why: "Cannot detect 'relatedness' automatically"
+        enforcement: "Human review in PR"
+
+      - rule: "EPIC/sub-issue structure"
+        why: "Requires understanding of problem domain"
+        enforcement: "Human project management"
+
+      - rule: "Critical thinking on Copilot comments"
+        why: "Requires context awareness and judgment"
+        enforcement: "Document analysis in PR description"
+
+  implementation_priority:
+    phase_1_immediate_completed:
+      - "✅ Add domain policy check to preflight.sh (completed in this PR)"
+      - "✅ Create check-domains.sh script (completed in this PR)"
+
+    phase_1_immediate:
+      - "Document branch protection settings"
+
+    phase_2_next:
+      - "Add commit convention check (commitlint)"
+      - "Create pre-pr-checklist.sh (interactive)"
+      - "Add one-topic heuristic (warning only)"
+
+    phase_3_optional:
+      - "Draft enforcement GitHub Action"
+      - "PR timeline analyzer"
+      - "Automated issue creation for findings"
+
 # Checklists (Single Source of Truth)
 checklists:
   pre_commit:
@@ -469,7 +805,7 @@ checklists:
           - "Governance files present: CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, CODEOWNERS"
           - "package.json complete: name, version, description, homepage, bugs, repository, license, author"
           - "OpenAPI spec complete: components, schemas, responses, examples, securitySchemes"
-        validation: 'ls -la | grep "^\\."'
+        validation: "ls -la | grep '^\\.'"
 
       - id: pass-4
         name: Security Auditor Review
@@ -625,6 +961,7 @@ learned_lessons:
       - CODEOWNERS
       - .editorconfig
       - .gitattributes
+      - scripts/check-domains.sh
     automation: "./scripts/sync-governance.sh"
     validation: "Script checks file existence and content match"
 
