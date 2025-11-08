@@ -29,7 +29,6 @@ GOVERNANCE_FILES=(
     "CODEOWNERS"
     ".editorconfig"
     ".gitattributes"
-    "scripts/check-domains.sh"
 )
 
 # Mode: sync (copy files) or check (verify only)
@@ -68,7 +67,7 @@ files_match() {
         return 1  # Target doesn't exist
     fi
 
-    # Compare file content (exact match, including whitespace)
+    # Compare file content (exact, including whitespace)
     if diff -q "$source" "$target" > /dev/null 2>&1; then
         return 0  # Files match
     else
@@ -116,16 +115,21 @@ for repo in "${TARGET_REPOS[@]}"; do
             else
                 # Sync mode: copy file
                 # Check if target exists BEFORE copying to determine correct message
-                msg="created"
                 if [[ -f "$target_file" ]]; then
-                    msg="updated"
+                    if cp "$source_file" "$target_file"; then
+                        echo -e "${GREEN}✅ $file (updated)${NC}"
+                    else
+                        echo -e "${RED}❌ $file (update failed)${NC}"
+                        exit 1
+                    fi
+                else
+                    if cp "$source_file" "$target_file"; then
+                        echo -e "${GREEN}✅ $file (created)${NC}"
+                    else
+                        echo -e "${RED}❌ $file (creation failed)${NC}"
+                        exit 1
+                    fi
                 fi
-
-                # Create parent directory if it doesn't exist
-                target_dir=$(dirname "$target_file")
-                mkdir -p "$target_dir"
-                cp "$source_file" "$target_file"
-                echo -e "${GREEN}✅ $file ($msg)${NC}"
                 synced_count=$((synced_count + 1))
             fi
         fi
