@@ -12,11 +12,16 @@ SecPal uses Git hooks to enforce quality standards before commits and pushes. Th
 ### Design Principle
 
 ```
-.git/hooks/pre-push  →  symlink  →  ../../scripts/preflight.sh
-.git/hooks/pre-commit → symlink  →  ../../.githooks/pre-commit
+.git/hooks/pre-push    →  symlink  →  ../../scripts/preflight.sh
+.git/hooks/pre-commit  →  managed by Python pre-commit framework
 ```
 
-**Why Symlinks?**
+**Note:**
+
+- The **pre-push** hook is a symlink to a repository script, so it updates automatically with script changes.
+- The **pre-commit** hook is managed by the [Python pre-commit framework](https://pre-commit.com/), which installs its own hook script in `.git/hooks/pre-commit` and manages updates via `pre-commit install` and `.pre-commit-config.yaml`.
+
+**Why Symlinks? (for pre-push)**
 
 - ✅ Hooks automatically update when scripts change
 - ✅ No manual sync needed after pulling updates
@@ -171,7 +176,7 @@ Test hooks without pushing/committing:
 ./scripts/preflight.sh
 
 # Test pre-commit checks
-./.githooks/pre-commit
+pre-commit run --all-files
 ```
 
 ## Bypass (Emergency Only)
@@ -221,10 +226,9 @@ git push --dry-run
 ## Related Scripts
 
 - **`scripts/setup-pre-push.sh`** - Installs pre-push hook as symlink
-- **`scripts/setup-pre-commit.sh`** - Installs pre-commit hook as symlink
+- **`scripts/setup-pre-commit.sh`** - Installs pre-commit hooks via Python framework
 - **`scripts/preflight.sh`** - Pre-push quality checks (target of pre-push hook)
-- **`.githooks/pre-commit`** - Pre-commit quality checks (target of pre-commit hook)
-- **`scripts/check-conflict-markers.sh`** - Detects merge conflict markers in files
+- **`scripts/check-conflict-markers.sh`** - Detects merge conflict markers in files (provided in PR #181)
 
 ## Debugging
 
@@ -271,9 +275,9 @@ Hooks enforce quality locally. CI enforces same checks remotely:
 ## Further Reading
 
 - [Git Hooks Documentation](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks)
-- [SecPal Quality Standards](./SELF_REVIEW_CHECKLIST.md)
+- [Pre-commit Framework](https://pre-commit.com/)
 - [Preflight Script Documentation](../scripts/README.md)
-- [Conflict Marker Detection](./scripts/CHECK_CONFLICT_MARKERS.md)
+- [Conflict Marker Detection](https://github.com/SecPal/.github/blob/main/docs/scripts/CHECK_CONFLICT_MARKERS.md) (see PR #181)
 
 ---
 
