@@ -35,7 +35,7 @@ Chronological log of notable changes to SecPal organization defaults.
     - Exit code 0 if all critical requirements met, 1 otherwise
     - Summary report with counts (OK / Warnings / Critical missing)
 - **Documentation:** `docs/scripts/CHECK_SYSTEM_REQUIREMENTS.md` - Complete usage guide with typical scenarios (backup restore, new dev system, CI/CD integration)
-- **Use case:** Essential after backup restoration or setting up new development environments to identify missing programs
+- **Use case:** Essential after backup restoration or setting up new development environments to identify missing tools
 
 **Why this matters:**
 

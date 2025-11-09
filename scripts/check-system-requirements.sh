@@ -36,6 +36,9 @@ CRITICAL_MISSING=0
 WARNING_COUNT=0
 OK_COUNT=0
 
+# Track Node.js check to avoid duplicates
+NODE_CHECKED=false
+
 # Repository filter
 REPO_FILTER=""
 if [[ "${1:-}" =~ --repo=(.*) ]]; then
@@ -191,16 +194,20 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "api" ]; then
 
     # Check if DDEV is running (only in api directory)
     if [ -f "../api/.ddev/config.yaml" ]; then
-      pushd "../api" >/dev/null 2>&1 || true
-      if ddev describe >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} DDEV is running"
-        OK_COUNT=$((OK_COUNT + 1))
+      if pushd "../api" >/dev/null 2>&1; then
+        if ddev describe >/dev/null 2>&1; then
+          echo -e "${GREEN}✓${NC} DDEV is running"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${YELLOW}⚠${NC} DDEV is installed but not running"
+          echo -e "  ${YELLOW}→${NC} Run: cd api && ddev start"
+          WARNING_COUNT=$((WARNING_COUNT + 1))
+        fi
+        popd >/dev/null 2>&1
       else
-        echo -e "${YELLOW}⚠${NC} DDEV is installed but not running"
-        echo -e "  ${YELLOW}→${NC} Run: cd api && ddev start"
+        echo -e "${YELLOW}⚠${NC} Cannot access ../api directory"
         WARNING_COUNT=$((WARNING_COUNT + 1))
       fi
-      popd >/dev/null 2>&1 || true
     fi
   else
     echo -e "${RED}✗${NC} DDEV ${RED}(REQUIRED for API development)${NC}"
@@ -216,42 +223,45 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "api" ]; then
   if [ -d "../api" ]; then
     print_section "API Repository - Local Dependencies"
 
-    pushd "../api" >/dev/null 2>&1 || true
-
-    if [ -d "vendor" ]; then
-      echo -e "${GREEN}✓${NC} vendor/ directory exists"
-      OK_COUNT=$((OK_COUNT + 1))
-
-      if [ -x "vendor/bin/pest" ]; then
-        echo -e "${GREEN}✓${NC} Pest installed"
+    if pushd "../api" >/dev/null 2>&1; then
+      if [ -d "vendor" ]; then
+        echo -e "${GREEN}✓${NC} vendor/ directory exists"
         OK_COUNT=$((OK_COUNT + 1))
+
+        if [ -x "vendor/bin/pest" ]; then
+          echo -e "${GREEN}✓${NC} Pest installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} Pest not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
+
+        if [ -x "vendor/bin/pint" ]; then
+          echo -e "${GREEN}✓${NC} Pint installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} Pint not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
+
+        if [ -x "vendor/bin/phpstan" ]; then
+          echo -e "${GREEN}✓${NC} PHPStan installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} PHPStan not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
       else
-        echo -e "${RED}✗${NC} Pest not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        echo -e "${YELLOW}⚠${NC} vendor/ directory not found"
+        echo -e "  ${YELLOW}→${NC} Run: composer install"
+        WARNING_COUNT=$((WARNING_COUNT + 1))
       fi
 
-      if [ -x "vendor/bin/pint" ]; then
-        echo -e "${GREEN}✓${NC} Pint installed"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${RED}✗${NC} Pint not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      fi
-
-      if [ -x "vendor/bin/phpstan" ]; then
-        echo -e "${GREEN}✓${NC} PHPStan installed"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${RED}✗${NC} PHPStan not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      fi
+      popd >/dev/null 2>&1
     else
-      echo -e "${YELLOW}⚠${NC} vendor/ directory not found"
-      echo -e "  ${YELLOW}→${NC} Run: composer install"
+      echo -e "${YELLOW}⚠${NC} Cannot access ../api directory"
       WARNING_COUNT=$((WARNING_COUNT + 1))
     fi
-
-    popd >/dev/null 2>&1 || true
   fi
 fi
 
@@ -277,9 +287,11 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "frontend" ]; then
       echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
       WARNING_COUNT=$((WARNING_COUNT + 1))
     fi
+    NODE_CHECKED=true
   else
     echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
     CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+    NODE_CHECKED=true
   fi
 
   check_command "npm" "npm" "critical" "Comes with Node.js"
@@ -290,50 +302,53 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "frontend" ]; then
   if [ -d "../frontend" ]; then
     print_section "Frontend Repository - Local Dependencies"
 
-    pushd "../frontend" >/dev/null 2>&1 || true
-
-    if [ -d "node_modules" ]; then
-      echo -e "${GREEN}✓${NC} node_modules/ directory exists"
-      OK_COUNT=$((OK_COUNT + 1))
-
-      if npm list typescript >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} TypeScript installed"
+    if pushd "../frontend" >/dev/null 2>&1; then
+      if [ -d "node_modules" ]; then
+        echo -e "${GREEN}✓${NC} node_modules/ directory exists"
         OK_COUNT=$((OK_COUNT + 1))
+
+        if npm list typescript --silent >/dev/null 2>&1; then
+          echo -e "${GREEN}✓${NC} TypeScript installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} TypeScript not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
+
+        if npm list vite --silent >/dev/null 2>&1; then
+          echo -e "${GREEN}✓${NC} Vite installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} Vite not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
+
+        if npm list vitest --silent >/dev/null 2>&1; then
+          echo -e "${GREEN}✓${NC} Vitest installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} Vitest not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
+
+        if npm list eslint --silent >/dev/null 2>&1; then
+          echo -e "${GREEN}✓${NC} ESLint installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} ESLint not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
       else
-        echo -e "${RED}✗${NC} TypeScript not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        echo -e "${YELLOW}⚠${NC} node_modules/ directory not found"
+        echo -e "  ${YELLOW}→${NC} Run: npm install"
+        WARNING_COUNT=$((WARNING_COUNT + 1))
       fi
 
-      if npm list vite >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} Vite installed"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${RED}✗${NC} Vite not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      fi
-
-      if npm list vitest >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} Vitest installed"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${RED}✗${NC} Vitest not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      fi
-
-      if npm list eslint >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} ESLint installed"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${RED}✗${NC} ESLint not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      fi
+      popd >/dev/null 2>&1
     else
-      echo -e "${YELLOW}⚠${NC} node_modules/ directory not found"
-      echo -e "  ${YELLOW}→${NC} Run: npm install"
+      echo -e "${YELLOW}⚠${NC} Cannot access ../frontend directory"
       WARNING_COUNT=$((WARNING_COUNT + 1))
     fi
-
-    popd >/dev/null 2>&1 || true
   fi
 fi
 
@@ -346,8 +361,8 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "contracts" ]; then
 
   print_section "Node.js & npm"
 
-  # Check Node version (reuse from frontend if already checked)
-  if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" != "frontend" ]; then
+  # Check Node version (skip if already checked in frontend section)
+  if [ "$NODE_CHECKED" = false ]; then
     if command -v node >/dev/null 2>&1; then
       node_version=$(node --version | sed 's/v//')
       major_version=$(echo "$node_version" | cut -d. -f1)
@@ -372,26 +387,29 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "contracts" ]; then
   if [ -d "../contracts" ]; then
     print_section "Contracts Repository - Local Dependencies"
 
-    pushd "../contracts" >/dev/null 2>&1 || true
-
-    if [ -d "node_modules" ]; then
-      echo -e "${GREEN}✓${NC} node_modules/ directory exists"
-      OK_COUNT=$((OK_COUNT + 1))
-
-      if npm list @redocly/cli >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} @redocly/cli installed"
+    if pushd "../contracts" >/dev/null 2>&1; then
+      if [ -d "node_modules" ]; then
+        echo -e "${GREEN}✓${NC} node_modules/ directory exists"
         OK_COUNT=$((OK_COUNT + 1))
+
+        if npm list @redocly/cli --silent >/dev/null 2>&1; then
+          echo -e "${GREEN}✓${NC} @redocly/cli installed"
+          OK_COUNT=$((OK_COUNT + 1))
+        else
+          echo -e "${RED}✗${NC} @redocly/cli not installed"
+          CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        fi
       else
-        echo -e "${RED}✗${NC} @redocly/cli not installed"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+        echo -e "${YELLOW}⚠${NC} node_modules/ directory not found"
+        echo -e "  ${YELLOW}→${NC} Run: npm install"
+        WARNING_COUNT=$((WARNING_COUNT + 1))
       fi
+
+      popd >/dev/null 2>&1
     else
-      echo -e "${YELLOW}⚠${NC} node_modules/ directory not found"
-      echo -e "  ${YELLOW}→${NC} Run: npm install"
+      echo -e "${YELLOW}⚠${NC} Cannot access ../contracts directory"
       WARNING_COUNT=$((WARNING_COUNT + 1))
     fi
-
-    popd >/dev/null 2>&1 || true
   fi
 fi
 

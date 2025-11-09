@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # System Requirements Check
 
-The `check-system-requirements.sh` script validates that all required programs and dependencies for developing all SecPal repositories are installed.
+The `check-system-requirements.sh` script validates that all required tools and dependencies for developing all SecPal repositories are installed.
 
 ## Usage
 
@@ -215,7 +215,7 @@ The script can be extended with:
 
 ## See Also
 
-- [DEVELOPMENT.md](../../api/DEVELOPMENT.md) - API Development Setup
-- [README.md](../../frontend/README.md) - Frontend Setup
-- [README.md](../../contracts/README.md) - Contracts Setup
+- [API DEVELOPMENT.md](https://github.com/SecPal/api/blob/main/DEVELOPMENT.md) - API Development Setup
+- [Frontend README.md](https://github.com/SecPal/frontend/blob/main/README.md) - Frontend Setup
+- [Contracts README.md](https://github.com/SecPal/contracts/blob/main/README.md) - Contracts Setup
 - [Preflight Scripts](../scripts/preflight.sh) - Quality Gate Checks
