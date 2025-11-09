@@ -95,7 +95,7 @@ Git Conflict Marker Detection
 
 ✗ Conflict markers detected:
 
-File: .git/hooks/pre-push
+File: src/utils/helper.py
   Line 73: <<<<<<< Updated upstream...
 
 File: src/main.py
