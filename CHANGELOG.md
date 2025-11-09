@@ -9,6 +9,41 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-09 - System Requirements Check Script
+
+**Added comprehensive system validation script for multi-repo setup:**
+
+- **New script:** `scripts/check-system-requirements.sh` - Validates all required tools and dependencies for development across all SecPal repositories
+  - **Global system tools:** Git, Bash, cURL, jq, REUSE, ShellCheck, yamllint, actionlint
+  - **Git configuration:** user.name, user.email, GPG commit signing
+  - **API repository (Laravel + DDEV):**
+    - PHP 8.4+, Composer 2.x
+    - DDEV (development environment) with running status check
+    - PostgreSQL (via DDEV, no local install needed)
+    - Laravel tools: Pest, Pint, PHPStan (checks vendor/ directory)
+  - **Frontend repository (React + TypeScript):**
+    - Node.js 22.x+, npm/yarn/pnpm
+    - Local dependencies: TypeScript, Vite, Vitest, ESLint (checks node_modules/)
+  - **Contracts repository (OpenAPI):**
+    - Node.js 22.x+, npm
+    - @redocly/cli (checks node_modules/)
+  - **Optional tools:** GitHub CLI (gh), pre-commit, Docker, Docker Compose
+  - **Features:**
+    - Colored output (green ✓ / yellow ⚠ / red ✗) for visual clarity
+    - Installation hints for each missing tool
+    - Repository filter: `--repo=api|frontend|contracts` for targeted checks
+    - Exit code 0 if all critical requirements met, 1 otherwise
+    - Summary report with counts (OK / Warnings / Critical missing)
+- **Documentation:** `docs/scripts/CHECK_SYSTEM_REQUIREMENTS.md` - Complete usage guide with typical scenarios (backup restore, new dev system, CI/CD integration)
+- **Use case:** Essential after backup restoration or setting up new development environments to identify missing programs
+
+**Why this matters:**
+
+- **Multi-repo awareness:** Checks all three SecPal repositories (api, frontend, contracts) with their specific requirements
+- **DDEV detection:** Special handling for API repository's DDEV environment (critical difference vs. standard PHP setup)
+- **Local dependencies validation:** Not just global tools, but also checks if `composer install` / `npm install` were run
+- **Zero manual debugging:** Script automatically identifies what's missing instead of trial-and-error with preflight.sh failures
+
 ## 2025-11-08 - DRY Refactoring: Copilot Instructions & YAML Enhancement
 
 **Major refactoring to eliminate redundancy and improve AI parsing performance:**
