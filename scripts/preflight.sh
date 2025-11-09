@@ -70,8 +70,6 @@ if [ "$FORMAT_EXIT" -ne 0 ]; then
   exit 1
 fi
 
-<<<<<<< Updated upstream
-=======
 # Domain Policy Check (CRITICAL: ZERO TOLERANCE)
 if [ -f scripts/check-domains.sh ]; then
   bash scripts/check-domains.sh || {
@@ -82,7 +80,6 @@ if [ -f scripts/check-domains.sh ]; then
   }
 fi
 
->>>>>>> Stashed changes
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
