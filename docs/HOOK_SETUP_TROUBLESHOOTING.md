@@ -52,11 +52,11 @@ $ git push
 The hook file is a **direct copy** (not a symlink) that contains unresolved merge conflict markers:
 
 ```bash
-<<<<<<< Updated upstream
-[old code version]
-=======
-[new code version]
->>>>>>> Stashed changes
+ <<<<<<< Updated upstream
+ [old code version]
+ =======
+ [new code version]
+ >>>>>>> Stashed changes
 ```
 
 **Solution:**
