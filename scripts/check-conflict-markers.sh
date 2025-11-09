@@ -25,9 +25,9 @@ NC='\033[0m' # No Color
 # Conflict marker patterns
 MARKERS=(
   "<<<<<<< "  # Start of conflict (from HEAD)
-  "======="   # Separator between changes
+  "======= "  # Separator between changes (7 equals + space to avoid false positives)
   ">>>>>>> "  # End of conflict (from incoming)
-  "||||||"    # Optional: diff3 style marker
+  "|||||||"   # Optional: diff3 style marker (7 pipes)
 )
 
 CONFLICTS_FOUND=0

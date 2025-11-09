@@ -12,11 +12,11 @@ The `check-conflict-markers.sh` script detects unresolved Git merge conflict mar
 When resolving merge conflicts, developers sometimes forget to remove conflict markers:
 
 ```bash
-<<<<<<< HEAD
-code from current branch
-=======
-code from incoming branch
->>>>>>> feature-branch
+ <<<<<<< HEAD
+ code from current branch
+ =======
+ code from incoming branch
+ >>>>>>> feature-branch
 ```
 
 These markers cause:

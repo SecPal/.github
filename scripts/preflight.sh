@@ -80,6 +80,16 @@ if [ -f scripts/check-domains.sh ]; then
   }
 fi
 
+# Conflict Marker Check (prevents accidental commits of broken code)
+if [ -f scripts/check-conflict-markers.sh ]; then
+  bash scripts/check-conflict-markers.sh || {
+    echo "" >&2
+    echo "❌ Conflict markers detected!" >&2
+    echo "Fix the conflicts above before committing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
