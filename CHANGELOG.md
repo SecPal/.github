@@ -44,6 +44,24 @@ Chronological log of notable changes to SecPal organization defaults.
 - **Local dependencies validation:** Not just global tools, but also checks if `composer install` / `npm install` were run
 - **Zero manual debugging:** Script automatically identifies what's missing instead of trial-and-error with preflight.sh failures
 
+---
+
+## 2025-11-09 - Git Conflict Marker Detection
+
+**Added automated detection for unresolved Git merge conflicts:**
+
+- **New script:** `scripts/check-conflict-markers.sh` - Detects conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) in tracked files
+  - **Prevents accidental commits** of broken code with unresolved merge conflicts
+  - **Checks all text files** using `git ls-files` (excludes binary files and .git directory)
+  - **Clear output** showing file names and line numbers of conflicts
+  - **Actionable guidance** for resolving detected conflicts
+- **CI Integration:** GitHub Actions workflow `check-conflict-markers.yml` runs on all PRs and pushes to main
+- **Documentation:** `docs/scripts/CHECK_CONFLICT_MARKERS.md` - Complete usage guide with examples and troubleshooting
+- **Exit codes:** 0 = clean, 1 = conflicts detected
+- **Use case:** Prevents syntax errors in hooks, source code, and configuration files from reaching the repository
+
+---
+
 ## 2025-11-08 - DRY Refactoring: Copilot Instructions & YAML Enhancement
 
 **Major refactoring to eliminate redundancy and improve AI parsing performance:**
