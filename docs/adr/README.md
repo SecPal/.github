@@ -77,6 +77,11 @@ Examples:
 
 <!-- New ADRs are added here in reverse chronological order -->
 
+### Accepted
+
+- [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11
+- [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08
+
 ### Proposed
 
 - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27

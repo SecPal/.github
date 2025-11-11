@@ -9,6 +9,26 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-11 - ADR-005: RBAC Design Decisions
+
+**Added:**
+
+- **ADR-005:** `docs/adr/20251111-rbac-design-decisions.md` - Formal documentation of three critical RBAC design decisions:
+  - **Decision 1:** No System Roles - All roles are equal with unified deletion rules and idempotent seeder recovery
+  - **Decision 2:** Direct Permissions - Users can have permissions independent of roles for exceptional access cases
+  - **Decision 3:** Temporal Assignments Optional - Permanent by default, temporal only when explicitly needed
+- **Updated:** `docs/adr/README.md` - Added ADR-005 and ADR-004 to "Accepted" section, created proper section structure
+
+**Context:**
+
+- These decisions emerged during RBAC Phase 4 planning (Issue SecPal/api#108) and were previously only documented in issue threads
+- Formalizing as ADR ensures architectural decisions are permanently recorded and linked for future reference
+- Supports Phase 4 implementation where other documentation (#143-145) must reference these decisions
+
+**Related:** Issue SecPal/api#142
+
+---
+
 ## 2025-11-09 - System Requirements Check Script
 
 **Added comprehensive system validation script for multi-repo setup:**
