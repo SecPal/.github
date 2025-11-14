@@ -432,12 +432,12 @@ Schema::create('br_approval_workflows', function (Blueprint $table) {
 
 | Resource         | Read | Approve | Reject | Export | Comment |
 | ---------------- | ---- | ------- | ------ | ------ | ------- |
-| Shift Plans      | ✅   | ✅      | ✅      | ✅     | ✅      |
-| Employee Files   | 🔐\* | ❌      | ❌      | 🔐\*   | ❌      |
-| Working Time     | ✅   | ✅      | ✅      | ✅     | ✅      |
-| Overtime Records | ✅   | ❌      | ❌      | ✅      | ❌      |
-| Guard Book       | ❌   | ❌      | ❌      | ❌     | ❌      |
-| System Settings  | ❌   | ❌      | ❌      | ❌     | ❌      |
+| Shift Plans      | ✅   | ✅      | ✅     | ✅     | ✅      |
+| Employee Files   | 🔐\* | ❌      | ❌     | 🔐\*   | ❌      |
+| Working Time     | ✅   | ✅      | ✅     | ✅     | ✅      |
+| Overtime Records | ✅   | ❌      | ❌     | ✅     | ❌      |
+| Guard Book       | ❌   | ❌      | ❌     | ❌     | ❌      |
+| System Settings  | ❌   | ❌      | ❌     | ❌     | ❌      |
 
 _\* 🔐 = Request-based access with justification required_
 

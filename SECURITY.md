@@ -118,24 +118,20 @@ All PRs automatically run:
 ### Secure Development Guidelines
 
 1. **Never commit secrets:**
-
    - Use environment variables (`.env`)
    - Utilize secret management services
    - Enable push protection (automatically enabled)
 
 2. **Keep dependencies updated:**
-
    - Dependabot creates PRs daily (04:00 CET)
    - Security updates have priority
    - Review and merge promptly
 
 3. **Follow OWASP Top 10:**
-
    - [OWASP Top Ten](https://owasp.org/www-project-top-ten/)
    - Regular security training encouraged
 
 4. **Validate all inputs:**
-
    - Server-side validation (never trust client)
    - Sanitize outputs to prevent XSS
    - Use framework's built-in protection (Laravel, React)
