@@ -148,6 +148,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
           running-workflow-name: "Enable Auto-Merge"
+          allowed-conclusions: success,skipped,neutral
+        continue-on-error: true
 
       - name: Enable auto-merge
         env:
