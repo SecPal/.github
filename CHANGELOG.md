@@ -9,6 +9,25 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-14 - Fix Dependabot Auto-Merge Timeouts
+
+**Fixed:**
+
+- **Workflow timeout issue:** Modified `lewagon/wait-on-check-action` step in `reusable-dependabot-auto-merge.yml` to add `allowed-conclusions: success,skipped,neutral` and `continue-on-error: true`, allowing the workflow to proceed even when checks like `license/cla` are skipped or neutral
+  - Step previously waited for ALL branch protection checks to reach "success" conclusion, causing 50+ minute timeouts
+  - `license/cla` check is marked as required by branch protection but comes from external app and may return "neutral" or be skipped for Dependabot PRs
+  - GitHub's native auto-merge (`gh pr merge --auto`) already waits for required checks automatically
+  - Resolves timeout issues blocking Dependabot PRs across multiple repositories (frontend#131, #126, #127, #128, #129)
+
+**Impact:**
+
+- Auto-merge workflows now complete successfully instead of timing out after 50+ minutes
+- Dependabot PRs can merge automatically as designed across all SecPal repositories
+
+**Related:** PR #184
+
+---
+
 ## 2025-11-14 - Fix CodeQL Workflow for Repositories Without JavaScript/TypeScript
 
 **Fixed:**
