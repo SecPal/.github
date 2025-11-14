@@ -18,9 +18,34 @@ permissions:
   security-events: write
 
 jobs:
+  check-languages:
+    name: Check for Code to Analyze
+    runs-on: ubuntu-latest
+    outputs:
+      has-javascript: ${{ steps.check.outputs.has-javascript }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Check for JavaScript/TypeScript files
+        id: check
+        run: |
+          # Check if any JS/TS files exist (excluding node_modules and .git)
+          if find . -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.mjs" -o -name "*.cjs" \) \
+             -not -path "*/node_modules/*" -not -path "*/.git/*" | grep -q .; then
+            echo "has-javascript=true" >> $GITHUB_OUTPUT
+            echo "✅ Found JavaScript/TypeScript files to analyze"
+          else
+            echo "has-javascript=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No JavaScript/TypeScript files found - CodeQL analysis will be skipped"
+          fi
+
   analyze:
     name: Analyze Code
     runs-on: ubuntu-latest
+    needs: check-languages
+    # Only run if we have code to analyze
+    if: needs.check-languages.outputs.has-javascript == 'true'
     timeout-minutes: 360
 
     strategy:

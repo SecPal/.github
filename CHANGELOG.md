@@ -9,6 +9,31 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-14 - Fix CodeQL Workflow for Repositories Without JavaScript/TypeScript
+
+**Fixed:**
+
+- **CodeQL false failure:** Modified `codeql.yml` workflow to check for JavaScript/TypeScript file presence before running analysis
+  - Added `check-languages` job that scans for `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` files (excluding `node_modules` and `.git`)
+  - `analyze` job now only runs when `has-javascript=true`, preventing failures in repositories without JS/TS code
+  - Resolves CodeQL failure in `.github` repository which contains only YAML/Markdown/Shell files
+
+**Impact:**
+
+- CodeQL workflow succeeds with skipped analysis for repositories without JavaScript/TypeScript code
+- Branch protection checks pass for non-JS/TS repositories (e.g., `.github` org defaults repo)
+- No false negatives - repositories with JS/TS code still get full security analysis
+
+**Technical Details:**
+
+- Uses `find` command with file extensions and path exclusions for reliable detection
+- Conditional job execution via `needs` and `if` ensures proper GitHub Actions check reporting
+- Compatible with branch protection rules expecting "CodeQL" check status
+
+**Related:** Discovered during PR #184 review
+
+---
+
 ## 2025-11-11 - ADR-005: RBAC Design Decisions
 
 **Added:**
