@@ -141,6 +141,16 @@ jobs:
     needs: check-eligibility
     if: needs.check-eligibility.outputs.should-auto-merge == 'true'
     steps:
+      - name: Wait for CI checks
+        uses: lewagon/wait-on-check-action@v1.4.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+          running-workflow-name: "Enable Auto-Merge"
+          allowed-conclusions: success,skipped,neutral
+        continue-on-error: true
+
       - name: Enable auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
