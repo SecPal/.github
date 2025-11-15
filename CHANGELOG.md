@@ -20,7 +20,7 @@ Chronological log of notable changes to SecPal organization defaults.
   - Backend flag (`api/`) and Frontend flag (`frontend/`)
   - Comprehensive ignore patterns for tests, configs, build artifacts
   - PR comments enabled with coverage diff and tree view
-  - Strict CI enforcement: `fail_ci_if_error: true`
+  - Strict CI enforcement: `if_ci_failed: error`
 
 **Changed:**
 
