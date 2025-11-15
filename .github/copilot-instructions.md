@@ -101,7 +101,12 @@ See `copilot-config.yaml:core_principles` for complete list with validation comm
 
 10. **REUSE Compliance:** All files MUST have SPDX headers. Run `reuse lint` before commit.
 
-11. **Post-Merge Cleanup:** IMMEDIATELY execute `copilot-config.yaml:checklists.post_merge_cleanup` after ANY merge.
+11. **Code Coverage Enforcement:** Code coverage tracked via Codecov (see `.codecov.yml`).
+    Minimum 80% coverage for new code, 100% for critical paths. Coverage reports
+    auto-generated in CI and uploaded to Codecov dashboard. PRs must not decrease
+    overall coverage below threshold.
+
+12. **Post-Merge Cleanup:** IMMEDIATELY execute `copilot-config.yaml:checklists.post_merge_cleanup` after ANY merge.
 
 ### Emergency Exception Process
 

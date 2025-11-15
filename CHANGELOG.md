@@ -9,6 +9,42 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-15 - Code Coverage Integration with Codecov
+
+**Added:**
+
+- **Organization-wide Codecov configuration:** Created `.codecov.yml` with coverage thresholds and policies
+  - Global coverage target: 80% for project and patches
+  - Precision: 2 decimal places, round down
+  - Coverage range: 70-100%
+  - Backend flag (`api/`) and Frontend flag (`frontend/`)
+  - Comprehensive ignore patterns for tests, configs, build artifacts
+  - PR comments enabled with coverage diff and tree view
+  - Strict CI enforcement: `fail_ci_if_error: true`
+
+**Changed:**
+
+- **Documentation updates:**
+  - Added Code Coverage section to `CONTRIBUTING.md` with local commands and requirements
+  - Updated `copilot-instructions.md` with coverage enforcement rule (#11)
+  - Added Codecov badges for backend and frontend to organization README
+  - Minimum 80% coverage for new code, 100% for critical paths documented
+
+**Implementation:**
+
+- Part of Epic #189: Implement Code Coverage Tracking with Codecov
+- Sub-Issue #190: Organization-Level Codecov Configuration & Documentation
+- Enables coverage tracking across `api` and `frontend` repositories
+- Coverage visible in Codecov dashboard and PR comments
+
+**Impact:**
+
+- Quality gate completion: Coverage requirements now enforced automatically
+- Developers can view coverage locally and in CI
+- Branch protection can enforce coverage thresholds (to be configured)
+
+---
+
 ## 2025-11-15 - Fix Draft PR Reminder Firing on ready_for_review Event
 
 **Fixed:**

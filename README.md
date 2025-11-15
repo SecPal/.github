@@ -5,6 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # SecPal Organization
 
+[![Code Coverage](https://codecov.io/gh/SecPal/api/branch/main/graph/badge.svg?flag=backend)](https://codecov.io/gh/SecPal/api)
+[![Code Coverage](https://codecov.io/gh/SecPal/frontend/branch/main/graph/badge.svg?flag=frontend)](https://codecov.io/gh/SecPal/frontend)
+
 This repository contains general project documentation, settings, and community health files for the [SecPal organization](https://github.com/SecPal).
 
 ## About SecPal
