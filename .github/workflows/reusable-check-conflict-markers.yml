@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Reusable - Check for Merge Conflict Markers
+
+on:
+  workflow_call:
+    inputs:
+      checkout-ref:
+        description: "Git ref to checkout (branch, tag, SHA). Defaults to the triggering ref."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  check-conflict-markers:
+    runs-on: ubuntu-latest
+    name: Detect Git Conflict Markers
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.checkout-ref }}
+
+      - name: Download conflict marker check script
+        run: |
+          curl -sSL https://raw.githubusercontent.com/SecPal/.github/main/scripts/check-conflict-markers.sh -o check-conflict-markers.sh
+          chmod +x check-conflict-markers.sh
+
+      - name: Run conflict marker check
+        run: ./check-conflict-markers.sh
