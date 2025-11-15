@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+# Codecov Configuration for SecPal Organization
+# https://docs.codecov.com/docs/codecov-yaml
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    wait_for_ci: true
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 1%
+        if_ci_failed: error
+        informational: false
+
+    patch:
+      default:
+        target: 80%
+        threshold: 1%
+        if_ci_failed: error
+        informational: false
+
+comment:
+  layout: "reach,diff,flags,tree,footer"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+
+flags:
+  backend:
+    paths:
+      - api/
+    carryforward: false
+
+  frontend:
+    paths:
+      - frontend/
+    carryforward: false
+
+ignore:
+  - "**/*Test.php"
+  - "**/*Test.ts"
+  - "**/*Test.tsx"
+  - "**/tests/**"
+  - "**/test/**"
+  - "**/__tests__/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*.spec.tsx"
+  - "**/vendor/**"
+  - "**/node_modules/**"
+  - "**/*.d.ts"
+  - "**/*.config.ts"
+  - "**/*.config.js"
+  - "**/migrations/**"
+  - "**/seeders/**"
+  - "**/storage/**"
+  - "**/build/**"
+  - "**/dist/**"
+  - "**/public/**"

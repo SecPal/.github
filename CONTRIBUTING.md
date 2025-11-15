@@ -264,6 +264,64 @@ git push origin --delete spike/auth-library-evaluation
 
 ---
 
+## Code Coverage
+
+SecPal uses [Codecov](https://codecov.io) for automated code coverage tracking across all repositories.
+
+### Coverage Requirements
+
+- **Minimum Coverage:** 80% for new code (enforced by Codecov)
+- **Critical Paths:** 100% coverage required (authentication, encryption, RBAC)
+- **Coverage Reports:** Auto-generated in CI and uploaded to Codecov
+- **PR Impact:** PRs must not decrease overall coverage below 80%
+
+### Viewing Coverage
+
+- **Codecov Dashboard:** [https://codecov.io/gh/SecPal](https://codecov.io/gh/SecPal)
+- **PR Comments:** Codecov automatically comments on PRs with coverage impact
+- **Badges:** Coverage badges displayed in each repository README
+
+### Local Coverage Reports
+
+**Backend (PHP/Laravel):**
+
+```bash
+# Run tests with coverage
+php artisan test --coverage-clover coverage.xml
+
+# View HTML report
+php artisan test --coverage-html coverage-html/
+open coverage-html/index.html
+```
+
+**Frontend (TypeScript/React):**
+
+```bash
+# Run tests with coverage
+npm run test:coverage
+
+# View HTML report (auto-opens in browser)
+open coverage/index.html
+```
+
+### Coverage Configuration
+
+- **Organization Config:** `.codecov.yml` in `.github` repository
+- **Backend Config:** PHPUnit coverage in `phpunit.xml` (`<source>` element)
+- **Frontend Config:** Vitest coverage in `vite.config.ts` (`test.coverage`)
+
+### Exclusions
+
+The following are excluded from coverage:
+
+- Test files (`**/*Test.php`, `**/*.test.ts`, etc.)
+- Configuration files (`**/*.config.ts`, `**/*.config.js`)
+- Type definitions (`**/*.d.ts`)
+- Database migrations and seeders
+- Build artifacts and dependencies
+
+---
+
 ## Commit Message Convention
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/) for clear and structured commit messages:
