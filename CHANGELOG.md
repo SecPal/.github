@@ -9,6 +9,32 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-15 - Fix Draft PR Reminder Firing on ready_for_review Event
+
+**Fixed:**
+
+- **Draft PR reminder false trigger:** Modified `draft-pr-reminder.yml` to prevent reminder comments when converting draft PR to "Ready for review"
+  - Added explicit action check: `github.event.action == 'opened'` to job condition
+  - Previously fired on both `opened` and `ready_for_review` events due to reusable workflow behavior
+  - Now only reminds on NEW non-draft PRs, not when draft is converted to ready (intended workflow)
+  - Resolves confusing duplicate comments on PRs that correctly started as drafts (e.g., api#158)
+
+**Technical Details:**
+
+- Reusable workflows (`workflow_call`) ignore their own `on:` section and inherit all events from calling workflow
+- Calling workflows (`project-automation.yml`) trigger on multiple events: `opened`, `ready_for_review`, `closed`, `converted_to_draft`
+- Job condition now checks both draft status AND action type to distinguish between new PR and status changes
+
+**Impact:**
+
+- No more false reminders when following correct draft → ready workflow
+- Fix automatically applies to all repositories (api, frontend, contracts) using the reusable workflow
+- DRY compliance maintained - single centralized fix
+
+**Documentation:** See `docs/BUGFIX_DRAFT_PR_REMINDER.md` for detailed analysis
+
+---
+
 ## 2025-11-14 - Fix Dependabot Auto-Merge Timeouts
 
 **Fixed:**

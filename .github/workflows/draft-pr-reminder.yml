@@ -12,7 +12,10 @@ on:
 jobs:
   remind-draft:
     name: Remind about draft PRs
-    if: github.event.pull_request.draft == false
+    # Only remind on NEW non-draft PRs, not when converting draft → ready
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.action == 'opened'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
