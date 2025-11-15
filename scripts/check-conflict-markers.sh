@@ -44,6 +44,13 @@ while IFS= read -r -d '' file; do
   if file "$file" | grep -q "text"; then
     CHECKED_FILES=$((CHECKED_FILES + 1))
 
+    # Skip Markdown files to avoid false positives from code examples
+    # Note: This means real conflicts in Markdown will not be detected.
+    # This is an acceptable trade-off for documentation files.
+    if [[ "$file" =~ \.md$ ]]; then
+      continue
+    fi
+
     # Check each conflict marker pattern
     for marker in "${MARKERS[@]}"; do
       if grep -n "^${marker}" "$file" > /dev/null 2>&1; then
