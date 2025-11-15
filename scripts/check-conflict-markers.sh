@@ -42,14 +42,14 @@ echo ""
 while IFS= read -r -d '' file; do
   # Skip binary files and non-text files
   if file "$file" | grep -q "text"; then
-    CHECKED_FILES=$((CHECKED_FILES + 1))
-
     # Skip Markdown files to avoid false positives from code examples
     # Note: This means real conflicts in Markdown will not be detected.
     # This is an acceptable trade-off for documentation files.
     if [[ "$file" =~ \.md$ ]]; then
       continue
     fi
+
+    CHECKED_FILES=$((CHECKED_FILES + 1))
 
     # Check each conflict marker pattern
     for marker in "${MARKERS[@]}"; do
