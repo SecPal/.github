@@ -113,6 +113,28 @@ check_command "jq" "jq (JSON processor)" "critical" "Install: sudo apt install j
 print_section "Quality & Compliance Tools"
 check_command "reuse" "REUSE (SPDX compliance)" "critical" "Install: pip3 install reuse"
 check_command "npx" "npx (Node Package Runner)" "critical" "Comes with npm (install Node.js)"
+
+# Helper function to check npx-based tools (DRY principle)
+check_npx_tool() {
+  local tool_name="$1"
+  if command -v npx >/dev/null 2>&1; then
+    if npx --yes "$tool_name" --version >/dev/null 2>&1; then
+      echo -e "${GREEN}✓${NC} $tool_name (via npx)"
+      OK_COUNT=$((OK_COUNT + 1))
+    else
+      echo -e "${RED}✗${NC} $tool_name ${RED}(REQUIRED)${NC}"
+      echo -e "  ${YELLOW}→${NC} Should be available via npx. Check npm/node installation."
+      CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+    fi
+  else
+    echo -e "${RED}✗${NC} $tool_name ${RED}(REQUIRED - npx not found)${NC}"
+    CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+  fi
+}
+
+check_npx_tool "markdownlint-cli2"
+check_npx_tool "prettier"
+
 check_command "shellcheck" "ShellCheck" "critical" "Install: sudo apt install shellcheck / brew install shellcheck"
 check_command "yamllint" "yamllint" "optional" "Install: pip3 install yamllint"
 check_command "actionlint" "actionlint (GitHub Actions)" "optional" "Install: brew install actionlint or download from GitHub"

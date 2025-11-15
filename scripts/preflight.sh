@@ -48,7 +48,7 @@ git fetch origin "$BASE" 2>/dev/null || true
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   npx --yes prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
-  npx --yes markdownlint-cli2 '**/*.md' || FORMAT_EXIT=1
+  npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' || FORMAT_EXIT=1
 fi
 # Workflow linting (part of documented gates)
 # NOTE: actionlint is disabled in local preflight due to known hanging issues
