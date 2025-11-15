@@ -9,6 +9,47 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-15 - Reusable Workflow for Conflict Marker Detection
+
+**Added:**
+
+- **Reusable workflow:** Created `reusable-check-conflict-markers.yml` for organization-wide conflict marker detection
+  - Downloads and executes shared `scripts/check-conflict-markers.sh`
+  - Supports customizable checkout ref via input parameter
+  - Detects Git conflict markers: `<<<<<<<`, `=======`, `>>>>>>>`, `|||||||`
+  - Prevents accidental commits of unresolved merge conflicts
+
+**Changed:**
+
+- **Migrated `.github` repository:** Updated local `check-conflict-markers.yml` to use reusable workflow
+  - Eliminates code duplication (DRY principle)
+  - Single source of truth for conflict detection logic
+  - Simplifies maintenance across all repositories
+
+**Impact:**
+
+- All SecPal repositories can now use the shared workflow
+- Future improvements benefit all repos automatically
+- Consistent conflict detection across the organization
+
+**Migration Path:**
+
+Other repositories (api, frontend, contracts) can migrate by updating their workflows:
+
+```yaml
+jobs:
+  conflict-markers:
+    uses: SecPal/.github/.github/workflows/reusable-check-conflict-markers.yml@main
+```
+
+**Related:**
+
+- Resolves #176: feat: add merge conflict marker check to shared CI/preflight workflow
+- Original implementation: SecPal/frontend#113
+- Original issue: SecPal/frontend#96
+
+---
+
 ## 2025-11-15 - Code Coverage Integration with Codecov
 
 **Added:**
