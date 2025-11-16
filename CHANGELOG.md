@@ -35,16 +35,21 @@ Chronological log of notable changes to SecPal organization defaults.
 
 **Changed:**
 
-- **Pre-Commit Checklist:** Updated with new validation items
-  - Added SOLID Principles check
-  - Added English Only communication check
-  - Added No Literal Quotes check
+- **Pre-Commit Checklist (Markdown & YAML):** Updated with new validation items
+  - Added SOLID Principles check to both markdown documentation and YAML source of truth
+  - Added English Only communication check to both markdown and YAML
+  - Added No Literal Quotes check to both markdown and YAML
   - DRY Principle already present, now part of comprehensive development principles
+  - YAML `copilot-config.yaml:checklists.pre_commit` is the authoritative source
 
 - **Core Development Principles:** Restructured and expanded
   - DRY (Don't Repeat Yourself) now part of formal development principles
-  - Quality Over Speed explicitly documented
+  - Quality Over Speed explicitly documented (removed from Critical Rules to avoid duplication)
   - All principles with validation guidance and examples
+
+- **Critical Rules:** Simplified to avoid duplication
+  - Removed "Quality Over Speed" from Critical Rule #6 (now only in Core Development Principles)
+  - Renumbered subsequent rules (CHANGELOG Mandatory is now #6 instead of #7)
 
 **Impact:**
 

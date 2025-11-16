@@ -794,6 +794,16 @@ checklists:
           - "Configuration in config files (not hardcoded)"
         validation: "Code review for duplication"
 
+      - id: solid-principles
+        title: SOLID Principles
+        items:
+          - "Single Responsibility: One class/function = one reason to change"
+          - "Open/Closed: Open for extension, closed for modification"
+          - "Liskov Substitution: Subtypes substitutable for base types"
+          - "Interface Segregation: Many small interfaces > one large"
+          - "Dependency Inversion: Depend on abstractions, not concretions"
+        validation: "Code review for SOLID compliance"
+
       - id: quality-over-speed
         title: Quality Over Speed
         items:
@@ -802,6 +812,23 @@ checklists:
           - "Error handling complete"
           - "No shortcuts taken"
         validation: "Self-review checklist completed"
+
+      - id: english-only
+        title: English Only Communication
+        items:
+          - "All commit messages in English"
+          - "All PR titles/descriptions in English"
+          - "All code comments in English"
+          - "All documentation in English (except legal docs and i18n)"
+        validation: "Manual review of commit/PR/comments"
+
+      - id: no-literal-quotes
+        title: No Literal Quotes
+        items:
+          - "No large code blocks copy/pasted into comments"
+          - "Code references use path/line format (e.g., 'See src/file.ts:45-60')"
+          - "Duplicated code in docs creates maintenance burden"
+        validation: "Review PR description and comments for verbatim code"
 
       - id: changelog-updated
         title: CHANGELOG Updated
