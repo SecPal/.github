@@ -77,6 +77,24 @@ See `copilot-config.yaml:policies.ai_autonomy` for complete rules.
   - Architectural decision with trade-offs
   - Emergency exception to critical rule
 
+## Core Development Principles
+
+**DRY (Don't Repeat Yourself):** Eliminate code duplication. Extract shared logic into functions/classes/modules. Reuse before rewrite.
+
+**SOLID Principles:**
+
+- **S**ingle Responsibility: One class/function = one reason to change
+- **O**pen/Closed: Open for extension, closed for modification
+- **L**iskov Substitution: Subtypes must be substitutable for base types
+- **I**nterface Segregation: Many small interfaces > one large interface
+- **D**ependency Inversion: Depend on abstractions, not concretions
+
+**Quality Over Speed:** Take time to implement correctly. Fast but broken code creates technical debt.
+
+**Communication Language:** All GitHub communication (issues, PRs, comments, documentation) MUST be in **English only**. Exception: German legal documents (CLA, licenses) require bilingual versions.
+
+**No Literal Quotes:** Never copy/paste large code blocks verbatim without understanding. Reference existing code by file path and line numbers instead of duplicating it in comments or documentation.
+
 ## Critical Rules (ALWAYS ENFORCED)
 
 See `copilot-config.yaml:core_principles` for complete list with validation commands.
@@ -189,7 +207,10 @@ See `copilot-config.yaml:checklists.pre_commit` for complete checklist with vali
 
 - [ ] TDD Compliance (tests first, coverage ≥80%)
 - [ ] DRY Principle (no duplication)
+- [ ] SOLID Principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)
 - [ ] Quality Over Speed (4-pass review)
+- [ ] English Only (all GitHub communication in English)
+- [ ] No Literal Quotes (reference code by path/line, don't duplicate)
 - [ ] CHANGELOG Updated
 - [ ] Documentation Complete
 - [ ] Preflight Script (`./scripts/preflight.sh`)

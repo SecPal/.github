@@ -103,6 +103,69 @@ core_principles:
     description: Every file MUST have SPDX headers (copyright + license)
     validation: "reuse lint returns 0 errors"
 
+# Development Principles
+development_principles:
+  dry:
+    title: "Don't Repeat Yourself (DRY)"
+    description: "Eliminate code duplication. Extract shared logic into functions/classes/modules."
+    validation: "Review code for duplicate patterns. Refactor before committing."
+    examples:
+      - "Extract common validation logic into reusable functions"
+      - "Use inheritance/composition instead of copying methods"
+      - "Create shared utilities instead of duplicating across files"
+
+  solid:
+    title: "SOLID Principles"
+    description: "Object-oriented design principles for maintainable, scalable code"
+    principles:
+      single_responsibility:
+        name: "Single Responsibility Principle (SRP)"
+        rule: "One class/function = one reason to change"
+        example: "UserService handles user logic, EmailService handles email logic"
+      open_closed:
+        name: "Open/Closed Principle (OCP)"
+        rule: "Open for extension, closed for modification"
+        example: "Use interfaces/abstract classes to allow extension without modifying existing code"
+      liskov_substitution:
+        name: "Liskov Substitution Principle (LSP)"
+        rule: "Subtypes must be substitutable for base types"
+        example: "Square extends Rectangle but violates LSP if width/height behavior differs"
+      interface_segregation:
+        name: "Interface Segregation Principle (ISP)"
+        rule: "Many small interfaces > one large interface"
+        example: "Separate Readable and Writable interfaces instead of combined ReadWrite"
+      dependency_inversion:
+        name: "Dependency Inversion Principle (DIP)"
+        rule: "Depend on abstractions, not concretions"
+        example: "Inject interfaces/contracts instead of concrete implementations"
+
+  quality_first:
+    title: "Quality Over Speed"
+    description: "Take time to implement correctly. Fast but broken code creates technical debt."
+    validation: "Execute 4-pass review BEFORE committing"
+
+  communication_language:
+    title: "English-Only Communication"
+    rule: "All GitHub communication (issues, PRs, comments, documentation) MUST be in English"
+    rationale: "Ensures accessibility for international contributors and maintainability"
+    exceptions:
+      - "German legal documents (CLA, licenses) require bilingual versions"
+      - "User-facing German translations in frontend (i18n files)"
+    validation: "Review all commit messages, PR descriptions, issue comments for English compliance"
+
+  no_literal_quotes:
+    title: "No Literal Code Quotes"
+    rule: "Never copy/paste large code blocks verbatim without understanding"
+    rationale: "Duplicate code in comments/docs creates maintenance burden and confusion"
+    correct_approach: "Reference existing code by file path and line numbers"
+    examples:
+      correct:
+        - "See `src/utils/auth.ts` lines 45-60 for implementation"
+        - "Follows pattern from `UserController.php:123`"
+      incorrect:
+        - "Copying 50 lines of code into PR description"
+        - "Pasting entire function into issue comment"
+
 # Repository Policies
 policies:
   git:

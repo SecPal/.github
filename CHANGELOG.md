@@ -9,6 +9,63 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-16 - Core Development Principles Enhancement
+
+**Added:**
+
+- **SOLID Principles:** Added comprehensive SOLID principles to core development guidelines
+  - Single Responsibility Principle (SRP): One class/function = one reason to change
+  - Open/Closed Principle (OCP): Open for extension, closed for modification
+  - Liskov Substitution Principle (LSP): Subtypes must be substitutable for base types
+  - Interface Segregation Principle (ISP): Many small interfaces > one large interface
+  - Dependency Inversion Principle (DIP): Depend on abstractions, not concretions
+  - Documentation added to both `.github/copilot-instructions.md` and `.github/copilot-config.yaml`
+
+- **English-Only Communication Rule:** Clarified language policy for GitHub communication
+  - All issues, PRs, comments, and documentation MUST be in English
+  - Ensures accessibility for international contributors
+  - Exceptions: German legal documents (CLA, licenses) and user-facing i18n translations
+  - Added to Pre-Commit Checklist for validation
+
+- **No Literal Quotes Rule:** Added guideline against verbatim code duplication
+  - Never copy/paste large code blocks without understanding
+  - Reference code by file path and line numbers instead
+  - Reduces maintenance burden and prevents confusion
+  - Correct approach: "See `src/utils/auth.ts` lines 45-60" vs copying 50 lines
+
+**Changed:**
+
+- **Pre-Commit Checklist:** Updated with new validation items
+  - Added SOLID Principles check
+  - Added English Only communication check
+  - Added No Literal Quotes check
+  - DRY Principle already present, now part of comprehensive development principles
+
+- **Core Development Principles:** Restructured and expanded
+  - DRY (Don't Repeat Yourself) now part of formal development principles
+  - Quality Over Speed explicitly documented
+  - All principles with validation guidance and examples
+
+**Impact:**
+
+- Improved code quality through explicit SOLID adherence
+- Better international collaboration with English-only policy
+- Reduced code duplication in documentation and comments
+- Clearer expectations for all contributors
+
+**Files Modified:**
+
+- `.github/copilot-instructions.md` - Added Core Development Principles section before Critical Rules
+- `.github/copilot-config.yaml` - Added `development_principles` section with detailed SOLID, DRY, quality-first, communication, and no-literal-quotes rules
+
+**Related:**
+
+- Addresses maintainer request for explicit SOLID principles documentation
+- Complements existing DRY principle from Pre-Commit Checklist
+- Aligns with Quality-First philosophy from core rules
+
+---
+
 ## 2025-11-15 - Reusable Workflow for Conflict Marker Detection
 
 **Added:**
