@@ -255,7 +255,7 @@ issue_management:
     examples:
       scenario_1:
         context: "Working on docs, find security bug in auth middleware"
-        action: "Create issue IMMEDIATELY: 'Bug: Auth middleware missing rate limiting'"
+        action: "Create issue IMMEDIATELY: 'Bug: Auth middleware missing rate-limiting'"
         reasoning: "Security issue unrelated to docs work → separate issue required"
 
       scenario_2:
