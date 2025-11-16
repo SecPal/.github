@@ -103,6 +103,13 @@ core_principles:
     description: Every file MUST have SPDX headers (copyright + license)
     validation: "reuse lint returns 0 errors"
 
+  - id: critical-rule-6
+    title: Issue Management Protocol
+    priority: CRITICAL
+    description: "IMMEDIATELY create GitHub issue when bug/improvement found that cannot be fixed now. EPIC + sub-issues REQUIRED for all features."
+    validation: "All findings documented as GitHub issues. No 'TODO: fix later' without issue link."
+    enforcement: "Zero tolerance - saying 'we should fix X' without creating issue = violation"
+
 # Development Principles
 development_principles:
   dry:
@@ -205,6 +212,199 @@ policies:
       examples:
         valid_comment: "Logic bug that would cause incorrect behavior"
         invalid_comment: "Suggests pattern that violates documented project conventions"
+
+# Issue Management Protocol (CRITICAL)
+issue_management:
+  critical: true
+  priority: CRITICAL
+  philosophy: "Every problem discovered MUST be tracked. No mental todos, no 'we should fix later' comments."
+
+  immediate_issue_creation:
+    rule: "Found bug/issue in old code that cannot be fixed immediately? CREATE GITHUB ISSUE NOW."
+    enforcement: "ZERO TOLERANCE - Proceeding without issue creation = Critical Rule violation"
+    rationale: "Untracked issues get forgotten. GitHub is single source of truth."
+
+    when_to_create_immediately:
+      - "Bug found in old code during current work"
+      - "Security vulnerability discovered (use SECURITY.md for responsible disclosure, NOT public issue)"
+      - "Technical debt identified"
+      - "Missing test coverage found"
+      - "Documentation gap discovered"
+      - "Performance issue noticed"
+      - "Code smell that needs refactoring"
+      - "Any finding that cannot be fixed in current PR scope"
+
+    when_not_to_create:
+      - "Issue directly related to current PR topic (fix in current PR)"
+      - "Typo you can fix in 10 seconds (just fix it)"
+
+    required_issue_fields:
+      title: "Clear, descriptive title (50 chars max)"
+      description: "Detailed problem description with context"
+      reproduction_steps: "How to reproduce (if bug)"
+      affected_files: "List of files involved"
+      labels: "bug, technical-debt, enhancement, security, etc."
+      context: "Link to current PR/branch if found during work"
+      priority: "Assess impact: critical, high, medium, low"
+
+    commands:
+      create_bug: 'gh issue create --title "Bug: ..." --body "..." --label "bug"'
+      create_technical_debt: 'gh issue create --title "Tech Debt: ..." --body "..." --label "technical-debt"'
+      create_enhancement: 'gh issue create --title "Enhancement: ..." --body "..." --label "enhancement"'
+
+    examples:
+      scenario_1:
+        context: "Working on docs, find security bug in auth middleware"
+        action: "Create issue IMMEDIATELY: 'Bug: Auth middleware missing rate-limiting'"
+        reasoning: "Security issue unrelated to docs work → separate issue required"
+
+      scenario_2:
+        context: "Implementing feature X, notice test coverage for module Y is 40%"
+        action: "Create issue: 'Tech Debt: Increase test coverage for module Y to 80%'"
+        reasoning: "Coverage issue unrelated to feature X → track separately"
+
+      scenario_3:
+        context: "Refactoring class A, notice similar duplication in class B"
+        action: "Fix class A in current PR, create issue for class B"
+        reasoning: "Class A = current scope, Class B = separate work"
+
+  epic_and_sub_issues:
+    rule: "ALL features requiring >1 PR MUST use EPIC + sub-issues structure"
+    enforcement: "MANDATORY - No exceptions for complex features"
+    rationale: "Maintains One Topic Rule, enables granular tracking, prevents premature epic closure"
+
+    when_to_use_epic:
+      - "Feature requires multiple PRs (>600 lines total)"
+      - "Work spans multiple files/modules/repos"
+      - "Implementation takes >1 day"
+      - "Multiple logical steps with dependencies"
+      - "Breaking changes requiring coordination"
+
+    when_not_to_use_epic:
+      - "Simple feature fitting in single PR (<600 lines)"
+      - "Single bug fix"
+      - "Documentation-only changes"
+
+    epic_structure:
+      epic_issue:
+        template: "Use GitHub template: '🗺️ Epic (Multi-PR Feature)'"
+        required_sections:
+          - "Goal: High-level feature description"
+          - "Sub-Issues & Work Plan: Tasklist linking to sub-issues"
+          - "Acceptance Criteria: When is epic complete?"
+          - "Non-Goals: What's explicitly out of scope?"
+          - "Dependencies: Other epics/issues blocking this"
+        stays_open: "Epic remains open until ALL sub-issues completed"
+
+      sub_issues:
+        template: "Use GitHub template: '📦 Sub-Issue (Part of Epic)'"
+        one_pr_per_sub_issue: "Each sub-issue = exactly 1 PR"
+        required_sections:
+          - "Link to parent epic: 'Sub-issue of #123'"
+          - "Clear, focused goal (one PR's worth ~400-600 LOC)"
+          - "Acceptance criteria specific to this sub-issue"
+          - "Dependencies: Which sub-issues must complete first?"
+        labels: "type/sub-issue, area/*, priority/*"
+
+      pr_linking:
+        rule: "Each PR references its sub-issue, NOT the epic"
+        format: "Fixes #<sub-issue-number>"
+        why: "Prevents premature epic closure, maintains granular tracking"
+        example: "PR description: 'Fixes #52' (sub-issue), NOT 'Fixes #50' (epic)"
+
+    commands:
+      create_epic: 'gh issue create --template epic.yml --title "[EPIC] Feature name"'
+      create_sub_issue: 'gh issue create --template sub-issue.yml --title "PR-X: Step name"'
+      list_sub_issues: 'gh issue list --label "type/sub-issue" --json number,title'
+
+    workflow:
+      - step: 1
+        action: "Create epic issue using template"
+        validation: "Epic has goal, acceptance criteria, non-goals"
+
+      - step: 2
+        action: "Break down work into logical chunks (~400-600 LOC each)"
+        validation: "Each chunk is independently testable and reviewable"
+
+      - step: 3
+        action: "Create sub-issue for each chunk"
+        validation: "Sub-issue links to parent epic, has clear scope"
+
+      - step: 4
+        action: "Update epic tasklist with sub-issue links"
+        validation: "GitHub shows progress tracker (X of Y tasks complete)"
+
+      - step: 5
+        action: "Work on sub-issues sequentially (or parallel if independent)"
+        validation: "One PR per sub-issue, PR references sub-issue not epic"
+
+      - step: 6
+        action: "Last sub-issue PR closes the epic"
+        validation: "PR description: 'Fixes #<last-sub-issue> and closes #<epic>'"
+
+    documentation_reference:
+      detailed_guide: "api/docs/EPIC_WORKFLOW.md"
+      real_world_example: "Issue #50 with 7 sub-issues (#52, #53, #55, #60, #64, #65, #67)"
+
+  ai_protocol:
+    discovery_workflow:
+      - step: 1
+        trigger: "AI discovers bug/issue/improvement during work"
+        action: "IMMEDIATELY assess: Can fix now or needs separate work?"
+
+      - step: 2
+        decision_can_fix_now:
+          condition: "Issue directly related to current PR topic AND <50 LOC"
+          action: "Fix in current PR, document in commit message"
+
+        decision_needs_separate_work:
+          condition: "Issue unrelated OR >50 LOC OR requires testing/research"
+          action: "CREATE GITHUB ISSUE IMMEDIATELY - DO NOT PROCEED WITHOUT IT"
+          critical: "ZERO TOLERANCE - This is Critical Rule #6"
+
+      - step: 3
+        after_issue_creation:
+          action: "Continue with original work"
+          note: "New issue will be addressed in separate PR"
+          documentation: "Mention in current PR description: 'Found issue #123 during work, tracked separately'"
+
+    feature_planning_workflow:
+      - step: 1
+        trigger: "User requests new feature or AI proposes improvement"
+        action: "Assess complexity: Single PR or multiple PRs?"
+
+      - step: 2
+        decision_single_pr:
+          condition: "Feature fits in <600 lines, single module, <1 day work"
+          action: "Create simple issue, proceed with PR"
+
+        decision_epic_needed:
+          condition: "Feature needs >600 lines OR multiple modules OR >1 day OR breaking changes"
+          action: "STOP - Create EPIC structure FIRST before any code"
+          critical: "No coding until EPIC + sub-issues defined"
+
+      - step: 3
+        after_epic_creation:
+          action: "Start with sub-issue #1, create PR, merge"
+          sequence: "Sequential: sub-issue → PR → merge → next sub-issue"
+          parallel: "Parallel allowed if sub-issues independent"
+
+    forbidden_patterns:
+      - pattern: "Saying 'we should fix X later' without creating issue"
+        violation: "Critical Rule #6 - Issue Management Protocol"
+        consequence: "Work MUST stop until issue created"
+
+      - pattern: "TODO comments without GitHub issue reference"
+        violation: "Untracked work - forbidden"
+        fix: "Replace 'TODO: fix X' with 'TODO(#123): fix X' or create issue"
+
+      - pattern: "Complex feature (>600 LOC) without EPIC structure"
+        violation: "Critical Rule #6 - EPIC requirement"
+        consequence: "Reject PR, require EPIC creation first"
+
+      - pattern: "PR referencing epic instead of sub-issue"
+        violation: "Premature epic closure"
+        fix: "Change 'Fixes #50' (epic) to 'Fixes #52' (sub-issue)"
 
     autonomous_decisions:
       rule: "Make decisions autonomously when answer is clear from principles/docs"
@@ -533,62 +733,12 @@ review_automation:
       - "NEVER mark ready if any uncertainty remains"
     expectation: "Copilot finds ZERO issues = local review process succeeded"
 
-  issue_management:
-    critical: true
-    rule: "Use EPIC/MAIN issues with sub-issues for complex work"
-    one_topic_enforcement: "If review finds multiple unrelated issues → create separate (sub-)issues"
-
-    workflow:
-      - step: 1
-        description: "Local review finds issue during work"
-        action: "Assess: Related to current PR topic or not?"
-
-      - step: 2
-        description: "If UNRELATED to current PR topic"
-        action: "Create (sub-)issue for later PR"
-        why: "Maintains 1 PR = 1 Topic rule"
-        example: "Working on docs, find security bug → create security sub-issue"
-
-      - step: 3
-        description: "If RELATED to current PR topic"
-        action: "Fix in current PR"
-
-      - step: 4
-        description: "Complex work with multiple related issues"
-        action: "Create EPIC issue with multiple sub-issues, one PR per sub-issue"
-
-    epic_sub_issue_structure:
-      epic: "Parent issue tracking overall goal"
-      sub_issues: "Individual actionable tasks (one PR each)"
-      example:
-        epic: "Refactor authentication system"
-        sub_issues:
-          - "Extract authentication logic to service class"
-          - "Add unit tests for auth service"
-          - "Update documentation for auth flow"
-      pr_mapping: "1 sub-issue = 1 PR (maintains One Topic Rule)"
-
-    when_to_create_issues:
-      during_local_review:
-        - "Find security issue unrelated to current work"
-        - "Find missing test coverage (not part of current PR)"
-        - "Find documentation gap (not part of current PR)"
-        - "Discover technical debt to address later"
-      during_external_review:
-        - "Copilot suggests improvement outside current scope"
-        - "Teammate suggests additional feature"
-        - "Performance issue discovered (separate from current fix)"
-
-    issue_creation_commands:
-      main_issue: 'gh issue create --title "..." --body "..." --label "enhancement"'
-      sub_issue: 'gh issue create --title "..." --body "..." --label "sub-issue"'
-      link_to_parent: "Add 'Sub-issue of #123' in body"
-
-    examples_from_this_pr:
-      found_during_review: "19 workflows without explicit permissions (CRITICAL security issue)"
-      action_taken: "OUT OF SCOPE for docs refactoring PR"
-      correct_approach: "Create separate security issue/EPIC for workflow permissions"
-      reasoning: "Maintains One Topic Rule, separate PR for security fixes"
+  issue_management_note:
+    reference: "See top-level 'issue_management' section for complete protocol (Critical Rule #6)"
+    key_rules:
+      - "Found bug in old code? CREATE GITHUB ISSUE IMMEDIATELY"
+      - "All features >1 PR? Use EPIC + sub-issues structure"
+      - "During review: Unrelated issue → create separate issue, maintain One Topic Rule"
 
   why_multiple_reviews:
     - "First review finds obvious issues"
@@ -860,6 +1010,16 @@ checklists:
           - "No --no-verify flag"
           - "Exception: Large PR with large-pr-approved label only"
         validation: "Git history check"
+
+      - id: issue-creation
+        title: Issue Creation Protocol
+        items:
+          - "All discovered bugs/improvements have GitHub issues?"
+          - "No 'TODO: fix later' comments without issue reference?"
+          - "Complex features (>1 PR) have EPIC + sub-issues structure?"
+          - "All unrelated findings documented as separate issues?"
+        validation: "Check for TODO comments, assess complexity vs issue tracking"
+        critical: "Critical Rule #6 - Issue Management Protocol"
 
   review_passes:
     description: "4-Pass Review Strategy - Execute ALL before PR creation"

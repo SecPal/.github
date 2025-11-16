@@ -18,6 +18,8 @@ Organization-wide defaults for all SecPal repositories.
 3. **STOP** if any check fails - explain the issue and ask for guidance
 4. **NEVER** proceed with failed checks
 
+**CRITICAL: Found bug/issue that cannot be fixed immediately? CREATE GITHUB ISSUE NOW (Critical Rule #6).**
+
 **Example:**
 
 ```text
@@ -97,6 +99,68 @@ Exceptions: German legal documents (CLA, licenses) require bilingual versions, a
 
 **No Literal Quotes:** Never copy/paste large code blocks verbatim without understanding. Reference existing code by file path and
 line numbers instead of duplicating it in comments or documentation.
+
+## Issue Management Protocol (CRITICAL RULE #6)
+
+See `copilot-config.yaml:issue_management` for complete protocol and examples.
+
+### Immediate Issue Creation
+
+**ZERO TOLERANCE RULE: Found bug/issue in old code that cannot be fixed now? CREATE GITHUB ISSUE IMMEDIATELY.**
+
+**When to create issue IMMEDIATELY:**
+
+- Bug found in old code during current work
+- **Security vulnerability discovered** (use SECURITY.md for responsible disclosure, NOT public issue)
+- Technical debt identified
+- Missing test coverage found
+- Documentation gap discovered
+- Performance issue noticed
+- Any finding that cannot be fixed in current PR scope
+
+**Required:** Title, description, reproduction steps (if bug), affected files, labels (`bug`, `technical-debt`, `enhancement`, `security`), priority.
+
+**Commands:**
+
+```bash
+gh issue create --title "Bug: ..." --body "..." --label "bug"
+gh issue create --title "Tech Debt: ..." --body "..." --label "technical-debt"
+```
+
+**FORBIDDEN:** Saying "we should fix X later" without creating GitHub issue = Critical Rule violation.
+
+### EPIC + Sub-Issues Structure
+
+**MANDATORY: All features requiring >1 PR MUST use EPIC + sub-issues structure.**
+
+**When to use EPIC:**
+
+- Feature requires multiple PRs (>600 lines total)
+- Work spans multiple files/modules/repos
+- Implementation takes >1 day
+- Multiple logical steps with dependencies
+
+**Structure:**
+
+1. **Epic Issue** (stays open until all sub-issues complete)
+   - Template: Use GitHub `🗺️ Epic (Multi-PR Feature)`
+   - Contains: Goal, Sub-Issues tasklist, Acceptance Criteria, Non-Goals
+2. **Sub-Issues** (one PR each, ~400-600 LOC)
+   - Template: Use GitHub `📦 Sub-Issue (Part of Epic)`
+   - Links to parent: "Sub-issue of #123"
+   - Each sub-issue = exactly 1 PR
+3. **PR Linking:** Reference sub-issue NOT epic
+   - ✅ Correct: `Fixes #52` (sub-issue)
+   - ❌ Wrong: `Fixes #50` (epic) → causes premature epic closure
+
+**Commands:**
+
+```bash
+gh issue create --template epic.yml --title "[EPIC] Feature name"
+gh issue create --template sub-issue.yml --title "PR-1: Step name"
+```
+
+**Documentation:** See `api/docs/EPIC_WORKFLOW.md` for detailed guide and real-world examples (Issue #50 with 7 sub-issues).
 
 ## Critical Rules (ALWAYS ENFORCED)
 
@@ -212,6 +276,7 @@ See `copilot-config.yaml:checklists.pre_commit` for complete checklist with vali
 - [ ] Quality Over Speed (4-pass review)
 - [ ] English Only (all GitHub communication in English)
 - [ ] No Literal Quotes (reference code by path/line, don't duplicate)
+- [ ] **Issue Creation Protocol (all findings have GitHub issues?)**
 - [ ] CHANGELOG Updated
 - [ ] Documentation Complete
 - [ ] Preflight Script (`./scripts/preflight.sh`)
@@ -301,7 +366,8 @@ auto_delete_branches: true
 
 **One Topic Rule:** See `copilot-config.yaml:policies.pr_workflow.one_topic` for prohibited/allowed combinations.
 
-**If local review finds UNRELATED issues:** Create separate (sub-)issues! Don't mix topics in one PR. See `copilot-config.yaml:review_automation.issue_management`
+**If local review finds UNRELATED issues:** CREATE GITHUB ISSUE IMMEDIATELY (Critical Rule #6)! Don't mix topics in one PR. See
+`copilot-config.yaml:issue_management` for complete protocol.
 
 **Branch Naming:** `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`
 

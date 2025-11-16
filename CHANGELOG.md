@@ -9,6 +9,52 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-16 - Issue Management Protocol (Critical Rule #6)
+
+**Added:**
+
+- **Critical Rule #6: Issue Management Protocol** - ZERO TOLERANCE enforcement for immediate issue creation
+  - MANDATORY: Create GitHub issue immediately when bug/issue found in old code that cannot be fixed now
+  - MANDATORY: EPIC + sub-issues structure for ALL features requiring >1 PR (>600 lines, multi-module, >1 day work)
+  - Top-level `issue_management` section in `copilot-config.yaml` (200+ lines) with complete protocol, workflows, examples
+  - Pre-commit checklist item: "Issue Creation Protocol" validates all findings documented as GitHub issues
+  - AI Execution Protocol updated with prominent reminder: "Found bug → CREATE GITHUB ISSUE NOW"
+  - Forbidden patterns: "TODO: fix later" without issue reference, "we should fix X" without creating issue
+  - Cross-reference to `api/docs/EPIC_WORKFLOW.md` for detailed EPIC/sub-issue guidance
+
+- **Issue Management section in Markdown** - Clear, concise rules added before Critical Rules section
+  - Immediate issue creation protocol: 8 scenarios requiring immediate action (bugs, tech debt, coverage gaps, etc.)
+  - **Security exception:** Vulnerabilities use SECURITY.md for responsible disclosure, NOT public issues
+  - EPIC structure requirements: When to use (4 criteria), how to structure (epic → sub-issues → PRs), PR linking rules
+  - GitHub CLI commands for issue/epic/sub-issue creation
+  - Real-world example: Issue #50 with 7 sub-issues demonstrating complete workflow
+
+**Changed:**
+
+- **Streamlined `review_automation` section** - Replaced 70-line `issue_management` subsection with concise cross-reference
+  - Maintains DRY principle: Single authoritative source for issue management rules
+  - Old section duplicated information now in top-level `issue_management` section
+  - Reduced review_automation from 180 lines to ~115 lines
+
+- **Pre-Commit Checklist enhanced** - Added "Issue Creation Protocol" item (4 validation points)
+  - "All discovered bugs/improvements have GitHub issues?"
+  - "No 'TODO: fix later' comments without issue reference?"
+  - "Complex features (>1 PR) have EPIC + sub-issues structure?"
+  - "All unrelated findings documented as separate issues?"
+
+- **AI Execution Protocol** - Added critical reminder at top: Issue creation now equal priority to TDD and Quality Gates
+- **PR Rules section** - Updated unrelated findings guidance: "CREATE GITHUB ISSUE IMMEDIATELY (Critical Rule #6)"
+
+**Documentation:**
+
+- All issue management rules consolidated in single location (`copilot-config.yaml:issue_management`)
+- Complete AI workflows: Discovery workflow (assess → create issue) and Feature planning workflow (assess complexity → EPIC or simple issue)
+- Examples: Security bug during docs work, test coverage gap during feature implementation, duplication refactoring
+- EPIC workflow: 6-step process from epic creation to final PR closing epic
+- Cross-references: `api/docs/EPIC_WORKFLOW.md` for detailed guide with Issue #50 real-world example
+
+---
+
 ## 2025-11-16 - Core Development Principles Enhancement
 
 **Added:**
