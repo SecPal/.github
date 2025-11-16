@@ -77,6 +77,27 @@ See `copilot-config.yaml:policies.ai_autonomy` for complete rules.
   - Architectural decision with trade-offs
   - Emergency exception to critical rule
 
+## Core Development Principles
+
+**DRY (Don't Repeat Yourself):** Eliminate code duplication. Extract shared logic into functions/classes/modules. Reuse before rewrite.
+
+**SOLID Principles:**
+
+- **S**ingle Responsibility: One class/function = one reason to change
+- **O**pen/Closed: Open for extension, closed for modification
+- **L**iskov Substitution: Subtypes must be substitutable for base types
+- **I**nterface Segregation: Many small interfaces > one large interface
+- **D**ependency Inversion: Depend on abstractions, not concretions
+
+**Quality Over Speed:** Take time to implement correctly. Fast but broken code creates technical debt.
+
+**Communication Language:** All GitHub communication (issues, PRs, comments, documentation) MUST be in **English only**.
+Exceptions: German legal documents (CLA, licenses) require bilingual versions, and user-facing German translations in frontend
+(i18n files).
+
+**No Literal Quotes:** Never copy/paste large code blocks verbatim without understanding. Reference existing code by file path and
+line numbers instead of duplicating it in comments or documentation.
+
 ## Critical Rules (ALWAYS ENFORCED)
 
 See `copilot-config.yaml:core_principles` for complete list with validation commands.
@@ -91,22 +112,20 @@ See `copilot-config.yaml:core_principles` for complete list with validation comm
 
 5. **Fail-Fast:** Stop at first error. Fix immediately, don't accumulate debt.
 
-6. **Quality Over Speed:** Take time to do it right.
+6. **CHANGELOG Mandatory:** Update CHANGELOG.md for every feature/fix/breaking change in the SAME commit (not batched separately).
 
-7. **CHANGELOG Mandatory:** Update CHANGELOG.md for every feature/fix/breaking change in the SAME commit (not batched separately).
+7. **Commit Signing:** All commits MUST be GPG signed. Configure: `git config commit.gpgsign true`
 
-8. **Commit Signing:** All commits MUST be GPG signed. Configure: `git config commit.gpgsign true`
+8. **Documentation:** All public APIs MUST have PHPDoc/JSDoc/TSDoc with examples.
 
-9. **Documentation:** All public APIs MUST have PHPDoc/JSDoc/TSDoc with examples.
+9. **REUSE Compliance:** All files MUST have SPDX headers. Run `reuse lint` before commit.
 
-10. **REUSE Compliance:** All files MUST have SPDX headers. Run `reuse lint` before commit.
-
-11. **Code Coverage Enforcement:** Code coverage tracked via Codecov (see `.codecov.yml`).
+10. **Code Coverage Enforcement:** Code coverage tracked via Codecov (see `.codecov.yml`).
     Minimum 80% coverage for new code, 100% for critical paths. Coverage reports
     auto-generated in CI and uploaded to Codecov dashboard. PRs must not decrease
     overall coverage below threshold.
 
-12. **Post-Merge Cleanup:** IMMEDIATELY execute `copilot-config.yaml:checklists.post_merge_cleanup` after ANY merge.
+11. **Post-Merge Cleanup:** IMMEDIATELY execute `copilot-config.yaml:checklists.post_merge_cleanup` after ANY merge.
 
 ### Emergency Exception Process
 
@@ -189,7 +208,10 @@ See `copilot-config.yaml:checklists.pre_commit` for complete checklist with vali
 
 - [ ] TDD Compliance (tests first, coverage ≥80%)
 - [ ] DRY Principle (no duplication)
+- [ ] SOLID Principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)
 - [ ] Quality Over Speed (4-pass review)
+- [ ] English Only (all GitHub communication in English)
+- [ ] No Literal Quotes (reference code by path/line, don't duplicate)
 - [ ] CHANGELOG Updated
 - [ ] Documentation Complete
 - [ ] Preflight Script (`./scripts/preflight.sh`)
