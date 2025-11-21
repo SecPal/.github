@@ -5,9 +5,11 @@
 # https://docs.codecov.com/docs/codecov-yaml
 
 codecov:
-  require_ci_to_pass: true
+  # Don't require CI to pass - GitHub Actions is already a required check
+  # This allows Dependabot PRs to pass even if codecov upload is skipped
+  require_ci_to_pass: false
   notify:
-    wait_for_ci: true
+    wait_for_ci: false
 
 coverage:
   precision: 2
@@ -20,6 +22,9 @@ coverage:
         target: 80%
         threshold: 1%
         if_ci_failed: error
+        # Coverage remains REQUIRED for normal PRs
+        # Dependabot PRs: GitHub Actions uses continue-on-error, so no upload occurs
+        # With require_ci_to_pass: false, Codecov won't block if no data is uploaded
         informational: false
 
     patch:
@@ -27,6 +32,9 @@ coverage:
         target: 80%
         threshold: 1%
         if_ci_failed: error
+        # Coverage remains REQUIRED for normal PRs
+        # Dependabot PRs: GitHub Actions uses continue-on-error, so no upload occurs
+        # With require_ci_to_pass: false, Codecov won't block if no data is uploaded
         informational: false
 
 comment:
