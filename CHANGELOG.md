@@ -17,7 +17,7 @@ Chronological log of notable changes to SecPal organization defaults.
   - Root cause: `require_ci_to_pass: true` caused Codecov to wait for CI before reporting status
   - Dependabot PRs use `continue-on-error: true` for codecov upload (security best practice - no token access)
   - Codecov interpreted skipped upload as failed check and blocked PRs
-  - Affected PRs: SecPal/api#204, SecPal/frontend#181, #182, #183, #184, #185
+  - Affected PRs: SecPal/api#204, SecPal/frontend#181, SecPal/frontend#182, SecPal/frontend#183, SecPal/frontend#184, SecPal/frontend#185
 
 **Changed:**
 
@@ -30,7 +30,7 @@ Chronological log of notable changes to SecPal organization defaults.
 - **Branch Protection Rules** - Removed `codecov/patch` from required status checks via GitHub API
   - Applied to `SecPal/api` and `SecPal/frontend` repositories
   - Codecov still runs and reports, but doesn't block PRs when no data is uploaded
-  - ✅ Completed automatically via `gh api` commands
+  - ✅ Applied manually via `gh api` commands (script provided as reference: `scripts/configure-codecov-optional.sh`)
 
 **Impact:**
 
@@ -50,7 +50,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 
 **Related Issues:**
 
-- This PR fixes the blocking issue, allowing the following Dependabot PRs to merge:
+- This PR fixes the blocking issue for the following Dependabot PRs:
 - SecPal/api#204 (actions/checkout 5→6)
 - SecPal/frontend#181 (actions/checkout 5→6)
 - SecPal/frontend#182 (vite 7.2.2→7.2.4)

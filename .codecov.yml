@@ -16,15 +16,15 @@ coverage:
   round: down
   range: "70...100"
 
+  # Coverage remains REQUIRED for all PRs (informational: false)
+  # - Normal PRs: Upload succeeds → Must meet 80% threshold
+  # - Dependabot PRs: Upload skipped (continue-on-error) → No data = no blocking (require_ci_to_pass: false)
   status:
     project:
       default:
         target: 80%
         threshold: 1%
         if_ci_failed: error
-        # Coverage remains REQUIRED for normal PRs
-        # Dependabot PRs: GitHub Actions uses continue-on-error, so no upload occurs
-        # With require_ci_to_pass: false, Codecov won't block if no data is uploaded
         informational: false
 
     patch:
@@ -32,9 +32,6 @@ coverage:
         target: 80%
         threshold: 1%
         if_ci_failed: error
-        # Coverage remains REQUIRED for normal PRs
-        # Dependabot PRs: GitHub Actions uses continue-on-error, so no upload occurs
-        # With require_ci_to_pass: false, Codecov won't block if no data is uploaded
         informational: false
 
 comment:

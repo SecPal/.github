@@ -39,18 +39,29 @@ configure_repo() {
     return 1
   fi
 
-  # Get current required checks
+  # Get current required checks (all checks)
+  all_checks=$(gh api "repos/$repo/branches/$branch/protection/required_status_checks" --jq '.checks[]' 2>/dev/null || echo "")
+  
+  if [ -z "$all_checks" ]; then
+    echo -e "${GREEN}  ✓ No required checks configured, skipping${NC}"
+    return 0
+  fi
+
+  # Filter out codecov checks
   required_checks=$(gh api "repos/$repo/branches/$branch/protection/required_status_checks" --jq '.checks[] | select(.context | test("codecov") | not) | .context' 2>/dev/null || echo "")
 
-  if [ -z "$required_checks" ]; then
-    echo -e "${GREEN}  ✓ No required checks configured, skipping${NC}"
+  # Check if any codecov checks were present
+  codecov_checks=$(gh api "repos/$repo/branches/$branch/protection/required_status_checks" --jq '.checks[] | select(.context | test("codecov")) | .context' 2>/dev/null || echo "")
+  
+  if [ -z "$codecov_checks" ]; then
+    echo -e "${GREEN}  ✓ No codecov checks found, skipping${NC}"
     return 0
   fi
 
   # Update required checks (remove codecov if present)
   echo "  → Removing codecov from required checks..."
 
-  # Build JSON array of non-codecov checks
+  # Build JSON array of non-codecov checks (can be empty array if codecov was the only check)
   checks_json="["
   first=true
   while IFS= read -r check; do
