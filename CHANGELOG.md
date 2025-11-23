@@ -15,7 +15,7 @@ Chronological log of notable changes to SecPal organization defaults.
 
 - **`docs/development-principles.md`** - Human-readable guide for all development principles
   - Comprehensive documentation with code examples (TypeScript + Laravel)
-  - Covers all 12 principles: Quality First, TDD, DRY, SOLID, KISS, YAGNI, Separation of Concerns, Fail Fast, Security by Design, Convention over Configuration
+  - Covers all 16 principles: 5 Essential Development Principles (Quality First, TDD, DRY, Clean Before Quick, Self Review Before Push), 5 SOLID Principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion), 3 Additional Design Principles (KISS, YAGNI, Separation of Concerns), and 3 Security & Best Practices (Fail Fast, Security by Design, Convention over Configuration)
   - Clearly marked as human-readable version with reference to YAML as source of truth
   - Framework-specific guidelines for Laravel and React/TypeScript
   - Practical application checklists
@@ -33,25 +33,12 @@ Chronological log of notable changes to SecPal organization defaults.
 
 - **`.github/copilot-instructions.md`** - Updated AI instructions with all principles
   - Added KISS, YAGNI, Separation of Concerns, Fail Fast, Security by Design to Core Principles section
-  - Updated Pre-Commit Checklist to include all 12 principles
+  - Updated Pre-Commit Checklist to include all 16 principles
   - Added reference to `copilot-config.yaml:development_principles` for complete details
 
-- **`api/DEVELOPMENT.md`** - Converted to DRY-compliant reference document
-  - Removed detailed principle explanations (600+ lines)
-  - Added link to central `.github/docs/development-principles.md`
-  - Kept Quick Reference section with principle names
-  - Follows DRY: Single source of truth in `.github`, repos reference it
+**Related Changes:**
 
-- **`api/docs/COPILOT_REMINDER_PATTERNS.md`** - Updated references to central documentation
-  - Changed references from `docs/DESIGN_PRINCIPLES.md` to `.github/docs/development-principles.md`
-  - Fixed session start template to reference correct location
-
-**Removed:**
-
-- **`api/docs/DESIGN_PRINCIPLES.md`** - Deleted DRY violation
-  - Was 600+ lines of duplicated content
-  - Content now centralized in `.github/docs/development-principles.md`
-  - Violates DRY principle in multi-repo structure
+- For API repository documentation updates, see SecPal/api#214
 
 **Impact:**
 
