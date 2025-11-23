@@ -146,10 +146,78 @@ development_principles:
         rule: "Depend on abstractions, not concretions"
         example: "Inject interfaces/contracts instead of concrete implementations"
 
+  kiss:
+    title: "KISS (Keep It Simple, Stupid)"
+    description: "Simple solutions are better than complex ones"
+    rule: "Choose simplicity over cleverness"
+    validation: "Ask: Can this be simpler? Will a junior understand this in 6 months?"
+    examples:
+      good: "Direct getter method returning formatted string"
+      bad: "Factory builder provider pattern for simple name formatting"
+
+  yagni:
+    title: "YAGNI (You Aren't Gonna Need It)"
+    description: "Don't implement features until they're actually needed"
+    rule: "Only implement what's required NOW, not what might be needed later"
+    validation: "Is there a concrete requirement in current sprint/issue?"
+    examples:
+      good: "Export users as CSV (current requirement)"
+      bad: "Build export system supporting CSV, JSON, XML, PDF, Excel (hypothetical future needs)"
+
+  separation_of_concerns:
+    title: "Separation of Concerns"
+    description: "Different responsibilities should be in different places"
+    rule: "Clear responsibility boundaries between layers"
+    pattern: "Controller → Service → Repository → Model"
+    examples:
+      controller: "Handle HTTP requests/responses"
+      service: "Business logic and orchestration"
+      repository: "Data access and persistence"
+      model: "Database entity representation"
+
+  fail_fast:
+    title: "Fail Fast"
+    description: "Detect and report errors as early as possible"
+    rule: "Validate at entry points, use type hints, guard clauses"
+    validation: "Errors caught at compile/request time, not runtime"
+    examples:
+      - "Form Request validation at controller entry"
+      - "Type hints on all parameters and returns"
+      - "Guard clauses at method start"
+      - "Strict mode enabled"
+
   quality_first:
     title: "Quality Over Speed"
     description: "Take time to implement correctly. Fast but broken code creates technical debt."
     validation: "Execute 4-pass review BEFORE committing"
+
+  security_by_design:
+    title: "Security by Design"
+    description: "Security is not an afterthought - build it in from the start"
+    rules:
+      - "Always validate input (Form Requests)"
+      - "Never log sensitive data (passwords, tokens, API keys)"
+      - "Use prepared statements (Eloquent does this automatically)"
+      - "Encrypt at rest (use EncryptedWithDek cast)"
+      - "Authorization at multiple layers (Middleware + Policy)"
+    examples:
+      input_validation: "StoreSecretRequest validates all fields before reaching controller"
+      no_logging_secrets: "Log user_id and secret_id, NEVER password field"
+      encryption: "protected $casts = ['password' => EncryptedWithDek::class]"
+      multi_layer_auth: "Middleware checks permission, Policy double-checks"
+
+  convention_over_configuration:
+    title: "Convention over Configuration"
+    description: "Follow framework conventions to reduce boilerplate"
+    rules:
+      - "Laravel naming conventions (models singular, tables plural)"
+      - "PSR-12 code style (auto-format with Pint)"
+      - "Resource naming (plural, kebab-case routes)"
+      - "Standard directory structure"
+    examples:
+      model_naming: "class User extends Model (table: users)"
+      controller_naming: "class UsersController extends Controller"
+      route_naming: "Route::resource('work-instructions', WorkInstructionsController::class)"
 
   communication_language:
     title: "English-Only Communication"

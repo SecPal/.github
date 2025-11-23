@@ -81,6 +81,10 @@ See `copilot-config.yaml:policies.ai_autonomy` for complete rules.
 
 ## Core Development Principles
 
+**See `copilot-config.yaml:development_principles` for complete details with examples.**
+
+**Essential Principles:**
+
 **DRY (Don't Repeat Yourself):** Eliminate code duplication. Extract shared logic into functions/classes/modules. Reuse before rewrite.
 
 **SOLID Principles:**
@@ -90,6 +94,18 @@ See `copilot-config.yaml:policies.ai_autonomy` for complete rules.
 - **L**iskov Substitution: Subtypes must be substitutable for base types
 - **I**nterface Segregation: Many small interfaces > one large interface
 - **D**ependency Inversion: Depend on abstractions, not concretions
+
+**KISS (Keep It Simple, Stupid):** Simple solutions over complex ones. Ask: Can this be simpler? Will a junior understand this in 6 months?
+
+**YAGNI (You Aren't Gonna Need It):** Only implement what's required NOW, not what might be needed later. No speculative features.
+
+**Separation of Concerns:** Clear responsibility boundaries. Pattern: Controller → Service → Repository → Model.
+
+**Fail Fast:** Detect and report errors as early as possible. Validate at entry points, use type hints, guard clauses.
+
+**Security by Design:** Build security in from the start. Always validate input, never log sensitive data, encrypt at rest, authorize at multiple layers.
+
+**Convention over Configuration:** Follow framework conventions (Laravel naming, PSR-12, React patterns) to reduce boilerplate.
 
 **Quality Over Speed:** Take time to implement correctly. Fast but broken code creates technical debt.
 
@@ -272,7 +288,12 @@ See `copilot-config.yaml:checklists.pre_commit` for complete checklist with vali
 
 - [ ] TDD Compliance (tests first, coverage ≥80%)
 - [ ] DRY Principle (no duplication)
-- [ ] SOLID Principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)
+- [ ] SOLID Principles (SRP, OCP, LSP, ISP, DIP)
+- [ ] KISS (simple solutions over complex ones)
+- [ ] YAGNI (only implement what's needed NOW)
+- [ ] Separation of Concerns (Controller → Service → Repository)
+- [ ] Fail Fast (validate early, type hints, guard clauses)
+- [ ] Security by Design (input validation, no sensitive data logged)
 - [ ] Quality Over Speed (4-pass review)
 - [ ] English Only (all GitHub communication in English)
 - [ ] No Literal Quotes (reference code by path/line, don't duplicate)
