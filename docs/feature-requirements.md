@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Features move to GitHub Issues when prioritized
 
-**Last Updated:** 2025-10-27
+**Last Updated:** 2025-11-26
 
 ---
 
@@ -597,6 +597,405 @@ class WorksCouncilPolicy {
 
 - legal-compliance.md: BetrVG compliance
 - Future: Betriebsrat training documentation
+
+---
+
+## 🏢 Flexible Organizational Structure & Multi-Level Hierarchies
+
+### Requirement: Support Diverse Organizational Structures
+
+**Context:**
+
+SecPal targets the German private security service industry, which encompasses organizations of vastly different sizes and structures:
+
+- **Small operations:** 3-5 person businesses with direct customer relationships
+- **Medium enterprises:** Regional companies with multiple branches (10-50 employees)
+- **Large corporations:** National/international companies with complex hierarchies (hundreds to thousands of employees)
+
+**Problem Statement:**
+
+Security service companies have diverse organizational structures that cannot be modeled with fixed, hardcoded hierarchy levels:
+
+1. **Flat structures:** Small businesses where customers are managed directly without intermediate organizational layers
+2. **Branch structures:** Regional branches managing local customers and objects
+3. **Regional structures:** Multiple branches grouped into regions
+4. **Holding structures:** Multiple subsidiaries (e.g., "ProSec Nord GmbH", "ProSec Süd GmbH") under a parent holding company
+5. **Division structures:** Large companies with separate business units (e.g., "Aviation Security", "Event Security", "Industrial Security")
+
+**Business Need:**
+
+- Support organizational hierarchies from 1 level (flat) to 10+ levels (holding structures)
+- Enable dynamic growth: Small companies can start simple and add organizational layers as they grow
+- Provide granular access control based on organizational position
+- Support customer hierarchies (national customers with regional/local structures)
+- Allow segmentation of large objects into areas with separate guard books
+
+### User Stories
+
+#### Story 1: Regional Manager Oversight
+
+```
+As a Regional Manager,
+I want to see all objects and guard books managed by branches in my region,
+So that I can oversee operations and ensure quality standards across all locations.
+
+Acceptance Criteria:
+- Regional Manager can view all branches in assigned region
+- Access includes all customers and objects managed by those branches
+- Access automatically extends to newly created branches in region
+- No manual permission updates needed when organizational structure changes
+- Can generate regional reports combining data from all branches
+```
+
+#### Story 2: Branch Manager Operations
+
+```
+As a Branch Manager,
+I want to manage only my branch's customers and objects,
+So that I focus on my operational area without confusion from other branches' data.
+
+Acceptance Criteria:
+- Branch Manager can only access own branch's resources
+- Cannot see other branches' data (even within same region)
+- Can assign Guards to shifts within own branch
+- Can generate reports for own branch only
+- Clear visual indicator showing current organizational scope
+```
+
+#### Story 3: Guard Field Access
+
+```
+As a Guard,
+I want to access only the objects I'm assigned to,
+So that I can complete my shifts without seeing irrelevant data.
+
+Acceptance Criteria:
+- Guard can only access own current and upcoming shifts
+- Can read/write guard book entries only for assigned objects
+- Cannot see other guards' shifts or unassigned objects
+- Mobile-optimized view for on-site work
+- Offline mode for areas with poor connectivity
+```
+
+#### Story 4: Corporate Customer User Access
+
+```
+As a Corporate Security Manager (customer user),
+I want to view all guard books for our company's locations nationwide,
+So that I can monitor security services across all sites.
+
+Acceptance Criteria:
+- Corporate user can access all subsidiary/local customer records
+- Can read guard books for all company locations
+- Can generate and export reports for any/all locations
+- Cannot modify guard book entries (read-only)
+- Cannot see which security company branch manages each location
+- Dashboard shows overview of all locations
+```
+
+#### Story 5: Regional Customer User Access
+
+```
+As a Regional Facility Manager (customer user),
+I want to access guard books only for locations in my region,
+So that I focus on my area of responsibility.
+
+Acceptance Criteria:
+- Regional user can only access own region's locations
+- Cannot see other regions' guard books
+- Can export regional reports
+- Read-only access (no modifications)
+- Hierarchical navigation showing regional structure
+```
+
+#### Story 6: Local Customer User Access
+
+```
+As a Local Site Manager (customer user),
+I want to access the guard book for my specific location,
+So that I can review security events at my site.
+
+Acceptance Criteria:
+- Local user can only access assigned location's guard book
+- Cannot see other locations (even within same company)
+- Can export reports for own location
+- Read-only access
+- Mobile-friendly view for on-site reviews
+```
+
+#### Story 7: Organizational Structure Management
+
+```
+As a System Administrator,
+I want to define our company's organizational structure flexibly,
+So that the system reflects our actual hierarchy as we grow and reorganize.
+
+Acceptance Criteria:
+- Can create arbitrary hierarchy depth (no hardcoded limits)
+- Can define custom organizational unit types beyond predefined ones
+- Can reorganize hierarchy (move branches between regions)
+- Changes to structure automatically update user access scopes
+- Can define which organizational unit manages which customer
+- Visual tree view of entire organizational structure
+```
+
+#### Story 8: Customer Hierarchy Management
+
+```
+As a Sales Manager,
+I want to model our customer's organizational structure,
+So that we can provide appropriate access to their users at different hierarchy levels.
+
+Acceptance Criteria:
+- Can create customer hierarchies (corporate → regional → local)
+- Can link customer users to appropriate hierarchy level
+- Customer hierarchies are independent from our internal structure
+- Can assign different access levels (corporate-wide, regional, local)
+- Can grant fine-grained object access when needed
+- Visual tree view of customer hierarchy
+```
+
+#### Story 9: Object Area Segmentation
+
+```
+As an Operations Manager,
+I want to divide large objects into separate areas with individual guard books,
+So that guard book entries remain organized and relevant per area.
+
+Acceptance Criteria:
+- Can define multiple areas per object (e.g., Terminal 1, Terminal 2, Apron)
+- Each area can have separate guard book
+- Guards assigned to specific area only access that area's guard book
+- Can generate reports per area or combined for entire object
+- Optional GPS boundaries for geofencing (future enhancement)
+- Clear visual distinction between areas in UI
+```
+
+#### Story 10: Guard Book Report Generation
+
+```
+As a Branch Manager,
+I want to generate guard book reports for any time period with custom filters,
+So that I can provide monthly reports to customers and analyze operational data.
+
+Acceptance Criteria:
+- Can select custom date range (daily, weekly, monthly, custom)
+- Can filter by event type (incidents, patrols, maintenance)
+- Can filter by severity (critical, high, medium, low)
+- Report shows all events matching criteria
+- Can export as PDF with company branding
+- Generated reports are stored for historical access
+- Report generation completes in < 5 seconds for typical monthly report
+```
+
+### Business Rules
+
+#### Organizational Structure Rules
+
+1. **No Artificial Depth Limits:**
+   - System must support hierarchies from 1 level (flat) to 10+ levels (holding structures)
+   - No hardcoded "maximum depth" constraint
+
+2. **Flexible Unit Types:**
+   - Predefined types: Holding, Company, Region, Branch, Division
+   - Support custom types (e.g., "Department", "Team")
+   - Custom types must have same capabilities as predefined types
+
+3. **Single Tenant Isolation:**
+   - Each security service company is isolated tenant
+   - Cannot see or access other tenants' data
+   - Organizational units are tenant-scoped
+
+4. **Hierarchical Access Inheritance:**
+   - Access to parent organizational unit can include all descendants (configurable)
+   - Regional Manager with "include descendants" sees all branches in region
+   - Branch Manager with "exclude descendants" sees only own branch
+   - Changes to hierarchy automatically update effective permissions
+
+5. **Multiple Parents:**
+   - Organizational units can have multiple parents (matrix structure)
+   - Example: "Aviation Security Division" reports to both "Region Hamburg" and "Aviation Business Unit"
+
+#### Customer Hierarchy Rules
+
+1. **Independence from Internal Structure:**
+   - Customer hierarchies are **completely separate** from internal organizational units
+   - Customer users do NOT see which branch manages them
+   - Internal employees see both structures (for management)
+   - Link between customer and managing unit is internal-only metadata
+
+2. **Read-Only Customer Access:**
+   - Customer users (Client role) have read-only access by default
+   - Cannot create, update, or delete guard book entries
+   - Cannot see internal employee data or organizational structure
+   - Exception: Customer admins can manage their own customer users
+
+3. **Hierarchical Customer Access:**
+   - Corporate customer user can access all descendant customers' objects
+   - Regional customer user limited to own region
+   - Local customer user limited to specific objects
+   - Access inheritance follows customer hierarchy, not internal structure
+
+4. **Fine-Grained Object Permissions:**
+   - Customer users can have object-specific permissions
+   - Allowed actions: ["read_guard_book", "read_reports", "export_reports"]
+   - Cannot override read-only restriction at entry level
+   - Object permissions can be more restrictive than hierarchy access
+
+#### Object Area Segmentation Rules
+
+1. **Optional Segmentation:**
+   - Small objects: Single guard book for entire object (default)
+   - Large objects: Multiple areas with separate guard books (optional)
+   - Decision made per object based on operational needs
+
+2. **Area-Specific Guard Books:**
+   - Each area can require separate guard book (configurable)
+   - Guards assigned to area only access that area's guard book
+   - Parent object must exist before areas can be created
+   - Deleting object cascades to all areas and their guard books
+
+3. **Area Boundaries:**
+   - Areas are logical divisions (e.g., "Terminal 1", "Warehouse")
+   - Optional GPS boundaries for future geofencing
+   - Areas cannot overlap (one location = one area)
+
+#### Guard Book Report Rules
+
+1. **Event Stream Model:**
+   - Guard books are continuous event streams (not closed physical books)
+   - No manual "closing" of books at month-end
+   - Reports generated on-demand for any time period
+   - Historical events remain accessible indefinitely
+
+2. **Report Filters:**
+   - Time period (start date/time, end date/time)
+   - Event types (incident, patrol, maintenance, access control, alarm, note)
+   - Severity (critical, high, medium, low)
+   - Combining filters via logical AND
+   - Reports include all events matching ALL filters
+
+3. **Report Immutability:**
+   - Generated reports store snapshot of events (denormalized)
+   - Historical integrity preserved even if original events are modified
+   - Report number is unique and sequential per tenant
+   - Reports cannot be edited after generation
+
+### Non-Functional Requirements
+
+#### Performance
+
+- **Hierarchical Queries:** O(1) complexity for "all descendants" queries (via closure table pattern)
+- **API Response Time:** < 500ms for organizational unit listing (p95)
+- **Tree Rendering:** Support 1000+ nodes in frontend tree view without performance degradation
+- **Report Generation:** < 5 seconds for typical monthly report with 1000 events
+
+#### Scalability
+
+- **Organizational Units:** Support 10,000+ units per tenant
+- **Customer Hierarchies:** Support 100,000+ customers per tenant
+- **Concurrent Users:** Support 1000+ concurrent users per tenant
+- **Database:** Efficient queries even with deep hierarchies (10+ levels)
+
+#### Security
+
+- **Tenant Isolation:** Zero-tolerance for cross-tenant data leaks
+- **Authorization:** All API endpoints enforce policy checks
+- **Audit Logging:** All organizational structure changes logged with user attribution
+- **Data Encryption:** Personal customer data encrypted at rest
+
+#### Usability
+
+- **Mobile-First:** Guard book access optimized for mobile devices (iOS/Android)
+- **Internationalization:** Support German (primary) and English
+- **Accessibility:** WCAG 2.1 Level AA compliance for all UI components
+- **Offline Mode:** Guards can view assigned shifts and objects offline
+
+#### Maintainability
+
+- **Database Schema:** Extensible without schema migrations (JSONB metadata fields)
+- **API Versioning:** Semantic versioning with backward compatibility
+- **Documentation:** All features documented in user guides and API reference
+
+### Technical Architecture
+
+**Closure Table Pattern:**
+
+SecPal uses the **Closure Table Pattern** for storing and querying hierarchical data efficiently:
+
+- **organizational_unit_closures:** Stores all ancestor-descendant relationships
+- **customer_closures:** Stores customer hierarchy relationships
+- **Advantages:**
+  - O(1) complexity for "all descendants" queries
+  - Simple to maintain with database triggers
+  - No recursive queries needed for common operations
+  - Works efficiently in SQLite (development) and PostgreSQL (production)
+
+**Two Independent Hierarchies:**
+
+1. **Internal Structure** (`organizational_units`):
+   - Security service company hierarchy (Holding → Region → Branch)
+   - For internal employees (Guards, Managers, Admins)
+   - Access control via `user_internal_organizational_scopes`
+
+2. **Customer Structure** (`customers`):
+   - External customer hierarchy (Corporate → Regional → Local)
+   - For customer users (Client role)
+   - Access control via `customer_user_accesses` + `customer_user_object_accesses`
+
+**RBAC Integration:**
+
+- **Hierarchical Scopes:** Users granted access to organizational unit or customer
+- **Include Descendants:** Configurable flag to include all child units/customers
+- **Fine-Grained Permissions:** Object-level and action-level permissions
+- **Policy Enforcement:** Laravel policies check both permissions and scopes
+
+**Implementation Reference:**
+
+See [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](https://github.com/SecPal/.github/blob/main/docs/adr/20251126-organizational-structure-hierarchy.md) for complete technical architecture.
+
+**Related Epic:**
+
+SecPal/api#228 - Epic: Flexible Organizational Structure & Multi-Level Hierarchies
+
+**Sub-Issues:**
+
+- SecPal/api#229: Database Migrations: Organizational Units & Closure Tables
+- SecPal/api#230: Database Migrations: Customer Hierarchies & Access Control
+- SecPal/api#231: Eloquent Models: Organizational Units with Hierarchical Relationships
+- SecPal/api#232: Eloquent Models: Customers, Objects, and Object Areas
+- SecPal/api#233: Guard Books: Event Stream Implementation & Object Area Segmentation
+- SecPal/api#234: RBAC: Hierarchical Access Control for Internal Employees
+- SecPal/api#235: RBAC: Customer User Access Control (Read-Only Scopes)
+- SecPal/api#236: API: REST Endpoints for Organizational Structure & Customer Hierarchies
+- SecPal/frontend#241: Frontend: UI for Organizational Hierarchy & Customer Management
+
+### Future Enhancements
+
+1. **Geofencing (Post-MVP):**
+   - GPS verification for guard check-ins at specific areas
+   - Alerts when guard entries are created outside area boundaries
+   - Requires legal review and works council approval
+
+2. **Advanced Reporting (Phase 2):**
+   - Automated scheduled reports (daily, weekly, monthly)
+   - Comparison reports (current vs. previous period)
+   - Trend analysis (incident frequency over time)
+   - Multi-area combined reports with area breakdown
+
+3. **Organizational Structure Versioning (Phase 2):**
+   - Historical tracking of organizational changes
+   - "Point-in-time" queries (what was the structure on date X?)
+   - Audit trail for compliance
+
+4. **Multi-Tenant Analytics (Phase 3):**
+   - Anonymized benchmarking across tenants
+   - Industry-specific KPIs and best practices
+   - Optional opt-in for data sharing
+
+**Priority:** 🟡 P1 (High) - Enables enterprise customers and growth
+
+**Timeline:** Q1 2026 (phased rollout, starting December 2025)
 
 ---
 
