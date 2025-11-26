@@ -84,6 +84,7 @@ Examples:
 
 ### Proposed
 
+- [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26
 - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27
 - [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27
 - [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27
