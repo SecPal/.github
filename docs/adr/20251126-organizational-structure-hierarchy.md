@@ -16,6 +16,7 @@ SPDX-License-Identifier: CC0-1.0
 This ADR defines the architecture for flexible, unlimited-depth organizational hierarchies in SecPal. **Two independent hierarchical systems** are implemented:
 
 1. **Internal Structure** (`organizational_units`): Security service company hierarchy (Holding → Company → Region → Branch → Division)
+
    - For **internal employees** (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
    - Fine-grained RBAC: From branch-wide access down to specific object areas
@@ -656,7 +657,7 @@ Schema::create('guard_book_reports', function (Blueprint $table) {
 
 **Purpose:** Define access scopes for **internal employees** based on the security service's organizational structure.
 
-````php
+```php
 Schema::create('user_internal_organizational_scopes', function (Blueprint $table) {
     $table->foreignUuid('user_id')->references('id')->on('users')->cascadeOnDelete();
     $table->foreignUuid('organizational_unit_id')
@@ -698,7 +699,9 @@ Schema::create('user_object_area_scopes', function (Blueprint $table) {
 
     $table->comment('Ultra-fine-grained: User access to specific areas (e.g., Schichtführer Haupteingang)');
 });
-```**Access Control Query Example (Internal Employees):**
+```
+
+**Access Control Query Example (Internal Employees):**
 
 ```php
 // Find all objects accessible to internal user X based on organizational scope
@@ -721,7 +724,7 @@ $accessibleObjects = Object::query()
     ->get();
 
 // Example: Regional Manager Berlin sees all objects managed by Niederlassung Berlin + sub-units
-````
+```
 
 **Access Control Query Example (Customer Users):**
 
@@ -1021,11 +1024,13 @@ DB::transaction(function () use ($unit, $newParent) {
 ## References
 
 - **Related ADRs:**
+
   - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md)
   - [ADR-004: RBAC System with Spatie Laravel-Permission](20251108-rbac-spatie-temporal-extension.md)
   - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md)
 
 - **Related Issues:**
+
   - Issue #5: RBAC System (Scope-based permissions)
   - Future Epic: Flexible Organizational Structure (TBD)
 
@@ -1047,6 +1052,7 @@ DB::transaction(function () use ($unit, $newParent) {
 **Two Independent Systems:**
 
 1. **Internal Organizational Structure** (`organizational_units`)
+
    - Security service company hierarchy (Holding → Region → Branch)
    - For **internal employees only** (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
