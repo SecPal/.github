@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Features move to GitHub Issues when prioritized
 
-**Last Updated:** 2025-10-27
+**Last Updated:** 2025-11-26
 
 ---
 
