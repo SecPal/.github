@@ -49,7 +49,6 @@ What are the positive and negative outcomes?
 What other options did we evaluate?
 
 1. **Option 1:** Description
-
    - Pro: ...
    - Contra: ...
 
