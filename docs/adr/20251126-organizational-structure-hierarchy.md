@@ -16,7 +16,6 @@ SPDX-License-Identifier: CC0-1.0
 This ADR defines the architecture for flexible, unlimited-depth organizational hierarchies in SecPal. **Two independent hierarchical systems** are implemented:
 
 1. **Internal Structure** (`organizational_units`): Security service company hierarchy (Holding → Company → Region → Branch → Division)
-
    - For **internal employees** (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
    - Fine-grained RBAC: From branch-wide access down to specific object areas
@@ -1024,13 +1023,11 @@ DB::transaction(function () use ($unit, $newParent) {
 ## References
 
 - **Related ADRs:**
-
   - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md)
   - [ADR-004: RBAC System with Spatie Laravel-Permission](20251108-rbac-spatie-temporal-extension.md)
   - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md)
 
 - **Related Issues:**
-
   - Issue #5: RBAC System (Scope-based permissions)
   - Future Epic: Flexible Organizational Structure (TBD)
 
@@ -1052,7 +1049,6 @@ DB::transaction(function () use ($unit, $newParent) {
 **Two Independent Systems:**
 
 1. **Internal Organizational Structure** (`organizational_units`)
-
    - Security service company hierarchy (Holding → Region → Branch)
    - For **internal employees only** (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
