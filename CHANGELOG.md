@@ -9,6 +9,24 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2025-11-23 - Fix Dependabot Auto-Merge Job Timeout
+
+**Fixed:**
+
+- **Job timeout issue:** Added `timeout-minutes: 20` to the `auto-merge` job in `reusable-dependabot-auto-merge.yml` to prevent workflows from hanging indefinitely
+  - Workflows were waiting unboundedly even when all CI checks had already completed
+  - Job now fails after 20 minutes instead of running indefinitely
+  - Works in conjunction with existing `continue-on-error: true` on the wait step (added 2025-11-14)
+  - Resolves hanging workflows in SecPal/api#238 and SecPal/api#239
+
+**Impact:**
+
+- Dependabot auto-merge workflows complete within reasonable timeframe
+- Failed workflows provide clear timeout signal instead of appearing stuck
+- Aligns with GitHub Actions best practices for job-level timeout enforcement
+
+---
+
 ## 2025-11-23 - Design Principles Consolidation (DRY Compliance)
 
 **Added:**
