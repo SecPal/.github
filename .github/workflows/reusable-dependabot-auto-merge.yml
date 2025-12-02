@@ -143,14 +143,31 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Wait for CI checks
+        id: wait-for-checks
         uses: lewagon/wait-on-check-action@v1.4.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
-          running-workflow-name: "Enable Auto-Merge"
+          # For reusable workflows, the check name format is "caller_job / callee_job"
+          # The caller job is named "auto-merge" and this job is "Enable Auto-Merge"
+          running-workflow-name: "auto-merge / Enable Auto-Merge"
           allowed-conclusions: success,skipped,neutral
+          # Also ignore by explicit check name as backup
+          ignore-checks: "Dependabot Auto-Merge,auto-merge / Enable Auto-Merge,auto-merge / Check Auto-Merge Eligibility"
         continue-on-error: true
+
+      - name: Log wait result
+        run: |
+          echo "Wait for checks outcome: ${{ steps.wait-for-checks.outcome }}"
+          echo "Wait for checks conclusion: ${{ steps.wait-for-checks.conclusion }}"
+          if [[ "${{ steps.wait-for-checks.outcome }}" == "failure" ]]; then
+            echo "⚠️ Wait for checks failed or timed out"
+            echo "   This is expected if there are no other CI checks configured for this repository."
+            echo "   The workflow will continue with auto-merge since continue-on-error is set."
+          else
+            echo "✅ All CI checks passed or were skipped"
+          fi
 
       - name: Enable auto-merge
         env:
