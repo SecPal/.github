@@ -154,7 +154,7 @@ jobs:
           running-workflow-name: "auto-merge / Enable Auto-Merge"
           allowed-conclusions: success,skipped,neutral
           # Also ignore by explicit check name as backup
-          ignore-checks: "Dependabot Auto-Merge,auto-merge / Enable Auto-Merge,auto-merge / Check Eligibility"
+          ignore-checks: "Dependabot Auto-Merge,auto-merge / Enable Auto-Merge,auto-merge / Check Auto-Merge Eligibility"
         continue-on-error: true
 
       - name: Log wait result
