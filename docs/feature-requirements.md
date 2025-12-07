@@ -1001,7 +1001,9 @@ SecPal/api#228 - Epic: Flexible Organizational Structure & Multi-Level Hierarchi
 
 ## 👥 Employee Management (HR Module)
 
-### Requirement: Comprehensive Employee Records
+> **Epic Issue:** [SecPal/.github#211](https://github.com/SecPal/.github/issues/211)
+
+### Requirement: Comprehensive Employee Lifecycle Management
 
 **Context:**
 Security companies need employee data for:
@@ -1009,32 +1011,133 @@ Security companies need employee data for:
 - Legal compliance (BewachV §34a: Qualification proof)
 - Shift planning (availability, qualifications)
 - Contract management (employment status, working hours)
+- Pre-contract onboarding (Personalfragebogen, digital signatures)
 - Training management (course expiry dates)
+- Automatic user account lifecycle (activation/deactivation)
 
 **Features:**
 
-### 1. Employee Profile
+### 1. Employee Status State Machine
+
+**Lifecycle Stages:**
+
+| Status         | User Account       | System Access             | Permissions                       | Use Case                                                         |
+| -------------- | ------------------ | ------------------------- | --------------------------------- | ---------------------------------------------------------------- |
+| `applicant`    | ❌ No              | ❌ No                     | None                              | Future: Bewerberverwaltung                                       |
+| `pre_contract` | ✅ Yes (activated) | ⚠️ Onboarding Portal Only | Own profile + onboarding forms    | Before contract start: Personalfragebogen, documents, signatures |
+| `active`       | ✅ Yes (activated) | ✅ Full Access            | Role-based (Guard, Manager, etc.) | Normal operations: shifts, guard book, work instructions         |
+| `on_leave`     | ✅ Yes (activated) | ⚠️ Read-only              | Limited                           | Parental leave, sick leave, sabbatical                           |
+| `terminated`   | ❌ Deactivated     | ❌ No                     | None (all roles revoked)          | After contract end, account kept 10 years (GDPR)                 |
+
+**State Transitions:**
+
+```
+applicant → pre_contract  (manual: HR creates employee with contract)
+pre_contract → active     (automatic: contract_start_date reached + onboarding completed)
+pre_contract → terminated (manual: contract cancelled before start)
+active → on_leave         (manual: HR marks as on leave)
+on_leave → active         (manual: HR marks as back from leave)
+active → terminated       (automatic: termination_date reached)
+on_leave → terminated     (automatic: termination_date reached while on leave)
+```
+
+### 2. Automatic User Account Management
+
+**Observer Pattern:**
+
+```php
+// EmployeeObserver handles automatic user account lifecycle
+
+on Employee created (status = pre_contract):
+  → Create User account (activated, no permissions)
+  → Send onboarding invitation email (magic link)
+
+on Employee updated (status: pre_contract → active):
+  → Assign role "Employee" with temporal dates
+  → Send welcome email
+
+on Employee updated (status: active → terminated):
+  → Revoke all roles
+  → Deactivate user account (user_account_active = false)
+  → Delete all sessions and API tokens
+  → Send account deactivation notice
+```
+
+**Error Handling Strategy (Observer Pattern):**
+
+For each automatic action, implementers MUST follow these error handling guidelines:
+
+1. **User account creation fails (e.g., email already exists, validation error):**
+   - Log the error with full context (employee ID, error message).
+   - Abort onboarding flow for this employee; do NOT proceed to send onboarding email.
+   - Notify HR/admin via dashboard alert or email.
+   - Status remains `pre_contract` until resolved manually.
+
+2. **Email sending fails (e.g., SMTP error, invalid email):**
+   - Log the error with full context.
+   - Queue a retry operation (max 3 attempts, exponential backoff).
+   - If all retries fail, notify HR/admin for manual intervention.
+   - Do NOT activate employee until onboarding email is successfully sent.
+
+3. **Role assignment fails (e.g., role doesn't exist):**
+   - Log the error and abort role assignment.
+   - Do NOT activate employee account; status remains unchanged.
+   - Notify system administrator to resolve missing role configuration.
+
+4. **Session deletion fails (e.g., database error):**
+   - Log the error and continue with other termination steps.
+   - Flag user for manual session/token cleanup in admin dashboard.
+   - Do NOT roll back termination; ensure user account is deactivated.
+
+All errors MUST be logged with sufficient detail for troubleshooting. Critical onboarding failures (user creation, email sending, role assignment) block status transitions and require manual resolution. Non-critical failures (session deletion) do not block status changes but must be flagged for follow-up.
+
+**Scheduled Job (Daily at 6:00 AM):**
+
+```php
+// Automatic status transitions based on contract dates
+
+Activate accounts:
+  - Status = pre_contract
+  - contract_start_date <= today
+  - onboarding_completed = true
+  → Update status to 'active'
+  # Note: If onboarding is incomplete, restrict access to sensitive features until onboarding is finished.
+
+Deactivate accounts:
+  - Status = active
+  - termination_date <= today
+  → Update status to 'terminated'
+
+Expiry warnings:
+  - Status = active
+  - termination_date in 7 days
+  → Send "Contract ending soon" notification
+```
+
+### 3. Employee Profile
 
 **Data Fields:**
 
 ```yaml
 Personal Information:
   - Employee Number: (unique, auto-generated or manual)
-  - First Name: (required)
-  - Last Name: (required)
-  - Date of Birth: (for age-restricted assignments)
+  - First Name: (required, encrypted)
+  - Last Name: (required, encrypted)
+  - Date of Birth: (encrypted, for age-restricted assignments)
   - Photo: (for ID badge, optional)
   - Contact Email: (for app login)
   - Phone Number: (emergency contact)
   - Address: (for travel distance calculation)
 
 Employment Details:
-  - Employment Status: [Active, Inactive, On Leave, Terminated]
+  - Employment Status: [applicant, pre_contract, active, on_leave, terminated]
   - Contract Type: [Full-time, Part-time, Minijob, Freelance]
-  - Hire Date: (required)
-  - Termination Date: (if applicable)
+  - Hire Date: (when employee was hired)
+  - Contract Start Date: (when system access begins)
+  - Termination Date: (when contract ends)
+  - Last Working Day: (actual last day on-site)
   - Weekly Working Hours: (for contract compliance)
-  - Hourly Rate / Salary: (for cost calculation, restricted access)
+  - Hourly Rate / Salary: (encrypted, restricted access)
 
 Legal Requirements:
   - §34a Certificate Number: (Sachkundeprüfung)
@@ -1044,53 +1147,250 @@ Legal Requirements:
   - Criminal Record Check Date: (refresh every 5 years)
 
 System Access:
-  - User Account: (linked to authentication)
-  - Assigned Roles: (RBAC roles)
-  - Mobile App Access: [Enabled, Disabled]
+  - User Account ID: (FK to users table)
+  - User Account Active: (boolean, master switch)
+  - User Account Activated At: (timestamp)
+  - User Account Deactivated At: (timestamp)
+  - Assigned Roles: (RBAC roles, temporal)
   - Last Login: (tracking)
+
+Pre-Contract Onboarding:
+  - Onboarding Completed: (boolean)
+  - Onboarding Steps: (JSON array)
+  - Onboarding Started At: (timestamp)
+  - Onboarding Completed At: (timestamp)
 ```
 
 **Data Protection:**
 
 - ✅ Separate personal data from operational data
-- ✅ Encrypt salary information
+- ✅ Encrypt salary information (TenantKey encryption)
+- ✅ Encrypt personal data (first_name, last_name, date_of_birth)
 - ✅ Clients cannot see employee names (pseudonymize: "Guard #1234")
 - ✅ Managers only see employees in their teams (scope-based)
+- ✅ Pre-contract users can ONLY access onboarding endpoints
+- ✅ Terminated accounts soft-deleted, kept 10 years (Aufbewahrungspflicht)
 
 **Implementation:**
 
 ```php
 Schema::create('employees', function (Blueprint $table) {
     $table->uuid('id')->primary();
-    $table->uuid('organization_id');
+    $table->foreignUuid('tenant_id')->constrained('tenant_keys');
     $table->string('employee_number')->unique();
 
-    // Personal (encrypted)
-    $table->text('first_name_encrypted');
-    $table->text('last_name_encrypted');
-    $table->date('date_of_birth_encrypted')->nullable();
+    // Personal (encrypted via TenantKey)
+    $table->text('first_name_enc');
+    $table->string('first_name_idx', 64)->nullable(); // Blind index for secure search
+    $table->text('last_name_enc');
+    $table->string('last_name_idx', 64)->nullable(); // Blind index for secure search
+    $table->text('date_of_birth_enc')->nullable();
+    $table->string('date_of_birth_idx', 64)->nullable(); // Blind index for age-based queries
+    // Email address for employee account creation and authentication.
+    // Requirements:
+    // - Must be a valid RFC 5322 email address (format validated in application and/or via DB constraint).
+    // - Must be unique across all employees (enforced by unique index).
+    // - Must be verified before account activation (see onboarding workflow).
+    // - Nullable for employees without user accounts; validation/uniqueness applies only when not null.
+    $table->string('email')->nullable()->unique(); // Copied to user.email on account creation, used for authentication
+    $table->string('phone')->nullable();
 
-    // Employment
-    $table->enum('status', ['active', 'inactive', 'on_leave', 'terminated']);
+    // Employment Status State Machine
+    $table->enum('status', [
+        'applicant',      // Future: Bewerberverwaltung
+        'pre_contract',   // Before contract start: Onboarding phase
+        'active',         // Normal operations
+        'on_leave',       // Parental leave, sick leave, etc.
+        'terminated'      // After contract end
+    ])->default('applicant');
+
+    // Contract Dates (trigger automatic status transitions)
+    $table->date('hire_date')->nullable();
+    $table->date('contract_start_date')->nullable(); // When system access begins
+    $table->date('termination_date')->nullable(); // When contract ends
+    $table->date('last_working_day')->nullable(); // Actual last day on-site
+
+    // Contract Details
     $table->enum('contract_type', ['full_time', 'part_time', 'minijob', 'freelance']);
-    $table->date('hire_date');
-    $table->date('termination_date')->nullable();
     $table->decimal('weekly_hours', 5, 2)->nullable();
+    $table->text('hourly_rate_enc')->nullable(); // Salary encrypted
 
-    // Legal (BewachV)
+    // Legal Requirements (BewachV)
     $table->string('sachkunde_certificate')->nullable();
     $table->date('sachkunde_expiry')->nullable();
     $table->date('criminal_record_check_date')->nullable();
+    $table->enum('criminal_record_status', ['valid', 'expired', 'pending'])->nullable();
 
-    // System
-    $table->foreignUuid('user_id')->nullable(); // Link to auth user
+    // System Access (User Account Link)
+    $table->foreignUuid('user_id')->nullable()->constrained('users')->onDelete('restrict');
+    $table->boolean('user_account_active')->default(false);
+    $table->timestamp('user_account_activated_at')->nullable();
+    $table->timestamp('user_account_deactivated_at')->nullable();
+
+    // Pre-Contract Onboarding
+    $table->boolean('onboarding_completed')->default(false);
+    $table->json('onboarding_steps')->nullable(); // [{"step": "personalfragebogen", "completed": true}, ...]
+    $table->timestamp('onboarding_started_at')->nullable();
+    $table->timestamp('onboarding_completed_at')->nullable();
 
     $table->timestamps();
     $table->softDeletes();
+
+    $table->index(['status', 'contract_start_date']);
+    $table->index('user_account_active');
+    $table->index('tenant_id');
+    $table->index('user_id');
+    $table->index('email');
+    $table->index('employee_number');
+    $table->index('termination_date');
 });
 ```
 
 **Priority:** 🔴 P0 (Blocker) - Core feature
+
+---
+
+### 4. Pre-Contract Onboarding
+
+**Goal:** Employees complete required paperwork BEFORE contract starts.
+
+**Workflow:**
+
+```
+1. HR creates Employee (status: pre_contract, contract_start_date: 2025-01-15)
+   ↓
+2. System automatically:
+   - Creates User account (email = employee.email, activated)
+   - Generates random password
+   - Sends invitation email with magic link (password reset)
+   ↓
+3. Employee logs in to Onboarding Portal:
+   - Views: Arbeitsvertrag (PDF, read-only)
+   - Fills: Personalfragebogen (standard form)
+   - Fills: Bankverbindung
+   - Fills: Notfallkontakt
+   - Fills: Steuer-ID
+   - Uploads: §34a Zertifikat, Führungszeugnis (PDF)
+   - Signs: Digital signature (Arbeitsvertrag, Datenschutzbelehrung)
+   ↓
+4. Each step saved as JSON in employee.onboarding_steps
+   ↓
+5. When all required steps completed:
+   - employee.onboarding_completed = true
+   - Notify HR: "Employee ready for review"
+   ↓
+6. HR reviews and approves
+   ↓
+7. On contract_start_date (automatic):
+   - Status: pre_contract → active
+   - Assign temporal role: "Employee" (valid_from = contract_start_date, valid_until = termination_date)
+   - Send welcome email
+   ↓
+8. Employee can now access full system
+```
+
+**Onboarding Steps (JSON Structure):**
+
+```json
+{
+  "steps": [
+    {
+      "id": "personal_questionnaire",
+      "name": "Personalfragebogen",
+      "type": "form",
+      "required": true,
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
+    },
+    {
+      "id": "bank_details",
+      "name": "Bankverbindung",
+      "type": "form",
+      "required": true,
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
+    },
+    {
+      "id": "emergency_contact",
+      "name": "Notfallkontakt",
+      "type": "form",
+      "required": true,
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
+    },
+    {
+      "id": "tax_id",
+      "name": "Steuer-ID",
+      "type": "form",
+      "required": true,
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
+    },
+    {
+      "id": "document_34a",
+      "name": "§34a Zertifikat Upload",
+      "type": "file_upload",
+      "required": true,
+      "completed": false,
+      "file_path": null
+    },
+    {
+      "id": "document_criminal_record",
+      "name": "Führungszeugnis Upload",
+      "type": "file_upload",
+      "required": true,
+      "completed": false,
+      "file_path": null
+    },
+    {
+      "id": "contract_signature",
+      "name": "Arbeitsvertrag Unterschrift",
+      "type": "digital_signature",
+      "required": true,
+      "completed": false,
+      "signature_id": null
+    },
+    {
+      "id": "data_protection_ack",
+      "name": "Datenschutzbelehrung",
+      "type": "acknowledgment",
+      "required": true,
+      "completed": false,
+      "acknowledged_at": null
+    }
+  ],
+  "progress_percent": 0,
+  "all_required_completed": false
+}
+```
+
+**Hybrid Approach:**
+
+- **Standard Forms:** HR defines templates (Personalfragebogen, Bankverbindung) once
+- **Custom Forms:** HR can add additional forms per employee (e.g., "Betriebliche Altersvorsorge")
+- **File Uploads:** Employee uploads documents (§34a, Führungszeugnis)
+- **Digital Signatures:** Employee signs contracts digitally
+
+**Authorization:**
+
+```php
+// Pre-contract users can ONLY access onboarding endpoints
+Route::middleware(['auth:sanctum', 'ensure.pre_contract'])->group(function () {
+    Route::get('/onboarding/steps', [OnboardingController::class, 'steps']);
+    Route::get('/onboarding/forms/{id}', [OnboardingController::class, 'form']);
+    Route::post('/onboarding/forms/{id}/submit', [OnboardingController::class, 'submit']);
+    Route::post('/onboarding/files/upload', [OnboardingController::class, 'upload']);
+});
+
+// All operational routes require active status
+Route::middleware(['auth:sanctum', 'ensure.not_pre_contract'])->group(function () {
+    // Shifts, guard book, work instructions, etc.
+});
+```
 
 ---
 
