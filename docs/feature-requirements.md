@@ -1034,9 +1034,11 @@ Security companies need employee data for:
 ```
 applicant → pre_contract  (manual: HR creates employee with contract)
 pre_contract → active     (automatic: contract_start_date reached + onboarding completed)
+pre_contract → terminated (manual: contract cancelled before start)
 active → on_leave         (manual: HR marks as on leave)
 on_leave → active         (manual: HR marks as back from leave)
 active → terminated       (automatic: termination_date reached)
+on_leave → terminated     (automatic: termination_date reached while on leave)
 ```
 
 ### 2. Automatic User Account Management
@@ -1061,6 +1063,34 @@ on Employee updated (status: active → terminated):
   → Send account deactivation notice
 ```
 
+**Error Handling Strategy (Observer Pattern):**
+
+For each automatic action, implementers MUST follow these error handling guidelines:
+
+1. **User account creation fails (e.g., email already exists, validation error):**
+   - Log the error with full context (employee ID, error message).
+   - Abort onboarding flow for this employee; do NOT proceed to send onboarding email.
+   - Notify HR/admin via dashboard alert or email.
+   - Status remains `pre_contract` until resolved manually.
+
+2. **Email sending fails (e.g., SMTP error, invalid email):**
+   - Log the error with full context.
+   - Queue a retry operation (max 3 attempts, exponential backoff).
+   - If all retries fail, notify HR/admin for manual intervention.
+   - Do NOT activate employee until onboarding email is successfully sent.
+
+3. **Role assignment fails (e.g., role doesn't exist):**
+   - Log the error and abort role assignment.
+   - Do NOT activate employee account; status remains unchanged.
+   - Notify system administrator to resolve missing role configuration.
+
+4. **Session deletion fails (e.g., database error):**
+   - Log the error and continue with other termination steps.
+   - Flag user for manual session/token cleanup in admin dashboard.
+   - Do NOT roll back termination; ensure user account is deactivated.
+
+All errors MUST be logged with sufficient detail for troubleshooting. Critical onboarding failures (user creation, email sending, role assignment) block status transitions and require manual resolution. Non-critical failures (session deletion) do not block status changes but must be flagged for follow-up.
+
 **Scheduled Job (Daily at 6:00 AM):**
 
 ```php
@@ -1071,6 +1101,7 @@ Activate accounts:
   - contract_start_date <= today
   - onboarding_completed = true
   → Update status to 'active'
+  # Note: If onboarding is incomplete, restrict access to sensitive features until onboarding is finished.
 
 Deactivate accounts:
   - Status = active
@@ -1149,10 +1180,19 @@ Schema::create('employees', function (Blueprint $table) {
     $table->string('employee_number')->unique();
 
     // Personal (encrypted via TenantKey)
-    $table->text('first_name_encrypted');
-    $table->text('last_name_encrypted');
-    $table->date('date_of_birth_encrypted')->nullable();
-    $table->string('email')->nullable(); // Copied to user.email on account creation
+    $table->text('first_name_enc');
+    $table->string('first_name_idx', 64)->nullable(); // Blind index for secure search
+    $table->text('last_name_enc');
+    $table->string('last_name_idx', 64)->nullable(); // Blind index for secure search
+    $table->text('date_of_birth_enc')->nullable();
+    $table->string('date_of_birth_idx', 64)->nullable(); // Blind index for age-based queries
+    // Email address for employee account creation and authentication.
+    // Requirements:
+    // - Must be a valid RFC 5322 email address (format validated in application and/or via DB constraint).
+    // - Must be unique across all employees (enforced by unique index).
+    // - Must be verified before account activation (see onboarding workflow).
+    // - Nullable for employees without user accounts; validation/uniqueness applies only when not null.
+    $table->string('email')->nullable()->unique(); // Copied to user.email on account creation, used for authentication
     $table->string('phone')->nullable();
 
     // Employment Status State Machine
@@ -1173,7 +1213,7 @@ Schema::create('employees', function (Blueprint $table) {
     // Contract Details
     $table->enum('contract_type', ['full_time', 'part_time', 'minijob', 'freelance']);
     $table->decimal('weekly_hours', 5, 2)->nullable();
-    $table->text('hourly_rate_encrypted')->nullable(); // Salary encrypted
+    $table->text('hourly_rate_enc')->nullable(); // Salary encrypted
 
     // Legal Requirements (BewachV)
     $table->string('sachkunde_certificate')->nullable();
@@ -1182,7 +1222,7 @@ Schema::create('employees', function (Blueprint $table) {
     $table->enum('criminal_record_status', ['valid', 'expired', 'pending'])->nullable();
 
     // System Access (User Account Link)
-    $table->foreignUuid('user_id')->nullable()->constrained('users');
+    $table->foreignUuid('user_id')->nullable()->constrained('users')->onDelete('restrict');
     $table->boolean('user_account_active')->default(false);
     $table->timestamp('user_account_activated_at')->nullable();
     $table->timestamp('user_account_deactivated_at')->nullable();
@@ -1198,6 +1238,11 @@ Schema::create('employees', function (Blueprint $table) {
 
     $table->index(['status', 'contract_start_date']);
     $table->index('user_account_active');
+    $table->index('tenant_id');
+    $table->index('user_id');
+    $table->index('email');
+    $table->index('employee_number');
+    $table->index('termination_date');
 });
 ```
 
@@ -1263,21 +1308,27 @@ Schema::create('employees', function (Blueprint $table) {
       "name": "Bankverbindung",
       "type": "form",
       "required": true,
-      "completed": false
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
     },
     {
       "id": "emergency_contact",
       "name": "Notfallkontakt",
       "type": "form",
       "required": true,
-      "completed": false
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
     },
     {
       "id": "tax_id",
       "name": "Steuer-ID",
       "type": "form",
       "required": true,
-      "completed": false
+      "completed": false,
+      "completed_at": null,
+      "form_submission_id": null
     },
     {
       "id": "document_34a",
@@ -1336,7 +1387,7 @@ Route::middleware(['auth:sanctum', 'ensure.pre_contract'])->group(function () {
 });
 
 // All operational routes require active status
-Route::middleware(['auth:sanctum', 'ensure.not.pre_contract'])->group(function () {
+Route::middleware(['auth:sanctum', 'ensure.not_pre_contract'])->group(function () {
     // Shifts, guard book, work instructions, etc.
 });
 ```
