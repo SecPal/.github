@@ -8,7 +8,7 @@ echo "🔧 Setting up Git hooks for all SecPal repositories..."
 echo ""
 
 # Determine workspace root (parent directory of .github)
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$WORKSPACE_ROOT"
 
@@ -40,6 +40,7 @@ for repo in "${REPOS[@]}"; do
 	if [ -f "scripts/setup-pre-push.sh" ]; then
 		if ./scripts/setup-pre-push.sh; then
 			echo "  ✓ Pre-push hook installed"
+			((SUCCESS_COUNT++))
 		else
 			echo "  ✗ Pre-push hook installation failed"
 			FAILED_REPOS+=("$repo (pre-push)")
@@ -68,7 +69,7 @@ done
 echo "════════════════════════════════════════"
 echo "✨ Summary"
 echo "════════════════════════════════════════"
-echo "Successfully configured: $SUCCESS_COUNT repositories"
+echo "Successfully installed: $SUCCESS_COUNT hooks"
 
 if [ ${#FAILED_REPOS[@]} -gt 0 ]; then
 	echo "Failed: ${#FAILED_REPOS[@]} repositories"

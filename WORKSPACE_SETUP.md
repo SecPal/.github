@@ -83,9 +83,9 @@ git push --no-verify    # Skip pre-push
 
 ## Documentation
 
-- [Git Hook Setup & Troubleshooting](.github/docs/HOOK_SETUP_TROUBLESHOOTING.md)
-- [Contributing Guidelines](.github/CONTRIBUTING.md)
-- [Development Workflow](.github/README.md)
+- [Git Hook Setup & Troubleshooting](docs/HOOK_SETUP_TROUBLESHOOTING.md)
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Development Workflow](README.md)
 
 ## License
 

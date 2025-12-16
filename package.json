@@ -8,6 +8,10 @@
     "type": "git",
     "url": "git+https://github.com/SecPal/.github.git"
   },
+  "homepage": "https://github.com/SecPal/.github#readme",
+  "bugs": {
+    "url": "https://github.com/SecPal/.github/issues"
+  },
   "keywords": [],
   "author": "SecPal Contributors",
   "license": "CC0-1.0"
