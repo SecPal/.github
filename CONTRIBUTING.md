@@ -56,8 +56,14 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
    Install both pre-commit and pre-push hooks:
 
    ```bash
-   # Install pre-commit (requires pre-commit to be installed first)
-   pip install --user pre-commit
+   # Install pre-commit (choose one method):
+   # Recommended: Use pipx (isolated, no PATH issues)
+   pipx install pre-commit
+   # Or: Use pip in a virtual environment
+   # python3 -m venv .venv && source .venv/bin/activate && pip install pre-commit
+   # For more options: https://pre-commit.com/#installation
+
+   # Setup pre-commit hooks
    ./scripts/setup-pre-commit.sh
 
    # Install pre-push hook
