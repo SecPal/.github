@@ -51,23 +51,17 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
    cd <repository>
    ```
 
-2. **Set up Git hooks (automatic):**
+2. **Set up Git hooks:**
 
-   Git hooks are automatically configured via `.githooks/` directory:
-
-   ```bash
-   git config core.hooksPath .githooks
-   ```
-
-3. **Install pre-commit (optional, for additional checks):**
+   Install both pre-commit and pre-push hooks:
 
    ```bash
-   # Install pre-commit
-   pip install pre-commit
-   # or: brew install pre-commit
+   # Install pre-commit (requires pre-commit to be installed first)
+   pip install --user pre-commit
+   ./scripts/setup-pre-commit.sh
 
-   # Install hooks
-   pre-commit install
+   # Install pre-push hook
+   ./scripts/setup-pre-push.sh
    ```
 
 ### Local Development Workflow
