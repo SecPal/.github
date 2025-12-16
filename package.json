@@ -1,6 +1,4 @@
 {
-  "_comment": "SPDX-FileCopyrightText: 2025 SecPal",
-  "_license": "SPDX-License-Identifier: CC0-1.0",
   "name": ".github",
   "version": "1.0.0",
   "description": "SecPal organization-wide documentation and settings",
@@ -12,5 +10,5 @@
   },
   "keywords": [],
   "author": "SecPal Contributors",
-  "license": "AGPL-3.0-or-later"
+  "license": "CC0-1.0"
 }
