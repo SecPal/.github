@@ -59,6 +59,9 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
    # Install pre-commit (choose one method):
    # Recommended: Use pipx (isolated, no PATH issues)
    pipx install pre-commit
+   # Or: Use your system package manager
+   # macOS: brew install pre-commit
+   # Debian/Ubuntu: apt install pre-commit
    # Or: Use pip in a virtual environment
    # python3 -m venv .venv && source .venv/bin/activate && pip install pre-commit
    # For more options: https://pre-commit.com/#installation
