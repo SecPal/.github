@@ -21,6 +21,10 @@ SecPal is a digital guard book and much more. It's the "guard's friend" in every
 - [`contracts`](https://github.com/SecPal/contracts): OpenAPI 3.1 API specifications
 - [`frontend`](https://github.com/SecPal/frontend): React/TypeScript frontend application
 
+## Multi-Repository Workspace Setup
+
+For setting up a local development environment with all repositories, see [WORKSPACE_SETUP.md](WORKSPACE_SETUP.md).
+
 ## Development Setup
 
 ### Feature Management & Project Tracking
@@ -140,18 +144,17 @@ We use a pre-push hook to run comprehensive quality checks before pushing to Git
 
 **Installation:**
 
-The pre-push hook is already configured in `.githooks/pre-push` (version controlled). To enable it:
+Run the setup scripts to install both pre-commit and pre-push hooks:
 
 ```bash
-# Configure Git to use .githooks directory
-git config core.hooksPath .githooks
-```
+# Install pre-commit hooks (formatting, linting, REUSE compliance)
+./scripts/setup-pre-commit.sh
 
-Or run the setup script:
-
-```bash
+# Install pre-push hook (comprehensive quality checks)
 ./scripts/setup-pre-push.sh
 ```
+
+The hooks are installed as symlinks in `.git/hooks/`, ensuring they automatically update when scripts change.
 
 **What it checks:**
 
