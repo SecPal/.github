@@ -5,9 +5,11 @@ SPDX-License-Identifier: CC0-1.0
 
 # ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies
 
-**Status:** Proposed
+**Status:** Partially Implemented
 
 **Date:** 2025-11-26
+
+**Last Updated:** 2025-12-17 (Phase 6 Implementation Notes added)
 
 **Deciders:** @kevalyq
 
@@ -1063,3 +1065,286 @@ DB::transaction(function () use ($unit, $newParent) {
 **Key Insight:** A customer (e.g., "Rewe Group") is **managed by** an internal organizational unit (e.g., "Niederlassung Berlin"), but the two hierarchies remain completely separate. Internal employees see both hierarchies (for management), customer users see only their own structure (for access control).
 
 **RBAC Infrastructure:** Both internal employees AND customer users share the **same technical RBAC system** (Spatie Laravel-Permission, Sanctum guard, hierarchical scopes). The difference is in **assigned permissions**: internal roles have CRUD capabilities (`guard_book.create`, `object.update`), while customer roles typically have read-only access (`guard_book.read`, `reports.export`).
+
+---
+
+## Implementation Notes - Phase 6 (Epic #210)
+
+### Overview
+
+**Implementation Period:** 2025-12-13 to 2025-12-16
+**Epic:** #210 Customer & Site Management
+**Status:** ✅ 100% Backend Complete (11 PRs merged, 22 API endpoints, 258+ tests, 0 PHPStan errors)
+
+The Phase 6 implementation (Epic #210) has delivered a **more flexible and pragmatic** data model than originally proposed in ADR-007. This section documents the actual implementation, improvements made, and conscious simplifications.
+
+### 1. Initial Simplified Implementation (What Was Built)
+
+#### ✅ Implemented Features
+
+**Sites Table** (`2025_12_14_100002_create_sites_table.php`):
+
+- UUID-based sites with tenant isolation
+- **Site Types:** `permanent` / `temporary` (Event Security support)
+- **Temporal Contracts:** `valid_from`, `valid_until` for contract periods
+- JSON address format with GPS coordinates
+- Relationships: `customer_id`, `organizational_unit_id`
+- Auto-generated `site_number` (e.g., `SITE-00001`)
+
+**Customer Assignments** (`2025_12_14_100003_create_customer_assignments_table.php`):
+
+- **M:N User-to-Customer assignments** (not 1:1 as proposed in ADR-007)
+- **Flexible role field:** String-based, tenant-specific (e.g., "Key Account Manager", "Sales Representative")
+- **Temporal validity:** `valid_from`, `valid_until` for time-bound assignments
+- Unique constraint: `customer_id + user_id + role`
+
+**Site Assignments** (`2025_12_14_100004_create_site_assignments_table.php`):
+
+- M:N User-to-Site assignments
+- Same flexible role pattern as customer assignments
+- Temporal validity support
+
+#### 🚫 Not Implemented (Conscious Decisions)
+
+**Customer Hierarchies:**
+
+- ❌ No `customer_closures` table (closure table pattern)
+- ❌ No `parent_customer_id` field
+- **Rationale:** YAGNI - None of the initial use cases (small security firms, event security, large corporations) required customer hierarchies. Flat structure is sufficient for MVP.
+
+**Object Areas Segmentation:**
+
+- ❌ No `object_areas` table
+- **Rationale:** Premature optimization. Sites are sufficient; segmentation can be added later if needed.
+
+**Guard Books:**
+
+- ❌ Not part of Phase 6 scope
+- **Status:** Separate Epic planned
+
+### 2. Flexibility Improvements (Beyond Original ADR)
+
+#### M:N Assignment Relationships
+
+**Original ADR-007 Proposal:**
+
+```
+CustomerAssignment:
+- customer_id → single customer
+- user_id → single user
+```
+
+**Actual Implementation:**
+
+```php
+// customer_assignments table
+$table->uuid('customer_id');
+$table->uuid('user_id');
+$table->string('role'); // ← FLEXIBLE! Tenant-defined roles
+$table->timestamp('valid_from');
+$table->timestamp('valid_until')->nullable();
+
+$table->unique(['customer_id', 'user_id', 'role']);
+```
+
+**Benefits:**
+
+- Users can have **multiple roles** for the same customer (e.g., "Key Account Manager" + "Technical Lead")
+- Tenants define custom role names (not hardcoded in code)
+- Temporal validity tracks role changes over time
+
+#### Temporal Validity Throughout
+
+**ADR-007 mentioned temporal validity conceptually, but implementation added it consistently:**
+
+- **Sites:** `valid_from` / `valid_until` for contract periods
+- **Customer Assignments:** Track when users are assigned/unassigned
+- **Site Assignments:** Track when users are assigned/unassigned
+
+**Scopes Added:**
+
+```php
+// Models include currentlyActive() scopes
+CustomerAssignment::query()->currentlyActive()->get();
+SiteAssignment::query()->currentlyActive()->get();
+```
+
+#### Site Types for Event Security
+
+**Original ADR-007:** Didn't distinguish between permanent and temporary sites.
+
+**Actual Implementation:**
+
+```php
+$table->enum('type', ['permanent', 'temporary'])->default('permanent');
+```
+
+**Use Case:** Event Security scenario (#2 in ADR-007) requires short-term sites. This field enables:
+
+- Filtering temporary event sites
+- Different business logic for event vs. permanent sites
+- Reporting on temporary engagements
+
+### 3. Conscious Simplifications (YAGNI Decisions)
+
+#### No Customer Hierarchies (Yet)
+
+**Reasoning:**
+
+- Scenario #3 (large corporations) mentioned customer hierarchies
+- Analysis of actual customer data: Most security firms have **flat customer lists**
+- Hierarchies can be added later **without breaking changes**:
+
+  ```php
+  // Future migration (non-breaking)
+  Schema::table('customers', function (Blueprint $table) {
+      $table->uuid('parent_customer_id')->nullable()
+            ->after('customer_number')
+            ->constrained('customers')->onDelete('cascade');
+  });
+
+  // Then add closure table
+  Schema::create('customer_closures', function (Blueprint $table) {
+      $table->uuid('ancestor_id')->constrained('customers')->onDelete('cascade');
+      $table->uuid('descendant_id')->constrained('customers')->onDelete('cascade');
+      $table->integer('depth');
+      $table->primary(['ancestor_id', 'descendant_id']);
+  });
+  ```
+
+#### No Object Areas Segmentation
+
+**Reasoning:**
+
+- ADR-007 proposed splitting sites into areas/zones
+- Actual requirement: Most customers treat entire site as unit
+- **Migration path:** Add `object_areas` table later if needed:
+
+  ```php
+  Schema::create('object_areas', function (Blueprint $table) {
+      $table->uuid('id')->primary();
+      $table->uuid('site_id')->constrained()->onDelete('cascade');
+      $table->string('area_code');
+      $table->string('name');
+      $table->text('description')->nullable();
+      // Then move site_assignments to reference object_areas instead of sites
+  });
+  ```
+
+#### Sites Naming (Not "Objects")
+
+**Original ADR-007:** Used term "objects" (German: "Objekte")
+
+**Actual Implementation:** Used "sites" throughout
+
+**Reasoning:**
+
+- "Site" is clearer in international context
+- Avoids confusion with programming term "object"
+- Better semantic fit for "location where services are provided"
+
+### 4. Evolution Path (When to Extend)
+
+#### Add Customer Hierarchies When:
+
+- Tenant has >50 customers with clear parent-child relationships
+- Reporting requires aggregation across customer hierarchies
+- Billing needs roll-up to parent customers
+
+**Migration Strategy:**
+
+1. Add `parent_customer_id` nullable field (non-breaking)
+2. Create `customer_closures` table
+3. Add `CustomerHierarchyService` to manage closure table
+4. Update queries to use hierarchical scopes
+
+#### Add Object Areas When:
+
+- Tenant has sites with >5 distinct zones requiring separate guard assignments
+- Different insurance policies per area within site
+- Area-specific access control needed
+
+**Migration Strategy:**
+
+1. Create `object_areas` table with `site_id` FK
+2. Migrate existing `site_assignments` to reference areas instead of sites
+3. Add UI for managing areas within sites
+
+#### Add Guard Books When:
+
+- Separate Epic planned
+- Depends on completed Phase 6 (sites, assignments)
+
+### 5. API Endpoints Delivered (Phase 6)
+
+**Customer Assignments:**
+
+- `GET /api/v1/customer-assignments` - List with filters
+- `POST /api/v1/customer-assignments` - Create assignment
+- `GET /api/v1/customer-assignments/{id}` - Show details
+- `PUT /api/v1/customer-assignments/{id}` - Update assignment
+- `DELETE /api/v1/customer-assignments/{id}` - Remove assignment
+
+**Site Assignments:**
+
+- `GET /api/v1/site-assignments` - List with filters
+- `POST /api/v1/site-assignments` - Create assignment
+- `GET /api/v1/site-assignments/{id}` - Show details
+- `PUT /api/v1/site-assignments/{id}` - Update assignment
+- `DELETE /api/v1/site-assignments/{id}` - Remove assignment
+
+**Sites:**
+
+- `GET /api/v1/sites` - List with filters (customer, type, status)
+- `POST /api/v1/sites` - Create site
+- `GET /api/v1/sites/{id}` - Show site details
+- `PUT /api/v1/sites/{id}` - Update site
+- `DELETE /api/v1/sites/{id}` - Soft delete site
+
+**Plus:** Customers, Contacts, Attachments endpoints (22 total endpoints)
+
+### 6. Testing & Quality Assurance
+
+**Test Coverage:**
+
+- 258+ tests across Epic #210
+- Feature tests for all 22 API endpoints
+- Unit tests for temporal validity scopes
+- Policy tests for authorization rules
+
+**PHPStan:** 0 errors (Level 5)
+
+**Code Quality:**
+
+- Pint: 0 style violations
+- Consistent use of UUIDs, tenant isolation, soft deletes
+- RESTful API conventions followed
+
+### 7. Key Takeaways for Future Phases
+
+1. **M:N > 1:1:** Flexible assignment relationships provide more value than rigid 1:1 mappings
+2. **Temporal Validity Everywhere:** Consistent `valid_from`/`valid_until` pattern simplifies time-based queries
+3. **YAGNI Works:** Deferring customer hierarchies & object areas reduced complexity without limiting functionality
+4. **Gradual Evolution:** Database schema allows non-breaking additions of hierarchies/segmentation later
+5. **Tenant-Specific Roles:** String-based roles (not enums) enable customization per tenant
+
+### 8. Related Pull Requests
+
+- #349 - Database Migrations (Sites, Assignments)
+- #350 - Model Tests & Factories
+- #352 - Customer Assignment API
+- #353 - Customer Assignment Tests
+- #354 - Site Assignment API
+- #355 - Site Assignment Tests
+- #356 - Sites API
+- #363 - Integration Tests
+- #368 - Final Refinements
+
+---
+
+## References
+
+- [Multi-Tenancy Architecture ADR](./20240921-multi-tenancy-architecture.md)
+- [API Schema Conventions ADR](./20241005-api-schema-conventions.md)
+- Database Schema Documentation: `api/docs/schema/`
+- Epic #210: Customer & Site Management (GitHub Issues)
