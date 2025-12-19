@@ -143,6 +143,7 @@ public function users(): HasMany
 
 ```php
 $table->unsignedBigInteger('tenant_id')->nullable()->after('id');
+$table->index('tenant_id');
 $table->foreign('tenant_id')->references('id')->on('tenant_keys');
 ```
 
@@ -394,10 +395,10 @@ $request->session()->put('active_tenant_id', $selectedTenantId);
 
 ## Related Documentation
 
-- [Multi-Tenant Deployment Guide](/api/docs/guides/multi-tenant-deployment.md)
-- [Tenant Provisioning Guide](/api/docs/guides/tenant-provisioning.md)
-- [Migration Guide: Single → Multi-Tenant](/api/docs/migration-guides/single-to-multi-tenant.md)
-- [RBAC Architecture (Tenant Context)](/api/docs/rbac-architecture.md)
+- [Multi-Tenant Deployment Guide](https://github.com/SecPal/api/blob/main/docs/guides/multi-tenant-deployment.md)
+- [Tenant Provisioning Guide](https://github.com/SecPal/api/blob/main/docs/guides/tenant-provisioning.md)
+- [Migration Guide: Single → Multi-Tenant](https://github.com/SecPal/api/blob/main/docs/migration-guides/single-to-multi-tenant.md)
+- [RBAC Architecture (Tenant Context)](https://github.com/SecPal/api/blob/main/docs/rbac-architecture.md)
 - [Epic #357: Production-Ready Multi-Tenant Architecture](https://github.com/SecPal/api/issues/357)
 
 ## ADR History
