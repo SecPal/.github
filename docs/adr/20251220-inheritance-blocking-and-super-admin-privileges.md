@@ -33,7 +33,6 @@ Holding AG (Root Organization)
 **Business Requirements:**
 
 1. **Holding HR** needs access to:
-
    - ✅ Holding AG employee records
    - ✅ HR Department employee records
    - ✅ IT Department employee records
@@ -41,7 +40,6 @@ Holding AG (Root Organization)
    - ❌ **Regional GmbH employee records** (GDPR violation: legally independent entity)
 
 2. **Holding QM** needs access to:
-
    - ✅ Work instructions across ALL units (including Regional GmbH)
    - ❌ Employee records of Regional GmbH
 
@@ -427,12 +425,10 @@ organizational_units.inheritance_blocks:
 **Security Rationale:**
 
 1. **Prevent Horizontal Privilege Escalation:**
-
    - Child-org admin could grant super-admin to accomplice
    - Accomplice gains access to peer orgs at same level
 
 2. **Prevent Upward Privilege Escalation:**
-
    - Child-org "super-admin" could use breaking glass upward
    - Subsidiary gains access to parent organization data
 
@@ -482,12 +478,10 @@ organizational_units.inheritance_blocks:
 **Security Principles:**
 
 1. **Principle of Least Privilege:**
-
    - Access granted only when needed
    - Automatically revoked when no longer needed
 
 2. **Principle of Accountability:**
-
    - All emergency access is logged
    - Reason must be documented
    - Cannot be done silently
@@ -540,13 +534,11 @@ organizational_units.inheritance_blocks:
 **Security Rationale:**
 
 1. **Separation of Duties (SoD):**
-
    - **Admin role:** System configuration, user management, infrastructure
    - **HR role:** Employee records, payroll, personnel files
    - Different responsibilities = different access
 
 2. **GDPR Need-to-Know:**
-
    - System admin has **no legitimate need** to view employee documents
    - Technical maintenance doesn't require personnel data access
    - Data minimization: Only HR should have access by default
@@ -924,25 +916,21 @@ EmergencyAccessLog::create([
 **Multiple validation layers prevent exploitation:**
 
 1. **Request Validation Layer:** `StoreOrganizationalScopeRequest`
-
    - Validates target unit is root (if super-admin)
    - Checks permission formats
    - Validates inheritance block structure
 
 2. **Policy Authorization Layer:** `OrganizationalUnitPolicy`
-
    - `manageScopes()`: Can user modify scopes for this unit?
    - `grantSuperAdmin()`: Can user grant super-admin for this unit?
    - Checks granter has root-unit super-admin scope
 
 3. **Controller Layer:** `OrganizationalScopeController`
-
    - Double-checks authorization before creating scope
    - Validates super-admin flag separately
    - Logs scope creation
 
 4. **Model Layer:** `UserInternalOrganizationalScope`
-
    - `canGrantSuperAdmin()`: Validates organizational hierarchy
    - `canRequestEmergencyAccessTo()`: Prevents upward escalation
 
