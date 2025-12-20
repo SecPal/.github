@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-26
 
-**Last Updated:** 2025-12-17 (Phase 6 Implementation Notes added)
+**Last Updated:** 2025-12-20 (ADR-009 Integration: Inheritance Blocking & Super-Admin)
 
 **Deciders:** @kevalyq
 
@@ -18,6 +18,7 @@ SPDX-License-Identifier: CC0-1.0
 This ADR defines the architecture for flexible, unlimited-depth organizational hierarchies in SecPal. **Two independent hierarchical systems** are implemented:
 
 1. **Internal Structure** (`organizational_units`): Security service company hierarchy (Holding → Company → Region → Branch → Division)
+
    - For **internal employees** (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
    - Fine-grained RBAC: From branch-wide access down to specific object areas
@@ -1025,11 +1026,13 @@ DB::transaction(function () use ($unit, $newParent) {
 ## References
 
 - **Related ADRs:**
+
   - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md)
   - [ADR-004: RBAC System with Spatie Laravel-Permission](20251108-rbac-spatie-temporal-extension.md)
   - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md)
 
 - **Related Issues:**
+
   - Issue #5: RBAC System (Scope-based permissions)
   - Future Epic: Flexible Organizational Structure (TBD)
 
@@ -1051,6 +1054,7 @@ DB::transaction(function () use ($unit, $newParent) {
 **Two Independent Systems:**
 
 1. **Internal Organizational Structure** (`organizational_units`)
+
    - Security service company hierarchy (Holding → Region → Branch)
    - For **internal employees only** (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
@@ -1342,9 +1346,119 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
 
 ---
 
+## Related ADRs
+
+- **ADR-005:** RBAC Design Decisions (role/permission foundation)
+- **ADR-008:** User-Based Tenant Resolution (tenant isolation)
+- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges ⭐️ **CRITICAL EXTENSION**
+
+### ADR-009 Integration: Organizational Autonomy & Security
+
+ADR-009 extends the organizational hierarchy architecture with critical security features addressing GDPR compliance and privilege escalation prevention:
+
+#### 1. Permission Inheritance Blocking
+
+Child organizational units can **block specific permissions** from being inherited, even when `include_descendants = true` is set on ancestor scopes:
+
+```php
+// organizational_units.inheritance_blocks (JSONB)
+{
+  "blocked_permissions": [
+    "employee.read",
+    "employee_document.read",
+    "employee_qualification.read"
+  ],
+  "blocked_access_levels": ["admin"],
+  "reason": "Legally independent subsidiary - GDPR Article 5(1)(c)",
+  "allows_emergency_access": true,
+  "emergency_requires_approval": true,
+  "applies_to_descendants": true
+}
+```
+
+**Use Case:** Holding company with legally independent regional subsidiaries must respect data autonomy:
+
+```
+ProSec Holding (root)
+├─ ProSec Nord GmbH (allows inheritance)
+└─ Regional GmbH (blocks employee.* permissions)
+   → Holding HR cannot access Regional employee records
+   → Regional protects itself via inheritance_blocks
+```
+
+#### 2. Super-Admin Restrictions
+
+Super-admin privileges are restricted to **root organizational units only** (units with `parent_id = null`):
+
+- ✅ Holding company super-admin can use breaking glass for all subsidiaries
+- ❌ Regional subsidiary admin **cannot** become super-admin
+- ❌ Regional admin **cannot** grant super-admin to others
+- ❌ Regional admin **cannot** access parent organization via breaking glass
+
+**Database Schema:**
+
+```php
+// user_internal_organizational_scopes.is_super_admin (boolean)
+// Can only be true if organizational_unit.parent_id = null
+```
+
+**Privilege Escalation Prevention:**
+
+- Only existing root-unit super-admins can grant super-admin
+- Multiple validation layers (request/policy/controller)
+- Breaking glass only works downward (never upward in hierarchy)
+
+#### 3. Breaking Glass Emergency Access
+
+Super-admins can request time-limited emergency access to blocked resources:
+
+- ⏰ Time-limited (1-4 hours)
+- 📝 Mandatory justification
+- 📊 Complete audit trail
+- 🔔 Automatic notifications to DPO
+- ✅ Optional 4-eyes approval
+
+**Database Schema:**
+
+```php
+// emergency_access_logs table
+Schema::create('emergency_access_logs', function (Blueprint $table) {
+    $table->uuid('id')->primary();
+    $table->foreignUuid('user_id')->constrained();
+    $table->foreignUuid('organizational_unit_id')->nullable();
+    $table->string('permission');
+    $table->text('reason');  // Required
+    $table->enum('urgency', ['low', 'medium', 'high', 'critical']);
+    $table->timestamp('access_granted_at');
+    $table->timestamp('access_expires_at');
+    $table->json('accessed_fields')->nullable();
+    // ...
+});
+```
+
+#### 4. Admin Role Restrictions
+
+Admin role has **NO default access** to employee documents (separation of duties):
+
+- ✅ Admin can manage system configuration, users, organizational structure
+- ❌ Admin **cannot** view employee records or personnel files by default
+- ✅ Super-admin can use breaking glass for emergency access (with audit trail)
+
+**GDPR Compliance:**
+
+- Need-to-Know principle enforced
+- Technical + organizational measures (Article 32)
+- Data minimization (Article 5(1)(c))
+- Complete audit trail for accountability
+
+For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Admin Privileges**.
+
+---
+
 ## References
 
 - [Multi-Tenancy Architecture ADR](./20240921-multi-tenancy-architecture.md)
 - [API Schema Conventions ADR](./20241005-api-schema-conventions.md)
+- [ADR-009: Permission Inheritance Blocking & Super-Admin Privileges](./20251220-inheritance-blocking-and-super-admin-privileges.md)
 - Database Schema Documentation: `api/docs/schema/`
 - Epic #210: Customer & Site Management (GitHub Issues)
