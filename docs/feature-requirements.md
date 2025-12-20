@@ -3313,7 +3313,949 @@ Datum: __________ Unterschrift: __________
 
 ---
 
-## 🔗 Related Documents
+## � Contracts & Service Packages
+
+### Overview: Flexible Contract Management
+
+**Purpose:** SecPal must support diverse business models from small single-site security services to complex multi-contract enterprise deployments. The contract system decouples **operational planning** (shifts, employee assignments) from **customer billing** (invoices, cost centers), enabling maximum flexibility while maintaining clean data separation.
+
+**Core Design Principles:**
+
+1. **Scalability:** 1-person operations to billion-dollar corporations
+2. **Flexibility:** No assumptions about contract structure, duration, or billing modes
+3. **Separation of Concerns:** Payroll tracking ≠ customer billing
+4. **Multi-Tenant Safe:** Contracts are always tenant-isolated
+5. **No Enforced Workflows:** Companies choose their own processes
+
+### Business Context
+
+#### Contract Types in Security Services
+
+Security companies typically operate with several contract patterns:
+
+**Permanent Contracts (Dauerverträge):**
+
+- Long-term site security (months to years)
+- Examples: Office building security, factory gate control, reception services
+- Billing: Usually monthly flat rates or hourly billing
+
+**Temporary Contracts (Befristete Verträge):**
+
+- Fixed-duration projects with defined start/end dates
+- Examples: Construction site security during building phase, event series over several months
+- Billing: Project-based or time-based
+
+**One-Time Services (Einmaldienste / Sonderdienste):**
+
+- Single service requests without ongoing relationship
+- Examples: Emergency replacement guard, special event security, short-term crowd control
+- Billing: Per-service fee or hourly rate for specific date
+
+**Recurring Events (Wiederkehrende Events):**
+
+- Regular events without permanent site relationship
+- Examples: Weekly market security, monthly company events, seasonal festivals
+- Billing: Per-event fee or package deals
+
+**Patrol Services (Revierdienste / Interventionsdienste):**
+
+- Mobile services covering multiple sites during one shift
+- Examples: Night patrol visiting 10-15 sites, alarm response service, mobile security rounds
+- Billing: Complex - may combine flat fees, per-visit charges, standby rates, and response fees
+
+#### Real-World Complexity Examples
+
+**Scenario 1: Mixed Services at One Site**
+
+A customer operates a large industrial complex (Site A) with:
+
+- **Contract 1:** Permanent gate security (24/7, flat monthly rate €15,000)
+- **Contract 2:** Recurring event security for monthly management meetings (€500 per event)
+- **Contract 3:** On-demand special services (e.g., forklift certification checks, billed hourly)
+
+→ Same site, multiple independent contracts with different billing modes.
+
+**Scenario 2: Multi-Site Patrol Services**
+
+A security company operates a patrol service covering 30 small businesses:
+
+- **One employee shift (8 hours)** generates billing for 15 different sites visited
+- Each site contract may have different pricing: Some pay per visit, others flat monthly fees, some hourly rates
+- Same shift must be trackable for payroll (8h paid to employee) AND splittable for customer billing (15× separate invoice line items)
+
+**Scenario 3: Corporate Account with Central Billing**
+
+Large corporation with 50 locations, but single invoice:
+
+- Multiple sites, each with own contracts
+- All billing aggregated to corporate headquarters
+- Require cost center tracking per site for internal controlling
+- Some locations have sub-contracts (cleaning, parking, etc.)
+
+**Scenario 4: Small Business Simplicity**
+
+One-person security service with 3 regular customers:
+
+- Customer A: One site, simple monthly flat rate, no cost centers
+- Customer B: Two sites, billed together, uses purchase order numbers
+- Customer C: Occasional services, invoiced per job
+
+→ System must work without complex setup while scaling to enterprise needs.
+
+### Data Model Architecture
+
+#### Hierarchy: Customer → Site → Contract
+
+```
+Customer (Entity with legal relationship)
+  ├─ Site 1 (Physical location / service area)
+  │    ├─ Contract 1.1 (Permanent gate security)
+  │    ├─ Contract 1.2 (Monthly event security)
+  │    └─ Contract 1.3 (On-demand services)
+  │
+  ├─ Site 2 (Another location)
+  │    └─ Contract 2.1 (Permanent site security)
+  │
+  └─ [Optional] Customer-level metadata
+       ├─ Billing address (if different from sites)
+       ├─ Payment terms (net 30, net 60, etc.)
+       └─ Corporate cost center structure
+```
+
+**Why Contracts Nest Under Sites:**
+
+1. **Geographic Context:** Security services are location-specific (guards work at physical sites)
+2. **Operational Planning:** Shift planning references sites, not abstract contracts
+3. **Customer Understanding:** Customers think "we need security at Site A" not "Contract #12345"
+4. **Flexibility:** Multiple contracts per site allow mixing service types without complexity
+
+**Alternative Patterns Supported:**
+
+- **Virtual Sites:** For patrol services, create site "Revier Nord" (Patrol District North) as logical grouping
+- **Contract-First:** Sites can be purely administrative if customer prefers contract-centric view
+- **Hybrid Models:** Mix permanent sites with virtual patrol districts
+
+#### Contract Model Fields
+
+```php
+contracts
+├── id (UUID, primary key)
+├── tenant_id (UUID, multi-tenant isolation)
+├── customer_id (UUID, foreign key)
+├── site_id (UUID, foreign key)
+├── contract_number (string, unique per tenant, e.g., "SEC-2025-001")
+├── name (string, e.g., "Permanent Gate Security" or "Night Patrol Service")
+├── description (text, optional details)
+│
+├── duration_type (enum: permanent, temporary, one_time, recurring_event)
+│   // Determines contract lifecycle behavior
+│
+├── start_date (date, when contract becomes active)
+├── end_date (date, nullable for permanent contracts)
+├── notice_period_days (integer, nullable - cancellation notice period)
+│
+├── billing_mode (enum: hourly, flat_rate, mixed, per_visit, custom)
+│   // Determines base billing calculation method
+│
+├── billing_interval (enum: monthly, weekly, per_service, custom)
+│   // How often invoices are generated
+│
+├── pricing_structure (JSONB, flexible pricing configuration)
+│   // Examples below - highly flexible schema
+│
+├── customer_billing_reference_type (enum: cost_center, purchase_order, project_code, none)
+├── customer_billing_reference (string, nullable)
+│   // The actual cost center code, PO number, etc. provided by customer
+│
+├── internal_cost_center_id (UUID, nullable, foreign key to internal_cost_centers)
+│   // For company's own controlling/accounting (payroll tracking)
+│
+├── organizational_unit_id (UUID, nullable, foreign key)
+│   // Which company division/branch handles this contract
+│
+├── is_active (boolean, default true)
+├── is_billable (boolean, default true - some contracts may be non-billable, e.g., internal)
+│
+├── status (enum: draft, active, suspended, completed, cancelled)
+│
+├── notes (text, internal notes)
+├── created_at, updated_at, deleted_at (timestamps, soft deletes)
+```
+
+**pricing_structure JSONB Examples:**
+
+```json
+// Simple hourly rate
+{
+  "type": "hourly",
+  "base_rate": 25.00,
+  "currency": "EUR",
+  "overtime_multiplier": 1.5,
+  "weekend_multiplier": 2.0,
+  "night_shift_multiplier": 1.25
+}
+
+// Flat monthly rate
+{
+  "type": "flat_rate",
+  "monthly_amount": 15000.00,
+  "currency": "EUR",
+  "includes": "24/7 gate security, 2 guards on-site"
+}
+
+// Mixed billing (patrol services)
+{
+  "type": "mixed",
+  "base_standby_fee": 500.00,  // Monthly availability fee
+  "per_visit_rate": 35.00,      // Per site visit during patrol
+  "alarm_response_fee": 150.00, // Additional fee for alarm calls
+  "hourly_rate": 40.00,         // For time-based work beyond visits
+  "minimum_billing_minutes": 15 // Round up to 15min increments
+}
+
+// Per-event pricing
+{
+  "type": "per_service",
+  "base_rate": 500.00,
+  "currency": "EUR",
+  "per": "event",
+  "additional_guard_rate": 200.00, // Per additional guard needed
+  "overtime_threshold_hours": 8
+}
+
+// Custom complex pricing
+{
+  "type": "custom",
+  "description": "Tiered pricing based on monthly hours",
+  "tiers": [
+    { "from": 0, "to": 160, "rate": 30.00 },
+    { "from": 161, "to": 200, "rate": 28.00 },
+    { "from": 201, "to": null, "rate": 25.00 }
+  ]
+}
+```
+
+**Why JSONB for Pricing:**
+
+- Maximum flexibility: Every company has different pricing models
+- No schema changes needed for new pricing types
+- Supports complex rules without bloating database schema
+- Can be validated against JSON schemas if needed
+- Queryable (PostgreSQL JSONB operators)
+
+### Service Bookings: Decoupling Operations from Billing
+
+**Problem:** Traditional systems conflate shift tracking (payroll) with customer billing, causing issues:
+
+- **Patrol services:** One 8-hour employee shift generates 15 separate invoice line items (one per site visited)
+- **Special services:** Additional work during a shift needs separate billing entry
+- **Mixed billing:** Same shift may have flat-rate components + hourly components
+- **Customer cost centers:** Different parts of one shift may bill to different customer cost centers
+
+**Solution: Service Bookings** are the billing-focused counterpart to shifts.
+
+```php
+service_bookings
+├── id (UUID, primary key)
+├── tenant_id (UUID, multi-tenant isolation)
+├── contract_id (UUID, foreign key - which contract is billed)
+├── shift_id (UUID, nullable, foreign key - optional link to operational shift)
+│
+├── booking_type (enum: duty_hours, patrol_visit, standby_fee, alarm_response,
+│                       special_service, travel_time, equipment_rental, other)
+│   // Categorizes what is being billed
+│
+├── service_date (date, when service was performed)
+├── service_time_start (time, nullable)
+├── service_time_end (time, nullable)
+├── duration_minutes (integer, nullable - calculated or manually entered)
+│
+├── quantity (decimal, default 1.0 - for countable items like "3 guards")
+├── unit_price (decimal - rate applied)
+├── amount (decimal - calculated: quantity × unit_price, or fixed amount)
+├── currency (string, default from contract)
+│
+├── description (text - appears on invoice line item)
+├── customer_cost_center (string, nullable - overrides contract default if needed)
+│   // Allows splitting one shift's billing across multiple customer cost centers
+│
+├── invoice_id (UUID, nullable, foreign key - when invoiced)
+├── invoice_status (enum: pending, invoiced, paid, disputed, cancelled)
+│
+├── billable (boolean, default true - can mark non-billable if needed)
+├── notes (text, internal notes)
+│
+├── created_at, updated_at, deleted_at (timestamps, soft deletes)
+```
+
+**Usage Examples:**
+
+**Example 1: Simple Hourly Contract**
+
+```
+Shift: Guard works 8h at Site A (Contract: Hourly billing @ €25/h)
+
+→ Service Booking Created:
+  - booking_type: duty_hours
+  - duration_minutes: 480 (8 hours)
+  - unit_price: 25.00
+  - amount: 200.00
+  - description: "Gate security service, 8 hours"
+```
+
+**Example 2: Patrol Service (One Shift, Multiple Bookings)**
+
+```
+Shift: Guard works 8h patrol route covering 15 sites
+
+→ Service Bookings Created:
+  1. Contract A (Site 1): patrol_visit, 30min, €35 per visit = €35
+  2. Contract B (Site 2): patrol_visit, 45min, €40 per visit = €40
+  3. Contract C (Site 3): patrol_visit, 20min, €35 per visit = €35
+  ... (15 bookings total, each to different contract)
+
+→ Employee payroll: One 8h shift
+→ Customer billing: 15 separate invoice line items
+```
+
+**Example 3: Mixed Billing at One Site**
+
+```
+Site X has Contract with flat monthly rate (€15k) + hourly overtime
+
+→ Service Bookings:
+  1. Monthly flat fee:
+     - booking_type: standby_fee
+     - amount: 15000.00 (fixed, created monthly)
+     - description: "Monthly security service package"
+
+  2. Overtime hours:
+     - booking_type: duty_hours
+     - duration_minutes: 120 (2h overtime on 2025-12-15)
+     - unit_price: 35.00
+     - amount: 70.00
+     - description: "Overtime: Special event coverage"
+```
+
+**Example 4: Cost Center Split Within One Contract**
+
+```
+Large customer wants different cost centers for different services
+
+Contract: Permanent site security
+- Regular hours → Customer Cost Center "KST-100-Security"
+- Event coverage → Customer Cost Center "KST-200-Events"
+
+→ Service Bookings:
+  Booking 1:
+    - duty_hours, 160h regular work
+    - customer_cost_center: "KST-100-Security"
+
+  Booking 2:
+    - special_service, 8h event coverage
+    - customer_cost_center: "KST-200-Events"
+```
+
+### Internal Cost Centers: Company Controlling
+
+**Purpose:** Track **internal** revenue/costs for company's own accounting and controlling, separate from customer billing references.
+
+**Key Distinction:**
+
+- **Customer Cost Centers** = References on invoices (customer's internal accounting)
+- **Internal Cost Centers** = Company's own profit centers, departments, revenue tracking
+
+#### Internal Cost Center Model
+
+```php
+internal_cost_centers
+├── id (UUID, primary key)
+├── tenant_id (UUID, multi-tenant isolation)
+├── code (string, e.g., "KST-REVNORD", "KST-OBJSEC")
+├── name (string, e.g., "Revier Nord", "Objektsicherheit")
+├── description (text, optional)
+│
+├── type (enum: productive, overhead, administrative)
+│   // productive: Revenue-generating (security services)
+│   // overhead: Support functions (Betriebsrat, training)
+│   // administrative: General admin, management
+│
+├── organizational_unit_id (UUID, nullable, foreign key)
+│   // Which company division/branch owns this cost center
+│
+├── parent_cost_center_id (UUID, nullable, self-referencing foreign key)
+│   // Supports hierarchical cost center structures:
+│   // Main Cost Center → Sub Cost Centers
+│
+├── is_active (boolean, default true)
+├── budget_amount (decimal, nullable - planned budget/revenue target)
+├── current_period_revenue (decimal, default 0 - aggregated from service bookings)
+│
+├── notes (text, internal notes)
+├── created_at, updated_at, deleted_at (timestamps, soft deletes)
+│
+UNIQUE(tenant_id, code)
+```
+
+**Usage Patterns:**
+
+**Pattern 1: Dedicated Cost Centers per Service Type**
+
+```
+Internal Cost Centers:
+├── KST-GATE: Gate security services
+├── KST-EVENT: Event security
+├── KST-PATROL: Patrol services
+└── KST-OVERHEAD: Non-billable internal costs
+
+Contracts assign internal_cost_center_id based on service type.
+```
+
+**Pattern 2: Geographic/Regional Cost Centers**
+
+```
+Internal Cost Centers:
+├── KST-REGION-NORTH: All services in northern region
+├── KST-REGION-SOUTH: All services in southern region
+└── KST-CENTRAL: Central services (administration, training)
+
+Contracts assign based on site location or organizational unit.
+```
+
+**Pattern 3: Customer-Specific Cost Centers**
+
+```
+Internal Cost Centers:
+├── KST-CUST-ACME: All ACME Corp contracts
+├── KST-CUST-GLOBEX: All Globex contracts
+└── KST-GENERAL: Other customers
+
+Use when analyzing profitability per major customer.
+```
+
+**Pattern 4: Flat Structure (Small Companies)**
+
+```
+Internal Cost Centers:
+├── KST-REVENUE: All billable services
+└── KST-ADMIN: Administrative overhead
+
+Simple 2-cost-center model for small operations.
+```
+
+**Pattern 5: No Cost Centers**
+
+- `internal_cost_center_id` remains NULL on contracts
+- Company doesn't use internal cost center controlling
+- Simple P&L tracking without detailed cost attribution
+
+#### Overhead Cost Centers
+
+**Purpose:** Track non-billable but necessary activities:
+
+- **Betriebsrat (Works Council):** Time spent in council meetings, co-determination activities
+- **Azubis (Apprentices/Trainees):** Training time before certification
+- **Verwaltung (Administration):** Back-office, management, HR
+- **Weiterbildung (Continuing Education):** Employee training, certifications
+- **Urlaub/Krankheit (Vacation/Sick Leave):** Paid time not generating revenue
+
+**Implementation:** Use same `internal_cost_centers` table with `type = 'overhead'`.
+
+**Example Shifts → Internal Cost Centers:**
+
+```
+Shift 1: Guard works 8h at customer site
+  → Internal Cost Center: KST-REVENUE (productive)
+  → Service Booking: Bills customer €200
+
+Shift 2: Guard attends safety training
+  → Internal Cost Center: KST-TRAINING (overhead)
+  → Service Booking: None (non-billable)
+
+Shift 3: Betriebsrat member in council meeting
+  → Internal Cost Center: KST-BETRIEBSRAT (overhead)
+  → Service Booking: None (non-billable)
+```
+
+**Aggregation Example:**
+
+```sql
+-- Monthly cost center revenue report
+SELECT
+  icc.code,
+  icc.name,
+  icc.type,
+  COUNT(DISTINCT c.id) as contract_count,
+  SUM(sb.amount) as total_revenue,
+  icc.budget_amount,
+  (SUM(sb.amount) - icc.budget_amount) as variance
+FROM internal_cost_centers icc
+LEFT JOIN contracts c ON c.internal_cost_center_id = icc.id
+LEFT JOIN service_bookings sb ON sb.contract_id = c.id
+WHERE sb.service_date BETWEEN '2025-12-01' AND '2025-12-31'
+GROUP BY icc.id
+ORDER BY total_revenue DESC;
+```
+
+### Customer Billing References: Flexible Invoice Tracking
+
+**Problem:** Different customers use different systems for invoice tracking:
+
+- **Large corporations:** Cost center codes (e.g., "KST-4711-Security")
+- **Public sector:** Budget line items or project codes
+- **SMEs:** Purchase order (PO) numbers (e.g., "PO-2025-12345")
+- **Small businesses:** No references, just invoice number
+
+**Solution:** Contracts support flexible billing references without enforcing structure.
+
+#### Implementation
+
+```php
+// On contracts table:
+customer_billing_reference_type (enum: cost_center, purchase_order, project_code, budget_line, none)
+customer_billing_reference (string, nullable)
+```
+
+**Usage Examples:**
+
+```
+Contract 1: Large corporation
+  - customer_billing_reference_type: cost_center
+  - customer_billing_reference: "KST-1000-Werkschutz"
+  → Invoice shows: "Kostenstelle: KST-1000-Werkschutz"
+
+Contract 2: Government agency
+  - customer_billing_reference_type: budget_line
+  - customer_billing_reference: "HH-2025-07-5510"
+  → Invoice shows: "Haushaltstitel: HH-2025-07-5510"
+
+Contract 3: SME with PO process
+  - customer_billing_reference_type: purchase_order
+  - customer_billing_reference: "PO-20251215-001"
+  → Invoice shows: "Bestellnummer: PO-20251215-001"
+
+Contract 4: Small business, no reference needed
+  - customer_billing_reference_type: none
+  - customer_billing_reference: NULL
+  → Invoice shows only date range and services
+```
+
+**Per-Booking Overrides:**
+
+Service bookings can override contract default:
+
+```php
+// service_bookings table has:
+customer_cost_center (string, nullable)
+
+// Use case: Customer wants split billing within one contract
+Contract: General site security (default: "KST-100")
+Service Booking 1: Regular hours → uses contract default "KST-100"
+Service Booking 2: Event coverage → override with "KST-200-Events"
+```
+
+### Advanced Scenarios & Edge Cases
+
+#### Scenario: Multi-Site Invoice Aggregation
+
+**Customer Request:** "We have 10 sites, but want ONE monthly invoice with all sites listed"
+
+**Implementation Options:**
+
+**Option A: Invoice-Level Aggregation (Recommended)**
+
+- Each site has own contract(s)
+- Service bookings reference individual contracts
+- Invoice generation groups by customer, includes all sites
+- Invoice line items show: `[Site Name] - [Service Description]`
+
+**Option B: Customer-Level Master Contract**
+
+- Create virtual "master contract" at customer level (site_id nullable)
+- Individual sites reference master contract
+- All service bookings attach to master contract
+
+**Option C: Hierarchical Contracts**
+
+- Add `parent_contract_id` (self-referencing foreign key) to contracts table
+- Child contracts (per-site) link to parent (aggregation contract)
+- Invoicing process walks hierarchy
+
+**Flexibility:** All three patterns possible - system doesn't enforce specific approach.
+
+#### Scenario: 10k€ Billing Threshold Rule
+
+**Business Rule Example:** "Sites with <€10,000 monthly revenue bill to customer's central cost center; sites with ≥€10,000 get dedicated cost center"
+
+**Implementation:** This is a **business logic rule**, not a database constraint.
+
+```php
+// Example service implementation (pseudocode)
+class BillingReferenceService {
+  public function determineCustomerCostCenter(Contract $contract, float $monthlyRevenue) {
+    // Company-specific rule - could be configured per tenant
+    if ($this->tenant->hasCostCenterThresholdRule()) {
+      $threshold = $this->tenant->cost_center_threshold_amount ?? 10000;
+
+      if ($monthlyRevenue < $threshold) {
+        return $contract->customer->default_cost_center; // Central CC
+      } else {
+        return $contract->customer_billing_reference; // Dedicated CC
+      }
+    }
+
+    // Default: Use contract's configured reference
+    return $contract->customer_billing_reference;
+  }
+}
+```
+
+**Why Not Hardcoded:**
+
+- ✅ Not every company uses this rule
+- ✅ Thresholds vary (€5k, €10k, €15k, etc.)
+- ✅ Some companies never split by threshold
+- ✅ Rule may change over time or per customer
+
+**Flexibility Approach:** Provide hooks for custom business logic without baking assumptions into core schema.
+
+#### Scenario: Patrol Service Spanning Multiple Customers
+
+**Complex Case:** Mobile patrol covering sites from different customers during one shift.
+
+**Example:**
+
+```
+Shift: Night patrol, 22:00-06:00 (8 hours)
+- 23:00-23:30: Visit Customer A, Site 1 (30min)
+- 00:00-00:15: Visit Customer B, Site 5 (15min)
+- 01:00-01:45: Visit Customer A, Site 2 (45min)
+- 03:00-03:20: Visit Customer C, Site 8 (20min)
+... etc.
+```
+
+**Service Bookings:**
+
+```php
+// Each visit = separate service booking to respective contract
+
+Booking 1:
+  - contract_id: Contract(Customer A, Site 1)
+  - shift_id: [Same shift ID for all]
+  - booking_type: patrol_visit
+  - duration_minutes: 30
+  - unit_price: 35.00 (Customer A's rate)
+  - amount: 35.00
+
+Booking 2:
+  - contract_id: Contract(Customer B, Site 5)
+  - shift_id: [Same shift ID]
+  - booking_type: patrol_visit
+  - duration_minutes: 15
+  - unit_price: 40.00 (Customer B's rate)
+  - amount: 40.00
+
+Booking 3:
+  - contract_id: Contract(Customer A, Site 2)
+  - shift_id: [Same shift ID]
+  - booking_type: patrol_visit
+  - duration_minutes: 45
+  - unit_price: 35.00 (Customer A's rate)
+  - amount: 52.50 (45min @ €70/h)
+
+... etc.
+```
+
+**Payroll vs. Billing:**
+
+- **Employee payroll:** One shift = 8 hours = employee gets paid for 8h
+- **Customer billing:** Multiple bookings, different rates, totaling more or less than 8h
+- **Unaccounted time:** Travel between sites, breaks → may bill as separate line items or absorb into standby fees
+
+**Standby Component:**
+
+```php
+// If contract includes standby fee for availability:
+Booking (Monthly):
+  - contract_id: Contract(Customer A)
+  - booking_type: standby_fee
+  - amount: 500.00 (monthly availability charge)
+  - description: "Monthly patrol availability - Revier Nord"
+
+// PLUS per-visit charges as shown above
+```
+
+#### Scenario: Special Services Without Regular Contract
+
+**Business Case:** Customer calls for emergency security, has no ongoing contract.
+
+**Options:**
+
+**Option 1: One-Time Contract (Recommended)**
+
+```php
+// Create contract on-the-fly
+Contract::create([
+  'customer_id' => $customer->id,
+  'site_id' => $site->id, // Or create temporary site
+  'contract_number' => 'ONETIME-2025-1215-001',
+  'name' => 'Emergency Security - 2025-12-15',
+  'duration_type' => 'one_time',
+  'billing_mode' => 'hourly',
+  'start_date' => '2025-12-15',
+  'end_date' => '2025-12-15',
+  'pricing_structure' => ['type' => 'hourly', 'base_rate' => 50.00],
+  'status' => 'active'
+]);
+
+// Then create service booking as usual
+```
+
+**Option 2: Generic "Ad-Hoc Services" Contract**
+
+```php
+// Create standing "miscellaneous services" contract per customer
+Contract: "Ad-Hoc Services - Customer X"
+  - duration_type: permanent
+  - billing_mode: custom
+  - Used for all one-time requests
+
+// Service bookings include detailed descriptions
+```
+
+**Option 3: Direct Service Booking (No Contract)**
+
+```php
+// Allow service_bookings.contract_id to be nullable
+// Link directly to customer_id + site_id
+// Use case: Ultra-flexible, but loses contract-level pricing structure
+```
+
+**Recommendation:** Option 1 (ephemeral contracts) maintains data consistency while supporting ad-hoc work.
+
+### Relationship to Shift Planning
+
+**Important:** Contracts define **what is billed**, shifts define **who works when**.
+
+**Typical Workflow:**
+
+```
+1. Customer signs contract → Contract created in SecPal
+2. Operations team plans shifts → Shifts reference contract (or site)
+3. Employees work shifts → Time tracking records actual work
+4. Billing period ends → Service bookings generated from shifts + contract pricing
+5. Invoices generated → Service bookings grouped by contract/customer
+```
+
+**Decoupling Benefits:**
+
+- **Flexibility:** One shift can generate multiple service bookings (patrol)
+- **Accuracy:** Billing reflects contract terms, not just hours worked
+- **Simplicity:** Operations team doesn't need billing knowledge to plan shifts
+- **Control:** Finance team can adjust service bookings without changing shift data
+
+### Configuration & Customization Per Tenant
+
+**Key Insight:** Different security companies need different features enabled.
+
+**Tenant Configuration (Future: Admin Settings UI):**
+
+```php
+tenant_settings
+├── use_contracts (boolean) - Enable contract management
+├── use_internal_cost_centers (boolean) - Enable internal controlling
+├── require_customer_billing_reference (boolean) - Mandatory on contracts
+├── default_billing_mode (enum) - Default for new contracts
+├── cost_center_threshold_enabled (boolean) - Enable threshold-based CC rules
+├── cost_center_threshold_amount (decimal) - Threshold value
+├── invoice_aggregation_level (enum: per_contract, per_site, per_customer)
+│   // How to group service bookings into invoices
+└── ... (other company-specific settings)
+```
+
+**Gradual Adoption:**
+
+1. **Phase 1:** Customer & Site Management (Epic #210 - DONE)
+2. **Phase 2:** Contract Management (this spec)
+3. **Phase 3:** Shift Planning (references contracts)
+4. **Phase 4:** Service Bookings & Time Tracking
+5. **Phase 5:** Invoice Generation
+
+**Small Business Path:** Skip internal cost centers, use simple contracts with flat rates, minimal configuration.
+
+**Enterprise Path:** Full cost center hierarchies, complex pricing, multiple billing references, hierarchical contracts.
+
+### Data Integrity & Validation Rules
+
+**Critical Constraints:**
+
+1. **Tenant Isolation:** ALWAYS enforce `tenant_id` on ALL queries
+2. **Contract-Site-Customer Consistency:** Contract's customer_id must match site's customer_id
+3. **Date Logic:** `end_date` must be NULL (permanent) or > `start_date`
+4. **Billing Reference Validation:** If `customer_billing_reference_type != 'none'`, then `customer_billing_reference` must be present
+5. **Pricing Structure Schema:** Validate JSONB against expected structure based on `billing_mode`
+6. **Service Booking Amounts:** `amount` should match `quantity × unit_price` unless manually adjusted (allow overrides for discounts)
+7. **Soft Deletes:** Never hard-delete contracts with existing service bookings or invoices
+
+**Validation Examples:**
+
+```php
+// Contract validation
+'start_date' => 'required|date',
+'end_date' => 'nullable|date|after:start_date',
+'customer_billing_reference' => [
+  'required_unless:customer_billing_reference_type,none',
+  'string',
+  'max:100'
+],
+
+// Service booking validation
+'contract_id' => [
+  'required',
+  'exists:contracts,id',
+  // Custom: Must belong to same tenant
+],
+'duration_minutes' => 'nullable|integer|min:0|max:1440', // Max 24h
+'amount' => 'required|decimal:0,2|min:0',
+```
+
+### API Design Considerations
+
+**RESTful Endpoints (Proposed):**
+
+```
+Contracts:
+  GET    /api/v1/contracts
+  POST   /api/v1/contracts
+  GET    /api/v1/contracts/{id}
+  PATCH  /api/v1/contracts/{id}
+  DELETE /api/v1/contracts/{id}
+
+  GET    /api/v1/customers/{customerId}/contracts
+  GET    /api/v1/sites/{siteId}/contracts
+
+Service Bookings:
+  GET    /api/v1/service-bookings
+  POST   /api/v1/service-bookings
+  GET    /api/v1/service-bookings/{id}
+  PATCH  /api/v1/service-bookings/{id}
+  DELETE /api/v1/service-bookings/{id}
+
+  GET    /api/v1/contracts/{contractId}/service-bookings
+  POST   /api/v1/shifts/{shiftId}/generate-service-bookings
+
+Internal Cost Centers:
+  GET    /api/v1/internal-cost-centers
+  POST   /api/v1/internal-cost-centers
+  GET    /api/v1/internal-cost-centers/{id}
+  PATCH  /api/v1/internal-cost-centers/{id}
+  DELETE /api/v1/internal-cost-centers/{id}
+
+  GET    /api/v1/internal-cost-centers/{id}/revenue-report?from=2025-12-01&to=2025-12-31
+```
+
+**Filtering Examples:**
+
+```
+GET /api/v1/contracts?status=active&duration_type=permanent
+GET /api/v1/contracts?customer_id=xxx&site_id=yyy
+GET /api/v1/service-bookings?contract_id=xxx&service_date_from=2025-12-01&invoice_status=pending
+```
+
+### UI/UX Considerations
+
+**Contract Creation Wizard (Suggested Flow):**
+
+1. **Select Customer & Site:** Dropdown or search
+2. **Contract Type:** Choose duration_type (permanent / temporary / one_time / recurring)
+3. **Billing Mode:** Choose billing_mode (hourly / flat_rate / mixed / custom)
+4. **Pricing Configuration:** Dynamic form based on billing_mode
+5. **Billing Reference:** Optional customer cost center / PO number
+6. **Internal Tracking:** Optional internal cost center assignment
+7. **Dates & Terms:** Start date, end date (if applicable), notice period
+8. **Review & Create:** Summary screen
+
+**Service Booking Creation:**
+
+- **Automatic:** Generated from shift planning + contract pricing
+- **Manual:** Finance team can add/edit bookings for adjustments, special charges
+- **Bulk Import:** CSV import for external time tracking integration
+
+**Internal Cost Center Dashboard:**
+
+- Revenue by cost center (current month / YTD)
+- Budget vs. actual comparison
+- Drill-down to contracts and service bookings
+- Export to accounting software (DATEV, SAP, etc.)
+
+### Future Enhancements (Not MVP)
+
+**Out of Scope for Initial Implementation:**
+
+- [ ] Automatic invoice generation (separate epic)
+- [ ] Contract templates / cloning
+- [ ] Contract approval workflows (for large organizations)
+- [ ] Integration with accounting software (DATEV, etc.)
+- [ ] Customer portal for contract visibility
+- [ ] Revenue forecasting based on contracts
+- [ ] Contract renewal notifications
+- [ ] Service level agreement (SLA) tracking
+- [ ] Performance metrics per contract
+- [ ] Hierarchical contract structures (parent/child)
+- [ ] Contract performance tracking & variance analysis (Soll/Ist comparison: contracted hours vs. actual delivery, billing verification)
+- [ ] Subcontractor management & integration (planning, cost tracking, service delivery verification)
+
+**Reasoning:** Keep initial implementation focused on core data model and CRUD operations. Advanced features build on stable foundation.
+
+### Technical Implementation Notes
+
+**Testing Strategy:**
+
+- Unit tests for contract validation rules
+- Unit tests for service booking amount calculations
+- Feature tests for API endpoints
+- Integration tests for contract → service booking → invoice flow
+- Multi-tenant isolation tests (critical!)
+- Edge case tests (null values, optional fields, boundary conditions)
+
+**Database Migrations:**
+
+- Create contracts table
+- Create service_bookings table
+- Create internal_cost_centers table
+- Add indexes for common queries (customer_id, site_id, contract_number, service_date)
+- Add foreign keys with appropriate cascade rules
+
+**Performance Considerations:**
+
+- Index: `contracts(tenant_id, customer_id, status)`
+- Index: `contracts(tenant_id, site_id, is_active)`
+- Index: `service_bookings(tenant_id, contract_id, service_date)`
+- Index: `service_bookings(tenant_id, invoice_id, invoice_status)`
+- Consider partitioning service_bookings by service_date for large datasets
+
+**Security:**
+
+- Multi-tenant isolation in ALL queries (use global scopes)
+- Permission checks: Users can only access contracts within their organizational scope
+- Audit logging for financial data (contracts, service bookings)
+- Immutability: Once invoiced, service bookings should be locked (prevent editing)
+
+### Summary: Design Goals Achieved
+
+✅ **Scalability:** Works for 1-person operations and billion-dollar corporations
+✅ **Flexibility:** No enforced workflows, supports diverse business models
+✅ **Separation of Concerns:** Operations (shifts) ≠ Billing (service bookings)
+✅ **Clean Data Model:** Intuitive hierarchy, clear relationships
+✅ **Edge Case Coverage:** Handles patrol services, special services, mixed billing, cost center splits
+✅ **Future-Proof:** JSONB pricing allows evolution without schema changes
+✅ **No Assumptions:** Companies configure their own processes (thresholds, aggregation, cost centers)
+
+**Key Principle:** The system provides the **structure and flexibility**, but does not dictate **business processes**. Companies choose how to use contracts, cost centers, and billing references based on their own needs.
+
+---
+
+## �🔗 Related Documents
 
 - `adr/`: Architecture decisions (technical implementation)
 - `legal-compliance.md`: GDPR, BewachV, labor law requirements
