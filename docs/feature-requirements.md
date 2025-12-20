@@ -3313,7 +3313,7 @@ Datum: __________ Unterschrift: __________
 
 ---
 
-## � Contracts & Service Packages
+## 📋 Contracts & Service Packages
 
 ### Overview: Flexible Contract Management
 
@@ -3793,7 +3793,7 @@ FROM internal_cost_centers icc
 LEFT JOIN contracts c ON c.internal_cost_center_id = icc.id
 LEFT JOIN service_bookings sb ON sb.contract_id = c.id
 WHERE sb.service_date BETWEEN '2025-12-01' AND '2025-12-31'
-GROUP BY icc.id
+GROUP BY icc.id, icc.code, icc.name, icc.type, icc.budget_amount
 ORDER BY total_revenue DESC;
 ```
 
@@ -4255,7 +4255,7 @@ GET /api/v1/service-bookings?contract_id=xxx&service_date_from=2025-12-01&invoic
 
 ---
 
-## �🔗 Related Documents
+## 🔗 Related Documents
 
 - `adr/`: Architecture decisions (technical implementation)
 - `legal-compliance.md`: GDPR, BewachV, labor law requirements
