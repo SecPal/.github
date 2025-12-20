@@ -431,6 +431,41 @@ This decision prioritizes **production readiness** and **simplicity** over featu
 
 ---
 
+## Related ADRs
+
+- **ADR-005:** RBAC Design Decisions (role/permission system)
+- **ADR-007:** Organizational Structure Hierarchy (organizational scopes)
+- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges (organizational-level isolation)
+
+### ADR-009 Integration: Multi-Tenant Super-Admin Context
+
+While ADR-008 establishes **tenant-level isolation** (user → tenant relationship), ADR-009 adds **organizational-level isolation** within tenants:
+
+- **Tenant isolation:** User can only access data from their assigned tenant
+- **Organizational isolation:** User can only access data from their organizational scopes
+- **Inheritance blocking:** Child organizations can protect themselves from parent access
+- **Super-admin scope:** Restricted to root organizational units within tenant
+
+**Multi-Tenant Super-Admin Scenario:**
+
+If a tenant has multiple root organizational units (e.g., acquired companies), super-admin privileges are **specific to each root unit**:
+
+```
+Tenant: "SecureGuard Services GmbH"
+  ├─ Holding A (root, parent_id = null)
+  │  └─ Super-Admin User A (scope: Holding A only)
+  └─ Holding B (root, parent_id = null)
+      └─ Super-Admin User B (scope: Holding B only)
+
+→ User A cannot access Holding B data (separate root unit)
+→ User B cannot access Holding A data (separate root unit)
+→ Both are isolated at organizational level within same tenant
+```
+
+For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Admin Privileges**.
+
+---
+
 **Status:** ✅ **Implemented and Validated** (2025-12-19)
 
 - All Phase 1 sub-issues closed (#358-361)

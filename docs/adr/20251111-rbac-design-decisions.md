@@ -365,9 +365,22 @@ public function handle()
 - **Issue #108:** RBAC Phase 4 (implementation)
 - **Issues #137-140:** Phase 4 sub-issues
 - **ADR-004:** RBAC Architecture (Spatie + Temporal Extensions)
+- **ADR-007:** Organizational Structure Hierarchy (organizational scopes)
+- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges (extends RBAC with organizational autonomy)
 - **PRs #109, #112, #113:** Phase 1 (temporal extensions)
 - **PRs #117, #118, #120:** Phase 2 (expiration logic)
 - **PR #121:** Phase 3 (API endpoints)
+
+### Super-Admin Escalation (See ADR-009)
+
+This ADR establishes the foundation for role-based access control, including the Admin role. ADR-009 extends this with:
+
+- **Super-Admin privileges:** Restricted to root organizational units only
+- **Breaking glass emergency access:** Time-limited access with full audit trail
+- **Inheritance blocking:** Child organizational units can block permission inheritance from parent units
+- **Defense-in-depth:** Multiple validation layers prevent privilege escalation
+
+Direct permissions (Decision 2) can be restricted by organizational unit inheritance blocks, providing resource-specific access control aligned with GDPR need-to-know principles.
 
 ## References
 
