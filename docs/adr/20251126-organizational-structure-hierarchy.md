@@ -1282,27 +1282,27 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
 
 **Customer Assignments:**
 
-- `GET /api/v1/customer-assignments` - List with filters
-- `POST /api/v1/customer-assignments` - Create assignment
-- `GET /api/v1/customer-assignments/{id}` - Show details
-- `PUT /api/v1/customer-assignments/{id}` - Update assignment
-- `DELETE /api/v1/customer-assignments/{id}` - Remove assignment
+- `GET /v1/customer-assignments` - List with filters
+- `POST /v1/customer-assignments` - Create assignment
+- `GET /v1/customer-assignments/{id}` - Show details
+- `PUT /v1/customer-assignments/{id}` - Update assignment
+- `DELETE /v1/customer-assignments/{id}` - Remove assignment
 
 **Site Assignments:**
 
-- `GET /api/v1/site-assignments` - List with filters
-- `POST /api/v1/site-assignments` - Create assignment
-- `GET /api/v1/site-assignments/{id}` - Show details
-- `PUT /api/v1/site-assignments/{id}` - Update assignment
-- `DELETE /api/v1/site-assignments/{id}` - Remove assignment
+- `GET /v1/site-assignments` - List with filters
+- `POST /v1/site-assignments` - Create assignment
+- `GET /v1/site-assignments/{id}` - Show details
+- `PUT /v1/site-assignments/{id}` - Update assignment
+- `DELETE /v1/site-assignments/{id}` - Remove assignment
 
 **Sites:**
 
-- `GET /api/v1/sites` - List with filters (customer, type, status)
-- `POST /api/v1/sites` - Create site
-- `GET /api/v1/sites/{id}` - Show site details
-- `PUT /api/v1/sites/{id}` - Update site
-- `DELETE /api/v1/sites/{id}` - Soft delete site
+- `GET /v1/sites` - List with filters (customer, type, status)
+- `POST /v1/sites` - Create site
+- `GET /v1/sites/{id}` - Show site details
+- `PUT /v1/sites/{id}` - Update site
+- `DELETE /v1/sites/{id}` - Soft delete site
 
 **Plus:** Customers, Contacts, Attachments endpoints (22 total endpoints)
 
