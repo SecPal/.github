@@ -1258,7 +1258,7 @@ test('hash chain detects injection attacks', function () {
 **Approach:**
 
 ```
-GET /api/public/activity-logs/{id}/verify
+GET /public/activity-logs/{id}/verify
 → Returns: event_hash, merkle_proof, ots_proof
 → Auditor can verify independently
 ```

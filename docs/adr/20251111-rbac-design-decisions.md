@@ -168,14 +168,14 @@ model_has_permissions:
 
 ```php
 // Permanent assignment (default - most common case)
-POST /api/v1/users/{id}/roles
+POST /v1/users/{id}/roles
 {
   "role": "manager"
   // No valid_from, no valid_until = permanent
 }
 
 // Temporal assignment (optional - special cases)
-POST /api/v1/users/{id}/roles
+POST /v1/users/{id}/roles
 {
   "role": "manager",
   "valid_from": "2025-12-01T00:00:00Z",

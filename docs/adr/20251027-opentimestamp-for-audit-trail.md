@@ -326,7 +326,7 @@ Batch events into Merkle tree, anchor root daily.
 
 ### Phase 3: Verification & Export
 
-- [ ] Verification endpoint: `GET /api/v1/events/{id}/verify-timestamp`
+- [ ] Verification endpoint: `GET /v1/events/{id}/verify-timestamp`
 - [ ] PDF export includes OTS proof
 - [ ] Standalone verification tool for auditors
 
