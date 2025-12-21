@@ -29,9 +29,11 @@ SecPal requires a **legally compliant, tamper-proof audit trail** for all user a
 
 > The ability to ensure ongoing confidentiality, integrity, availability and resilience of processing systems and services.
 
-**German BewachV §10 - Aufzeichnungspflicht:**
+**German BewachV §21 - Buchführung und Aufbewahrung:**
 
-> Aufzeichnungen sind mindestens zwei Jahre aufzubewahren und auf Verlangen der zuständigen Behörde vorzulegen.
+> Die Aufzeichnungen und Belege sind bis zum Schluss des dritten auf den Zeitpunkt ihrer Entstehung folgenden Kalenderjahres in den Geschäftsräumen aufzubewahren.
+
+**Example:** Log created 15.03.2025 → retention until 31.12.2028 (not just 3 years, but until end of the 3rd following calendar year)
 
 **BetrVG (Works Council Rights):**
 
@@ -1211,7 +1213,7 @@ test('hash chain detects injection attacks', function () {
 - **GDPR Article 30:** Records of Processing Activities
 - **GDPR Article 32:** Security of Processing
 - **GDPR Article 5(1)(e):** Storage Limitation
-- **German BewachV §10:** Aufzeichnungspflicht (2 Jahre Aufbewahrung)
+- **German BewachV §21:** Buchführung und Aufbewahrung (until end of 3rd following calendar year)
 - **BetrVG §87, §99:** Works Council Co-Determination Rights
 
 ### Technical Standards
