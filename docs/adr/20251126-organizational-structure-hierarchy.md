@@ -1384,56 +1384,12 @@ ProSec Holding (root)
 
 **Note:** See ADR-009 for details on inheritance blocking and leadership-based access control.
 
-**Privilege Escalation Prevention:**
-
-- Only existing root-unit super-admins can grant super-admin
-- Multiple validation layers (request/policy/controller)
-- Breaking glass only works downward (never upward in hierarchy)
-
-#### 3. Breaking Glass Emergency Access
-
-Super-admins can request time-limited emergency access to blocked resources:
-
-- ⏰ Time-limited (1-4 hours)
-- 📝 Mandatory justification
-- 📊 Complete audit trail
-- 🔔 Automatic notifications to DPO
-- ✅ Optional 4-eyes approval
-
-**Database Schema:**
-
-```php
-// emergency_access_logs table
-Schema::create('emergency_access_logs', function (Blueprint $table) {
-    $table->uuid('id')->primary();
-    $table->foreignUuid('user_id')->constrained();
-    $table->foreignUuid('organizational_unit_id')->nullable();
-    $table->string('permission');
-    $table->text('reason');  // Required
-    $table->enum('urgency', ['low', 'medium', 'high', 'critical']);
-    $table->timestamp('access_granted_at');
-    $table->timestamp('access_expires_at');
-    $table->json('accessed_fields')->nullable();
-    // ...
-});
-```
-
-#### 4. Admin Role Restrictions
-
-Admin role has **NO default access** to employee documents (separation of duties):
-
-- ✅ Admin can manage system configuration, users, organizational structure
-- ❌ Admin **cannot** view employee records or personnel files by default
-- ✅ Super-admin can use breaking glass for emergency access (with audit trail)
-
 **GDPR Compliance:**
 
-- Need-to-Know principle enforced
+- Need-to-Know principle enforced via inheritance blocking
 - Technical + organizational measures (Article 32)
 - Data minimization (Article 5(1)(c))
 - Complete audit trail for accountability
-
-For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Admin Privileges**.
 
 ---
 
@@ -1441,6 +1397,6 @@ For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Adm
 
 - [Multi-Tenancy Architecture ADR](./20240921-multi-tenancy-architecture.md)
 - [API Schema Conventions ADR](./20241005-api-schema-conventions.md)
-- [ADR-009: Permission Inheritance Blocking & Super-Admin Privileges](./20251220-inheritance-blocking-and-super-admin-privileges.md)
+- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](./20251221-inheritance-blocking-and-leadership-access-control.md)
 - Database Schema Documentation: `api/docs/schema/`
 - Epic #210: Customer & Site Management (GitHub Issues)

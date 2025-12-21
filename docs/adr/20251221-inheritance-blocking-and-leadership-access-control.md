@@ -219,8 +219,8 @@ Schema::table('user_internal_organizational_scopes', function (Blueprint $table)
         ->comment('Maximum rank user can view (inclusive)');
 
     // null/null = all levels
-    // 5/null = rank 5 and below (subordinates)
-    // null/3 = rank 3 and above (superiors - rare case)
+    // 5/null = rank 5 and higher numbers (subordinates - lower in hierarchy)
+    // null/3 = rank 3 and lower numbers (superiors - rare case)
 });
 ```
 
@@ -327,14 +327,34 @@ class EmployeePolicy
 ```php
 public function blocksPermissionInheritance(string $permission): bool
 {
+    // Check current unit's blocks
     $blocks = $this->inheritance_blocks ?? [];
     $blockedPerms = $blocks['blocked_permissions'] ?? [];
 
-    foreach ($blockedPerms as $blocked) {
-        // Exact match
-        if ($blocked === $permission) {
-            return true;
+    if ($this->hasBlockedPermission($blockedPerms, $permission)) {
+        return true;
+    }
+
+    // Check ancestors with applies_to_descendants = true
+    $ancestors = $this->ancestors()->get();
+
+    foreach ($ancestors as $ancestor) {
+        $ancestorBlocks = $ancestor->inheritance_blocks ?? [];
+        $appliesToDescendants = $ancestorBlocks['applies_to_descendants'] ?? false;
+
+        if ($appliesToDescendants) {
+            $ancestorPerms = $ancestorBlocks['blocked_permissions'] ?? [];
+            if ($this->hasBlockedPermission($ancestorPerms, $permission)) {
+                return true;
+            }
         }
+    }
+
+    return false;
+}
+
+protected function hasBlockedPermission(array $blockedPerms, string $permission): bool
+{
 
         // Wildcard match (resource.*)
         if (str_ends_with($blocked, '.*')) {
