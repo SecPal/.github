@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-26
 
-**Last Updated:** 2025-12-20 (ADR-009 Integration: Inheritance Blocking & Super-Admin)
+**Last Updated:** 2025-12-21 (ADR-009 Integration: Inheritance Blocking & Leadership Levels)
 
 **Deciders:** @kevalyq
 
@@ -664,11 +664,14 @@ Schema::create('user_internal_organizational_scopes', function (Blueprint $table
     $table->foreignUuid('organizational_unit_id')
         ->references('id')->on('organizational_units')->cascadeOnDelete();
 
-    $table->enum('access_level', [
-        'full',              // Full access to this unit + ALL descendants
-        'read_only',         // Read-only access to this unit + descendants
-        'specific_objects'   // Only specific objects (see user_object_scopes)
-    ]);
+    $table->boolean('include_descendants')->default(true)
+        ->comment('Include child units (true) or only this unit (false)');
+
+    // Leadership Level Filters (see ADR-009)
+    $table->unsignedTinyInteger('min_viewable_rank')->nullable()
+        ->comment('Minimum leadership rank user can view (null = no minimum)');
+    $table->unsignedTinyInteger('max_viewable_rank')->nullable()
+        ->comment('Maximum leadership rank user can view (null = no maximum)');
 
     $table->primary(['user_id', 'organizational_unit_id'], 'user_internal_org_scopes_pk');
     $table->timestamps();
@@ -715,7 +718,7 @@ $accessibleObjects = Object::query()
                     $scopeQ->select('organizational_unit_id')
                         ->from('user_internal_organizational_scopes')
                         ->where('user_id', $userId)
-                        ->where('access_level', '!=', 'specific_objects');
+                        ->where('include_descendants', true);
                 });
         });
     })
@@ -1364,10 +1367,7 @@ Child organizational units can **block specific permissions** from being inherit
     "employee_document.read",
     "employee_qualification.read"
   ],
-  "blocked_access_levels": ["admin"],
   "reason": "Legally independent subsidiary - GDPR Article 5(1)(c)",
-  "allows_emergency_access": true,
-  "emergency_requires_approval": true,
   "applies_to_descendants": true
 }
 ```
@@ -1382,21 +1382,7 @@ ProSec Holding (root)
    → Regional protects itself via inheritance_blocks
 ```
 
-#### 2. Super-Admin Restrictions
-
-Super-admin privileges are restricted to **root organizational units only** (units with `parent_id = null`):
-
-- ✅ Holding company super-admin can use breaking glass for all subsidiaries
-- ❌ Regional subsidiary admin **cannot** become super-admin
-- ❌ Regional admin **cannot** grant super-admin to others
-- ❌ Regional admin **cannot** access parent organization via breaking glass
-
-**Database Schema:**
-
-```php
-// user_internal_organizational_scopes.is_super_admin (boolean)
-// Can only be true if organizational_unit.parent_id = null
-```
+**Note:** See ADR-009 for details on inheritance blocking and leadership-based access control.
 
 **Privilege Escalation Prevention:**
 
