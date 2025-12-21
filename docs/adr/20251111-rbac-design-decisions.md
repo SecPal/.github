@@ -9,6 +9,8 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-11
 
+**Last Updated:** 2025-12-21 (ADR-009: Leadership-Based Access Control)
+
 **Deciders:** @kevalyq
 
 ## Context
@@ -366,17 +368,25 @@ public function handle()
 - **Issues #137-140:** Phase 4 sub-issues
 - **ADR-004:** RBAC Architecture (Spatie + Temporal Extensions)
 - **ADR-007:** Organizational Structure Hierarchy (organizational scopes)
-- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges (extends RBAC with organizational autonomy)
+- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control (extends RBAC with hierarchical access)
 - **PRs #109, #112, #113:** Phase 1 (temporal extensions)
 - **PRs #117, #118, #120:** Phase 2 (expiration logic)
 - **PR #121:** Phase 3 (API endpoints)
 
-### Super-Admin Escalation (See ADR-009)
+### Leadership-Based Access Control (See ADR-009)
 
-This ADR establishes the foundation for role-based access control, including the Admin role. ADR-009 extends this with:
+This ADR establishes the foundation for role-based access control. **No role has default privileges** - all roles (including "Admin") are equal and access is controlled exclusively through:
 
-- **Super-Admin privileges:** Restricted to root organizational units only
-- **Breaking glass emergency access:** Time-limited access with full audit trail
+1. **Permissions:** Spatie Laravel-Permission system (e.g., `employee.read`, `employee.update`)
+2. **Organizational Scopes:** Access to specific organizational units (ADR-007)
+3. **Leadership Level Filters:** Rank-based visibility control (ADR-009)
+
+**Note:** The "Admin" role is a regular role name without special meaning to the system. It typically receives broad permissions via the seeder, but can be modified, deleted, or renamed like any other role.
+
+ADR-009 extends this with:
+
+- **Leadership Levels:** Tenant-configurable hierarchical ranks (1=CEO, ascending)
+- **Horizontal Access Control:** Users cannot view peers or superiors
 - **Inheritance blocking:** Child organizational units can block permission inheritance from parent units
 - **Defense-in-depth:** Multiple validation layers prevent privilege escalation
 

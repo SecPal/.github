@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-26
 
-**Last Updated:** 2025-12-20 (ADR-009 Integration: Inheritance Blocking & Super-Admin)
+**Last Updated:** 2025-12-21 (ADR-009 Integration: Inheritance Blocking & Leadership Levels)
 
 **Deciders:** @kevalyq
 
@@ -664,11 +664,14 @@ Schema::create('user_internal_organizational_scopes', function (Blueprint $table
     $table->foreignUuid('organizational_unit_id')
         ->references('id')->on('organizational_units')->cascadeOnDelete();
 
-    $table->enum('access_level', [
-        'full',              // Full access to this unit + ALL descendants
-        'read_only',         // Read-only access to this unit + descendants
-        'specific_objects'   // Only specific objects (see user_object_scopes)
-    ]);
+    $table->boolean('include_descendants')->default(true)
+        ->comment('Include child units (true) or only this unit (false)');
+
+    // Leadership Level Filters (see ADR-009)
+    $table->unsignedTinyInteger('min_viewable_rank')->nullable()
+        ->comment('Minimum leadership rank user can view (null = no minimum)');
+    $table->unsignedTinyInteger('max_viewable_rank')->nullable()
+        ->comment('Maximum leadership rank user can view (null = no maximum)');
 
     $table->primary(['user_id', 'organizational_unit_id'], 'user_internal_org_scopes_pk');
     $table->timestamps();
@@ -715,7 +718,7 @@ $accessibleObjects = Object::query()
                     $scopeQ->select('organizational_unit_id')
                         ->from('user_internal_organizational_scopes')
                         ->where('user_id', $userId)
-                        ->where('access_level', '!=', 'specific_objects');
+                        ->where('include_descendants', true);
                 });
         });
     })
@@ -1364,10 +1367,7 @@ Child organizational units can **block specific permissions** from being inherit
     "employee_document.read",
     "employee_qualification.read"
   ],
-  "blocked_access_levels": ["admin"],
   "reason": "Legally independent subsidiary - GDPR Article 5(1)(c)",
-  "allows_emergency_access": true,
-  "emergency_requires_approval": true,
   "applies_to_descendants": true
 }
 ```
@@ -1382,72 +1382,14 @@ ProSec Holding (root)
    → Regional protects itself via inheritance_blocks
 ```
 
-#### 2. Super-Admin Restrictions
-
-Super-admin privileges are restricted to **root organizational units only** (units with `parent_id = null`):
-
-- ✅ Holding company super-admin can use breaking glass for all subsidiaries
-- ❌ Regional subsidiary admin **cannot** become super-admin
-- ❌ Regional admin **cannot** grant super-admin to others
-- ❌ Regional admin **cannot** access parent organization via breaking glass
-
-**Database Schema:**
-
-```php
-// user_internal_organizational_scopes.is_super_admin (boolean)
-// Can only be true if organizational_unit.parent_id = null
-```
-
-**Privilege Escalation Prevention:**
-
-- Only existing root-unit super-admins can grant super-admin
-- Multiple validation layers (request/policy/controller)
-- Breaking glass only works downward (never upward in hierarchy)
-
-#### 3. Breaking Glass Emergency Access
-
-Super-admins can request time-limited emergency access to blocked resources:
-
-- ⏰ Time-limited (1-4 hours)
-- 📝 Mandatory justification
-- 📊 Complete audit trail
-- 🔔 Automatic notifications to DPO
-- ✅ Optional 4-eyes approval
-
-**Database Schema:**
-
-```php
-// emergency_access_logs table
-Schema::create('emergency_access_logs', function (Blueprint $table) {
-    $table->uuid('id')->primary();
-    $table->foreignUuid('user_id')->constrained();
-    $table->foreignUuid('organizational_unit_id')->nullable();
-    $table->string('permission');
-    $table->text('reason');  // Required
-    $table->enum('urgency', ['low', 'medium', 'high', 'critical']);
-    $table->timestamp('access_granted_at');
-    $table->timestamp('access_expires_at');
-    $table->json('accessed_fields')->nullable();
-    // ...
-});
-```
-
-#### 4. Admin Role Restrictions
-
-Admin role has **NO default access** to employee documents (separation of duties):
-
-- ✅ Admin can manage system configuration, users, organizational structure
-- ❌ Admin **cannot** view employee records or personnel files by default
-- ✅ Super-admin can use breaking glass for emergency access (with audit trail)
+**Note:** See ADR-009 for details on inheritance blocking and leadership-based access control.
 
 **GDPR Compliance:**
 
-- Need-to-Know principle enforced
+- Need-to-Know principle enforced via inheritance blocking
 - Technical + organizational measures (Article 32)
 - Data minimization (Article 5(1)(c))
 - Complete audit trail for accountability
-
-For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Admin Privileges**.
 
 ---
 
@@ -1455,6 +1397,6 @@ For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Adm
 
 - [Multi-Tenancy Architecture ADR](./20240921-multi-tenancy-architecture.md)
 - [API Schema Conventions ADR](./20241005-api-schema-conventions.md)
-- [ADR-009: Permission Inheritance Blocking & Super-Admin Privileges](./20251220-inheritance-blocking-and-super-admin-privileges.md)
+- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](./20251221-inheritance-blocking-and-leadership-access-control.md)
 - Database Schema Documentation: `api/docs/schema/`
 - Epic #210: Customer & Site Management (GitHub Issues)
