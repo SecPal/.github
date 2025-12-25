@@ -235,21 +235,12 @@ Schema::table('user_internal_organizational_scopes', function (Blueprint $table)
     $table->index(['min_viewable_rank', 'max_viewable_rank']);
     $table->index(['min_assignable_rank', 'max_assignable_rank']);
 
-    // Add leadership level filters for ASSIGNING
-    $table->unsignedTinyInteger('min_assignable_rank')
-        ->nullable()
-        ->comment('Minimum rank user can assign to employees (inclusive, null = no minimum)');
-
-    $table->unsignedTinyInteger('max_assignable_rank')
-        ->nullable()
-        ->comment('Maximum rank user can assign to employees (inclusive, null/0 = only employees without leadership)');
-
-    // Examples:
+    // Examples for viewable_rank:
     // null/null or 0/0 = ONLY employees without leadership (no Führungskräfte)
-    // 5/null or 5/0 = can view rank 5 and higher numbers, but NOT employees with leadership
-    // 1/255 = can view ALL ranks (FE1 through FE255)
-    // null/2 or 0/2 = cannot view any leadership (max=2 but min is unset, meaning no range)
-    // 3/255 = can view rank 3 and all subordinates (FE3 through FE255)
+    // 5/null or 5/0 = INVALID: min=5 (only FE5+) intersects with max=null/0 (only non-leadership) → no employees visible
+    // 1/255 = can view ALL leadership ranks (FE1 through FE255), NOT non-leadership
+    // null/2 or 0/2 = can view leadership ranks FE1–FE2 (no minimum restriction, max=2)
+    // 3/255 = can view rank 3 and all numerically higher ranks (FE3, FE4, ..., FE255)
 });
 ```
 
@@ -314,12 +305,16 @@ class EmployeePolicy
 
             // Target employee has NO leadership level (e.g., Guards)
             if ($employeeRank === null) {
-                // Accessible if max_viewable_rank is null or 0 (only non-leadership)
-                // OR if max_viewable_rank is high enough (>= 1)
-                if ($maxRank === null || $maxRank === 0 || $maxRank >= 1) {
+                // Scopes with max_viewable_rank = null or 0 are **non-leadership-only**
+                if ($maxRank === null || $maxRank === 0) {
+                    // 🔒 SELF-ACCESS CHECK: Prevent users from accessing their own HR data
+                    if ($employee->id === $user->employee->id && !$scope->allow_self_access) {
+                        continue;  // User cannot access their own non-leadership data via this scope
+                    }
+
                     return true;
                 }
-                continue;  // This scope doesn't allow non-leadership employees
+                continue;  // This scope doesn't allow non-leadership employees (only leadership with max >= 1)
             }
 
             // Target employee HAS leadership level (e.g., Branch Director)
@@ -655,13 +650,13 @@ class OrganizationalScopePolicy
         }
 
         // Check if target range is within user's assignable range
-        // User with max_assignable_rank=2 can grant access to FE2 and below
+        // User with max_assignable_rank=2 can grant access to FE2 and numerically higher ranks (FE3, FE4, ...)
         if ($minViewableRank !== null && $minViewableRank < $userMaxAssignableRank) {
-            return false;  // Trying to grant access to superior ranks
+            return false;  // Trying to grant access to superior (higher-privilege, lower-number) ranks
         }
 
         if ($maxViewableRank !== null && $maxViewableRank > 0 && $maxViewableRank < $userMaxAssignableRank) {
-            return false;  // Trying to grant access beyond user's own range
+            return false;  // Trying to include superior ranks in the viewable range via maxViewableRank
         }
 
         return true;
@@ -859,7 +854,7 @@ User "thomas.mueller@company.de":
 
 - ✅ Thomas sees Area Managers (rank 5)
 - ✅ Thomas sees Site Managers (rank 6)
-- ✅ Thomas sees all Guards (no rank, because max_viewable_rank >= 1)
+- ❌ Thomas does NOT see Guards (no rank – this scope with max_viewable_rank = 255 only applies to leadership; non-leadership would require an additional scope with max_viewable_rank = null/0)
 - ❌ Thomas does NOT see Regional CEO (rank 2 - superior)
 - ❌ Thomas does NOT see peer Branch Directors (rank 3 - not within min_viewable_rank)
 
@@ -1174,7 +1169,7 @@ if (allowLeadership && minRank > maxRank) {
 
 // Prevent selecting ranks outside user's capability
 if (maxRank < userMaxAssignableRank) {
-  showError(`Sie dürfen nur Bereiche bis FE${userMaxAssignableRank} vergeben.`);
+  showError(`Sie dürfen keine Führungsebenen unterhalb von FE${userMaxAssignableRank} vergeben.`);
   return;
 }
 
@@ -1245,7 +1240,7 @@ public function rules(): array
                     // User cannot grant access to ranks they can't assign
                     $userMaxAssignable = auth()->user()->getMaxAssignableRank();
                     if ($userMaxAssignable !== null && $minRank < $userMaxAssignable) {
-                        $fail("Sie dürfen nur Bereiche ab FE{$userMaxAssignable} vergeben.");
+                        $fail("Sie dürfen keinen Zugriff auf Führungsebenen unterhalb von FE{$userMaxAssignable} vergeben.");
                     }
                 }
 
