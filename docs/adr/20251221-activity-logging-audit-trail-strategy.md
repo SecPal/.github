@@ -7,11 +7,17 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Proposed** (Draft - awaiting review)
+**Accepted**
 
 ## Date
 
-2025-12-21
+2025-12-24 (Originally proposed: 2025-12-21)
+
+## Implementation Status
+
+**Implemented:** Phases 1-3 (Sub-Issues #386-#391, #398, #408) - Core infrastructure complete
+**In Progress:** Phase 4 (Retention & Archiving)
+**Pending:** Phases 5-6 (Controller/Policy/Frontend/Documentation)
 
 ## Context
 
