@@ -49,6 +49,7 @@ What are the positive and negative outcomes?
 What other options did we evaluate?
 
 1. **Option 1:** Description
+
    - Pro: ...
    - Contra: ...
 
@@ -79,11 +80,13 @@ Examples:
 
 ### Accepted
 
+- [ADR-010: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field.md) - 2025-12-27
 - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11
 - [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08
 
 ### Proposed
 
+- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21 (Partially superseded by ADR-010)
 - [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26
 - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27
 - [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27
