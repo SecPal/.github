@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Partially Superseded by [ADR-010](20251227-simplify-management-level-to-integer-field.md)** (Management level implementation changed)
+**Partially Superseded by [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md)** (Management level implementation changed)
 
 **Proposed** (Draft - awaiting review for permission inheritance blocking)
 
@@ -19,7 +19,7 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Context
 
-**⚠️ NOTE:** This ADR originally described a `leadership_levels` table with LeadershipLevel model. Epic #399 simplified this to a direct `management_level` integer field (0-255) on the `employees` table. See [ADR-010](20251227-simplify-management-level-to-integer-field.md) for the current implementation. The organizational scope filtering logic described in this ADR remains **unchanged**.
+**⚠️ NOTE:** This ADR originally described a `leadership_levels` table with LeadershipLevel model. Epic #399 simplified this to a direct `management_level` integer field (0-255) on the `employees` table. See [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md) for the current implementation. The organizational scope filtering logic described in this ADR remains **unchanged**.
 
 ### The Problem: GDPR Compliance & Hierarchical Access Control
 
@@ -176,7 +176,7 @@ public function view(User $user, Employee $employee): bool
 
 #### Database Schema
 
-**⚠️ UPDATED (2025-12-27):** The original design used a separate `leadership_levels` table. This was simplified in Epic #399 to a direct `management_level` field. See [ADR-010](20251227-simplify-management-level-to-integer-field.md) for details.
+**⚠️ UPDATED (2025-12-27):** The original design used a separate `leadership_levels` table. This was simplified in Epic #399 to a direct `management_level` field. See [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md) for details.
 
 ```php
 // employees table (simplified in Epic #399)
