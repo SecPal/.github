@@ -79,11 +79,15 @@ Examples:
 
 ### Accepted
 
+- [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27
+- [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24
+- [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19
 - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11
 - [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08
 
 ### Proposed
 
+- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21 (Partially superseded by ADR-011)
 - [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26
 - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27
 - [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27

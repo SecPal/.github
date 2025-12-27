@@ -7,13 +7,19 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Proposed** (Draft - awaiting review)
+**Partially Superseded by [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md)** (Management level implementation changed)
+
+**Proposed** (Draft - awaiting review for permission inheritance blocking)
 
 ## Date
 
 2025-12-21
 
+**Last Updated:** 2025-12-27 (Management level implementation updated)
+
 ## Context
+
+**⚠️ NOTE:** This ADR originally described a `leadership_levels` table with LeadershipLevel model. Epic #399 simplified this to a direct `management_level` integer field (0-255) on the `employees` table. See [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md) for the current implementation. The organizational scope filtering logic described in this ADR remains **unchanged**.
 
 ### The Problem: GDPR Compliance & Hierarchical Access Control
 
@@ -166,66 +172,47 @@ public function view(User $user, Employee $employee): bool
 
 **Concept:** Users can only view employees **below their own leadership rank**, preventing horizontal (peer) and upward (superior) access.
 
-**Implementation:** Flexible, tenant-configurable leadership levels.
+**Implementation:** Simple integer-based management levels (0-255).
 
 #### Database Schema
 
+**⚠️ UPDATED (2025-12-27):** The original design used a separate `leadership_levels` table. This was simplified in Epic #399 to a direct `management_level` field. See [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md) for details.
+
 ```php
-// leadership_levels table (tenant-specific definitions)
-Schema::create('leadership_levels', function (Blueprint $table) {
-    $table->uuid('id')->primary();
-    $table->foreignId('tenant_id')->constrained('tenant_keys')->cascadeOnDelete();
+// employees table (simplified in Epic #399)
+Schema::create('employees', function (Blueprint $table) {
+    // ...
+    $table->unsignedTinyInteger('management_level')
+        ->default(0)
+        ->nullable(false)
+        ->comment('Management level: 0=non-management, 1=CEO/highest, 2-255=lower levels');
+    // ...
 
-    $table->unsignedTinyInteger('rank')
-        ->comment('Numerical hierarchy (1=CEO, ascending for lower levels)');
-
-    $table->string('name', 100)
-        ->comment('Display name (e.g., "Managing Director", "Site Manager")');
-
-    $table->text('description')->nullable();
-    $table->string('color', 7)->nullable()->comment('Hex color for UI');
-    $table->boolean('is_active')->default(true);
-
-    $table->timestamps();
-
-    $table->unique(['tenant_id', 'rank']);
-    $table->unique(['tenant_id', 'name']);
+    $table->index(['tenant_id', 'management_level']);
 });
 
-// employees table
-Schema::table('employees', function (Blueprint $table) {
-    $table->foreignUuid('leadership_level_id')
-        ->nullable()
-        ->after('position')
-        ->constrained('leadership_levels')
-        ->nullOnDelete()
-        ->comment('Leadership level (null = no leadership)');
-
-    $table->index(['tenant_id', 'leadership_level_id']);
-});
-
-// user_internal_organizational_scopes table
+// user_internal_organizational_scopes table (UNCHANGED)
 Schema::table('user_internal_organizational_scopes', function (Blueprint $table) {
     // Remove access_level enum (no longer needed)
     $table->dropColumn('access_level');
 
-    // Add leadership level filters for VIEWING
+    // Add management level filters for VIEWING
     $table->unsignedTinyInteger('min_viewable_rank')
         ->nullable()
         ->comment('Minimum rank user can view (inclusive, null = no minimum)');
 
     $table->unsignedTinyInteger('max_viewable_rank')
         ->nullable()
-        ->comment('Maximum rank user can view (inclusive, null/0 = only employees without leadership)');
+        ->comment('Maximum rank user can view (inclusive, null/0 = only employees without management)');
 
-    // Add leadership level filters for ASSIGNING (used in Operation 2)
+    // Add management level filters for ASSIGNING (used in Operation 2)
     $table->unsignedTinyInteger('min_assignable_rank')
         ->nullable()
         ->comment('Minimum rank user can assign to employees (null = no minimum)');
 
     $table->unsignedTinyInteger('max_assignable_rank')
         ->nullable()
-        ->comment('Maximum rank user can assign to employees (null/0 = cannot assign any leadership)');
+        ->comment('Maximum rank user can assign to employees (null/0 = cannot assign any management level)');
 
     // 🔒 NEW: Self-access control flag
     $table->boolean('allow_self_access')
@@ -235,12 +222,12 @@ Schema::table('user_internal_organizational_scopes', function (Blueprint $table)
     $table->index(['min_viewable_rank', 'max_viewable_rank']);
     $table->index(['min_assignable_rank', 'max_assignable_rank']);
 
-    // Examples for viewable_rank:
-    // null/null or 0/0 = ONLY employees without leadership (no Führungskräfte)
-    // 5/null or 5/0 = INVALID: min=5 (only FE5+) intersects with max=null/0 (only non-leadership) → no employees visible
-    // 1/255 = can view ALL leadership ranks (FE1 through FE255), NOT non-leadership
-    // null/2 or 0/2 = can view leadership ranks FE1–FE2 (no minimum restriction, max=2)
-    // 3/255 = can view rank 3 and all numerically higher ranks (FE3, FE4, ..., FE255)
+    // Examples for viewable_rank (SEMANTICS UNCHANGED):
+    // null/null or 0/0 = ONLY employees without management (no Führungskräfte)
+    // 5/null or 5/0 = INVALID: min=5 (only ML5+) intersects with max=null/0 (only non-management) → no employees visible
+    // 1/255 = can view ALL management ranks (ML1 through ML255), NOT non-management
+    // null/2 or 0/2 = can view management ranks ML1–ML2 (no minimum restriction, max=2)
+    // 3/255 = can view rank 3 and all numerically higher ranks (ML3, ML4, ..., ML255)
 });
 ```
 
@@ -277,12 +264,13 @@ class EmployeePolicy
     {
         // ... permission & scope checks ...
 
-        return $this->canViewLeadershipLevel($user, $employee);
+        return $this->canViewManagementLevel($user, $employee);
     }
 
-    private function canViewLeadershipLevel(User $user, Employee $employee): bool
+    private function canViewManagementLevel(User $user, Employee $employee): bool
     {
-        $employeeRank = $employee->leadershipLevel?->rank;
+        // UPDATED (2025-12-27): Direct field access instead of relationship
+        $employeeRank = $employee->management_level;
 
         // Get user's scopes covering this employee's org unit
         $matchingScopes = $user->organizationalScopes()
@@ -303,24 +291,24 @@ class EmployeePolicy
             $minRank = $scope->min_viewable_rank;
             $maxRank = $scope->max_viewable_rank;
 
-            // Target employee has NO leadership level (e.g., Guards)
-            if ($employeeRank === null) {
-                // Scopes with max_viewable_rank = null or 0 are **non-leadership-only**
+            // Target employee has NO management level (0 = non-management, e.g., Guards)
+            if ($employeeRank === 0) {
+                // Scopes with max_viewable_rank = null or 0 are **non-management-only**
                 if ($maxRank === null || $maxRank === 0) {
                     // 🔒 SELF-ACCESS CHECK: Prevent users from accessing their own HR data
                     if ($employee->id === $user->employee->id && !$scope->allow_self_access) {
-                        continue;  // User cannot access their own non-leadership data via this scope
+                        continue;  // User cannot access their own non-management data via this scope
                     }
 
                     return true;
                 }
-                continue;  // This scope doesn't allow non-leadership employees (only leadership with max >= 1)
+                continue;  // This scope doesn't allow non-management employees (only management with max >= 1)
             }
 
-            // Target employee HAS leadership level (e.g., Branch Director)
-            // null/0 in max_viewable_rank means "only non-leadership" → blocked
+            // Target employee HAS management level (1-255, e.g., Branch Director)
+            // null/0 in max_viewable_rank means "only non-management" → blocked
             if ($maxRank === null || $maxRank === 0) {
-                continue;  // This scope doesn't allow leadership employees
+                continue;  // This scope doesn't allow management employees
             }
 
             // Check if employee's rank is within allowed range
@@ -452,61 +440,39 @@ class LeadershipLevelHelper
 }
 ```
 
-### RBAC Architecture: Three Independent Operations
+### RBAC Architecture: Two Independent Operations
 
-**CRITICAL:** Leadership levels have **NO inherent permission implications**. A user's own leadership level does NOT grant or restrict any permissions. All access control is explicit via Spatie permissions.
+**⚠️ UPDATED (2025-12-27):** Operation 1 (LeadershipLevel CRUD) was **removed** in Epic #399. Management levels are now direct integer values (0-255) without a separate definition table. See [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md).
 
-#### Operation 1: Leadership Level Definition Management (CRUD)
+**CRITICAL:** Management levels have **NO inherent permission implications**. A user's own management level does NOT grant or restrict any permissions. All access control is explicit via Spatie permissions.
 
-**What:** Creating/editing/deleting the leadership level definitions themselves (e.g., "Branch Director = Rank 3")
+#### ~~Operation 1: Leadership Level Definition Management (CRUD)~~ [REMOVED]
 
-**Authorization:** Pure permission-based, **independent of user's own leadership level**
+**Status:** ❌ **Removed in Epic #399** (2025-12-27)
 
-```php
-class LeadershipLevelPolicy
-{
-    public function viewAny(User $user): bool
-    {
-        return $user->hasPermissionTo('leadership_level.view');
-    }
+~~**What:** Creating/editing/deleting the leadership level definitions themselves (e.g., "Branch Director = Rank 3")~~
 
-    public function create(User $user): bool
-    {
-        return $user->hasPermissionTo('leadership_level.create');
-    }
+~~**Authorization:** Pure permission-based, **independent of user's own leadership level**~~
 
-    public function update(User $user, LeadershipLevel $level): bool
-    {
-        return $user->hasPermissionTo('leadership_level.update');
-    }
+Management levels are now hardcoded as integers (0-255) with standard industry semantics:
 
-    public function delete(User $user, LeadershipLevel $level): bool
-    {
-        // Prevent deletion if employees are assigned
-        if ($level->employees()->count() > 0) {
-            return false;
-        }
-        return $user->hasPermissionTo('leadership_level.delete');
-    }
-}
-```
+- 0 = Non-management (Guards)
+- 1 = CEO/Highest
+- 2 = Branch Director
+- 3-255 = Lower management tiers
 
-**Examples:**
+No CRUD operations or policies needed—levels are assigned directly as integers.
 
-- ✅ User with FE6 + `leadership_level.update` permission → Can edit FE1, FE2, all levels
-- ✅ User with FE1 WITHOUT permission → Cannot edit anything
-- ✅ User with `null` leadership level + permission → Can manage all levels
+#### Operation 2: Management Level Assignment to Employees (Renumbered: was Operation 2)
 
-#### Operation 2: Leadership Level Assignment to Employees
+**What:** Assigning a management level to an employee (setting `employee.management_level`)
 
-**What:** Assigning a leadership level to an employee (setting `employee.leadership_level_id`)
-
-**Authorization:** Permission-based + **scope-based leadership level range check**
+**Authorization:** Permission-based + **scope-based management level range check**
 
 ```php
 class EmployeePolicy
 {
-    public function assignLeadershipLevel(User $user, Employee $employee, ?int $targetRank): bool
+    public function assignManagementLevel(User $user, Employee $employee, ?int $targetRank): bool
     {
         // 1. User needs permission to update employees
         if (!$user->hasPermissionTo('employee.update')) {
@@ -518,24 +484,25 @@ class EmployeePolicy
             return false;
         }
 
-        // 3. When REMOVING leadership (targetRank = null), check current rank
-        if ($targetRank === null && $employee->leadershipLevel !== null) {
+        // 3. When REMOVING management (targetRank = 0), check current rank
+        // UPDATED (2025-12-27): Direct field access instead of relationship
+        if ($targetRank === 0 && $employee->management_level > 0) {
             // Must have permission to modify this employee's CURRENT rank
             // Prevents permission escalation: Can't demote CEO if you can't promote to CEO
-            $currentRank = $employee->leadershipLevel->rank;
-            return $this->canAssignLeadershipRank($user, $employee, $currentRank);
+            $currentRank = $employee->management_level;
+            return $this->canAssignManagementRank($user, $employee, $currentRank);
         }
 
-        // 4. When ASSIGNING leadership, check target rank
-        if ($targetRank !== null) {
-            return $this->canAssignLeadershipRank($user, $employee, $targetRank);
+        // 4. When ASSIGNING management, check target rank
+        if ($targetRank !== null && $targetRank > 0) {
+            return $this->canAssignManagementRank($user, $employee, $targetRank);
         }
 
-        // 5. Removing leadership from non-leadership employee (null → null) is always allowed
+        // 5. Removing management from non-management employee (0 → 0) is always allowed
         return true;
     }
 
-    private function canAssignLeadershipRank(User $user, Employee $employee, int $targetRank): bool
+    private function canAssignManagementRank(User $user, Employee $employee, int $targetRank): bool
     {
         // Get user's scopes that cover this employee's organizational unit
         $applicableScopes = $user->organizationalScopes()
@@ -592,15 +559,15 @@ Schema::table('user_internal_organizational_scopes', function (Blueprint $table)
 
 **Examples:**
 
-- ✅ User has scope with `min_assignable_rank = 3, max_assignable_rank = 255` → Can assign/remove FE3, FE4, FE5...
-- ❌ User has scope with `max_assignable_rank = 2` → **Cannot** assign FE1 (superior) or remove FE1 from CEO
-- ✅ User has scope with `min_assignable_rank = 1, max_assignable_rank = 255` → Can assign/remove all leadership ranks
-- ❌ User has scope with `max_assignable_rank = null` or `= 0` → **Cannot** assign OR remove ANY leadership rank
-- ⚠️ **CRITICAL:** To remove FE from employee, you must have permission to assign that FE (prevents escalation!)
+- ✅ User has scope with `min_assignable_rank = 3, max_assignable_rank = 255` → Can assign/remove ML3, ML4, ML5...
+- ❌ User has scope with `max_assignable_rank = 2` → **Cannot** assign ML1 (superior) or remove ML1 from CEO
+- ✅ User has scope with `min_assignable_rank = 1, max_assignable_rank = 255` → Can assign/remove all management ranks
+- ❌ User has scope with `max_assignable_rank = null` or `= 0` → **Cannot** assign OR remove ANY management rank
+- ⚠️ **CRITICAL:** To remove management level from employee, you must have permission to assign that level (prevents escalation!)
 
-#### Operation 3: Permission Assignment with Leadership Level Filters
+#### Operation 3: Permission Assignment with Management Level Filters (Renumbered: was Operation 3)
 
-**What:** Granting permissions to other users with leadership level filters (setting scope's `min_viewable_rank/max_viewable_rank`)
+**What:** Granting permissions to other users with management level filters (setting scope's `min_viewable_rank/max_viewable_rank`)
 
 **Authorization:** Permission-based + **rank range validation**
 
@@ -617,7 +584,7 @@ class OrganizationalScopePolicy
         return $user->hasPermissionTo('organizational_scope.update');
     }
 
-    public function setLeadershipRangeFilter(
+    public function setManagementRangeFilter(
         User $user,
         ?int $minViewableRank,
         ?int $maxViewableRank
@@ -640,17 +607,17 @@ class OrganizationalScopePolicy
         $userMaxAssignableRank = $user->organizationalScopes()
             ->max('max_assignable_rank');  // Highest max = least restrictive
 
-        // User has no leadership assignment capability (null/0 = only non-leadership)
+        // User has no management assignment capability (null/0 = only non-management)
         if ($userMaxAssignableRank === null || $userMaxAssignableRank === 0) {
-            // Can only grant access to non-leadership employees
+            // Can only grant access to non-management employees
             if ($maxViewableRank !== null && $maxViewableRank > 0) {
-                return false;  // Trying to grant access to leadership ranks
+                return false;  // Trying to grant access to management ranks
             }
             return true;
         }
 
         // Check if target range is within user's assignable range
-        // User with max_assignable_rank=2 can grant access to FE2 and numerically higher ranks (FE3, FE4, ...)
+        // User with max_assignable_rank=2 can grant access to ML2 and numerically higher ranks (ML3, ML4, ...)
         if ($minViewableRank !== null && $minViewableRank < $userMaxAssignableRank) {
             return false;  // Trying to grant access to superior (higher-privilege, lower-number) ranks
         }
@@ -666,18 +633,18 @@ class OrganizationalScopePolicy
 
 **Examples:**
 
-- ✅ User with `max_assignable_rank = 5` → Can grant scope with `min_viewable_rank = 5, max_viewable_rank = 255` (FE5 and below)
-- ❌ User with `max_assignable_rank = 5` → **Cannot** grant scope with `min_viewable_rank = 1` (includes FE1-4)
-- ❌ User with `max_assignable_rank = null` or `= 0` → Can **only** grant scope with `max_viewable_rank = null/0` (non-leadership only)
-- ✅ User with `max_assignable_rank = 255` → Can grant any rank filter (including all leadership)
+- ✅ User with `max_assignable_rank = 5` → Can grant scope with `min_viewable_rank = 5, max_viewable_rank = 255` (ML5 and below)
+- ❌ User with `max_assignable_rank = 5` → **Cannot** grant scope with `min_viewable_rank = 1` (includes ML1-4)
+- ❌ User with `max_assignable_rank = null` or `= 0` → Can **only** grant scope with `max_viewable_rank = null/0` (non-management only)
+- ✅ User with `max_assignable_rank = 255` → Can grant any rank filter (including all management)
 
 **⚠️ Invalid Combinations (Must be rejected during validation):**
 
 These combinations are logically impossible and must be prevented by form validation:
 
-- ❌ `min_viewable_rank = 5, max_viewable_rank = 0` → **INVALID**: No intersection between "FE5+" and "non-leadership only"
+- ❌ `min_viewable_rank = 5, max_viewable_rank = 0` → **INVALID**: No intersection between "ML5+" and "non-management only"
 - ❌ `min_viewable_rank = 5, max_viewable_rank = null` → **INVALID**: Same as above
-- ❌ `min_viewable_rank = 5, max_viewable_rank = 4` → **INVALID**: min > max (no leadership levels in range)
+- ❌ `min_viewable_rank = 5, max_viewable_rank = 4` → **INVALID**: min > max (no management levels in range)
 - ❌ `min_assignable_rank = 3, max_assignable_rank = 0` → **INVALID**: Same logic applies
 
 **Validation Rule:**
@@ -697,7 +664,7 @@ public function rules(): array
                 // If max is 0/null AND min is set (> 0), that's invalid
                 if ($minRank !== null && $minRank > 0) {
                     if ($value === null || $value === 0) {
-                        $fail('Cannot combine leadership level filter (min_viewable_rank) with "non-leadership only" (max=0).');
+                        $fail('Cannot combine management level filter (min_viewable_rank) with "non-management only" (max=0).');
                     }
                     if ($value < $minRank) {
                         $fail('max_viewable_rank must be greater than or equal to min_viewable_rank.');
@@ -716,8 +683,8 @@ public function rules(): array
 
 Instead of allowing users to enter `min` and `max` values directly (error-prone), the UI should guide them through **two independent yes/no questions**:
 
-1. **"Soll Zugriff auf Mitarbeiter OHNE Führungsebene erlaubt sein?"** → Sets `max_viewable_rank = 0`
-2. **"Soll Zugriff auf Mitarbeiter MIT Führungsebene erlaubt sein?"** → Activates range dropdowns
+1. **"Should access to employees WITHOUT management level be allowed?"** → Sets `max_viewable_rank = 0`
+2. **"Should access to employees WITH management level be allowed?"** → Activates range dropdowns
    - If YES: Select `min` (1-255) and `max` (≥min, ≤255)
    - Dropdowns automatically filter impossible values
 
@@ -725,17 +692,19 @@ This approach makes combinations like `min=5, max=0` **structurally impossible**
 
 **Backend must still validate** despite frontend UX, as API could be called directly.
 
-### Summary: Own Leadership Level ≠ Permissions
+### Summary: Own Management Level ≠ Permissions
 
-| User's Own FE  | Permission                            | Can Do?                                                                  |
-| -------------- | ------------------------------------- | ------------------------------------------------------------------------ |
-| FE6            | `leadership_level.update`             | ✅ Edit FE1, FE2, all level definitions                                  |
-| FE1            | No permission                         | ❌ Cannot edit any level definitions                                     |
-| `null` (no FE) | `leadership_level.create`             | ✅ Create all levels                                                     |
-| FE6            | Scope with `max_assignable_rank=2`    | ❌ Cannot assign/remove FE1 to/from employees (only FE2+)                |
-| FE6            | Scope with `max_assignable_rank=255`  | ✅ Can assign/remove FE1 to/from employees (all ranks)                   |
-| FE6            | Scope with `max_assignable_rank=null` | ❌ Cannot assign/remove ANY leadership (only non-leadership)             |
-| FE1            | Scope with `min=5, max=255`           | ❌ Cannot assign/remove FE2 to/from employees (outside range, only FE5+) |
+**⚠️ UPDATED (2025-12-27):** Removed references to `leadership_level.*` permissions (no longer exist after Epic #399).
+
+| User's Own ML | Permission                            | Can Do?                                                                  |
+| ------------- | ------------------------------------- | ------------------------------------------------------------------------ |
+| ML6           | `employee.update` + assignable scopes | ✅ Assign ML6-ML255 to employees within scopes                           |
+| ML1           | No permission                         | ❌ Cannot update any employees                                           |
+| `0` (no ML)   | `employee.create` + assignable scopes | ✅ Create employees with management levels within scope range            |
+| ML6           | Scope with `max_assignable_rank=2`    | ❌ Cannot assign/remove ML1 to/from employees (only ML2+)                |
+| ML6           | Scope with `max_assignable_rank=255`  | ✅ Can assign/remove ML1 to/from employees (all ranks)                   |
+| ML6           | Scope with `max_assignable_rank=null` | ❌ Cannot assign/remove ANY management (only non-management)             |
+| ML1           | Scope with `min=5, max=255`           | ❌ Cannot assign/remove ML2 to/from employees (outside range, only ML5+) |
 
 ---
 
@@ -743,21 +712,23 @@ This approach makes combinations like `min=5, max=0` **structurally impossible**
 
 ### Example 1: Area Manager with Peer Isolation
 
+**⚠️ UPDATED (2025-12-27):** Changed from `leadership_level_id` to direct `management_level` field.
+
 **Setup:**
 
 ```php
 // Employees
 Employee "Hans Weber" (Area Manager Operations):
   organizational_unit_id: "niederlassung-berlin"
-  leadership_level_id: "rank-5"  // Rank 5
+  management_level: 5  // Rank 5
 
 Employee "Klaus Müller" (Area Manager Security):
   organizational_unit_id: "niederlassung-berlin"
-  leadership_level_id: "rank-5"  // Rank 5 (peer!)
+  management_level: 5  // Rank 5 (peer!)
 
 Employee "Peter Schmidt" (Site Manager):
   organizational_unit_id: "niederlassung-berlin"
-  leadership_level_id: "rank-6"  // Rank 6 (subordinate)
+  management_level: 6  // Rank 6 (subordinate)
 
 // User Scope
 User "hans.weber@company.de":
@@ -1086,31 +1057,31 @@ EmployeePolicy::view():
 
 The UI must guide users through a **two-step independent selection process** to prevent logically impossible combinations:
 
-**Step 1: Non-Leadership Employees Access (Independent)**
+**Step 1: Non-Management Employees Access (Independent)**
 
 ```
-☐ Darf auf Mitarbeiter OHNE Führungsebene zugreifen/bearbeiten?
-   (Allows access to employees without leadership level)
+☐ Allow access/editing of employees WITHOUT management level?
+   (Allows access to employees without management level)
 ```
 
 - If **checked** → Sets `max_viewable_rank = 0` (or `null`)
-- If **unchecked** → No access to non-leadership employees
-- **Independent** from leadership level filters (Step 2)
+- If **unchecked** → No access to non-management employees
+- **Independent** from management level filters (Step 2)
 
-**Step 2: Leadership Level Range (Independent)**
+**Step 2: Management Level Range (Independent)**
 
 ```
-☐ Darf auf Mitarbeiter MIT Führungsebene zugreifen/bearbeiten?
-   (Allows access to employees with leadership levels)
+☐ Allow access/editing of employees WITH management level?
+   (Allows access to employees with management levels)
 
-   ↳ Von Führungsebene (min):  [Dropdown: FE1, FE2, ..., FE255]
-   ↳ Bis Führungsebene (max):  [Dropdown: FE1, FE2, ..., FE255]
+   ↳ From management level (min):  [Dropdown: ML1, ML2, ..., ML255]
+   ↳ To management level (max):    [Dropdown: ML1, ML2, ..., ML255]
 
-   Hinweis: Kleinere Rangnummer = Höhere Position
-   (FE1 = CEO, FE255 = niedrigste Führungsebene)
+   Note: Lower rank number = Higher position
+   (ML1 = CEO, ML255 = lowest management level)
 ```
 
-- If **unchecked** → No access to leadership employees
+- If **unchecked** → No access to management employees
 - If **checked** → Dropdowns become active
   - `min_viewable_rank` dropdown: Only shows ranks ≤ user's `max_assignable_rank`
   - `max_viewable_rank` dropdown: Dynamically filtered based on selected `min`
@@ -1122,29 +1093,29 @@ The UI must guide users through a **two-step independent selection process** to 
 This step is **only shown** if the user's own leadership level falls within the selected range from Step 2:
 
 ```
-⚠️ Achtung: Mit dieser Einstellung könnte der Nutzer auf seine eigene Personalakte zugreifen!
+⚠️ Warning: This setting would allow the user to access their own personnel file!
 
-☐ Erlaubt dem Nutzer Zugriff auf die eigene Personalakte?
+☐ Allow user to access their own personnel file?
    (Allow user to view/edit their own HR data)
 
-   ⚠️ Nicht empfohlen: Mitarbeiter sollten normalerweise ihre eigenen
-      Gehaltsdaten, Verträge, oder Beurteilungen nicht bearbeiten können.
+   ⚠️ Not recommended: Employees should normally not be able to edit their own
+      salary data, contracts, or performance reviews.
 ```
 
-- **Only visible if:** User's own `leadership_level.rank` ∈ [`min_viewable_rank`, `max_viewable_rank`]
+- **Only visible if:** User's own `management_level` ∈ [`min_viewable_rank`, `max_viewable_rank`]
 - **Default:** ☐ **Unchecked** (deny self-access for security)
 - **If checked** → `allow_self_access = true` in scope
 - **If unchecked** → `allow_self_access = false` (default, secure)
 
 **When is this relevant?**
 
-| User's FE | Scope Range            | Step 3 shown? | Reason                                      |
-| --------- | ---------------------- | ------------- | ------------------------------------------- |
-| FE3       | min=3, max=255         | ✅ YES        | User's rank (3) is in range [3-255]         |
-| FE3       | min=5, max=255         | ❌ NO         | User's rank (3) is NOT in range [5-255]     |
-| FE3       | min=1, max=2           | ❌ NO         | User's rank (3) is NOT in range [1-2]       |
-| `null`    | max=0 (non-leadership) | ✅ YES        | User has no FE, scope allows non-leadership |
-| FE5       | max=0 (non-leadership) | ❌ NO         | User has FE, scope only allows non-FE       |
+| User's ML | Scope Range            | Step 3 shown? | Reason                                        |
+| --------- | ---------------------- | ------------- | --------------------------------------------- |
+| ML3       | min=3, max=255         | ✅ YES        | User's rank (3) is in range [3-255]           |
+| ML3       | min=5, max=255         | ❌ NO         | User's rank (3) is NOT in range [5-255]       |
+| ML3       | min=1, max=2           | ❌ NO         | User's rank (3) is NOT in range [1-2]         |
+| `0`       | max=0 (non-management) | ✅ YES        | User has no ML, scope allows non-management   |
+| ML5       | max=0 (non-management) | ❌ NO         | User has ML, scope only allows non-management |
 
 **Example 4: No access (both unchecked)**
 
@@ -1157,19 +1128,21 @@ This step is **only shown** if the user's own leadership level falls within the 
 ```javascript
 // Prevent submission if both unchecked
 if (!allowNonLeadership && !allowLeadership) {
-  showError("Mindestens eine Option muss ausgewählt sein.");
+  showError("At least one option must be selected.");
   return;
 }
 
 // Prevent min > max
 if (allowLeadership && minRank > maxRank) {
-  showError("Min-Rang muss ≤ Max-Rang sein.");
+  showError("Min rank must be ≤ max rank.");
   return;
 }
 
 // Prevent selecting ranks outside user's capability
 if (maxRank < userMaxAssignableRank) {
-  showError(`Sie dürfen keine Führungsebenen unterhalb von FE${userMaxAssignableRank} vergeben.`);
+  showError(
+    `You are not allowed to grant access to management levels below ML${userMaxAssignableRank}.`
+  );
   return;
 }
 
@@ -1184,7 +1157,7 @@ const scopeIncludesTargetUser =
 
 if (scopeIncludesTargetUser && !allowSelfAccessExplicitlySet) {
   showWarning(
-    "Diese Scope würde dem Nutzer Zugriff auf eigene Daten erlauben. Bitte explizit bestätigen."
+    "This scope would allow the user to access their own data. Please confirm explicitly."
   );
 }
 ```
@@ -1208,7 +1181,7 @@ public function rules(): array
             'required_if:allow_leadership,true',
             function ($attribute, $value, $fail) {
                 if ($this->allow_leadership && $value === null) {
-                    $fail('min_viewable_rank erforderlich wenn Führungsebenen erlaubt.');
+                    $fail('min_viewable_rank required when management levels are allowed.');
                 }
             },
         ],
@@ -1219,7 +1192,7 @@ public function rules(): array
                 // If non-leadership allowed, set to 0
                 if ($this->allow_non_leadership && !$this->allow_leadership) {
                     if ($value !== 0 && $value !== null) {
-                        $fail('max_viewable_rank muss 0 sein bei nur nicht-führenden.');
+                        $fail('max_viewable_rank must be 0 for non-management only.');
                     }
                 }
 
@@ -1229,24 +1202,24 @@ public function rules(): array
 
                     // Cannot be 0/null if leadership is allowed
                     if ($value === null || $value === 0) {
-                        $fail('max_viewable_rank muss > 0 sein bei Führungsebenen.');
+                        $fail('max_viewable_rank must be > 0 when management levels are allowed.');
                     }
 
                     // Min must be <= max
                     if ($minRank !== null && $value < $minRank) {
-                        $fail('max_viewable_rank muss ≥ min_viewable_rank sein.');
+                        $fail('max_viewable_rank must be ≥ min_viewable_rank.');
                     }
 
                     // User cannot grant access to ranks they can't assign
                     $userMaxAssignable = auth()->user()->getMaxAssignableRank();
                     if ($userMaxAssignable !== null && $minRank < $userMaxAssignable) {
-                        $fail("Sie dürfen keinen Zugriff auf Führungsebenen unterhalb von FE{$userMaxAssignable} vergeben.");
+                        $fail("You are not allowed to grant access to management levels below ML{$userMaxAssignable}.");
                     }
                 }
 
                 // At least one must be allowed
                 if (!$this->allow_non_leadership && !$this->allow_leadership) {
-                    $fail('Mindestens eine Option muss aktiviert sein.');
+                    $fail('At least one option must be enabled.');
                 }
             },
         ],
