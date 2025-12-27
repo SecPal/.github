@@ -34,6 +34,10 @@ jobs:
         run: |
           if [ -f "package.json" ]; then
             npm ci || npm install
+            # Install jq for JSON parsing if not available
+            if ! command -v jq &> /dev/null; then
+              sudo apt-get update && sudo apt-get install -y jq
+            fi
           else
             npm install -g prettier
           fi
@@ -42,8 +46,16 @@ jobs:
         env:
           FILES: ${{ inputs.files }}
         run: |
-          if [ -f "package.json" ] && grep -q "\"format:check\"" package.json; then
-            npm run format:check
+          # Check if package.json has a format:check script that we can use
+          # Only use it if FILES matches the default to avoid ignoring custom file patterns
+          if [ -f "package.json" ] && command -v jq &> /dev/null && jq -e '.scripts["format:check"]' package.json > /dev/null 2>&1; then
+            if [ "$FILES" = "**/*.{md,yml,yaml,json}" ]; then
+              npm run format:check
+            else
+              echo "Warning: Skipping 'npm run format:check' because FILES ($FILES) doesn't match default pattern."
+              echo "Falling back to direct prettier invocation."
+              npx prettier --check "$FILES"
+            fi
           else
-            npx prettier --check "$FILES" || prettier --check "$FILES"
+            npx prettier --check "$FILES"
           fi
