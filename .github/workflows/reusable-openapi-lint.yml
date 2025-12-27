@@ -30,10 +30,42 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Install OpenAPI linter
-        run: npm install -g @redocly/cli
+      - name: Install dependencies
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+            # Install jq for JSON parsing if not available
+            if ! command -v jq &> /dev/null; then
+              sudo apt-get update && sudo apt-get install -y jq
+            fi
+          else
+            npm install -g @redocly/cli
+          fi
 
       - name: Validate OpenAPI specification
         env:
           OPENAPI_FILE: ${{ inputs.openapi-file }}
-        run: redocly lint "$OPENAPI_FILE"
+        run: |
+          # Check if package.json has a lint script that we can use
+          # Only use it if OPENAPI_FILE matches the default to avoid ignoring custom file paths
+          if [ -f "package.json" ] && command -v jq &> /dev/null && jq -e '.scripts.lint' package.json > /dev/null 2>&1; then
+            if [ "$OPENAPI_FILE" = "openapi.yaml" ] || [ "$OPENAPI_FILE" = "docs/openapi.yaml" ]; then
+              npm run lint
+            else
+              echo "Warning: Skipping 'npm run lint' because OPENAPI_FILE ($OPENAPI_FILE) doesn't match default paths."
+              echo "Falling back to direct redocly invocation."
+              if [ -f ".redocly.yaml" ]; then
+                npx redocly lint "$OPENAPI_FILE" --config .redocly.yaml
+              elif [ -f ".redocly.yml" ]; then
+                npx redocly lint "$OPENAPI_FILE" --config .redocly.yml
+              else
+                npx redocly lint "$OPENAPI_FILE"
+              fi
+            fi
+          elif [ -f ".redocly.yaml" ]; then
+            npx redocly lint "$OPENAPI_FILE" --config .redocly.yaml
+          elif [ -f ".redocly.yml" ]; then
+            npx redocly lint "$OPENAPI_FILE" --config .redocly.yml
+          else
+            npx redocly lint "$OPENAPI_FILE"
+          fi
