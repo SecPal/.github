@@ -30,10 +30,22 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Install OpenAPI linter
-        run: npm install -g @redocly/cli
+      - name: Install dependencies
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+          else
+            npm install -g @redocly/cli
+          fi
 
       - name: Validate OpenAPI specification
         env:
           OPENAPI_FILE: ${{ inputs.openapi-file }}
-        run: redocly lint "$OPENAPI_FILE"
+        run: |
+          if [ -f "package.json" ] && grep -q "\"lint\"" package.json; then
+            npm run lint
+          elif [ -f ".redocly.yaml" ] || [ -f ".redocly.yml" ]; then
+            npx redocly lint "$OPENAPI_FILE" --config .redocly.yaml 2>/dev/null || npx redocly lint "$OPENAPI_FILE" --config .redocly.yml || redocly lint "$OPENAPI_FILE"
+          else
+            npx redocly lint "$OPENAPI_FILE" || redocly lint "$OPENAPI_FILE"
+          fi

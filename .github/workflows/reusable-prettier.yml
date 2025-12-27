@@ -30,10 +30,20 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Install Prettier
-        run: npm install -g prettier
+      - name: Install dependencies
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+          else
+            npm install -g prettier
+          fi
 
       - name: Run Prettier Check
         env:
           FILES: ${{ inputs.files }}
-        run: prettier --check "$FILES"
+        run: |
+          if [ -f "package.json" ] && grep -q "\"format:check\"" package.json; then
+            npm run format:check
+          else
+            npx prettier --check "$FILES" || prettier --check "$FILES"
+          fi
