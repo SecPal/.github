@@ -49,6 +49,7 @@ What are the positive and negative outcomes?
 What other options did we evaluate?
 
 1. **Option 1:** Description
+
    - Pro: ...
    - Contra: ...
 
@@ -80,6 +81,8 @@ Examples:
 ### Accepted
 
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27
+- [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24
+- [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19
 - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11
 - [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08
 

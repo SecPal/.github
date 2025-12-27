@@ -442,7 +442,7 @@ class LeadershipLevelHelper
 
 ### RBAC Architecture: Two Independent Operations
 
-**⚠️ UPDATED (2025-12-27):** Operation 1 (LeadershipLevel CRUD) was **removed** in Epic #399. Management levels are now direct integer values (0-255) without a separate definition table. See [ADR-010](20251227-simplify-management-level-to-integer-field.md).
+**⚠️ UPDATED (2025-12-27):** Operation 1 (LeadershipLevel CRUD) was **removed** in Epic #399. Management levels are now direct integer values (0-255) without a separate definition table. See [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md).
 
 **CRITICAL:** Management levels have **NO inherent permission implications**. A user's own management level does NOT grant or restrict any permissions. All access control is explicit via Spatie permissions.
 
