@@ -48,7 +48,7 @@ jobs:
       - name: Setup Node.js for Octokit
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Octokit dependencies
         run: npm install @octokit/core
@@ -318,7 +318,7 @@ jobs:
       - name: Setup Node.js for Octokit
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Octokit dependencies
         run: npm install @octokit/core
@@ -493,7 +493,7 @@ jobs:
       - name: Setup Node.js for Octokit
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Octokit dependencies
         run: npm install @octokit/core
