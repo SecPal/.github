@@ -104,7 +104,7 @@ The script automatically detects repository type:
 - **org**: `.github` repository (org-wide instructions)
 - **api**: Laravel API (has `artisan`, `composer.json`)
 - **frontend**: React frontend (has `package.json` with `vite`)
-- **contracts**: OpenAPI contracts (has `package.json` with `openapi`)
+- **contracts**: OpenAPI contracts (has `package.json` with `openapi` or `docs/openapi.yaml`)
 
 ## Adding New Scripts
 

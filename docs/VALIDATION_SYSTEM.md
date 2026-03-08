@@ -191,7 +191,7 @@ Similar to api, detects via `package.json` with `vite`
 
 ### contracts Repository (OpenAPI)
 
-Similar to api, detects via `package.json` with `openapi`
+Similar to api, detects via `package.json` with `openapi` or `docs/openapi.yaml`
 
 ## Integration Points
 

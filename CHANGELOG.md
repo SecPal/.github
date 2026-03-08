@@ -40,6 +40,22 @@ capture review findings, turn them into persistent lessons, and promote repeated
 - Open PRs can be scanned automatically on a schedule instead of relying on manual execution
 - Scheduled runs generate less artifact noise while still keeping review exports available when findings exist
 
+## 2026-03-08 - Fix Copilot Instruction Validator For Runtime Model
+
+**Fixed:**
+
+- **`scripts/validate-copilot-instructions.sh`** now validates the current self-contained runtime model instead of obsolete `@EXTENDS` and org-reminder assumptions
+- Added checks for runtime-model wording, active-instruction frontmatter, and pseudo-inheritance marker removal
+
+**Why:**
+
+The validator still enforced the old pseudo-inheritance approach even though the active repositories now rely on repo-local, self-contained instruction files.
+
+**Impact:**
+
+- Local and CI validation now match the actual Copilot instruction architecture
+- False positives from outdated `@EXTENDS` and org-reminder checks are removed
+
 ## 2026-03-08 - Harden Copilot Instructions for Multi-Repo Workspace
 
 **Changed:**
