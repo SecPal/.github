@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: GitHub Workflow Rules
 description: Applies workflow and Dependabot rules to GitHub automation files in this repo.
-applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/dependabot.yml,.github/dependabot.yaml"
+applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/dependabot.yml,.github/dependabot.yaml,workflow-templates/**/*.yml,workflow-templates/**/*.yaml,EXAMPLE_workflow_for_other_repos.yml"
 ---
 
 # GitHub Actions & Workflow Rules

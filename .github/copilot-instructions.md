@@ -45,17 +45,17 @@ All checks passed. Proceeding with commit.
 
 ## Repository Structure
 
-See `copilot-config.yaml:multi_repo` for complete structure and inheritance rules.
+See `copilot-config.yaml:multi_repo` for complete structure and repository mapping rules.
 
 ```text
 SecPal Organization:
 ├── .github/     - Organization-wide settings (base rules)
-├── api/         - Laravel backend (extends base + DDEV/Pest rules)
-├── frontend/    - React/TypeScript frontend (extends base + PWA rules)
-└── contracts/   - OpenAPI 3.1 specifications (extends base + contract-first rules)
+├── api/         - Laravel backend (keeps repo-local copies of org rules + DDEV/Pest rules)
+├── frontend/    - React/TypeScript frontend (keeps repo-local copies of org rules + PWA rules)
+└── contracts/   - OpenAPI 3.1 specifications (keeps repo-local copies of org rules + contract-first rules)
 ```
 
-**Inheritance:** Repository-specific rules override organization-wide for non-critical rules. Critical rules ALWAYS apply across all repos.
+**Repository precedence model:** Repository-specific rules override organization-wide for non-critical rules. Critical rules ALWAYS apply across all repos.
 
 ## AI Autonomy & Critical Thinking
 
