@@ -21,14 +21,14 @@ print_result() {
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
     if [ "$status" = "PASS" ]; then
-        echo -e "${GREEN}✓${NC} $test_name"
+        printf '%b✓%b %s\n' "$GREEN" "$NC" "$test_name"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         return
     fi
 
-    echo -e "${RED}✗${NC} $test_name"
+    printf '%b✗%b %s\n' "$RED" "$NC" "$test_name"
     if [ -n "$message" ]; then
-        echo -e "  ${YELLOW}→${NC} $message"
+        printf '  %b→%b %s\n' "$YELLOW" "$NC" "$message"
     fi
     FAILED_TESTS=$((FAILED_TESTS + 1))
 }
@@ -44,7 +44,7 @@ detect_repo_type() {
         return
     fi
 
-    if [ -f "docs/openapi.yaml" ]; then
+    if [ -f "docs/openapi.yaml" ] || { [ -f "package.json" ] && grep -q "openapi" package.json 2>/dev/null; }; then
         echo "contracts"
         return
     fi
@@ -160,22 +160,25 @@ test_critical_rules() {
 }
 
 test_instruction_frontmatter() {
-    local files
+    local file
+    local found=0
+    local message
 
-    files=$(find .github/instructions -type f -name '*.instructions.md' 2>/dev/null || true)
-    if [ -z "$files" ]; then
-        print_result "instruction files expose frontmatter" "PASS" "Skipped (no file-based instructions present)"
+    while IFS= read -r -d '' file; do
+        found=1
+        if ! head -n 10 "$file" | grep -q '^applyTo:' || ! head -n 10 "$file" | grep -q '^name:'; then
+            printf -v message 'Missing name/applyTo in %s' "$file"
+            print_result "instruction files include required frontmatter" "FAIL" "$message"
+            return
+        fi
+    done < <(find .github/instructions -type f -name '*.instructions.md' -print0 2>/dev/null)
+
+    if [ "$found" -eq 0 ]; then
+        print_result "instruction files include required frontmatter" "PASS" "Skipped (no file-based instructions present)"
         return
     fi
 
-    while IFS= read -r file; do
-        if ! head -n 10 "$file" | grep -q '^applyTo:' || ! head -n 10 "$file" | grep -q '^name:'; then
-            print_result "instruction files expose frontmatter" "FAIL" "Missing name/applyTo in $file"
-            return
-        fi
-    done <<< "$files"
-
-    print_result "instruction files expose frontmatter" "PASS"
+    print_result "instruction files include required frontmatter" "PASS"
 }
 
 main() {
@@ -211,11 +214,11 @@ main() {
     echo ""
 
     if [ "$FAILED_TESTS" -eq 0 ]; then
-        echo -e "${GREEN}✓ All tests passed!${NC}"
+            printf '%b✓ All tests passed!%b\n' "$GREEN" "$NC"
         exit 0
     fi
 
-    echo -e "${RED}✗ Some tests failed${NC}"
+        printf '%b✗ Some tests failed%b\n' "$RED" "$NC"
     exit 1
 }
 

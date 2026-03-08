@@ -54,7 +54,7 @@ The validator still enforced the old pseudo-inheritance approach even though the
 **Impact:**
 
 - Local and CI validation now match the actual Copilot instruction architecture
-- False negatives from outdated `@EXTENDS` and org-reminder checks are removed
+- False positives from outdated `@EXTENDS` and org-reminder checks are removed
 
 ## 2026-03-08 - Harden Copilot Instructions for Multi-Repo Workspace
 
