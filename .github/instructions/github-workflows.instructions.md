@@ -40,9 +40,11 @@ Applies when editing GitHub Actions workflows, Dependabot configs, and YAML conf
 
 - Org-wide reusable workflows live in `workflow-templates/` and `.github/workflows/reusable-*.yml`
 - Consume them via:
+
   ```yaml
   uses: SecPal/.github/.github/workflows/reusable-<name>.yml@main
   ```
+
 - Check `EXAMPLE_workflow_for_other_repos.yml` for reference patterns before writing a new workflow
 
 ## `continue-on-error`
