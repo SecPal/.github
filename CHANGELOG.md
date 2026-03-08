@@ -18,11 +18,13 @@ Chronological log of notable changes to SecPal organization defaults.
   - Exports thread reports in Markdown or JSON
   - Generates durable lessons artifacts that can outlive a single chat session
   - Scans open non-draft PRs across multiple SecPal repositories in one run
+  - Aggregates machine-readable finding exports into recurring categories and syncs durable tracking issues
   - Resolves review threads via GraphQL without using comment replies
   - Validates CLI arguments, supports `--max-prs`, and warns when GitHub pagination truncates exports
 - **`docs/copilot-review-automation.md`** - operational guide for using review artifacts as durable memory and promoting repeated findings into instructions, hooks, lint rules, tests, and CI
 - **`.github/workflows/copilot-review-memory.yml`** - scheduled artifact export for unresolved Copilot findings across `api`, `frontend`, `contracts`, and `.github`
 - **`package.json` scripts** for `copilot:review:threads`, `copilot:review:lessons`, `copilot:review:scan`, and `copilot:review:resolve`
+- Persistent category-tracking issues in `SecPal/.github` once recurring findings cross the configured threshold
 - Scheduled organization-level workflow runs that export unresolved Copilot findings as workflow artifacts
 - Package metadata and lockfile names were aligned for consistent `npm` behavior
 
@@ -37,6 +39,7 @@ capture review findings, turn them into persistent lessons, and promote repeated
 - Copilot review handling no longer depends on manual GraphQL one-offs
 - Lessons learned can be persisted as repo-owned artifacts instead of vanishing with a session
 - Repeated Copilot findings can be converted into enforceable rules faster
+- Recurring review categories now survive PR closure through durable tracking issues
 - Open PRs can be scanned automatically on a schedule instead of relying on manual execution
 - Scheduled runs generate less artifact noise while still keeping review exports available when findings exist
 

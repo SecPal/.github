@@ -7,6 +7,7 @@
     "copilot:review:threads": "./scripts/copilot-review-tool.sh threads",
     "copilot:review:lessons": "./scripts/copilot-review-tool.sh lessons",
     "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
+    "copilot:review:track": "./scripts/copilot-review-tool.sh track",
     "copilot:review:resolve": "./scripts/copilot-review-tool.sh resolve"
   },
   "repository": {

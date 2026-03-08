@@ -24,6 +24,7 @@ Use [scripts/copilot-review-tool.sh](../scripts/copilot-review-tool.sh).
 - `threads`: export Copilot review threads for one PR
 - `lessons`: turn one PR's findings into a durable lessons file
 - `scan`: walk open non-draft PRs across multiple repositories
+- `track`: aggregate exported findings by category and create or update durable tracking issues
 - `resolve`: resolve review threads without posting comments
 
 ## Preferred Non-Manual Path
@@ -40,6 +41,11 @@ It uploads a workflow artifact containing:
 - `summary.md`
 - one `threads` report per matching PR
 - one `lessons` report per matching PR
+- one `findings.jsonl` export per matching PR for machine-readable aggregation
+- `tracking.md` with the issue-sync result for recurring categories
+
+It also creates or updates persistent tracking issues in `SecPal/.github` once a category crosses the configured repetition threshold.
+Those issues keep the category visible after the originating PRs are closed or merged.
 
 ## Local Usage
 
@@ -51,6 +57,15 @@ It uploads a workflow artifact containing:
   --repo SecPal/.github \
   --state unresolved \
   --output-dir tmp/copilot-review-memory
+
+./scripts/copilot-review-tool.sh track \
+  --repo SecPal/.github \
+  --input-dir tmp/copilot-review-memory \
+  --threshold 2 \
+  --label enhancement \
+  --label developer-experience \
+  --label config-infrastructure \
+  --dry-run
 ```
 
 For single PR work:
@@ -69,3 +84,5 @@ If the same Copilot finding appears repeatedly, it should stop living only in ar
 2. `.github/instructions/*.instructions.md`
 3. hooks or validators
 4. tests or CI
+
+The persistent tracking issue is the bridge between short-lived review artifacts and those stronger guardrails.
