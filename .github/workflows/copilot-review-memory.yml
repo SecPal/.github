@@ -5,7 +5,7 @@ name: Copilot Review Memory
 
 on:
   schedule:
-    - cron: "23 * * * *"
+    - cron: "23 5 * * *"
   workflow_dispatch:
   pull_request_review:
     types:
@@ -34,6 +34,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Export unresolved Copilot findings
+        id: scan
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -43,9 +44,14 @@ jobs:
             --repo SecPal/contracts \
             --repo SecPal/.github \
             --state unresolved \
+            --max-prs 25 \
             --output-dir artifacts/copilot-review-memory
 
+          match_count=$(find artifacts/copilot-review-memory -name 'pr-*-threads.md' | wc -l | tr -d ' ')
+          echo "match_count=$match_count" >> "$GITHUB_OUTPUT"
+
       - name: Upload review memory artifact
+        if: steps.scan.outputs.match_count != '0'
         uses: actions/upload-artifact@v4
         with:
           name: copilot-review-memory-${{ github.run_id }}
@@ -53,4 +59,10 @@ jobs:
           if-no-files-found: error
 
       - name: Publish workflow summary
-        run: cat artifacts/copilot-review-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          cat artifacts/copilot-review-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.scan.outputs.match_count }}" = "0" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "No unresolved Copilot review findings matched this run." >> "$GITHUB_STEP_SUMMARY"
+          fi

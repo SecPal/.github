@@ -11,7 +11,7 @@ usage() {
 Usage:
   scripts/copilot-review-tool.sh threads --repo OWNER/REPO --pr NUMBER [--state unresolved|resolved|all] [--format json|markdown] [--output FILE]
   scripts/copilot-review-tool.sh lessons --repo OWNER/REPO --pr NUMBER [--state unresolved|resolved|all] [--output FILE]
-  scripts/copilot-review-tool.sh scan --repo OWNER/REPO [--repo OWNER/REPO ...] [--state unresolved|resolved|all] [--output-dir DIR]
+    scripts/copilot-review-tool.sh scan --repo OWNER/REPO [--repo OWNER/REPO ...] [--state unresolved|resolved|all] [--max-prs NUMBER] [--output-dir DIR]
   scripts/copilot-review-tool.sh resolve --thread-id ID [--thread-id ID ...]
 EOF
 }
@@ -19,6 +19,43 @@ EOF
 need() {
     command -v "$1" >/dev/null 2>&1 || {
         echo "Missing required command: $1" >&2
+        exit 1
+    }
+}
+
+require_value() {
+    local option_name="$1"
+    local option_value="${2:-}"
+
+    if [[ -z "$option_value" || "$option_value" == --* ]]; then
+        echo "Option $option_name requires a value" >&2
+        exit 1
+    fi
+}
+
+validate_state() {
+    case "$1" in
+        unresolved|resolved|all) ;;
+        *)
+            echo "Invalid --state value: $1" >&2
+            exit 1
+            ;;
+    esac
+}
+
+validate_format() {
+    case "$1" in
+        json|markdown) ;;
+        *)
+            echo "Invalid --format value: $1" >&2
+            exit 1
+            ;;
+    esac
+}
+
+validate_max_prs() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]] || {
+        echo "Invalid --max-prs value: $1" >&2
         exit 1
     }
 }
@@ -76,6 +113,7 @@ fetch_threads_json() {
     local repo="$1"
     local pr_number="$2"
     local query
+    local response
 
     split_repo "$repo"
     query=$(cat <<'EOF'
@@ -83,12 +121,18 @@ query($owner:String!, $name:String!, $number:Int!) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
       reviewThreads(first:100) {
+                pageInfo {
+                    hasNextPage
+                }
         nodes {
           id
           isResolved
           path
           line
           comments(first:20) {
+                        pageInfo {
+                            hasNextPage
+                        }
             nodes {
               author { login }
               body
@@ -103,15 +147,24 @@ query($owner:String!, $name:String!, $number:Int!) {
 EOF
 )
 
-    PAGER=cat GH_PAGER=cat gh api graphql \
+    response="$(PAGER=cat GH_PAGER=cat gh api graphql \
         -F owner="$REPO_OWNER" \
         -F name="$REPO_NAME" \
         -F number="$pr_number" \
-        -f query="$query"
+        -f query="$query")"
+
+    if printf '%s' "$response" | jq -e '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage or any(.data.repository.pullRequest.reviewThreads.nodes[]?; .comments.pageInfo.hasNextPage)' >/dev/null; then
+        echo "Warning: Copilot review export for $repo PR #$pr_number was truncated by GitHub pagination limits." >&2
+    fi
+
+    printf '%s\n' "$response"
 }
 
 list_open_prs_json() {
-    PAGER=cat GH_PAGER=cat gh pr list --repo "$1" --state open --limit 100 --json number,title,url,isDraft
+    local repo="$1"
+    local max_prs="$2"
+
+    PAGER=cat GH_PAGER=cat gh pr list --repo "$repo" --state open --limit "$max_prs" --json number,title,url,isDraft
 }
 
 filter_threads() {
@@ -229,10 +282,11 @@ render_lessons_markdown() {
 scan_repo() {
     local repo="$1"
     local state="$2"
-    local output_dir="$3"
+    local max_prs="$3"
+    local output_dir="$4"
     local pr_list repo_dir total found summary
 
-    pr_list="$(list_open_prs_json "$repo")"
+    pr_list="$(list_open_prs_json "$repo" "$max_prs")"
     repo_dir="$output_dir/$(repo_slug "$repo")"
     total="$(printf '%s' "$pr_list" | jq 'map(select(.isDraft == false)) | length')"
     found=0
@@ -295,11 +349,11 @@ command_threads() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --repo) repo="$2"; shift 2 ;;
-            --pr) pr_number="$2"; shift 2 ;;
-            --state) state="$2"; shift 2 ;;
-            --format) format="$2"; shift 2 ;;
-            --output) output_file="$2"; shift 2 ;;
+            --repo) require_value "$1" "${2:-}"; repo="$2"; shift 2 ;;
+            --pr) require_value "$1" "${2:-}"; pr_number="$2"; shift 2 ;;
+            --state) require_value "$1" "${2:-}"; state="$2"; validate_state "$state"; shift 2 ;;
+            --format) require_value "$1" "${2:-}"; format="$2"; validate_format "$format"; shift 2 ;;
+            --output) require_value "$1" "${2:-}"; output_file="$2"; shift 2 ;;
             *) echo "Unknown option for threads: $1" >&2; usage; exit 1 ;;
         esac
     done
@@ -315,10 +369,10 @@ command_lessons() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --repo) repo="$2"; shift 2 ;;
-            --pr) pr_number="$2"; shift 2 ;;
-            --state) state="$2"; shift 2 ;;
-            --output) output_file="$2"; shift 2 ;;
+            --repo) require_value "$1" "${2:-}"; repo="$2"; shift 2 ;;
+            --pr) require_value "$1" "${2:-}"; pr_number="$2"; shift 2 ;;
+            --state) require_value "$1" "${2:-}"; state="$2"; validate_state "$state"; shift 2 ;;
+            --output) require_value "$1" "${2:-}"; output_file="$2"; shift 2 ;;
             *) echo "Unknown option for lessons: $1" >&2; usage; exit 1 ;;
         esac
     done
@@ -329,13 +383,14 @@ command_lessons() {
 }
 
 command_scan() {
-    local repos=() state="unresolved" output_dir="copilot-review-memory" summary
+    local repos=() state="unresolved" max_prs="100" output_dir="copilot-review-memory" summary
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --repo) repos+=("$2"); shift 2 ;;
-            --state) state="$2"; shift 2 ;;
-            --output-dir) output_dir="$2"; shift 2 ;;
+            --repo) require_value "$1" "${2:-}"; repos+=("$2"); shift 2 ;;
+            --state) require_value "$1" "${2:-}"; state="$2"; validate_state "$state"; shift 2 ;;
+            --max-prs) require_value "$1" "${2:-}"; max_prs="$2"; validate_max_prs "$max_prs"; shift 2 ;;
+            --output-dir) require_value "$1" "${2:-}"; output_dir="$2"; shift 2 ;;
             *) echo "Unknown option for scan: $1" >&2; usage; exit 1 ;;
         esac
     done
@@ -350,7 +405,7 @@ command_scan() {
 
     for repo in "${repos[@]}"; do
         summary+=$'\n\n'
-        summary+="$(scan_repo "$repo" "$state" "$output_dir")"
+        summary+="$(scan_repo "$repo" "$state" "$max_prs" "$output_dir")"
     done
 
     printf '%s\n' "$summary" >"$output_dir/summary.md"
@@ -362,7 +417,7 @@ command_resolve() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --thread-id) thread_ids+=("$2"); shift 2 ;;
+            --thread-id) require_value "$1" "${2:-}"; thread_ids+=("$2"); shift 2 ;;
             *) echo "Unknown option for resolve: $1" >&2; usage; exit 1 ;;
         esac
     done
