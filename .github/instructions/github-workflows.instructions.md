@@ -18,22 +18,25 @@ Applies when editing GitHub Actions workflows, Dependabot configs, and YAML conf
       timeout-minutes: 15
   ```
 
-- Set **explicit permissions** on every workflow (principle of least privilege):
+- Set **explicit permissions** on every workflow (principle of least privilege). Start with the minimal baseline and add scopes only when a specific job requires them:
 
   ```yaml
   permissions:
     contents: read
-    pull-requests: write
+    # Add more granular permissions (e.g., pull-requests: write) only when required by specific jobs
   ```
 
-- **Pin external actions to full SHA**, not floating tags:
+- **Pin external actions to a specific version**. Prefer full commit SHAs for third-party actions; for GitHub-maintained actions (`actions/*`), pinning to a major version tag is acceptable in this repo (Dependabot keeps them up to date):
 
   ```yaml
-  # ✅ Good — pinned to SHA
-  uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  # ✅ Recommended for third-party actions — pinned to full SHA
+  uses: some-org/some-action@11bd71901bbe5b1630ceea73d27597364c9af683 # v1.2.3
 
-  # ❌ Bad — floating tag, can be hijacked
-  uses: actions/checkout@v4
+  # ✅ Also acceptable in this repo for GitHub-maintained actions
+  uses: actions/checkout@v4  # tracked by Dependabot
+
+  # ❌ Bad — floating tag on third-party action, can be hijacked
+  uses: some-org/some-action@main
   ```
 
 ## Reusable Workflows
