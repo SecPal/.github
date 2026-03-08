@@ -9,6 +9,37 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-08 - Automate Copilot Review Memory
+
+**Added:**
+
+- **`scripts/copilot-review-tool.sh`** - CLI automation for the Copilot review workflow
+  - Fetches Copilot review threads from a PR via GraphQL
+  - Exports thread reports in Markdown or JSON
+  - Generates durable lessons artifacts that can outlive a single chat session
+  - Scans open non-draft PRs across multiple SecPal repositories in one run
+  - Resolves review threads via GraphQL without using comment replies
+  - Validates CLI arguments, supports `--max-prs`, and warns when GitHub pagination truncates exports
+- **`docs/copilot-review-automation.md`** - operational guide for using review artifacts as durable memory and promoting repeated findings into instructions, hooks, lint rules, tests, and CI
+- **`.github/workflows/copilot-review-memory.yml`** - scheduled artifact export for unresolved Copilot findings across `api`, `frontend`, `contracts`, and `.github`
+- **`package.json` scripts** for `copilot:review:threads`, `copilot:review:lessons`, `copilot:review:scan`, and `copilot:review:resolve`
+- Scheduled organization-level workflow runs that export unresolved Copilot findings as workflow artifacts
+- Package metadata and lockfile names were aligned for consistent `npm` behavior
+
+**Why:**
+
+Private agent memory cannot be written safely from repository automation.
+The maintainable alternative is to automate the durable parts of the process:
+capture review findings, turn them into persistent lessons, and promote repeated issues into deterministic guardrails.
+
+**Impact:**
+
+- Copilot review handling no longer depends on manual GraphQL one-offs
+- Lessons learned can be persisted as repo-owned artifacts instead of vanishing with a session
+- Repeated Copilot findings can be converted into enforceable rules faster
+- Open PRs can be scanned automatically on a schedule instead of relying on manual execution
+- Scheduled runs generate less artifact noise while still keeping review exports available when findings exist
+
 ## 2026-03-08 - Harden Copilot Instructions for Multi-Repo Workspace
 
 **Changed:**
@@ -603,28 +634,6 @@ jobs:
 #### Documentation & Governance
 
 - Initial repository structure and governance documentation
-- `README.md` with project overview and setup instructions
-- `CONTRIBUTING.md` with detailed contribution guidelines
-- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1)
-- `SECURITY.md` with vulnerability disclosure process and security policies
-- `LICENSE` files for AGPL-3.0-or-later, CC0-1.0, and MIT
-- `copilot-instructions.md` with comprehensive development guidelines (1,218 lines)
-  - Core Development Philosophy (6 non-negotiable principles)
-  - Versioning & Release Strategy (Semantic Versioning 2.0.0)
-  - Licensing Strategy with dependency compatibility matrix
-  - Dependency Management strategy (Dependabot configuration)
-  - Repository Visibility policy (Public by default)
-  - Local vs CI Quality Gate Enforcement (3-stage gates)
-  - PR Size & Scope Discipline ("One PR = One Topic" rule)
-  - Branch Protection Rules and merge strategy
-
-#### Templates
-
-- Pull Request template with quality checklist and "One PR = One Topic" enforcement
-- 5 Issue Templates:
-  - Bug Report (structured, severity-based)
-  - Feature Request (with priority assessment)
-  - Documentation (improvement tracking)
   - Security (responsible disclosure workflow)
   - Config/Infrastructure (build, CI/CD, dependencies)
 - Issue template configuration (`.github/ISSUE_TEMPLATE/config.yml`)

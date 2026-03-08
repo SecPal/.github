@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: CC0-1.0
+
+name: Copilot Review Memory
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+  pull_request_review:
+    types:
+      - submitted
+
+permissions:
+  contents: read
+
+jobs:
+  export-review-memory:
+    name: Export Copilot review memory
+    if: github.event_name != 'pull_request_review' || github.event.review.user.login == 'copilot-pull-request-reviewer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: SecPal
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Export unresolved Copilot findings
+        id: scan
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          ./scripts/copilot-review-tool.sh scan \
+            --repo SecPal/api \
+            --repo SecPal/frontend \
+            --repo SecPal/contracts \
+            --repo SecPal/.github \
+            --state unresolved \
+            --max-prs 25 \
+            --output-dir artifacts/copilot-review-memory
+
+          match_count=$(find artifacts/copilot-review-memory -name 'pr-*-threads.md' | wc -l | tr -d ' ')
+          echo "match_count=$match_count" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review memory artifact
+        if: steps.scan.outputs.match_count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-review-memory-${{ github.run_id }}
+          path: artifacts/copilot-review-memory
+          if-no-files-found: error
+
+      - name: Publish workflow summary
+        run: |
+          cat artifacts/copilot-review-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.scan.outputs.match_count }}" = "0" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "No unresolved Copilot review findings matched this run." >> "$GITHUB_STEP_SUMMARY"
+          fi
