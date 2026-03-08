@@ -9,6 +9,32 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-08 - Automate Copilot Review Lessons Workflow
+
+**Added:**
+
+- **`scripts/copilot-review-tool.sh`** - CLI automation for the Copilot review workflow
+  - Fetches Copilot review threads from a PR via GraphQL
+  - Exports thread reports in Markdown or JSON
+  - Generates durable lessons artifacts that can outlive a single chat session
+  - Resolves review threads via GraphQL without using comment replies
+- **`docs/copilot-review-automation.md`** - operational guide for using review artifacts as durable memory and promoting repeated findings into instructions, hooks, lint rules, tests, and CI
+- **`package.json` scripts** for `copilot:review:threads`, `copilot:review:lessons`, and `copilot:review:resolve`
+
+**Why:**
+
+Private agent memory cannot be written safely from repository automation.
+The maintainable alternative is to automate the durable parts of the process:
+capture review findings, turn them into persistent lessons, and promote repeated issues into deterministic guardrails.
+
+**Impact:**
+
+- Copilot review handling no longer depends on manual GraphQL one-offs
+- Lessons learned can be persisted as repo-owned artifacts instead of vanishing with a session
+- Repeated Copilot findings can be converted into enforceable rules faster
+
+---
+
 ## 2026-03-08 - Harden Copilot Instructions for Multi-Repo Workspace
 
 **Changed:**

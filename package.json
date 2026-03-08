@@ -1,9 +1,13 @@
 {
-  "name": ".github",
+  "name": "secpal-github-config",
   "version": "1.0.0",
   "description": "SecPal organization-wide documentation and settings",
   "private": true,
-  "scripts": {},
+  "scripts": {
+    "copilot:review:threads": "./scripts/copilot-review-tool.sh threads",
+    "copilot:review:lessons": "./scripts/copilot-review-tool.sh lessons",
+    "copilot:review:resolve": "./scripts/copilot-review-tool.sh resolve"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SecPal/.github.git"
