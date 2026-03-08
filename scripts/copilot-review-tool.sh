@@ -54,9 +54,12 @@ validate_format() {
     esac
 }
 
-validate_max_prs() {
-    [[ "$1" =~ ^[1-9][0-9]*$ ]] || {
-        echo "Invalid --max-prs value: $1" >&2
+validate_positive_integer() {
+    local option_name="$1"
+    local value="$2"
+
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+        echo "Invalid ${option_name} value: ${value} (must be a positive integer)" >&2
         exit 1
     }
 }
@@ -232,7 +235,15 @@ load_findings_json() {
 }
 
 extract_tracker_state() {
-    perl -0ne 'if (/<!-- copilot-review-tracker-state:\s*(\{.*?\})\s*-->/s) { print $1 }' <<<"$1"
+    local extracted
+
+    extracted="$(perl -0ne 'if (/<!-- copilot-review-tracker-state:\s*(\{.*\})\s*-->/s) { print $1 } else { print "{}" }' <<<"$1")"
+    if printf '%s' "$extracted" | jq -e . >/dev/null 2>&1; then
+        printf '%s\n' "$extracted"
+        return
+    fi
+
+    printf '{}\n'
 }
 
 build_tracker_state() {
@@ -707,7 +718,7 @@ command_scan() {
         case "$1" in
             --repo) require_value "$1" "${2:-}"; repos+=("$2"); shift 2 ;;
             --state) require_value "$1" "${2:-}"; state="$2"; validate_state "$state"; shift 2 ;;
-            --max-prs) require_value "$1" "${2:-}"; max_prs="$2"; validate_max_prs "$max_prs"; shift 2 ;;
+            --max-prs) require_value "$1" "${2:-}"; max_prs="$2"; validate_positive_integer "--max-prs" "$max_prs"; shift 2 ;;
             --output-dir) require_value "$1" "${2:-}"; output_dir="$2"; shift 2 ;;
             *) echo "Unknown option for scan: $1" >&2; usage; exit 1 ;;
         esac
@@ -739,7 +750,7 @@ command_track() {
         case "$1" in
             --repo) require_value "$1" "${2:-}"; tracking_repo="$2"; shift 2 ;;
             --input-dir) require_value "$1" "${2:-}"; input_dir="$2"; shift 2 ;;
-            --threshold) require_value "$1" "${2:-}"; threshold="$2"; validate_max_prs "$threshold"; shift 2 ;;
+            --threshold) require_value "$1" "${2:-}"; threshold="$2"; validate_positive_integer "--threshold" "$threshold"; shift 2 ;;
             --label) require_value "$1" "${2:-}"; labels+=("$2"); shift 2 ;;
             --run-url) require_value "$1" "${2:-}"; run_url="$2"; shift 2 ;;
             --output) require_value "$1" "${2:-}"; output_file="$2"; shift 2 ;;

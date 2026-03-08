@@ -23,7 +23,7 @@ Chronological log of notable changes to SecPal organization defaults.
   - Validates CLI arguments, supports `--max-prs`, and warns when GitHub pagination truncates exports
 - **`docs/copilot-review-automation.md`** - operational guide for using review artifacts as durable memory and promoting repeated findings into instructions, hooks, lint rules, tests, and CI
 - **`.github/workflows/copilot-review-memory.yml`** - scheduled artifact export for unresolved Copilot findings across `api`, `frontend`, `contracts`, and `.github`
-- **`package.json` scripts** for `copilot:review:threads`, `copilot:review:lessons`, `copilot:review:scan`, and `copilot:review:resolve`
+- **`package.json` scripts** for `copilot:review:threads`, `copilot:review:lessons`, `copilot:review:scan`, `copilot:review:resolve`, and `copilot:review:track`
 - Persistent category-tracking issues in `SecPal/.github` once recurring findings cross the configured threshold
 - Scheduled organization-level workflow runs that export unresolved Copilot findings as workflow artifacts
 - Package metadata and lockfile names were aligned for consistent `npm` behavior
