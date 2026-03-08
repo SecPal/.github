@@ -9,6 +9,25 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-08 - Fix Copilot Instructions Frontmatter
+
+**Fixed:**
+
+- **YAML frontmatter in `.instructions.md` files:** Replaced HTML comment blocks (invisible
+  to VS Code) with proper YAML frontmatter (`---`) in `backend.instructions.md` and
+  `frontend.instructions.md` so that `applyTo` is actually parsed and path-scoped rule
+  matching works as intended.
+- **Updated notes:** Changed "Copy to repo when created" text to point at the existing
+  per-repo `copilot-instructions.md` files.
+
+**Impact:**
+
+- VS Code Copilot now correctly loads these instruction files when editing files in the
+  `.github (org)` workspace root.
+- `applyTo: "**"` ensures all files in the org root benefit from org-wide context.
+
+---
+
 ## 2025-11-23 - Fix Dependabot Auto-Merge Job Timeout
 
 **Fixed:**

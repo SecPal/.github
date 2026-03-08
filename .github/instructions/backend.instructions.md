@@ -1,29 +1,15 @@
-<!--
-SPDX-FileCopyrightText: 2025 SecPal
-SPDX-License-Identifier: AGPL-3.0-or-later
--->
+---
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+applyTo: "**"
+---
 
 # Backend Instructions (Laravel/PHP)
 
 > **Note:** These instructions are organization-level defaults from `SecPal/.github`.
-> Copy to `SecPal/backend/.github/copilot-instructions.md` when backend repo is created.
+> Repo-specific rules live in `api/.github/copilot-instructions.md`.
 
 **Applies to:** `app/**`, `routes/**`, `database/**`, `tests/**`, `docs/openapi.yaml`
-
-## Path-Scoped Rules (Preflight Integration)
-
-<!--
-These rules can be activated for local preflight checks in backend repo:
-
-applyTo:
-  - "app/**"
-  - "docs/openapi.yaml"
-
-rules:
-  - "Eloquent: eager loading required; avoid N+1."
-  - "Validation via FormRequests; API output via Resources/DTO."
-  - "Document migrations with a rollback plan."
--->
 
 ## Architecture
 

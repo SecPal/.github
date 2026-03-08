@@ -1,29 +1,15 @@
-<!--
-SPDX-FileCopyrightText: 2025 SecPal
-SPDX-License-Identifier: AGPL-3.0-or-later
--->
+---
+# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+applyTo: "**"
+---
 
 # Frontend Instructions (React/TypeScript)
 
 > **Note:** These instructions are organization-level defaults from `SecPal/.github`.
-> Copy to `SecPal/frontend/.github/copilot-instructions.md` when frontend repo is created.
+> Repo-specific rules live in `frontend/.github/copilot-instructions.md`.
 
 **Applies to:** `src/**`, `apps/**`, `packages/**`, `*.tsx`, `*.ts`
-
-## Path-Scoped Rules (Preflight Integration)
-
-<!--
-These rules can be activated for local preflight checks in frontend repo:
-
-applyTo:
-  - "src/**"
-  - "apps/**"
-  - "packages/ui/**"
-
-rules:
-  - "React + TS; check accessibility (a11y); provide Storybook stories for new components."
-  - "API access: RTK/TanStack Query; types from the OpenAPI generator."
--->
 
 ## Architecture
 
