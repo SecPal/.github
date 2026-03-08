@@ -1,7 +1,9 @@
 ---
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
-applyTo: "**/*.yml,**/*.yaml"
+name: GitHub Workflow Rules
+description: Applies workflow and Dependabot rules to GitHub automation files in this repo.
+applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/dependabot.yml,.github/dependabot.yaml"
 ---
 
 # GitHub Actions & Workflow Rules

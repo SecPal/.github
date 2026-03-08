@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2025 SecPal -->
+<!-- SPDX-FileCopyrightText: 2026 SecPal -->
 <!-- SPDX-License-Identifier: CC0-1.0 -->
 
 # Changelog
@@ -9,31 +9,26 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
-## 2026-03-08 - Restructure Copilot Instructions for Multi-Repo Workspace
+## 2026-03-08 - Harden Copilot Instructions for Multi-Repo Workspace
 
 **Changed:**
 
-- **Removed** `backend.instructions.md` and `frontend.instructions.md` from
-  `.github/instructions/` — these files contained per-repo content (Laravel, React) that
-  never applied here (wrong workspace root) and duplicated rules already in `api/.github/`
-  and `frontend/.github/`.
-- **Added** `github-workflows.instructions.md` with `applyTo: "**/*.yml,**/*.yaml"` — rules
-  that actually apply when editing GitHub Actions workflows and Dependabot configs in this
-  org root (timeout-minutes, pinned SHAs, explicit permissions, yamllint, etc.).
+- **Clarified** `.github/copilot-instructions.md` runtime semantics — this file is authoritative only inside the `.github` repository itself and does not automatically inherit into sibling repos.
+- **Scoped** `.github/instructions/github-workflows.instructions.md` to GitHub automation files only with `applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/dependabot.yml,.github/dependabot.yaml"`.
+- **Aligned companion repo layouts** in `api/`, `frontend/`, and `contracts/` to use self-contained `.github/copilot-instructions.md` files plus targeted `.github/instructions/*.instructions.md` overlays.
 
 **Why:**
 
 VS Code Copilot only loads `.instructions.md` files from the **active workspace root**.
-Since `SecPal/.github` is a separate git repo opened as its own workspace folder, backend/
-frontend rules are irrelevant here — they belong exclusively in `api/.github/` and
-`frontend/.github/`. Adding org-shared principles to those repos (see companion PRs in
-`SecPal/api` and `SecPal/frontend`) is the correct approach for cross-repo rule inheritance.
+Since `SecPal/.github` is a separate git repo opened as its own workspace folder, sibling
+repository rules are not inherited at runtime. Self-contained repo-local instruction files
+are the reliable way to keep organization principles and repository-specific guidance active.
 
 **Impact:**
 
-- No more dead/misleading instructions when editing CI workflows
-- `github-workflows.instructions.md` provides relevant guidance for workflow editing
-- `applyTo: "**/*.yml,**/*.yaml"` ensures it only activates for YAML/workflow files
+- No more reliance on comment-based pseudo-inheritance across repositories
+- Repo-local instruction baselines are explicit and predictable in `api/`, `frontend/`, and `contracts/`
+- Workflow rules now activate only for workflow and Dependabot files instead of all YAML files
 
 ---
 

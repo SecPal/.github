@@ -1,11 +1,17 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # SecPal Copilot Instructions
 
 Organization-wide defaults for all SecPal repositories.
+
+## Runtime Application Model
+
+- This file is authoritative when working inside the `.github` repository itself.
+- Other repositories do not automatically inherit this file at runtime from comments or pseudo-extends markers.
+- For reliable behavior, each working repository must keep a self-contained `.github/copilot-instructions.md` and any needed `.github/instructions/*.instructions.md` files locally.
 
 **⚡ FAST REFERENCE:** Use `.github/copilot-config.yaml` for 10x faster AI parsing. YAML is Single Source of Truth.
 
