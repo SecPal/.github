@@ -9,6 +9,34 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-08 - Restructure Copilot Instructions for Multi-Repo Workspace
+
+**Changed:**
+
+- **Removed** `backend.instructions.md` and `frontend.instructions.md` from
+  `.github/instructions/` — these files contained per-repo content (Laravel, React) that
+  never applied here (wrong workspace root) and duplicated rules already in `api/.github/`
+  and `frontend/.github/`.
+- **Added** `github-workflows.instructions.md` with `applyTo: "**/*.yml,**/*.yaml"` — rules
+  that actually apply when editing GitHub Actions workflows and Dependabot configs in this
+  org root (timeout-minutes, pinned SHAs, explicit permissions, yamllint, etc.).
+
+**Why:**
+
+VS Code Copilot only loads `.instructions.md` files from the **active workspace root**.
+Since `SecPal/.github` is a separate git repo opened as its own workspace folder, backend/
+frontend rules are irrelevant here — they belong exclusively in `api/.github/` and
+`frontend/.github/`. Adding org-shared principles to those repos (see companion PRs in
+`SecPal/api` and `SecPal/frontend`) is the correct approach for cross-repo rule inheritance.
+
+**Impact:**
+
+- No more dead/misleading instructions when editing CI workflows
+- `github-workflows.instructions.md` provides relevant guidance for workflow editing
+- `applyTo: "**/*.yml,**/*.yaml"` ensures it only activates for YAML/workflow files
+
+---
+
 ## 2025-11-23 - Fix Dependabot Auto-Merge Job Timeout
 
 **Fixed:**
