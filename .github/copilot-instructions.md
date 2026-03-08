@@ -1,11 +1,17 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # SecPal Copilot Instructions
 
 Organization-wide defaults for all SecPal repositories.
+
+## Runtime Application Model
+
+- This file is authoritative when working inside the `.github` repository itself.
+- Other repositories do not automatically inherit this file at runtime from comments or pseudo-extends markers.
+- For reliable behavior, each working repository must keep a self-contained `.github/copilot-instructions.md` and any needed `.github/instructions/*.instructions.md` files locally.
 
 **⚡ FAST REFERENCE:** Use `.github/copilot-config.yaml` for 10x faster AI parsing. YAML is Single Source of Truth.
 
@@ -39,17 +45,17 @@ All checks passed. Proceeding with commit.
 
 ## Repository Structure
 
-See `copilot-config.yaml:multi_repo` for complete structure and inheritance rules.
+See `copilot-config.yaml:multi_repo` for complete structure and repository mapping rules.
 
 ```text
 SecPal Organization:
 ├── .github/     - Organization-wide settings (base rules)
-├── api/         - Laravel backend (extends base + DDEV/Pest rules)
-├── frontend/    - React/TypeScript frontend (extends base + PWA rules)
-└── contracts/   - OpenAPI 3.1 specifications (extends base + contract-first rules)
+├── api/         - Laravel backend (keeps repo-local copies of org rules + DDEV/Pest rules)
+├── frontend/    - React/TypeScript frontend (keeps repo-local copies of org rules + PWA rules)
+└── contracts/   - OpenAPI 3.1 specifications (keeps repo-local copies of org rules + contract-first rules)
 ```
 
-**Inheritance:** Repository-specific rules override organization-wide for non-critical rules. Critical rules ALWAYS apply across all repos.
+**Repository precedence model:** Repository-specific rules override organization-wide for non-critical rules. Critical rules ALWAYS apply across all repos.
 
 ## AI Autonomy & Critical Thinking
 
