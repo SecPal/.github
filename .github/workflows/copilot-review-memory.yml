@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload review memory artifact
         if: steps.scan.outputs.match_count != '0'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: copilot-review-memory-${{ github.run_id }}
           path: artifacts/copilot-review-memory
