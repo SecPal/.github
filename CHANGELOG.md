@@ -9,6 +9,21 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-15 - Refresh Stale Product Examples In Development Principles
+
+**Changed:**
+
+- Replaced deleted feature-specific controller, component, hook, and fail-fast examples in `docs/development-principles.md` with current customer-oriented examples
+
+**Why:**
+
+The organization guidance should not teach patterns using a product feature that has already been removed from the active SecPal repositories.
+
+**Impact:**
+
+- Documentation examples now match the current product direction
+- New contributors are less likely to reintroduce deleted feature vocabulary into fresh code
+
 ## 2026-03-08 - Automate Copilot Review Memory
 
 **Added:**

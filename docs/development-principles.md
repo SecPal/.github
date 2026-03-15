@@ -420,7 +420,7 @@ Controller → Service → Repository → Model
 
 ```typescript
 // ✅ Validate at entry point
-function createSecret(data: CreateSecretDto): Secret {
+function createCustomer(data: CreateCustomerDto): Customer {
   // Validation happens in DTO/Schema, controller never receives invalid data
 }
 
@@ -430,17 +430,17 @@ function processUser(user: User): void {
 }
 
 // ✅ Guard clauses (fail early in method)
-function updateSecret(secret: Secret, data: UpdateData): Secret {
-  if (secret.isExpired()) {
-    throw new SecretExpiredException("Cannot update expired secret");
+function updateCustomer(customer: Customer, data: UpdateData): Customer {
+  if (!customer.isEditable()) {
+    throw new CustomerLockedException("Cannot update an archived customer");
   }
 
-  if (!this.canUserEdit(secret)) {
-    throw new UnauthorizedException("User cannot edit this secret");
+  if (!this.canUserEdit(customer)) {
+    throw new UnauthorizedException("User cannot edit this customer");
   }
 
   // Now safe to proceed
-  return secret.update(data);
+  return customer.update(data);
 }
 ```
 
@@ -476,15 +476,15 @@ function updateSecret(secret: Secret, data: UpdateData): Secret {
 ```typescript
 // ✅ Multi-layer security
 @UseGuards(AuthGuard, PermissionGuard) // Middleware layer
-@Controller("secrets")
-class SecretsController {
+@Controller("customers")
+class CustomersController {
   @Post()
   async create(
-    @Body() data: CreateSecretDto, // Input validation layer
+    @Body() data: CreateCustomerDto, // Input validation layer
     @CurrentUser() user: User
   ) {
-    this.authService.authorize(user, "secrets.create"); // Policy layer
-    return await this.secretsService.create(user, data);
+    this.authService.authorize(user, "customers.create"); // Policy layer
+    return await this.customersService.create(user, data);
   }
 }
 ```
@@ -503,14 +503,14 @@ class SecretsController {
 
 **Examples:**
 
-| Framework      | Convention                            | Example                                |
-| -------------- | ------------------------------------- | -------------------------------------- |
-| **Laravel**    | Models singular, tables plural        | `User` model → `users` table           |
-| **Laravel**    | Foreign keys: `{model}_id`            | `user_id`, `tenant_id`                 |
-| **Laravel**    | Controllers plural                    | `UsersController`, `SecretsController` |
-| **React**      | Components PascalCase                 | `UserProfile.tsx`, `SecretList.tsx`    |
-| **React**      | Hooks start with `use`                | `useAuth()`, `useSecrets()`            |
-| **TypeScript** | Interfaces with `I` prefix (optional) | `IUserRepository`                      |
+| Framework      | Convention                            | Example                                  |
+| -------------- | ------------------------------------- | ---------------------------------------- |
+| **Laravel**    | Models singular, tables plural        | `User` model → `users` table             |
+| **Laravel**    | Foreign keys: `{model}_id`            | `user_id`, `tenant_id`                   |
+| **Laravel**    | Controllers plural                    | `UsersController`, `CustomersController` |
+| **React**      | Components PascalCase                 | `UserProfile.tsx`, `CustomerList.tsx`    |
+| **React**      | Hooks start with `use`                | `useAuth()`, `useCustomers()`            |
+| **TypeScript** | Interfaces with `I` prefix (optional) | `IUserRepository`                        |
 
 ---
 
