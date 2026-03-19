@@ -9,6 +9,21 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-19 - Align Laravel Version References With Current Runtime
+
+**Changed:**
+
+- Updated organization-level backend stack references from Laravel 12 to Laravel 13 in the active Copilot guidance and changelog narrative
+
+**Why:**
+
+The API runtime has already been upgraded to Laravel 13, so organization and repository guidance should not continue advertising the old framework baseline.
+
+**Impact:**
+
+- Cross-repo guidance now matches the current Laravel baseline
+- Future repo maintenance is less likely to reintroduce stale Laravel 12 wording into active documentation
+
 ## 2026-03-15 - Refresh Stale Product Examples In Development Principles
 
 **Changed:**
