@@ -9,6 +9,22 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-20 - Replace DDEV Runtime Assumptions In Copilot Guidance
+
+**Changed:**
+
+- Updated organization-level Copilot instructions and YAML guidance to describe the API backend as a native PHP runtime instead of a DDEV-only environment
+- Replaced DDEV-specific command examples in the machine-readable backend guidance with direct shell, SSH, and log access guidance that fits the current VPS workflow
+
+**Why:**
+
+SecPal API development now runs directly on the VPS in a full server environment. Organization guidance should not keep telling agents to use container wrappers that are no longer part of the active workflow.
+
+**Impact:**
+
+- Cross-repo AI guidance now matches the real backend runtime and command surface
+- Agents are less likely to suggest `ddev exec`, `ddev ssh`, or DDEV-only tooling when operating on the API repository remotely
+
 ## 2026-03-19 - Align Laravel Version References With Current Runtime
 
 **Changed:**
