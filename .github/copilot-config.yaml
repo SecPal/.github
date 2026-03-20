@@ -28,7 +28,7 @@ multi_repo:
         extends: ".github/copilot-config.yaml"
         override_allowed: true
         specific_rules:
-          - "DDEV-specific commands (ddev exec)"
+          - "Native PHP shell commands in local or remote SSH environments"
           - "Pest testing framework (never PHPUnit directly)"
           - "Data protection (GDPR encryption patterns)"
 
@@ -585,8 +585,8 @@ stack:
     framework: Laravel
     framework_version: "13.x"
     testing: Pest # EXCLUSIVE: Only Pest, never PHPUnit directly
-    test_runner: "ddev exec php artisan test"
-    development_environment: DDEV
+    test_runner: "php artisan test"
+    development_environment: "Native PHP shell (local or remote over SSH)"
     database: PostgreSQL 16
 
   frontend:
@@ -609,7 +609,7 @@ stack:
 testing:
   backend:
     framework: Pest
-    runner: "ddev exec php artisan test"
+    runner: "php artisan test"
     coverage_minimum: 80
     coverage_critical: 100
     patterns:
@@ -653,7 +653,7 @@ validation:
     actionlint: "actionlint"
 
   tests:
-    backend: "ddev exec php artisan test"
+    backend: "php artisan test"
     backend_local: "php artisan test"
     frontend: "npm test"
 
@@ -662,12 +662,12 @@ validation:
     frontend: "npm run lint"
 
   development:
-    start: "ddev start"
-    stop: "ddev stop"
-    exec: "ddev exec <command>"
-    ssh: "ddev ssh"
-    logs: "ddev logs"
-    mailpit: "http://localhost:8026 (DDEV Mailpit UI)"
+    start: "Use the repo-native dev entrypoint, for example composer run dev"
+    stop: "Stop the active dev server or relevant service manager process"
+    exec: "Run commands directly in the active shell"
+    ssh: "ssh <user>@<host>"
+    logs: "tail -f storage/logs/laravel.log or the relevant service logs"
+    mail_testing: "Use the mail sink configured for the active environment; do not assume Mailpit is present"
 
 # Data Protection (GDPR/DSGVO)
 data_protection:

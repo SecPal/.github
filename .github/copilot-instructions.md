@@ -50,7 +50,7 @@ See `copilot-config.yaml:multi_repo` for complete structure and repository mappi
 ```text
 SecPal Organization:
 ├── .github/     - Organization-wide settings (base rules)
-├── api/         - Laravel backend (keeps repo-local copies of org rules + DDEV/Pest rules)
+├── api/         - Laravel backend (keeps repo-local copies of org rules + native PHP/Pest runtime rules)
 ├── frontend/    - React/TypeScript frontend (keeps repo-local copies of org rules + PWA rules)
 └── contracts/   - OpenAPI 3.1 specifications (keeps repo-local copies of org rules + contract-first rules)
 ```
@@ -226,13 +226,13 @@ If bypass REQUIRED (production down):
 
 See `copilot-config.yaml:stack` for complete technology details.
 
-**Backend:** PHP 8.4, Laravel 13, DDEV (use `ddev exec`), Pest testing (NEVER PHPUnit directly), PostgreSQL 16
+**Backend:** PHP 8.4, Laravel 13, native PHP shell usage (local or remote over SSH), Pest testing (NEVER PHPUnit directly), PostgreSQL 16
 
 **Frontend:** Node 22.x, React, TypeScript (strict), Vite, Vitest + React Testing Library
 
 **API:** OpenAPI 3.1, REST, JSON, Bearer tokens, URL versioning (`/api/v1/`, `/api/v2/`)
 
-**Database:** PostgreSQL 16 (via DDEV), Laravel migrations (MUST be reversible)
+**Database:** PostgreSQL 16, Laravel migrations (MUST be reversible)
 
 ### Data Protection (GDPR/DSGVO)
 
