@@ -244,6 +244,6 @@ public function scopeActive($query)
 ## References
 
 - Spatie Laravel-Permission: <https://github.com/spatie/laravel-permission>
-- Laravel Authorization: <https://laravel.com/docs/12.x/authorization>
+- Laravel Authorization: <https://laravel.com/docs/13.x/authorization>
 - Temporal Role Patterns: Martin Fowler's "Temporal Patterns" (enterprise patterns)
 - GDPR Access Control Requirements: <https://gdpr-info.eu/art-32-gdpr/>

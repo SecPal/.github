@@ -226,7 +226,7 @@ If bypass REQUIRED (production down):
 
 See `copilot-config.yaml:stack` for complete technology details.
 
-**Backend:** PHP 8.4, Laravel 12, DDEV (use `ddev exec`), Pest testing (NEVER PHPUnit directly), PostgreSQL 16
+**Backend:** PHP 8.4, Laravel 13, DDEV (use `ddev exec`), Pest testing (NEVER PHPUnit directly), PostgreSQL 16
 
 **Frontend:** Node 22.x, React, TypeScript (strict), Vite, Vitest + React Testing Library
 
