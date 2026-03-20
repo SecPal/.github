@@ -14,6 +14,8 @@ Chronological log of notable changes to SecPal organization defaults.
 **Changed:**
 
 - Updated organization-level backend stack references from Laravel 12 to Laravel 13 in the active Copilot guidance and changelog narrative
+- Updated `copilot-config.yaml:stack.backend.framework_version` from `12.x` to `13.x` (YAML Single Source of Truth)
+- Updated Laravel authorization doc link in `docs/adr/20251108-rbac-spatie-temporal-extension.md` from `12.x` to `13.x`
 
 **Why:**
 
@@ -22,6 +24,7 @@ The API runtime has already been upgraded to Laravel 13, so organization and rep
 **Impact:**
 
 - Cross-repo guidance now matches the current Laravel baseline
+- `copilot-config.yaml` (machine-readable YAML, primary source for AI tooling) now consistently reflects Laravel 13
 - Future repo maintenance is less likely to reintroduce stale Laravel 12 wording into active documentation
 
 ## 2026-03-15 - Refresh Stale Product Examples In Development Principles

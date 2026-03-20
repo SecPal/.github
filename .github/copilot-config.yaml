@@ -583,7 +583,7 @@ stack:
     language: PHP
     version: "8.4"
     framework: Laravel
-    framework_version: "12.x"
+    framework_version: "13.x"
     testing: Pest # EXCLUSIVE: Only Pest, never PHPUnit directly
     test_runner: "ddev exec php artisan test"
     development_environment: DDEV
