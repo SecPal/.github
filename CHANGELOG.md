@@ -9,6 +9,23 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-22 - Remove Stale DDEV Assumptions From Governance Docs
+
+**Changed:**
+
+- Replaced DDEV-specific API coverage commands in `CONTRIBUTING.md` with direct `php artisan test` examples
+- Updated the system requirements guide and helper script to describe the API runtime as native PHP, remove DDEV as a requirement, and add SSH-friendly guidance for remote execution
+
+**Why:**
+
+Issue #255 correctly identified that organization-level docs and helper scripts were still steering contributors toward a DDEV workflow that no longer matches the active API runtime.
+
+**Impact:**
+
+- Contributors and agents now see API setup guidance that matches the direct shell and SSH-based workflow used by the current Laravel runtime
+- The system requirements script no longer reports DDEV as a mandatory API dependency
+- Coverage and troubleshooting examples no longer suggest DDEV-only commands
+
 ## 2026-03-22 - Enforce Branch Hygiene Before Local Work Starts
 
 **Changed:**

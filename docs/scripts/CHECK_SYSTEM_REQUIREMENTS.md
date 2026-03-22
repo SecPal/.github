@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal Contributors
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -48,22 +48,22 @@ The `check-system-requirements.sh` script validates that all required tools and 
 - Git user.email - critical
 - GPG commit signing - recommended
 
-### 2. API Repository (Laravel + PHP + DDEV)
+### 2. API Repository (Laravel + Native PHP Runtime)
 
 **PHP & Composer:**
 
 - PHP 8.4+ - critical
 - Composer 2.x - critical
 
-**DDEV (Development Environment):**
+**Runtime Access:**
 
-- DDEV installed - critical for API development
-- DDEV running - warning if not started
+- Native PHP runtime available locally or on the target VPS over SSH
+- Direct `php artisan` and `composer` commands preferred
 
 **PostgreSQL:**
 
-- Provided via DDEV
-- No local PostgreSQL installation needed
+- Provided by the target environment or remote service
+- No local PostgreSQL installation needed when using the VPS workflow
 
 **Local Dependencies (api/vendor):**
 
@@ -102,8 +102,7 @@ The `check-system-requirements.sh` script validates that all required tools and 
 
 - GitHub CLI (`gh`)
 - pre-commit framework
-- Docker (for DDEV)
-- Docker Compose (for DDEV)
+- OpenSSH client (`ssh`) for remote API runtime access
 
 ## Exit Codes
 
@@ -133,7 +132,7 @@ For a completely new system:
 # 2. Install missing tools (follow hints from script)
 
 # 3. Install repository-specific dependencies
-cd ../api && composer install && ddev start
+cd ../api && composer install
 cd ../frontend && npm install
 cd ../contracts && npm install
 
@@ -152,13 +151,14 @@ The script can be used in CI pipelines:
 
 ## Special Considerations
 
-### DDEV in API Repository
+### Native API Runtime
 
-The API repository uses **DDEV** as development environment. This is an important distinction:
+The API repository uses a **native PHP runtime**. Workflows should be compatible with local shells and the VPS runtime over SSH:
 
-- DDEV manages PHP, PostgreSQL and other services
-- All Laravel commands must be executed via `ddev exec`
-- Example: `ddev exec php artisan test`
+- Run Laravel commands directly with `php artisan`
+- Run dependency management directly with `composer`
+- Use an SSH session when the active runtime is hosted remotely
+- Example: `php artisan test`
 
 ### Multi-Repo Structure
 
@@ -178,8 +178,6 @@ Each repository has its own dependencies and quality gates.
 ```bash
 cd ../api
 composer install
-# or with DDEV:
-ddev composer install
 ```
 
 ### "node_modules/ directory not found"
@@ -189,11 +187,12 @@ cd ../frontend  # or ../contracts
 npm install
 ```
 
-### "DDEV is installed but not running"
+### "API runtime is remote"
 
 ```bash
-cd ../api
-ddev start
+ssh <user>@<host>
+cd /path/to/api
+php artisan test
 ```
 
 ### "GPG commit signing not configured"
