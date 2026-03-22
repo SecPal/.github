@@ -1,6 +1,6 @@
-# GitHub Advanced Security Setup for SecPal
+# GitHub Advanced Security Baseline for SecPal
 
-Quick-start guide for enabling GHAS in new repositories.
+Quick-start guide for configuring and auditing the organization-wide GitHub security baseline.
 
 ## 🎯 Setup Workflow (when repo exists)
 
@@ -8,8 +8,25 @@ Quick-start guide for enabling GHAS in new repositories.
 
 ```bash
 gh api -X PATCH repos/SecPal/{REPO_NAME} \
-  -f security_and_analysis='{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}'
+  -f allow_auto_merge=true \
+  -f security_and_analysis='{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"},"dependabot_security_updates":{"status":"enabled"}}'
 ```
+
+### Baseline Settings
+
+Apply these defaults to every SecPal repository unless a documented exception exists:
+
+- `allow_auto_merge=true` so Dependabot auto-merge workflows can actually enable GitHub auto-merge
+- `secret_scanning=enabled`
+- `secret_scanning_push_protection=enabled`
+- `dependabot_security_updates=enabled`
+- label baseline synced from [docs/labels.md](./labels.md), including `github-actions`
+- active `Copilot review for default branch` ruleset on the default branch
+
+The following features are currently reviewed separately and are not part of the required baseline for every repository:
+
+- `secret_scanning_non_provider_patterns`
+- `secret_scanning_validity_checks`
 
 ### 2️⃣ **Generate CodeQL Workflow**
 
@@ -24,26 +41,29 @@ gh workflow init codeql -R SecPal/{REPO_NAME}
 
 See [Dependabot Template](#-dependabot-template) below.
 
-## 📋 Planned Repositories
+## Repository Classes
 
-### **React Frontend** (not yet created)
+### **React Frontend / Tooling Repositories**
 
-- **Stack**: React, TypeScript
+- **Examples**: `frontend`, `android`, `.github`, `secpal.app`
+- **Stack**: React, TypeScript, Astro, shell, workflows
 - **CodeQL**: `javascript-typescript`
 - **Extras**: npm audit, ESLint Security Plugin
 
-### **Laravel Backend** (not yet created)
+### **Laravel Backend**
 
+- **Example**: `api`
 - **Stack**: Laravel, PHP 8.4, PostgreSQL
 - **CodeQL**: ⚠️ **NOT SUPPORTED** - PHP is not supported by CodeQL
 - **Alternatives**: Use PHPStan (level: max), Psalm, or Semgrep for static analysis
 - **Extras**: Composer audit, Laravel Pint (code style)
 
-### **OpenAPI Service** (not yet created)
+### **OpenAPI Contracts Repository**
 
-- **Stack**: TBD (Node.js/Python/Go)
-- **CodeQL**: Language-dependent
-- **Extras**: OpenAPI Spec Validation (Spectral OWASP)
+- **Example**: `contracts`
+- **Stack**: OpenAPI 3.1, Node.js tooling
+- **CodeQL**: Optional, depending on whether repository-owned code justifies code scanning
+- **Extras**: OpenAPI spec validation, dependency review, and workflow hardening
 
 ## 🔒 What CodeQL Detects (Language-specific)
 
@@ -139,6 +159,10 @@ gh api repos/SecPal/{REPO_NAME}/branches/main/protection \
 - `required_approving_review_count=0`: Single maintainer project, automated checks provide quality gates
 - Required status checks: Adjust based on repository type (CodeQL for JS/TS only, not for PHP)
 
+### Copilot Review Ruleset
+
+Standardize the `Copilot review for default branch` ruleset across repositories so the same review gate applies to each default branch.
+
 Or manually: **Settings → Branches → Add rule**
 
 ## 📊 Security Dashboard
@@ -154,6 +178,24 @@ After activation:
 - **Secret scanning** - Leaked Credentials
 - **Dependabot** - Vulnerable Dependencies
 - **Advisories** - CVE Database
+
+## Audit Commands
+
+Use these checks to confirm the live baseline instead of relying on stale snapshots:
+
+```bash
+gh api repos/SecPal/{REPO_NAME} --jq '{
+  allow_auto_merge,
+  secret_scanning: .security_and_analysis.secret_scanning.status,
+  push_protection: .security_and_analysis.secret_scanning_push_protection.status,
+  dependabot_security_updates: .security_and_analysis.dependabot_security_updates.status,
+  non_provider_patterns: .security_and_analysis.secret_scanning_non_provider_patterns.status,
+  validity_checks: .security_and_analysis.secret_scanning_validity_checks.status
+}'
+
+gh api repos/SecPal/{REPO_NAME}/rulesets --jq '.[] | [.name, .enforcement] | @tsv'
+gh label list -R SecPal/{REPO_NAME} --limit 200
+```
 
 ## 🚀 Setup for New Repositories
 
@@ -199,6 +241,6 @@ See [Branch Protection section](#-branch-protection-recommended)
 
 ---
 
-**Status**: ✅ Ready for rollout when repositories are created
+**Status**: ✅ Active baseline for live repositories
 **Maintained by**: SecPal Security Team
-**Last Updated**: October 2025
+**Last Updated**: March 2026

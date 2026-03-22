@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
@@ -67,6 +67,7 @@ Labels used by automated tools and workflows.
 | Label               | Color   | Description                                             | Usage      |
 | ------------------- | ------- | ------------------------------------------------------- | ---------- |
 | `dependabot`        | #0366d6 | Pull requests created by Dependabot                     | PRs (auto) |
+| `github-actions`    | #0366d6 | Pull requests that update GitHub Actions workflows      | PRs (auto) |
 | `large-pr-approved` | #FFA500 | Approved large PR (boilerplate/templates, cannot split) | PRs        |
 
 ## Label Usage Guidelines
@@ -100,6 +101,7 @@ Labels: bug, security, priority: high
 - `breaking-change` if backward incompatible
 - `large-pr-approved` if > 600 lines and legitimate (see [CONTRIBUTING.md](../CONTRIBUTING.md#pr-size-limit))
 - `dependencies` (usually auto-added by Dependabot)
+- `github-actions` for GitHub Actions dependency updates
 
 **Example:**
 
@@ -213,6 +215,7 @@ Choose the **primary** type. If a PR is both `enhancement` and `documentation`, 
 
 - Initial label standards documentation
 - Defined 20 standard labels across 4 categories
+- Added `github-actions` to the automation label baseline
 - Created `large-pr-approved` for legitimate large PRs
 - Added label sync script
 

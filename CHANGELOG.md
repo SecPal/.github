@@ -9,6 +9,24 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-22 - Refresh Governance Baseline Docs For Live Repository State
+
+**Changed:**
+
+- Added the `github-actions` automation label to the organization label standard and label sync script
+- Updated the GHAS baseline guide to document the live required defaults for `allow_auto_merge`, secret scanning, push protection, Dependabot security updates, and the Copilot review ruleset
+- Replaced stale "planned repository" language in the GHAS guide with the current repository classes and added repeatable audit commands for checking live repository settings
+
+**Why:**
+
+The cross-repository governance drift report in Issue #254 was partly based on an older snapshot. The `.github` source documents should describe the current baseline clearly enough that future audits and label sync runs measure the intended state instead of outdated assumptions.
+
+**Impact:**
+
+- Label sync now includes the `github-actions` label expected by Dependabot configurations
+- Security baseline guidance now matches the live SecPal repository fleet instead of October 2025 rollout assumptions
+- Future governance audits can verify current settings with documented CLI commands instead of relying on stale issue text
+
 ## 2026-03-22 - Remove Stale DDEV Assumptions From Governance Docs
 
 **Changed:**
