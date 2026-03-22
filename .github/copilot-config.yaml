@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
 # GitHub Copilot Configuration (YAML Format)
@@ -244,6 +244,16 @@ development_principles:
 # Repository Policies
 policies:
   git:
+    default_base_branch: "main"
+    never_develop_on_main: true
+    start_of_work_protocol:
+      required: true
+      check_command: "git status --short --branch"
+      rules:
+        - "If the current branch is main: create or switch to a dedicated topic branch BEFORE any edit, file creation, or commit."
+        - "If a non-main branch already has uncommitted changes: verify they belong to the current task before continuing."
+        - "If existing changes are unrelated or ambiguous: STOP and ask whether to commit, stash, or split them before proceeding."
+        - "Never mix pre-existing unrelated changes with the current task in one branch or commit."
     commit_signing: required
     commit_message_format: "type(scope): description"
     branch_naming: "type/descriptive-name"
@@ -252,11 +262,30 @@ policies:
     test_coverage: 100 # percentage for critical paths
     code_review: required
     ci_checks: all_must_pass
+    tooling_warning_triage:
+      required: true
+      rule: "Warnings, audit findings, deprecation notices, and non-fatal diagnostics from scripts and package managers must be reviewed."
+      handling:
+        - "Fix them immediately when they are in scope and safely actionable."
+        - "If they are real but outside the current PR scope, create a GitHub issue immediately."
+        - "Do not ignore non-fatal warnings just because the command exit code is 0."
 
   licensing:
     primary: AGPL-3.0-or-later
     headers: SPDX
     compliance_tool: reuse
+    copyright_year_maintenance:
+      required_on_edit: true
+      applies_to:
+        - "SPDX-FileCopyrightText headers"
+        - "License files and sidecar license files when they are edited"
+      single_year_format: "YYYY"
+      range_format: "YYYY-YYYY"
+      rules:
+        - "If the existing first year is the current year, keep a single year only."
+        - "If an edited file still shows an earlier year, extend it to a range ending in the current calendar year."
+        - "Do not use spaces around the hyphen in SPDX year ranges."
+        - "If the edited file has no inline SPDX header but has a companion .license file, check and update the .license file instead."
 
   pr_workflow:
     one_topic: true
@@ -991,6 +1020,38 @@ enforcement_mechanisms:
 
 # Checklists (Single Source of Truth)
 checklists:
+  branch_hygiene:
+    description: "Execute before ANY edit, file creation, or other write action."
+    checks:
+      - id: branch-state-checked
+        title: Branch State Checked
+        items:
+          - "Ran git status --short --branch"
+          - "Current branch and local changes understood before work starts"
+        validation: "git status --short --branch"
+
+      - id: not-working-on-main
+        title: Not Working On Main
+        items:
+          - "Current work is NOT started on local main"
+          - "A dedicated topic branch exists before any write action"
+        validation: "Current branch is not main"
+
+      - id: dirty-branch-assessed
+        title: Existing Changes Assessed
+        items:
+          - "Uncommitted changes on the active branch were reviewed"
+          - "Existing changes belong to the same task, or work was paused"
+          - "If unrelated: user asked to commit, stash, or split work first"
+        validation: "Manual review of git status output"
+
+      - id: no-mixed-work
+        title: No Mixed Work
+        items:
+          - "No unrelated topics are being combined in one local branch"
+          - "No mixed commits caused by reusing a dirty branch"
+        validation: "Task scope review against branch contents"
+
   pre_commit:
     description: "Execute before EVERY commit. NO EXCEPTIONS."
     checks:
@@ -1030,6 +1091,15 @@ checklists:
           - "Error handling complete"
           - "No shortcuts taken"
         validation: "Self-review checklist completed"
+
+      - id: tooling-warnings-reviewed
+        title: Tooling Warnings Reviewed
+        items:
+          - "Warnings and notices from scripts were reviewed"
+          - "npm/composer/audit/deprecation notices were assessed"
+          - "In-scope findings were fixed immediately"
+          - "Out-of-scope but real findings were turned into GitHub issues"
+        validation: "Review command output and resulting fixes/issues"
 
       - id: english-only
         title: English Only Communication
@@ -1194,6 +1264,11 @@ checklists:
 
 # Workflow Mapping (When to use which checklist)
 workflows:
+  before_work:
+    description: "Mandatory branch hygiene check before any edit or write action"
+    checklists: ["branch_hygiene"]
+    mandatory: true
+
   before_commit:
     description: "Mandatory checks before git commit"
     checklists: ["pre_commit"]

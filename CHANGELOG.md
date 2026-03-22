@@ -9,6 +9,27 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-22 - Enforce Branch Hygiene Before Local Work Starts
+
+**Changed:**
+
+- Added an explicit pre-work branch hygiene workflow to the organization-level Copilot YAML and markdown instructions
+- Defined that AI must inspect `git status --short --branch` before edits, never start implementation on local `main`, and stop when an existing non-`main` branch already contains unrelated uncommitted changes
+- Added explicit SPDX year-maintenance guidance so edited files and license sidecars keep `SPDX-FileCopyrightText` at the current calendar year using `YYYY` or `YYYY-YYYY` without spaces as appropriate
+- Clarified that files without inline SPDX headers must use their companion `.license` files for the same year-maintenance rule
+- Added explicit warning-triage guidance so non-fatal diagnostics, audit findings, and deprecation notices must be reviewed and either fixed or tracked immediately
+
+**Why:**
+
+Branch protection on `main` only helps at merge and push time. It does not prevent local mixed work if an agent starts editing on `main` first and creates a topic branch only after hitting protection.
+
+**Impact:**
+
+- Agents now have a documented start-of-work rule instead of relying on branch protection alone
+- Dirty non-`main` branches must be assessed before new work continues, which reduces accidental mixed commits across topics
+- Edited governance files are less likely to keep stale copyright years after routine maintenance
+- Non-fatal tool warnings are less likely to be ignored just because a script still exits successfully
+
 ## 2026-03-20 - Replace DDEV Runtime Assumptions In Copilot Guidance
 
 **Changed:**

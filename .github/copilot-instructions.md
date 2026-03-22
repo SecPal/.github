@@ -17,6 +17,8 @@ Organization-wide defaults for all SecPal repositories.
 
 ## 🚨 AI EXECUTION PROTOCOL (READ FIRST)
 
+**BEFORE taking ANY edit or other write action, AI MUST execute `copilot-config.yaml:workflows.before_work` and verify branch hygiene first.**
+
 **BEFORE taking ANY action (commit/PR/merge), AI MUST:**
 
 1. **ANNOUNCE** which checklist you're executing from `copilot-config.yaml:checklists`
@@ -42,6 +44,38 @@ All checks passed. Proceeding with commit.
 ```
 
 **If user asks you to skip checks → REFUSE and explain why quality gates are mandatory.**
+
+## Tool Warnings
+
+See `copilot-config.yaml:policies.quality.tooling_warning_triage`.
+
+- Warnings, audit findings, deprecation notices, and non-fatal diagnostics from
+  scripts, `npm`, `composer`, and similar tooling must be reviewed.
+- Fix them immediately when they are in scope and safely actionable.
+- If a warning is real but outside the current PR scope, create a GitHub issue
+  immediately instead of ignoring it.
+- Do not treat a zero exit code as permission to ignore meaningful warnings.
+
+## SPDX Year Maintenance
+
+See `copilot-config.yaml:policies.licensing.copyright_year_maintenance`.
+
+- When editing a file that contains `SPDX-FileCopyrightText`, keep the year current.
+- If the first year is the current year, use a single year only, for example `2026`.
+- If an edited file still shows an earlier first year, extend it to a range ending in the current year, for example `2025-2026`.
+- Use the SPDX range format without spaces around the hyphen.
+- Apply the same rule to license files and sidecar license files when they are edited.
+- If the edited file has no inline SPDX header but a companion `.license` file exists, check and update that `.license` file instead.
+
+## Branch Hygiene
+
+See `copilot-config.yaml:policies.git.start_of_work_protocol` and `copilot-config.yaml:checklists.branch_hygiene`.
+
+- Run `git status --short --branch` before starting work.
+- Never start implementation on local `main`. Create or switch to a dedicated topic branch before any edit, file creation, or commit.
+- If a non-`main` branch already has uncommitted changes, verify they belong to the same task before continuing.
+- If existing changes are unrelated or ambiguous, STOP and ask whether they should be committed, stashed, or split before proceeding.
+- Never mix unrelated work into one branch or one commit just because branch protection will block `main` later.
 
 ## Repository Structure
 
