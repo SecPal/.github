@@ -64,11 +64,11 @@ Labels that describe the **current state** of an issue or PR.
 
 Labels used by automated tools and workflows.
 
-| Label               | Color   | Description                                             | Usage      |
-| ------------------- | ------- | ------------------------------------------------------- | ---------- |
-| `dependabot`        | #0366d6 | Pull requests created by Dependabot                     | PRs (auto) |
-| `github-actions`    | #0366d6 | Pull requests that update GitHub Actions workflows      | PRs (auto) |
-| `large-pr-approved` | #FFA500 | Approved large PR (boilerplate/templates, cannot split) | PRs        |
+| Label               | Color   | Description                                                    | Usage      |
+| ------------------- | ------- | -------------------------------------------------------------- | ---------- |
+| `dependabot`        | #0366d6 | Pull requests created by Dependabot                            | PRs (auto) |
+| `github-actions`    | #0366d6 | Pull requests that update GitHub Actions workflows             | PRs (auto) |
+| `large-pr-approved` | #FFA500 | Approved large PR (boilerplate/templates that cannot be split) | PRs        |
 
 ## Label Usage Guidelines
 
@@ -211,11 +211,14 @@ Choose the **primary** type. If a PR is both `enhancement` and `documentation`, 
 
 ## Change Log
 
+### 2026-03-22
+
+- Added `github-actions` to the automation label baseline
+
 ### 2025-10-25
 
 - Initial label standards documentation
-- Defined 20 standard labels across 4 categories
-- Added `github-actions` to the automation label baseline
+- Defined the standard label baseline across 4 categories
 - Created `large-pr-approved` for legitimate large PRs
 - Added label sync script
 

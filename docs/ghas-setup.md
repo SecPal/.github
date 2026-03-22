@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # GitHub Advanced Security Baseline for SecPal
 
 Quick-start guide for configuring and auditing the organization-wide GitHub security baseline.
@@ -21,7 +26,7 @@ Apply these defaults to every SecPal repository unless a documented exception ex
 - `secret_scanning_push_protection=enabled`
 - `dependabot_security_updates=enabled`
 - label baseline synced from [docs/labels.md](./labels.md), including `github-actions`
-- active `Copilot review for default branch` ruleset on the default branch
+- ensure an active `Copilot review for default branch` ruleset exists on the default branch for each repository
 
 The following features are currently reviewed separately and are not part of the required baseline for every repository:
 
@@ -163,7 +168,7 @@ gh api repos/SecPal/{REPO_NAME}/branches/main/protection \
 
 Standardize the `Copilot review for default branch` ruleset across repositories so the same review gate applies to each default branch.
 
-Or manually: **Settings → Branches → Add rule**
+Or manually: **Settings → Rules → Rulesets**
 
 ## 📊 Security Dashboard
 
