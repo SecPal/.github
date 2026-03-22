@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 # ============================================================================
@@ -178,11 +178,11 @@ else
 fi
 
 # ============================================================================
-# 2. API Repository Requirements (Laravel + PHP + DDEV)
+# 2. API Repository Requirements (Laravel + Native PHP Runtime)
 # ============================================================================
 
 if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "api" ]; then
-  print_header "2. API Repository (Laravel + PHP + DDEV)"
+  print_header "2. API Repository (Laravel + Native PHP Runtime)"
 
   print_section "PHP & Composer"
 
@@ -206,40 +206,13 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "api" ]; then
 
   check_command "composer" "Composer" "critical" "Install: https://getcomposer.org/download/"
 
-  print_section "DDEV (Development Environment)"
+  print_section "Runtime Access"
+  echo -e "${BLUE}ℹ${NC} API workflows use direct php artisan/composer commands"
+  echo -e "${BLUE}ℹ${NC} Use a local shell or an SSH session for the target VPS runtime"
 
-  # Check DDEV
-  if command -v ddev >/dev/null 2>&1; then
-    ddev_version=$(ddev version | head -n 1)
-    echo -e "${GREEN}✓${NC} DDEV: $ddev_version"
-    OK_COUNT=$((OK_COUNT + 1))
-
-    # Check if DDEV is running (only in api directory)
-    if [ -f "../api/.ddev/config.yaml" ]; then
-      if pushd "../api" >/dev/null 2>&1; then
-        if ddev describe >/dev/null 2>&1; then
-          echo -e "${GREEN}✓${NC} DDEV is running"
-          OK_COUNT=$((OK_COUNT + 1))
-        else
-          echo -e "${YELLOW}⚠${NC} DDEV is installed but not running"
-          echo -e "  ${YELLOW}→${NC} Run: cd api && ddev start"
-          WARNING_COUNT=$((WARNING_COUNT + 1))
-        fi
-        popd >/dev/null 2>&1
-      else
-        echo -e "${YELLOW}⚠${NC} Cannot access ../api directory"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
-      fi
-    fi
-  else
-    echo -e "${RED}✗${NC} DDEV ${RED}(REQUIRED for API development)${NC}"
-    echo -e "  ${YELLOW}→${NC} Install: https://ddev.readthedocs.io/en/stable/"
-    CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-  fi
-
-  print_section "PostgreSQL (via DDEV)"
-  echo -e "${BLUE}ℹ${NC} PostgreSQL is provided by DDEV"
-  echo -e "${BLUE}ℹ${NC} No local PostgreSQL installation needed"
+  print_section "PostgreSQL Access"
+  echo -e "${BLUE}ℹ${NC} PostgreSQL is provided by the target environment or remote service"
+  echo -e "${BLUE}ℹ${NC} No local PostgreSQL installation needed when using the VPS workflow"
 
   # Check API local dependencies
   if [ -d "../api" ]; then
@@ -443,8 +416,7 @@ print_header "5. Optional but Recommended Tools"
 
 check_command "gh" "GitHub CLI" "optional" "Install: https://cli.github.com/"
 check_command "pre-commit" "pre-commit framework" "optional" "Install: pip3 install pre-commit"
-check_command "docker" "Docker" "optional" "Required if using DDEV (auto-managed)"
-check_command "docker-compose" "Docker Compose" "optional" "Required if using DDEV (auto-managed)"
+check_command "ssh" "OpenSSH client" "optional" "Needed for remote API runtime access"
 
 # ============================================================================
 # Summary

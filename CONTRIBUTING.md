@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
@@ -290,10 +290,10 @@ SecPal uses [Codecov](https://codecov.io) for automated code coverage tracking a
 
 ```bash
 # Run tests with coverage
-ddev exec php artisan test --coverage-clover coverage.xml
+php artisan test --coverage-clover coverage.xml
 
 # View HTML report
-ddev exec php artisan test --coverage-html coverage-html/
+php artisan test --coverage-html coverage-html/
 open coverage-html/index.html
 ```
 
