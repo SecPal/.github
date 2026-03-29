@@ -350,7 +350,7 @@ See `copilot-config.yaml:checklists.review_passes` for complete passes with all 
 **Execute ALL 4 passes MULTIPLE TIMES before creating PR:**
 
 1. **Comprehensive Review:** Coding standards, documentation, tests, no TODOs
-2. **Deep Dive Review:** Domain policy (secpal.app/secpal.dev ONLY), licenses, security patterns
+2. **Deep Dive Review:** Domain policy (homepage on secpal.app, API on api.secpal.dev, PWA on app.secpal.dev, examples on secpal.dev), licenses, security patterns
 3. **Best Practices Review:** Hidden files, governance files, package.json metadata, OpenAPI completeness
 4. **Security Auditor Review:** Workflow permissions explicit, .gitignore complete, no secrets
 
@@ -458,14 +458,20 @@ See `copilot-config.yaml:domain_policy` for validation commands.
 
 **Use Cases:**
 
-- **secpal.app** → Production services, real APIs, **ALL emails** (including dev/test), official contact info
-- **secpal.dev** → Dev/staging infrastructure, testing, **examples**, OpenAPI specs, documentation examples
+- **secpal.app** → Public homepage, official website content, real email addresses, official contact info
+- **api.secpal.dev** → Live API host
+- **app.secpal.dev** → Live PWA/frontend host
+- **secpal.dev** → Dev/staging infrastructure, testing, **examples**, OpenAPI specs, documentation examples, and non-real example email addresses
+- **app.secpal.app** → Android application identifier only, never a deployable web domain
 
-**Allowed:** secpal.app (production/ALL emails) | secpal.dev (dev/examples/testing)
+**Allowed:** secpal.app (homepage/real emails) | api.secpal.dev (API) | app.secpal.dev (PWA) | secpal.dev (dev/examples) | app.secpal.app (Android identifier only)
+
+**Deprecated Web Hosts:** api.secpal.app, app.secpal.app
 
 **Forbidden:** secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, ANY other domain
 
-**Validation:** `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"` MUST return ONLY secpal.app and secpal.dev.
+**Validation:** Run `./scripts/check-domains.sh` as the canonical domain-policy check (matches preflight). For ad-hoc troubleshooting, `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"`
+can list all occurrences, but the script is authoritative for pass/fail.
 
 ## Learned Lessons
 
@@ -477,7 +483,7 @@ Execute 4 review passes with different perspectives before creating PR. Single-p
 
 ### 2. Domain Policy (CRITICAL - ZERO TOLERANCE)
 
-secpal.app and secpal.dev ONLY. Run grep before EVERY commit. ZERO exceptions.
+Use only the approved SecPal domains and identifiers. Run the domain-policy check before EVERY commit. ZERO exceptions.
 
 ### 3. Governance File Distribution
 

@@ -9,6 +9,14 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-29 - Align Cross-Repo Domain Policy With Active .dev Hosts
+
+**Changed:**
+
+- corrected the organization-wide domain policy text so `secpal.app` is limited to the public homepage and real email addresses, while `api.secpal.dev` and `app.secpal.dev` are the active API/PWA hosts and `app.secpal.app` remains Android identifier-only
+- updated the shared `check-domains.sh` guidance to flag deprecated `.app` web-host usage separately from valid Android identifier references
+- refreshed historical ADR and feature-requirement examples that still used `.secpal.app` subdomains as active tenant or employee web-host examples
+
 ## 2026-03-22 - Refresh Governance Baseline Docs For Live Repository State
 
 **Changed:**
@@ -665,7 +673,7 @@ jobs:
   - Repos: `api/`, `frontend/`, `contracts/` can override non-critical rules
   - Critical rules ALWAYS apply across all repos (TDD, 1 PR = 1 Topic, Signed Commits, REUSE, Domain Policy, Copilot Review Protocol)
   - Coordination: contracts/ FIRST, then api/frontend in parallel
-- **Domain Policy:** `domain_policy` section enforces secpal.app/secpal.dev ONLY (ZERO TOLERANCE)
+- **Domain Policy:** `domain_policy` section enforces the approved SecPal host split and rejects deprecated `.app` web-host usage (ZERO TOLERANCE)
 - **Bot PR Validation:** `bot_pr_validation` section codifies tech stack validation for bot-created PRs
 - **Learned Lessons as Policies:** `learned_lessons` section converts retrospectives into machine-readable policies
 - **🚨 CRITICAL: Copilot Review Protocol clarified:** `copilot_review.absolute_prohibition` section makes rule ultra-prominent

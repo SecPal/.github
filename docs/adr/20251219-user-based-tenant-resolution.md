@@ -166,7 +166,7 @@ This three-step approach ensures **zero-downtime deployment** for existing insta
 
 ### Alternative 1: Subdomain-Based Tenant Resolution
 
-**Approach:** Extract tenant from subdomain (e.g., `tenant1.secpal.app`)
+**Approach:** Extract tenant from subdomain (e.g., `tenant1.secpal.dev`)
 
 ```php
 // Extract subdomain
@@ -187,7 +187,7 @@ $tenantId = $tenant->id;
 
 **Cons:**
 
-- ❌ Requires DNS wildcard configuration (`*.secpal.app`)
+- ❌ Requires DNS wildcard configuration (`*.secpal.dev`)
 - ❌ Infrastructure complexity (SSL certificates per subdomain)
 - ❌ Cannot have users accessing multiple tenants
 - ❌ Breaks during local development (localhost subdomains)

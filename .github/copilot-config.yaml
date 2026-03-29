@@ -911,7 +911,7 @@ enforcement_mechanisms:
 
       recommended_additions:
         - name: "Domain Policy Check"
-          description: "Validate only secpal.app/secpal.dev used"
+          description: "Validate the approved SecPal domain split and reject deprecated .app web hosts"
           script: "./scripts/check-domains.sh (IMPLEMENTED in this PR)"
           blocks_merge: true
 
@@ -960,8 +960,7 @@ enforcement_mechanisms:
     scriptable_validations:
       - name: "Domain Policy Check"
         script_path: "./scripts/check-domains.sh"
-        command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh" | grep -v "secpal\.app\|secpal\.dev"'
-        expected_output: "Empty (no matches)"
+        command: "./scripts/check-domains.sh"
         integration: "Integrated in preflight.sh (this PR)"
         exit_on_failure: true
 
@@ -1177,8 +1176,8 @@ checklists:
         name: Deep Dive Review
         focus: "Domain and security compliance"
         checks:
-          - "Domain compliance: All URLs use secpal.app or secpal.dev"
-          - "All email addresses use @secpal.app (NO exceptions)"
+          - "Domain compliance: secpal.app stays the website domain, api.secpal.dev is the API host, app.secpal.dev is the PWA host, and deprecated api/app .app web hosts are absent"
+          - "Real email addresses use @secpal.app; non-real examples may use @secpal.dev"
           - "Licenses correct (check SPDX headers with reuse lint)"
           - "Security patterns present (input validation, error handling, auth)"
           - "No hardcoded secrets or credentials"
@@ -1294,24 +1293,40 @@ workflows:
 # Domain Policy (ZERO TOLERANCE)
 domain_policy:
   critical: true
-  production_domain: "secpal.app"
+  homepage_domain: "secpal.app"
+  api_domain: "api.secpal.dev"
+  frontend_domain: "app.secpal.dev"
   development_domain: "secpal.dev"
-  email_domain: "secpal.app" # ALL emails use this, including dev
+  real_email_domain: "secpal.app"
+  example_email_domain: "secpal.dev"
+  android_application_identifier: "app.secpal.app"
 
   # Use Case Rules
   use_cases:
     secpal_app:
-      - "Production services and APIs"
-      - "Real user-facing endpoints"
-      - "Email addresses (ALL, including dev/test)"
+      - "Public homepage and website content"
       - "Official contact information"
-      - "Production documentation references"
+      - "Real email addresses"
+    api_secpal_dev:
+      - "Live API host"
+      - "API deployment and operational examples"
+    app_secpal_dev:
+      - "Live PWA/frontend host"
+      - "Frontend deployment and SPA examples"
     secpal_dev:
       - "Development/staging infrastructure"
       - "Testing endpoints"
       - "Code examples and tutorials"
       - "OpenAPI specification examples"
       - "Documentation examples (non-production)"
+      - "Non-real example email addresses"
+    app_secpal_app:
+      - "Android application identifier only"
+      - "Android package, namespace, and Capacitor appId"
+
+  deprecated_web_hosts:
+    - "api.secpal.app"
+    - "app.secpal.app"
 
   forbidden_domains:
     - "secpal.com"
@@ -1319,9 +1334,9 @@ domain_policy:
     - "secpal.net"
     - "secpal.io"
     - "secpal.example" # Even in examples - use secpal.dev instead
-  validation_command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"'
-  validation_rule: "Command MUST return ONLY secpal.app and secpal.dev"
-  enforcement: "Any other match = PR rejected"
+  validation_command: "./scripts/check-domains.sh"
+  validation_rule: "Script must exit 0; any non-approved secpal.* domain or deprecated .app web-host usage causes a non-zero exit"
+  enforcement: "Any other domain or deprecated .app web-host usage = PR rejected"
 
 # Bot PR Validation
 bot_pr_validation:
