@@ -2740,8 +2740,8 @@ Employees want to check their schedules from personal phones/computers, but shou
 **Option A: Separate "Employee Portal" (Read-Only)**
 
 ```php
-// Separate authentication domain: employees.secpal.app
-Route::domain('employees.{organization}.secpal.app')->group(function () {
+// Separate authentication domain: employees.secpal.dev
+Route::domain('employees.{organization}.secpal.dev')->group(function () {
     Route::middleware(['auth:employee'])->group(function () {
         // LIMITED access
         Route::get('/shifts', [EmployeeShiftController::class, 'index']);
