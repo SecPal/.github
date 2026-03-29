@@ -45,7 +45,12 @@ matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     grep -v -- '- "secpal\.' | \
     grep -v -- '^[[:space:]]*- \[' || true)
 
-violations=$(printf '%s\n' "$matches" | grep -E "secpal\.(com|org|net|io|example)" || true)
+# Allowlist approach: flag any secpal.* domain not matching an approved pattern.
+# Approved: secpal.app, secpal.dev, api.secpal.dev, app.secpal.dev, app.secpal.app (identifier context).
+# This catches unknown domains (e.g. secpal.xyz) that a denylist-only check would miss.
+violations=$(printf '%s\n' "$matches" | \
+    grep -Ev 'secpal\.(app|dev)([^a-zA-Z0-9.-]|$)|api\.secpal\.(dev|app)|app\.secpal\.(dev|app)' | \
+    grep -E 'secpal\.' || true)
 
 deprecated_web_hosts=$(printf '%s\n' "$matches" | \
     grep -E 'api\.secpal\.app|app\.secpal\.app' | \

@@ -960,8 +960,7 @@ enforcement_mechanisms:
     scriptable_validations:
       - name: "Domain Policy Check"
         script_path: "./scripts/check-domains.sh"
-        command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh" | grep -v "secpal\.app\|secpal\.dev"'
-        expected_output: "Empty (no matches)"
+        command: "./scripts/check-domains.sh"
         integration: "Integrated in preflight.sh (this PR)"
         exit_on_failure: true
 
@@ -1335,8 +1334,8 @@ domain_policy:
     - "secpal.net"
     - "secpal.io"
     - "secpal.example" # Even in examples - use secpal.dev instead
-  validation_command: 'grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"'
-  validation_rule: "Command MUST return only approved SecPal domains and identifiers; api.secpal.app and app.secpal.app must not appear as active web hosts"
+  validation_command: "./scripts/check-domains.sh"
+  validation_rule: "Script must exit 0; any non-approved secpal.* domain or deprecated .app web-host usage causes a non-zero exit"
   enforcement: "Any other domain or deprecated .app web-host usage = PR rejected"
 
 # Bot PR Validation

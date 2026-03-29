@@ -470,7 +470,8 @@ See `copilot-config.yaml:domain_policy` for validation commands.
 
 **Forbidden:** secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, ANY other domain
 
-**Validation:** `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"` MUST return only approved SecPal domains and identifiers. `api.secpal.app` and `app.secpal.app` must not appear as active web hosts.
+**Validation:** Run `./scripts/check-domains.sh` as the canonical domain-policy check (matches preflight). For ad-hoc troubleshooting, `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"`
+can list all occurrences, but the script is authoritative for pass/fail.
 
 ## Learned Lessons
 
