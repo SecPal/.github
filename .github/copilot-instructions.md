@@ -5,524 +5,60 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # SecPal Copilot Instructions
 
-Organization-wide defaults for all SecPal repositories.
+These instructions are authoritative when working inside the `.github` repository itself.
+Other repositories must keep their own self-contained runtime instructions.
 
-## Runtime Application Model
+## Always-On Rules
 
-- This file is authoritative when working inside the `.github` repository itself.
-- Other repositories do not automatically inherit this file at runtime from comments or pseudo-extends markers.
-- For reliable behavior, each working repository must keep a self-contained `.github/copilot-instructions.md` and any needed `.github/instructions/*.instructions.md` files locally.
+- Run `git status --short --branch` before any write action. Never start implementation on local `main`, and stop if a dirty non-`main` branch contains unrelated work.
+- Keep one topic per change, fail fast, and never use bypasses such as `--no-verify` or force-push.
+- Update `CHANGELOG.md` for real fixes, features, and breaking changes in the same change set.
+- Create a GitHub issue immediately for out-of-scope bugs, technical debt, missing tests, documentation gaps, and actionable warnings you cannot fix now.
+- Keep GitHub-facing communication in English and reference files and lines instead of pasting large code blocks.
+- Treat warnings, audit findings, and deprecations as actionable. Fix them in scope or track them immediately.
+- Keep `SPDX-FileCopyrightText` years current in edited files or companion `.license` sidecars.
+- Never reply to Copilot review comments with GitHub comment tools. Fix the code, push, and resolve threads through the approved non-comment workflow.
+- Use EPIC plus sub-issues before starting work that will span more than one PR.
 
-**⚡ FAST REFERENCE:** Use `.github/copilot-config.yaml` for 10x faster AI parsing. YAML is Single Source of Truth.
+## Required Validation
 
-## 🚨 AI EXECUTION PROTOCOL (READ FIRST)
+Before any commit, PR, or merge, announce the checklist you are executing and stop on the first failed item.
+At minimum verify:
 
-**BEFORE taking ANY edit or other write action, AI MUST execute `copilot-config.yaml:workflows.before_work` and verify branch hygiene first.**
+- the smallest relevant validation for the touched area passed, and `./scripts/preflight.sh` ran for substantial governance or workflow changes
+- `CHANGELOG.md` was updated for real changes
+- commits are GPG-signed
+- REUSE compliance was checked when changed files require it
+- the local 4-pass review was completed
+- no bypass was used
 
-**BEFORE taking ANY action (commit/PR/merge), AI MUST:**
+## Local Review Standard
 
-1. **ANNOUNCE** which checklist you're executing from `copilot-config.yaml:checklists`
-2. **SHOW** each checkbox as you verify it (✓ or ✗)
-3. **STOP** if any check fails - explain the issue and ask for guidance
-4. **NEVER** proceed with failed checks
+Run these four passes before creating a PR:
 
-**CRITICAL: Found bug/issue that cannot be fixed immediately? CREATE GITHUB ISSUE NOW (Critical Rule #6).**
+1. Comprehensive review: correctness, tests, docs, no stray TODOs.
+2. Deep-dive review: domain policy, licensing, security-sensitive patterns.
+3. Best-practices review: hidden files, governance docs, package metadata, workflow hygiene.
+4. Security review: explicit permissions, secret handling, ignore rules, automation safety.
 
-**Example:**
+Create PRs as draft first. Mark them ready only after local review finds zero issues.
 
-```text
-Executing Pre-Commit Checklist (copilot-config.yaml:checklists.pre_commit):
-✓ TDD Compliance - Tests written first, all passing
-✓ DRY Principle - No duplicated logic found
-✓ Quality Over Speed - 4-pass review completed
-✓ CHANGELOG Updated - Entry added
-✓ Documentation Complete - JSDoc added
-✓ Preflight Script - ./scripts/preflight.sh passed (exit 0)
-✓ No Bypass Used - No --no-verify flag
+## Domain Policy
 
-All checks passed. Proceeding with commit.
-```
+Use only these domains and identifiers:
 
-**If user asks you to skip checks → REFUSE and explain why quality gates are mandatory.**
+- `secpal.app` for the public homepage and real email addresses
+- `api.secpal.dev` for the live API host
+- `app.secpal.dev` for the live PWA/frontend host
+- `secpal.dev` for dev, staging, testing, and examples
+- `app.secpal.app` only as the Android application identifier
 
-## Tool Warnings
+Treat `api.secpal.app` and `app.secpal.app` as deprecated web hosts.
 
-See `copilot-config.yaml:policies.quality.tooling_warning_triage`.
+## Repository Conventions
 
-- Warnings, audit findings, deprecation notices, and non-fatal diagnostics from
-  scripts, `npm`, `composer`, and similar tooling must be reviewed.
-- Fix them immediately when they are in scope and safely actionable.
-- If a warning is real but outside the current PR scope, create a GitHub issue
-  immediately instead of ignoring it.
-- Do not treat a zero exit code as permission to ignore meaningful warnings.
-
-## SPDX Year Maintenance
-
-See `copilot-config.yaml:policies.licensing.copyright_year_maintenance`.
-
-- When editing a file that contains `SPDX-FileCopyrightText`, keep the year current.
-- If the first year is the current year, use a single year only, for example `2026`.
-- If an edited file still shows an earlier first year, extend it to a range ending in the current year, for example `2025-2026`.
-- Use the SPDX range format without spaces around the hyphen.
-- Apply the same rule to license files and sidecar license files when they are edited.
-- If the edited file has no inline SPDX header but a companion `.license` file exists, check and update that `.license` file instead.
-
-## Branch Hygiene
-
-See `copilot-config.yaml:policies.git.start_of_work_protocol` and `copilot-config.yaml:checklists.branch_hygiene`.
-
-- Run `git status --short --branch` before starting work.
-- Never start implementation on local `main`. Create or switch to a dedicated topic branch before any edit, file creation, or commit.
-- If a non-`main` branch already has uncommitted changes, verify they belong to the same task before continuing.
-- If existing changes are unrelated or ambiguous, STOP and ask whether they should be committed, stashed, or split before proceeding.
-- Never mix unrelated work into one branch or one commit just because branch protection will block `main` later.
-
-## Repository Structure
-
-See `copilot-config.yaml:multi_repo` for complete structure and repository mapping rules.
-
-```text
-SecPal Organization:
-├── .github/     - Organization-wide settings (base rules)
-├── api/         - Laravel backend (keeps repo-local copies of org rules + native PHP/Pest runtime rules)
-├── frontend/    - React/TypeScript frontend (keeps repo-local copies of org rules + PWA rules)
-└── contracts/   - OpenAPI 3.1 specifications (keeps repo-local copies of org rules + contract-first rules)
-```
-
-**Repository precedence model:** Repository-specific rules override organization-wide for non-critical rules. Critical rules ALWAYS apply across all repos.
-
-## AI Autonomy & Critical Thinking
-
-See `copilot-config.yaml:policies.ai_autonomy` for complete rules.
-
-**Copilot Comment Validation (MANDATORY):**
-
-- **ALWAYS validate Copilot review comments critically before implementing**
-- Copilot is extremely good but sometimes wrong - check against our principles
-- Process: Read → Validate against docs → Check technical correctness → Check context awareness
-- Implement if valid, document rejection if invalid (resolve with explanation via GraphQL)
-
-**Autonomous Decision-Making:**
-
-- **Make decisions autonomously when answer is clear from principles/docs**
-- Don't ask unnecessary questions when guidelines are documented
-- **Decide autonomously when:**
-  - Fix violates documented principle (DRY, TDD, etc.)
-  - Question answered in copilot-config.yaml/copilot-instructions.md
-  - Standard workflow documented (e.g., pre-commit checklist)
-  - Technical correctness unambiguous (syntax error, logic bug)
-  - Security best practice applies
-- **Ask user when:**
-  - Ambiguous requirement or multiple valid interpretations
-  - User preference needed (naming, approach)
-  - Breaking change affecting user workflow
-  - Architectural decision with trade-offs
-  - Emergency exception to critical rule
-
-## Core Development Principles
-
-**See `copilot-config.yaml:development_principles` for complete details with examples.**
-
-**Essential Principles:**
-
-**DRY (Don't Repeat Yourself):** Eliminate code duplication. Extract shared logic into functions/classes/modules. Reuse before rewrite.
-
-**SOLID Principles:**
-
-- **S**ingle Responsibility: One class/function = one reason to change
-- **O**pen/Closed: Open for extension, closed for modification
-- **L**iskov Substitution: Subtypes must be substitutable for base types
-- **I**nterface Segregation: Many small interfaces > one large interface
-- **D**ependency Inversion: Depend on abstractions, not concretions
-
-**KISS (Keep It Simple, Stupid):** Simple solutions over complex ones. Ask: Can this be simpler? Will a junior understand this in 6 months?
-
-**YAGNI (You Aren't Gonna Need It):** Only implement what's required NOW, not what might be needed later. No speculative features.
-
-**Separation of Concerns:** Clear responsibility boundaries. Pattern: Controller → Service → Repository → Model.
-
-**Fail Fast:** Detect and report errors as early as possible. Validate at entry points, use type hints, guard clauses.
-
-**Security by Design:** Build security in from the start. Always validate input, never log sensitive data, encrypt at rest, authorize at multiple layers.
-
-**Convention over Configuration:** Follow framework conventions (Laravel naming, PSR-12, React patterns) to reduce boilerplate.
-
-**Quality Over Speed:** Take time to implement correctly. Fast but broken code creates technical debt.
-
-**Communication Language:** All GitHub communication (issues, PRs, comments, documentation) MUST be in **English only**.
-Exceptions: German legal documents (CLA, licenses) require bilingual versions, and user-facing German translations in frontend
-(i18n files).
-
-**No Literal Quotes:** Never copy/paste large code blocks verbatim without understanding. Reference existing code by file path and
-line numbers instead of duplicating it in comments or documentation.
-
-## Issue Management Protocol (CRITICAL RULE #6)
-
-See `copilot-config.yaml:issue_management` for complete protocol and examples.
-
-### Immediate Issue Creation
-
-**ZERO TOLERANCE RULE: Found bug/issue in old code that cannot be fixed now? CREATE GITHUB ISSUE IMMEDIATELY.**
-
-**When to create issue IMMEDIATELY:**
-
-- Bug found in old code during current work
-- **Security vulnerability discovered** (use SECURITY.md for responsible disclosure, NOT public issue)
-- Technical debt identified
-- Missing test coverage found
-- Documentation gap discovered
-- Performance issue noticed
-- Any finding that cannot be fixed in current PR scope
-
-**Required:** Title, description, reproduction steps (if bug), affected files, labels (`bug`, `technical-debt`, `enhancement`, `security`), priority.
-
-**Commands:**
-
-```bash
-gh issue create --title "Bug: ..." --body "..." --label "bug"
-gh issue create --title "Tech Debt: ..." --body "..." --label "technical-debt"
-```
-
-**FORBIDDEN:** Saying "we should fix X later" without creating GitHub issue = Critical Rule violation.
-
-### EPIC + Sub-Issues Structure
-
-**MANDATORY: All features requiring >1 PR MUST use EPIC + sub-issues structure.**
-
-**When to use EPIC:**
-
-- Feature requires multiple PRs (>600 lines total)
-- Work spans multiple files/modules/repos
-- Implementation takes >1 day
-- Multiple logical steps with dependencies
-
-**Structure:**
-
-1. **Epic Issue** (stays open until all sub-issues complete)
-   - Template: Use GitHub `🗺️ Epic (Multi-PR Feature)`
-   - Contains: Goal, Sub-Issues tasklist, Acceptance Criteria, Non-Goals
-2. **Sub-Issues** (one PR each, ~400-600 LOC)
-   - Template: Use GitHub `📦 Sub-Issue (Part of Epic)`
-   - Links to parent: "Sub-issue of #123"
-   - Each sub-issue = exactly 1 PR
-3. **PR Linking:** Reference sub-issue NOT epic
-   - ✅ Correct: `Fixes #52` (sub-issue)
-   - ❌ Wrong: `Fixes #50` (epic) → causes premature epic closure
-
-**Commands:**
-
-```bash
-gh issue create --template epic.yml --title "[EPIC] Feature name"
-gh issue create --template sub-issue.yml --title "PR-1: Step name"
-```
-
-**Documentation:** See `api/docs/EPIC_WORKFLOW.md` for detailed guide and real-world examples (Issue #50 with 7 sub-issues).
-
-## Critical Rules (ALWAYS ENFORCED)
-
-See `copilot-config.yaml:core_principles` for complete list with validation commands.
-
-1. **TDD Mandatory:** Write failing test FIRST, implement, refactor. Minimum 80% coverage for new code, 100% for critical paths. **Exception:** `spike/*` branches (exploration only, cannot merge to main).
-
-2. **Quality Gates:** Preflight script (`./scripts/preflight.sh`) MUST pass before push. All CI checks MUST pass before merge. No bypass. **Exception:** Large PRs (>500 lines) with `large-pr-approved` label.
-
-3. **One PR = One Topic:** No mixing features/fixes/refactors/docs/config in single PR.
-
-4. **No Bypass:** Never use `--no-verify` or force push. Branch protection applies to admins. Exceptions same as Rule #2.
-
-5. **Fail-Fast:** Stop at first error. Fix immediately, don't accumulate debt.
-
-6. **CHANGELOG Mandatory:** Update CHANGELOG.md for every feature/fix/breaking change in the SAME commit (not batched separately).
-
-7. **Commit Signing:** All commits MUST be GPG signed. Configure: `git config commit.gpgsign true`
-
-8. **Documentation:** All public APIs MUST have PHPDoc/JSDoc/TSDoc with examples.
-
-9. **REUSE Compliance:** All files MUST have SPDX headers. Run `reuse lint` before commit.
-
-10. **Code Coverage Enforcement:** Code coverage tracked via Codecov (see `.codecov.yml`).
-    Minimum 80% coverage for new code, 100% for critical paths. Coverage reports
-    auto-generated in CI and uploaded to Codecov dashboard. PRs must not decrease
-    overall coverage below threshold.
-
-11. **Post-Merge Cleanup:** IMMEDIATELY execute `copilot-config.yaml:checklists.post_merge_cleanup` after ANY merge.
-
-### Emergency Exception Process
-
-If bypass REQUIRED (production down):
-
-1. Document in commit/PR why bypass needed
-2. Create issue for proper fix
-3. Fix within 24 hours
-4. All checks must retroactively pass
-
-## Tech Stack
-
-See `copilot-config.yaml:stack` for complete technology details.
-
-**Backend:** PHP 8.4, Laravel 13, native PHP shell usage (local or remote over SSH), Pest testing (NEVER PHPUnit directly), PostgreSQL 16
-
-**Frontend:** Node 22.x, React, TypeScript (strict), Vite, Vitest + React Testing Library
-
-**API:** OpenAPI 3.1, REST, JSON, Bearer tokens, URL versioning (`/api/v1/`, `/api/v2/`)
-
-**Database:** PostgreSQL 16, Laravel migrations (MUST be reversible)
-
-### Data Protection (GDPR/DSGVO)
-
-See `copilot-config.yaml:data_protection` for complete encryption architecture.
-
-**CRITICAL: All personal data MUST be encrypted at rest.**
-
-- `*_enc` - Encrypted storage (NEVER access directly)
-- `*_idx` - Blind index for queries (hashed sha256)
-- `*_plain` - Transient property (write-only, auto-encrypts)
-
-**✅ ALWAYS use `_plain` in tests/factories/controllers | ❌ NEVER access `_enc` directly**
-
-## 🚨 GitHub Copilot Review Protocol - CRITICAL RULE
-
-**See `copilot-config.yaml:copilot_review.absolute_prohibition` for complete details.**
-
-### THE IRON LAW (ZERO TOLERANCE)
-
-**NEVER RESPOND TO COPILOT REVIEW COMMENTS USING GITHUB COMMENT TOOLS.**
-
-**Why:** Commenting creates unwanted bot PRs and notification spam. Copilot re-reviews after each push.
-
-**❌ FORBIDDEN:**
-
-- `mcp_github_github_add_issue_comment`
-- `mcp_github_github_add_comment_to_pending_review`
-- GitHub UI comments on review threads
-- Replying to Copilot suggestions
-
-**✅ CORRECT WORKFLOW:**
-
-1. Query unresolved threads (GraphQL): `copilot-config.yaml:copilot_review.process.step_1.command`
-2. Fix code based on comment → commit → push (do NOT reply to comment)
-3. Wait 30s for CI and Copilot re-review
-4. Resolve thread (GraphQL mutation): `copilot-config.yaml:copilot_review.process.step_4.command`
-5. Repeat until query returns empty array
-
-**For documentation:** Update PR description (NOT comments).
-
-## Checklists
-
-**All checklists available in `copilot-config.yaml:checklists`. Execute via `copilot-config.yaml:workflows`.**
-
-### When to Use Which Checklist
-
-| Event         | Required Checklists                                                                      |
-| ------------- | ---------------------------------------------------------------------------------------- |
-| Before Commit | `workflows.before_commit` → `checklists.pre_commit`                                      |
-| Before PR     | `workflows.before_pr` → `checklists.pre_commit + review_passes + copilot_proof_standard` |
-| Before Merge  | `workflows.before_merge` → `checklists.copilot_proof_standard + validation`              |
-| After Merge   | `workflows.after_merge` → `checklists.post_merge_cleanup` (IMMEDIATE)                    |
-
-### Pre-Commit Checklist
-
-See `copilot-config.yaml:checklists.pre_commit` for complete checklist with validation commands.
-
-**Execute before EVERY commit:**
-
-- [ ] TDD Compliance (tests first, coverage ≥80%)
-- [ ] DRY Principle (no duplication)
-- [ ] SOLID Principles (SRP, OCP, LSP, ISP, DIP)
-- [ ] KISS (simple solutions over complex ones)
-- [ ] YAGNI (only implement what's needed NOW)
-- [ ] Separation of Concerns (Controller → Service → Repository)
-- [ ] Fail Fast (validate early, type hints, guard clauses)
-- [ ] Security by Design (input validation, no sensitive data logged)
-- [ ] Quality Over Speed (4-pass review)
-- [ ] English Only (all GitHub communication in English)
-- [ ] No Literal Quotes (reference code by path/line, don't duplicate)
-- [ ] **Issue Creation Protocol (all findings have GitHub issues?)**
-- [ ] CHANGELOG Updated
-- [ ] Documentation Complete
-- [ ] Preflight Script (`./scripts/preflight.sh`)
-- [ ] No Bypass Used
-
-### 4-Pass Review Strategy
-
-See `copilot-config.yaml:checklists.review_passes` for complete passes with all checks.
-
-**Execute ALL 4 passes MULTIPLE TIMES before creating PR:**
-
-1. **Comprehensive Review:** Coding standards, documentation, tests, no TODOs
-2. **Deep Dive Review:** Domain policy (homepage on secpal.app, API on api.secpal.dev, PWA on app.secpal.dev, examples on secpal.dev), licenses, security patterns
-3. **Best Practices Review:** Hidden files, governance files, package.json metadata, OpenAPI completeness
-4. **Security Auditor Review:** Workflow permissions explicit, .gitignore complete, no secrets
-
-**CRITICAL Workflow (15 steps):** See `copilot-config.yaml:review_automation`
-
-1. Write code
-2. **2x full 4-pass reviews** (minimum) → Fix issues → Review again
-3. Commit & push ONLY after ZERO issues found
-4. **Create PR as DRAFT** (`gh pr create --draft`)
-5. Final self-review in GitHub UI
-6. **Mark ready** (`gh pr ready`) → **Copilot review starts NOW**
-7. Wait for Copilot → Query ALL comments → Analyze critically → Fix valid issues → Update PR description
-
-**Why DRAFT first?** Copilot only reviews non-draft PRs. Draft allows final self-review before external review. Integrates with project automation script.
-
-**Why multiple reviews?** First review finds obvious issues. Second review finds issues introduced by fixes. Third+ review catches DRY violations in fix code. Continue until ZERO issues found.
-
-### Post-Merge Cleanup
-
-See `copilot-config.yaml:checklists.post_merge_cleanup` for exact commands.
-
-**Execute IMMEDIATELY after EVERY merge:**
-
-```bash
-git checkout main
-git pull
-git branch -d <feature-branch-name>
-git fetch --prune
-git status  # MUST show: "nothing to commit, working tree clean"
-```
-
-## Versioning (Software Repositories Only)
-
-**SEMVER 2.0.0** starting at **0.0.1**. Development (0.x.x): breaking changes allowed in MINOR. Stable (1.x.x+): MAJOR for breaking, MINOR for features, PATCH for fixes.
-
-**Note:** `.github` repository is NOT versioned (chronological CHANGELOG only).
-
-## Licensing
-
-**Dual-Licensing:** AGPL-3.0-or-later (open source) + Commercial License (proprietary use)
-
-**Default:** AGPL-3.0-or-later for code | CC0-1.0 for config/docs | MIT for scripts
-
-**CLA Enforcement:** All contributors must sign CLA via [CLA Assistant](https://cla-assistant.io) (OAuth click-through, GDPR-compliant).
-
-## Quality Gates (3-Stage)
-
-See `copilot-config.yaml:validation` for all commands.
-
-1. **Pre-Commit (Fast):** REUSE, Prettier, Markdownlint, yamllint, actionlint, shellcheck
-2. **Pre-Push (Comprehensive):** All pre-commit + PHPStan/ESLint + all tests + OpenAPI validation
-3. **CI (Enforcement):** All pre-push + CodeQL (JS/TS only, NOT PHP)
-
-## Branch Protection
-
-```yaml
-main:
-  required_status_checks: [REUSE, License Check, Formatting]
-  required_approving_review_count: 0 # Single maintainer
-  enforce_admins: true
-  required_signatures: true
-  required_linear_history: true
-  required_conversation_resolution: true
-  allow_force_pushes: false
-  allow_deletions: false
-
-merge_strategy: squash_only
-auto_delete_branches: true
-```
-
-## PR Rules
-
-**Size:** ≤600 lines changed (excluding generated code, lock files). Exception: Initial setup, large refactors (document why).
-
-**One Topic Rule:** See `copilot-config.yaml:policies.pr_workflow.one_topic` for prohibited/allowed combinations.
-
-**If local review finds UNRELATED issues:** CREATE GITHUB ISSUE IMMEDIATELY (Critical Rule #6)! Don't mix topics in one PR. See
-`copilot-config.yaml:issue_management` for complete protocol.
-
-**Branch Naming:** `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`
-
-**Commit Convention:** `type(scope): description`
-
-**DRAFT Workflow:**
-
-1. Create PR as DRAFT: `gh pr create --draft`
-2. Mark ready ONLY when local reviews find ZERO issues: `gh pr ready`
-3. Expectation: Copilot should find ZERO issues (local review = quality gate)
-
-**EPIC/Sub-Issue Structure:** Complex work → EPIC issue + multiple sub-issues → 1 PR per sub-issue
-
-**PR Checklist:**
-
-1. All checks GREEN locally and CI
-2. ≤600 lines
-3. ONE topic only
-4. Self-reviewed (4-pass review documented)
-5. Description complete
-6. Tests pass
-7. No `--no-verify` used
-
-## Domain Policy (ZERO TOLERANCE)
-
-See `copilot-config.yaml:domain_policy` for validation commands.
-
-**Use Cases:**
-
-- **secpal.app** → Public homepage, official website content, real email addresses, official contact info
-- **api.secpal.dev** → Live API host
-- **app.secpal.dev** → Live PWA/frontend host
-- **secpal.dev** → Dev/staging infrastructure, testing, **examples**, OpenAPI specs, documentation examples, and non-real example email addresses
-- **app.secpal.app** → Android application identifier only, never a deployable web domain
-
-**Allowed:** secpal.app (homepage/real emails) | api.secpal.dev (API) | app.secpal.dev (PWA) | secpal.dev (dev/examples) | app.secpal.app (Android identifier only)
-
-**Deprecated Web Hosts:** api.secpal.app, app.secpal.app
-
-**Forbidden:** secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, ANY other domain
-
-**Validation:** Run `./scripts/check-domains.sh` as the canonical domain-policy check (matches preflight). For ad-hoc troubleshooting, `grep -r "secpal\." --include="*.md" --include="*.yaml" --include="*.json" --include="*.sh"`
-can list all occurrences, but the script is authoritative for pass/fail.
-
-## Learned Lessons
-
-See `copilot-config.yaml:learned_lessons` for complete policies.
-
-### 1. Multi-Layer Review Strategy (MANDATORY)
-
-Execute 4 review passes with different perspectives before creating PR. Single-pass reviews miss 60%+ of issues.
-
-### 2. Domain Policy (CRITICAL - ZERO TOLERANCE)
-
-Use only the approved SecPal domains and identifiers. Run the domain-policy check before EVERY commit. ZERO exceptions.
-
-### 3. Governance File Distribution
-
-Files copied from .github/ to other repos (symlinks don't render on GitHub.com). Use `./scripts/sync-governance.sh` for automation.
-
-### 4. Security by Default
-
-Security explicit from line 1. Workflow permissions minimal (`contents: read`). .gitignore includes `.env*`, `*.key`, `*.pem`, `secrets/`, `credentials/`.
-
-### 5. Hidden Files Have Equal Priority
-
-`.editorconfig`, `.gitattributes`, `.gitignore`, `CODEOWNERS` are EQUALLY critical as source code. Validate presence: `ls -la | grep "^\\."`
-
-### 6. OpenAPI Must Be Complete
-
-OpenAPI specs MUST include components, schemas, responses, parameters, examples, securitySchemes, servers from v0.0.1.
-
-### 7. package.json Complete Metadata
-
-All fields required from v0.0.1: name, version, description, keywords, homepage, bugs, repository, license, author.
-
-### 8. Pre-Push Quality Gates Work
-
-preflight.sh blocks broken commits when enforced. Achieved 100% CI compliance.
-
-### 9. Copilot-Proof Code Standard
-
-Quality target: "No AI reviewer can suggest ANY improvements". Run GitHub Copilot review → ZERO suggestions = standard achieved.
-
-### 10. Post-Merge Cleanup Protocol
-
-Execute 5-command sequence after EVERY merge. Prevents orphaned branches, ensures sync.
-
-### 11. Bot PR Validation
-
-See `copilot-config.yaml:bot_pr_validation` for validation process. Validate against tech stack before accepting bot PRs.
-
----
-
-**For complete details, validation commands, and structured data:** See `.github/copilot-config.yaml`
-
-**Markdown length:** 368 lines (target ≤400 achieved) | **YAML contains:** All checklists, validations, multi-repo rules, complete tech stack
+- This repository is not versioned; keep its changelog chronological.
+- Hidden files and automation files are first-class source artifacts.
+- For GitHub workflows, set explicit permissions, set `timeout-minutes` on every job, pin external actions, and never expose secrets in logs.
+- Reusable workflows live in `workflow-templates/` and `.github/workflows/reusable-*.yml`.
+- Keep changes repo-local, minimal, and aligned with the existing governance and automation patterns.

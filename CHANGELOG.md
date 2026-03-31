@@ -9,6 +9,13 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-01 - Reduce Copilot Instruction Context Bloat
+
+**Changed:**
+
+- replaced the oversized organization-level Copilot runtime instructions with a shorter self-contained baseline and removed dead `copilot-config.yaml` references that no longer resolve in this repository
+- tightened the guidance to the rules that actually need to stay always-on so multi-repo VS Code workspaces send less redundant governance text with each Copilot request
+
 ## 2026-03-29 - Align Cross-Repo Domain Policy With Active .dev Hosts
 
 **Changed:**
