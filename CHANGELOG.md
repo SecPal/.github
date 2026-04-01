@@ -9,6 +9,33 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-03-31 - Second-Pass Adversarial Security Audit (14 Findings)
+
+**Added:**
+
+- `docs/audits/2026-03-31-adversarial-review.md` — second-pass adversarial security audit
+  across all SecPal repositories (API, frontend, Android, contracts), documenting 3 CRITICAL,
+  5 HIGH, and 6 MEDIUM findings with exact code references, attack scenarios, and remediation
+  guidance
+- `docs/audits/2026-03-31-adversarial-review-LOCAL-REVIEW.md` — completed 4-pass local
+  review of the audit document confirming zero blocking issues
+
+**Key CRITICAL findings:**
+
+- Merkle tree second-preimage vulnerability in `BuildMerkleTreeBatch` / `verifyMerkleProof`
+  (missing RFC 6962 domain separation between leaf and internal nodes)
+- User ID type mismatch: UUID in API vs. integer in OpenAPI contract
+- Error response shape contract violation exposing stack traces and non-canonical envelopes
+
+**Why:**
+
+The forensic audit trail is used as legal evidence under BewachV §10. Any weakness in
+cryptographic verification or contract alignment undermines legal admissibility. Findings
+are documented here for cross-repository awareness; remediation issues should be opened in
+the affected repositories referencing this document.
+
+---
+
 ## 2026-04-01 - Reduce Copilot Instruction Context Bloat
 
 **Changed:**
