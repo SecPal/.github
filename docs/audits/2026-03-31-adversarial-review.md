@@ -27,8 +27,8 @@ This document captures **14 substantive security findings** discovered through a
 **Severity**: **CRITICAL** (Cryptographic Exploit)
 **Affected Files**:
 
-- [api/app/Jobs/BuildMerkleTreeBatch.php#L210](api/app/Jobs/BuildMerkleTreeBatch.php#L210)
-- [api/app/Models/Activity.php#L730](api/app/Models/Activity.php#L730)
+- `api/app/Jobs/BuildMerkleTreeBatch.php#L210`
+- `api/app/Models/Activity.php#L730`
 
 **Finding**:
 The Merkle tree uses simple string concatenation without domain-separation prefixes. This allows crafting different activity logs that hash to the same root.
@@ -63,7 +63,7 @@ $parentHash = hash('sha256', 'parent:' . $leftHash . $rightHash);
 $calculatedHash = hash('sha256', 'leaf:' . ($previousHash ?? '') . $logData);
 ```
 
-**Test Gap**: [api/tests/Unit/ActivityLog/MerkleProofTest.php](api/tests/Unit/ActivityLog/MerkleProofTest.php) does NOT test whether different leaf arrays can produce identical roots.
+**Test Gap**: `api/tests/Unit/ActivityLog/MerkleProofTest.php` does NOT test whether different leaf arrays can produce identical roots.
 
 **Blocking**: Merkle tree tamper-proof property is fundamentally broken until fixed.
 
@@ -73,7 +73,7 @@ $calculatedHash = hash('sha256', 'leaf:' . ($previousHash ?? '') . $logData);
 
 **Component**: API Activity Logging / Event Hash Chain
 **Severity**: **CRITICAL** (Related to #1)
-**Affected File**: [api/app/Models/Activity.php#L575](api/app/Models/Activity.php#L575)
+**Affected File**: `api/app/Models/Activity.php#L575`
 
 **Finding**:
 Event hashes (leaf nodes) lack prefix differentiation from internal node hashes. A parent node's hash could collide with a leaf hash, breaking tree integrity.
@@ -98,9 +98,9 @@ $calculatedHash = hash('sha256', ($this->previous_hash ?? '') . $logData);
 **Severity**: **CRITICAL** (Data Model / Integration Failure)
 **Affected Files**:
 
-- [api/app/Models/User.php#L30-L35](api/app/Models/User.php#L30-L35) - Uses UUID
-- [api/database/migrations/0001_01_01_000000_create_users_table.php#L15](api/database/migrations/0001_01_01_000000_create_users_table.php#L15) - UUID migration
-- [contracts/docs/openapi.yaml#L395-L400](contracts/docs/openapi.yaml#L395-L400) - Documents integer ID
+- `api/app/Models/User.php#L30-L35` - Uses UUID
+- `api/database/migrations/0001_01_01_000000_create_users_table.php#L15` - UUID migration
+- `contracts/docs/openapi.yaml#L395-L400` - Documents integer ID
 
 **Finding**:
 OpenAPI contract explicitly defines `AuthenticatedUser.id` as `integer`, but implementation uses UUID strings.
@@ -131,7 +131,7 @@ User::find($user->id)  // Returns: '550e8400-e29b-41d4-a716-446655440000'
 
 **Affected Schemas**: `AuthenticatedUser`, `MyOrganizationalScope`, any schema using `user_id`.
 
-**Fix Required**: Update ALL `user_id` types in [contracts/docs/openapi.yaml](contracts/docs/openapi.yaml) from `integer` to `string` with `format: uuid`.
+**Fix Required**: Update ALL `user_id` types in `contracts/docs/openapi.yaml` from `integer` to `string` with `format: uuid`.
 
 ---
 
@@ -141,7 +141,7 @@ User::find($user->id)  // Returns: '550e8400-e29b-41d4-a716-446655440000'
 
 **Component**: API Onboarding / Employee Lifecycle
 **Severity**: **HIGH** (TOCTOU - Time-of-Check-Time-of-Use)
-**Affected File**: [api/app/Http/Controllers/OnboardingController.php#L102-L240](api/app/Http/Controllers/OnboardingController.php#L102-L240)
+**Affected File**: `api/app/Http/Controllers/OnboardingController.php#L102-L240`
 
 **Finding**:
 The `/onboarding/complete` endpoint validates token availability outside a database transaction. Two concurrent requests can pass validation for the same token, leading to race condition in state transitions.
@@ -210,7 +210,7 @@ DB::transaction(function () use (...) {
 
 **Component**: API Employee Lifecycle
 **Severity**: **HIGH** (Race Condition)
-**Affected File**: [api/app/Http/Controllers/OnboardingController.php#L137](api/app/Http/Controllers/OnboardingController.php#L137)
+**Affected File**: `api/app/Http/Controllers/OnboardingController.php#L137`
 
 **Finding**:
 Employee status is checked outside the transaction scope. Between the check (line 137) and password insertion (line 188), HR can independently activate the employee via `POST /api/v1/employees/{id}/activate`.
@@ -242,7 +242,7 @@ T6: Observer's pre_contract→active role assignment runs (but no transition occ
 
 **Component**: API Responses / Authorization
 **Severity**: **HIGH** (Least-Privilege Violation)
-**Affected File**: [api/app/Http/Resources/EmployeeResource.php#L44-L130](api/app/Http/Resources/EmployeeResource.php#L44-L130)
+**Affected File**: `api/app/Http/Resources/EmployeeResource.php#L44-L130`
 
 **Finding**:
 ALL sensitive employee fields (tax ID, SSN, ID document numbers, health insurance, work permits, residence permits, Sachkunde IHK number) are returned unconditionally to ANY user with `employees.read` permission.
@@ -272,7 +272,7 @@ public function toArray(Request $request): array {
 - BewachV § 16 Abs. 2 (ID document data) should be HR-only
 - Tax/SSN data should be Finance/HR only, not all supervisors
 
-**Documented Finding**: [api/SECURITY_AUDIT_API_VALIDATION.md#L216](api/SECURITY_AUDIT_API_VALIDATION.md#L216) as M-4 (medium severity).
+**Documented Finding**: `api/SECURITY_AUDIT_API_VALIDATION.md#L216` as M-4 (medium severity).
 
 **Fix Required**: Implement conditional field rendering:
 
@@ -297,8 +297,8 @@ public function toArray(Request $request): array {
 **Severity**: **HIGH** (Contract Non-Compliance)
 **Affected Files**:
 
-- [contracts/docs/openapi.yaml#L1848](contracts/docs/openapi.yaml#L1848) - Defines required `code` field
-- [api/tests/Feature/AuthTest.php#L631](api/tests/Feature/AuthTest.php#L631) - Tests show message-only responses
+- `contracts/docs/openapi.yaml#L1848` - Defines required `code` field
+- `api/tests/Feature/AuthTest.php#L631` - Tests show message-only responses
 
 **Finding**:
 OpenAPI contract defines error schema with **required** fields: `message` AND `code`. Implementation returns only `message` (or `message` + `errors` for validation failures).
@@ -343,8 +343,8 @@ Error:
 
 **Examples from codebase showing expected message-only format**:
 
-- [api/tests/Feature/AuthTest.php#L631](api/tests/Feature/AuthTest.php#L631): Expects message-only
-- [api/docs/api/rbac-endpoints.md#L1102-L1140](api/docs/api/rbac-endpoints.md#L1102-L1140): Documents message-only
+- `api/tests/Feature/AuthTest.php#L631`: Expects message-only
+- `api/docs/api/rbac-endpoints.md#L1102-L1140`: Documents message-only
 
 **Fix Required**:
 
@@ -359,7 +359,7 @@ _Recommendation_: Option 2 - align contract to actual behavior unless downstream
 
 **Component**: API Retention / Activity Archival
 **Severity**: **HIGH** (Data Loss Window)
-**Affected File**: [api/app/Console/Commands/ApplyRetentionPolicies.php](api/app/Console/Commands/ApplyRetentionPolicies.php)
+**Affected File**: `api/app/Console/Commands/ApplyRetentionPolicies.php`
 
 **Finding**:
 Activity logs are archived only during daily scheduled runs (02:00 UTC). Logs can be permanently deleted if removed:
@@ -401,8 +401,8 @@ Result: PERMANENT DATA LOSS, no restoration possible
 **Severity**: **HIGH** (Integration Failure)
 **Affected Files**:
 
-- [contracts/docs/openapi.yaml#L19](contracts/docs/openapi.yaml#L19) - Claims 100/min
-- [api/app/Providers/AppServiceProvider.php#L68-L110](api/app/Providers/AppServiceProvider.php#L68-L110) - Actual limits
+- `contracts/docs/openapi.yaml#L19` - Claims 100/min
+- `api/app/Providers/AppServiceProvider.php#L68-L110` - Actual limits
 
 **Finding**:
 OpenAPI contract states "Rate Limiting: 100 requests per minute per API key", but no such limiter exists in the implementation.
@@ -443,7 +443,7 @@ info:
 
 **Component**: API Retention / Activity Archival
 **Severity**: **MEDIUM** (Unlikely but exploitable)
-**Affected File**: [api/app/Console/Commands/ApplyRetentionPolicies.php#L213-L230](api/app/Console/Commands/ApplyRetentionPolicies.php#L213-L230)
+**Affected File**: `api/app/Console/Commands/ApplyRetentionPolicies.php#L213-L230`
 
 **Finding**:
 When archiving and marking orphaned logs, queries happen BEFORE transaction, creating a race window with concurrent deletions.
@@ -488,7 +488,7 @@ Thread 1 transaction attempts to mark C as orphaned but B data is stale
 
 **Component**: API Contract Consistency
 **Severity**: **MEDIUM** (Design Inconsistency)
-**Affected File**: [contracts/docs/openapi.yaml](contracts/docs/openapi.yaml)
+**Affected File**: `contracts/docs/openapi.yaml`
 
 **Finding**:
 Within the same OpenAPI contract, `user_id` is declared as different types:
@@ -515,7 +515,7 @@ Within the same OpenAPI contract, `user_id` is declared as different types:
 
 **Component**: Frontend Auth Context
 **Severity**: **MEDIUM** (Brief window, mitigated by validation)
-**Affected File**: [frontend/src/contexts/AuthContext.tsx#L154-L200](frontend/src/contexts/AuthContext.tsx#L154-L200)
+**Affected File**: `frontend/src/contexts/AuthContext.tsx#L154-L200`
 
 **Finding**:
 During bootstrap, auth state is composed from localStorage PLUS concurrent API validation. Between initial state and validation completion, user can access protected features.
@@ -563,7 +563,7 @@ Brief window T0-T3: Protected component renders with stale user
 
 **Component**: Frontend Logout / Cache Management
 **Severity**: **MEDIUM** (Brief window)
-**Affected File**: [frontend/src/lib/clientStateCleanup.ts#L30-L46](frontend/src/lib/clientStateCleanup.ts#L30-L46)
+**Affected File**: `frontend/src/lib/clientStateCleanup.ts#L30-L46`
 
 **Finding**:
 Sensitive caches (localStorage, sessionStorage, IndexedDB) are deleted asynchronously during logout, not awaited in critical path.
@@ -614,8 +614,8 @@ T4: Stale API response returned from cache
 **Severity**: **MEDIUM** (Documentation Gap)
 **Affected Files**:
 
-- [contracts/docs/openapi.yaml](contracts/docs/openapi.yaml) - Silent re: headers
-- [api/docs/api/rbac-endpoints.md#L1164](api/docs/api/rbac-endpoints.md#L1164) - Claims headers returned
+- `contracts/docs/openapi.yaml` - Silent re: headers
+- `api/docs/api/rbac-endpoints.md#L1164` - Claims headers returned
 
 **Finding**:
 Production documentation states that rate limiting headers are returned:

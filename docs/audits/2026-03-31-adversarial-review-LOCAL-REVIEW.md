@@ -89,7 +89,7 @@
 
 ### Governance Documents
 
-- ✅ Findings document placed in `.github/docs/audits/` (proper organization)
+- ✅ Findings document placed in `docs/audits/` (proper organization)
 - ✅ File named `2026-03-31-adversarial-review.md` (date-prefixed, descriptive)
 - ✅ CHANGELOG.md updated in same change set (follows commit hygiene)
 - ✅ Local review document created for traceability
