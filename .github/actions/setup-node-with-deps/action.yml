@@ -44,8 +44,13 @@ runs:
 
         if [ -f "package.json" ]; then
           if [ "$INSTALL_JQ" = "true" ] && ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y jq
+            if [ "${RUNNER_OS:-}" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y jq
+            else
+              echo "::error::install-jq requires apt-get. Preinstall jq on this runner or set install-jq: false." >&2
+              exit 1
+            fi
           fi
 
           if [ -f "package-lock.json" ]; then
