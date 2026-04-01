@@ -17,7 +17,8 @@ Other repositories must keep their own self-contained runtime instructions.
 - Keep GitHub-facing communication in English and reference files and lines instead of pasting large code blocks.
 - Treat warnings, audit findings, and deprecations as actionable. Fix them in scope or track them immediately.
 - Keep `SPDX-FileCopyrightText` years current in edited files or companion `.license` sidecars.
-- Never reply to Copilot review comments with GitHub comment tools. Fix the code, push, and resolve threads through the approved non-comment workflow.
+- Never reply to Copilot review comments with GitHub comment tools. Fix the code, push, and resolve threads
+  using the approved non-comment workflow (`docs/copilot-review-automation.md` or `scripts/copilot-review-tool.sh`).
 - Use EPIC plus sub-issues before starting work that will span more than one PR.
 
 ## Required Validation
@@ -60,5 +61,6 @@ Treat `api.secpal.app` and `app.secpal.app` as deprecated web hosts.
 - This repository is not versioned; keep its changelog chronological.
 - Hidden files and automation files are first-class source artifacts.
 - For GitHub workflows, set explicit permissions, set `timeout-minutes` on every job, pin external actions, and never expose secrets in logs.
-- Reusable workflows live in `workflow-templates/` and `.github/workflows/reusable-*.yml`.
+- Workflow templates for other repositories live in `workflow-templates/`.
+  Reusable workflow definitions live in `.github/workflows/reusable-*.yml` and are invoked via `uses:`.
 - Keep changes repo-local, minimal, and aligned with the existing governance and automation patterns.
