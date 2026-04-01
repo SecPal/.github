@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$WORKSPACE_ROOT"
 
-REPOS=("api" "frontend" "contracts" ".github")
+REPOS=("api" "frontend" "contracts" "android" "secpal.app" ".github")
 SUCCESS_COUNT=0
 FAILED_REPOS=()
 

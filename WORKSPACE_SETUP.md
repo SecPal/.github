@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal Contributors
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
@@ -14,8 +14,10 @@ SecPal/
 ├── .github/       # Organization-wide settings and documentation
 │   └── setup-hooks.sh  # Master script to setup hooks in all repos
 ├── api/           # Laravel backend API
+├── android/       # React/TypeScript Android app via Capacitor
 ├── contracts/     # OpenAPI 3.1 API specifications
-└── frontend/      # React/TypeScript frontend application
+├── frontend/      # React/TypeScript frontend application
+└── secpal.app/    # Astro public website
 ```
 
 ## Quick Setup
@@ -30,8 +32,8 @@ cd .github
 This will:
 
 - Install pre-commit (if not already installed)
-- Set up pre-commit hooks in all repos (formatting, linting, REUSE compliance)
-- Set up pre-push hooks in all repos (comprehensive quality checks)
+- Set up pre-commit hooks in all active repos (formatting, linting, REUSE compliance)
+- Set up pre-push hooks in all active repos (repository preflight checks)
 
 ## Individual Repository Setup
 
@@ -66,11 +68,13 @@ SecPal uses two types of Git hooks:
 - Implemented as symlinks to `scripts/preflight.sh`
 - Runs on every `git push`
 - Comprehensive checks including:
-  - All pre-commit checks
+  - Formatting, markdownlint, REUSE, domain, and conflict-marker checks
   - Language-specific linting and type checking
   - Tests (where applicable)
   - PR size limits
   - Protection against pushing directly to main/master branches
+
+Workflow linting via `actionlint` is enforced through pre-commit hooks and CI. Install `actionlint` separately if you want to run it manually outside those paths.
 
 ## Bypassing Hooks (Emergencies Only)
 

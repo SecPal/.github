@@ -87,12 +87,14 @@ This script runs automatically before every `git push` via the pre-push hook.
 
 - Code formatting (Prettier)
 - Markdown linting
-- Workflow linting (actionlint)
+- Workflow linting coverage reminder (actionlint is enforced by pre-commit hooks and CI)
 - REUSE compliance
 - PHP linting and tests (if applicable)
 - Node.js linting and tests (if applicable)
 - OpenAPI validation (if applicable)
 - PR size (< 600 lines recommended, excluding lock files and license files)
+
+If you want a manual local workflow lint pass, install `actionlint` and run `actionlint` from the repository root. The local preflight script intentionally does not invoke `actionlint` directly.
 
 **Excluded from PR size calculation:**
 

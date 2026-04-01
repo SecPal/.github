@@ -9,6 +9,13 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-01 - Tighten Local Tooling Guidance And Workspace Hook Coverage
+
+**Changed:**
+
+- clarified that local `scripts/preflight.sh` does not invoke `actionlint` directly, while workflow linting remains enforced through pre-commit hooks and CI, and documented the optional manual local `actionlint` path consistently across contributor docs
+- extended the master `setup-hooks.sh` workspace bootstrap to include the active `android` and `secpal.app` repositories and refreshed the workspace setup guide to match the current six-repository layout
+
 ## 2026-04-01 - Adversarial Security Review Second Pass
 
 **Added:**

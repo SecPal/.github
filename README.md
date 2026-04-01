@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
@@ -160,7 +160,7 @@ The hooks are installed as symlinks in `.git/hooks/`, ensuring they automaticall
 
 - Code formatting (Prettier, markdownlint)
 - REUSE 3.3 compliance
-- Workflow linting (actionlint - **disabled locally**, runs in CI only due to network timeout issues when checking workflows; actionlint attempts to fetch GitHub API metadata which can hang indefinitely in some network configurations)
+- Workflow linting coverage via pre-commit hooks and CI (local preflight does not invoke `actionlint` directly because it has caused hangs in some environments)
 - Language-specific checks:
   - **PHP/Laravel**: Pint, PHPStan, tests
   - **Node.js**: ESLint, TypeScript, tests, npm audit
@@ -173,9 +173,14 @@ The hooks are installed as symlinks in `.git/hooks/`, ensuring they automaticall
 # Run preflight checks manually
 ./scripts/preflight.sh
 
+# Optional local workflow lint
+actionlint
+
 # Skip checks (not recommended)
 git push --no-verify
 ```
+
+Install `actionlint` via your package manager or a release binary if you want that optional local workflow lint pass.
 
 **Included Checks (pre-commit):**
 
