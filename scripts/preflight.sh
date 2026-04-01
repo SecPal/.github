@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
@@ -50,16 +50,12 @@ if command -v npx >/dev/null 2>&1; then
   npx --yes prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
   npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' || FORMAT_EXIT=1
 fi
-# Workflow linting (part of documented gates)
-# NOTE: actionlint is disabled in local preflight due to known hanging issues
-# It runs in CI via .github/workflows/actionlint.yml instead
+# Workflow linting is enforced by pre-commit hooks and CI.
+# Local preflight keeps this as guidance only because direct actionlint runs
+# have caused hangs in some environments.
 if [ -d .github/workflows ]; then
-  if command -v actionlint >/dev/null 2>&1; then
-    echo "ℹ️  Skipping actionlint in local preflight (runs in CI)" >&2
-    # Uncomment below to enable (may hang):
-    # timeout 30 actionlint || FORMAT_EXIT=1
-  else
-    echo "Warning: .github/workflows found but actionlint not installed - skipping workflow lint" >&2
+  if ! command -v actionlint >/dev/null 2>&1; then
+    echo "ℹ️  actionlint is optional for manual local workflow linting; pre-commit hooks and CI still enforce workflow checks. Install actionlint if you want to run 'actionlint' manually." >&2
   fi
 fi
 if command -v reuse >/dev/null 2>&1; then

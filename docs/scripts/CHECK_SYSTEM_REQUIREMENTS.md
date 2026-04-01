@@ -40,7 +40,9 @@ The `check-system-requirements.sh` script validates that all required tools and 
 - npx (Node Package Runner) - critical
 - ShellCheck - critical
 - yamllint - optional
-- actionlint (GitHub Actions) - optional
+- actionlint (GitHub Actions, optional manual local workflow linting) - optional
+
+If you want to run workflow linting locally outside pre-commit and CI, install `actionlint` with your package manager or place a release binary on your `PATH`.
 
 **Git Configuration:**
 
