@@ -74,7 +74,7 @@ SecPal uses two types of Git hooks:
   - PR size limits
   - Protection against pushing directly to main/master branches
 
-Workflow linting via `actionlint` is enforced through pre-commit hooks and CI. Install `actionlint` separately if you want to run it manually outside those paths.
+Workflow linting via `actionlint` is enforced through pre-commit hooks and CI. If you need to run it manually, prefer `pre-commit run actionlint --all-files`, or wrap any direct `actionlint` invocation in a short timeout (e.g. `timeout 30 actionlint`) to avoid environment-specific hangs.
 
 ## Bypassing Hooks (Emergencies Only)
 

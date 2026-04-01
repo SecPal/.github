@@ -27,8 +27,9 @@ fi
 
 for repo in "${REPOS[@]}"; do
 	if [ ! -d "$repo" ]; then
-		echo "⚠️  Skipping $repo (directory not found)"
-		continue
+                echo "  ✗ Directory not found: $repo"
+                FAILED_REPOS+=("$repo (directory not found)")
+                continue
 	fi
 
 	echo "────────────────────────────────────────"
@@ -46,24 +47,26 @@ for repo in "${REPOS[@]}"; do
 			FAILED_REPOS+=("$repo (pre-push)")
 		fi
 	else
-		echo "  ⚠️  scripts/setup-pre-push.sh not found"
-	fi
+                echo "  ✗ scripts/setup-pre-push.sh not found in $repo"
+                FAILED_REPOS+=("$repo (setup-pre-push.sh missing)")
+        fi
 
-	# Setup pre-commit hook
-	if [ -f "scripts/setup-pre-commit.sh" ]; then
-		if ./scripts/setup-pre-commit.sh; then
-			echo "  ✓ Pre-commit hook installed"
-			((SUCCESS_COUNT++))
-		else
-			echo "  ✗ Pre-commit hook installation failed"
-			FAILED_REPOS+=("$repo (pre-commit)")
-		fi
-	else
-		echo "  ⚠️  scripts/setup-pre-commit.sh not found"
-	fi
+        # Setup pre-commit hook
+        if [ -f "scripts/setup-pre-commit.sh" ]; then
+                if ./scripts/setup-pre-commit.sh; then
+                        echo "  ✓ Pre-commit hook installed"
+                        ((SUCCESS_COUNT++))
+                else
+                        echo "  ✗ Pre-commit hook installation failed"
+                        FAILED_REPOS+=("$repo (pre-commit)")
+                fi
+        else
+                echo "  ✗ scripts/setup-pre-commit.sh not found in $repo"
+                FAILED_REPOS+=("$repo (setup-pre-commit.sh missing)")
+        fi
 
-	cd "$WORKSPACE_ROOT"
-	echo ""
+        cd "$WORKSPACE_ROOT"
+        echo ""
 done
 
 echo "════════════════════════════════════════"

@@ -173,14 +173,15 @@ The hooks are installed as symlinks in `.git/hooks/`, ensuring they automaticall
 # Run preflight checks manually
 ./scripts/preflight.sh
 
-# Optional local workflow lint
-actionlint
+# Optional local workflow lint (prefer this to avoid environment-specific hangs)
+pre-commit run actionlint --all-files
+# or, if you need a direct run: timeout 30 actionlint
 
 # Skip checks (not recommended)
 git push --no-verify
 ```
 
-Install `actionlint` via your package manager or a release binary if you want that optional local workflow lint pass.
+Install `actionlint` via your package manager or a release binary if you want to run it outside pre-commit.
 
 **Included Checks (pre-commit):**
 

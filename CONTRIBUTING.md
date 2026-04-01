@@ -94,7 +94,7 @@ This script runs automatically before every `git push` via the pre-push hook.
 - OpenAPI validation (if applicable)
 - PR size (< 600 lines recommended, excluding lock files and license files)
 
-If you want a manual local workflow lint pass, install `actionlint` and run `actionlint` from the repository root. The local preflight script intentionally does not invoke `actionlint` directly.
+If you want a manual local workflow lint pass, prefer `pre-commit run actionlint --all-files` — this avoids the environment-specific hangs that can occur with a direct `actionlint` invocation. If you must run `actionlint` directly, wrap it with a timeout (e.g. `timeout 30 actionlint`). The local preflight script intentionally does not invoke `actionlint` directly.
 
 **Excluded from PR size calculation:**
 
