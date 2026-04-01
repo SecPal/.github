@@ -36,12 +36,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Setup Node.js and dependencies
-        uses: SecPal/.github/.github/actions/setup-node-with-deps@main
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
-          global-package: "@redocly/cli"
-          require-lockfile: ${{ inputs.require-lockfile }}
+
+      - name: Install dependencies
+        env:
+          REQUIRE_LOCKFILE: ${{ inputs.require-lockfile }}
+        run: |
+          set -euo pipefail
+          if [ -f "package.json" ]; then
+            if ! command -v jq >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y jq
+            fi
+            if [ -f "package-lock.json" ]; then
+              npm ci
+            elif [ "$REQUIRE_LOCKFILE" = "true" ]; then
+              echo "::error::package-lock.json not found. Commit a lock file or disable require-lockfile." >&2
+              exit 1
+            else
+              echo "::warning::No package-lock.json found. Using npm install instead of npm ci." >&2
+              echo "::warning::Consider committing package-lock.json for reproducible builds." >&2
+              npm install
+            fi
+          else
+            npm install -g @redocly/cli
+          fi
 
       - name: Validate OpenAPI specification
         env:
