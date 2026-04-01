@@ -9,6 +9,13 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-01 - Fix Cross-Repo Composite Action Resolution In Reusable Workflows
+
+**Fixed:**
+
+- inlined the Node.js setup and dependency-install steps back into `reusable-prettier.yml` and `reusable-openapi-lint.yml` to restore cross-repo compatibility; GitHub Actions cannot resolve composite actions stored under `.github/actions/` in an external repository when referenced from a step inside a reusable `workflow_call` workflow, causing all callers (`frontend`, `secpal.app`) to fail with "Can't find action.yml"
+- the composite action `setup-node-with-deps` is retained for potential future use once a supported path layout is confirmed
+
 ## 2026-04-01 - Refactor Reusable Node Workflow Setup
 
 **Changed:**
