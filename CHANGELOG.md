@@ -9,6 +9,14 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-01 - Adversarial Security Review Second Pass
+
+**Added:**
+
+- completed second-pass adversarial security audit targeting subtle, non-obvious vulnerabilities overlooked in standard reviews
+- identified 14 substantive findings (3 critical, 5 high, 6 medium severity) including Merkle tree cryptography weakness, race conditions, and contract/implementation misalignment
+- documented findings in `docs/audits/2026-03-31-adversarial-review.md` with exact code references and remediation guidance
+
 ## 2026-04-01 - Reduce Copilot Instruction Context Bloat
 
 **Changed:**
