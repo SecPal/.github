@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+---
 name: Reusable - Prettier
 
 on:
@@ -16,31 +17,31 @@ on:
         required: false
         type: string
         default: "**/*.{md,yml,yaml,json}"
+      require-lockfile:
+        description: >-
+          Fail if package-lock.json is missing when package.json exists
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Node.js and dependencies
+        uses: SecPal/.github/.github/actions/setup-node-with-deps@main
         with:
           node-version: ${{ inputs.node-version }}
-
-      - name: Install dependencies
-        run: |
-          if [ -f "package.json" ]; then
-            npm ci || npm install
-            # Install jq for JSON parsing if not available
-            if ! command -v jq &> /dev/null; then
-              sudo apt-get update && sudo apt-get install -y jq
-            fi
-          else
-            npm install -g prettier
-          fi
+          global-package: "prettier"
+          require-lockfile: ${{ inputs.require-lockfile }}
 
       - name: Run Prettier Check
         env:
@@ -48,7 +49,9 @@ jobs:
         run: |
           # Check if package.json has a format:check script that we can use
           # Only use it if FILES matches the default to avoid ignoring custom file patterns
-          if [ -f "package.json" ] && command -v jq &> /dev/null && jq -e '.scripts["format:check"]' package.json > /dev/null 2>&1; then
+          if [ -f "package.json" ] && \
+            command -v jq &> /dev/null && \
+            jq -e '.scripts["format:check"]' package.json > /dev/null 2>&1; then
             if [ "$FILES" = "**/*.{md,yml,yaml,json}" ]; then
               npm run format:check
             else

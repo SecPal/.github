@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+name: Setup Node.js With Dependencies
+description: >-
+  Set up Node.js and install local or global npm dependencies for shared
+  workflows.
+
+inputs:
+  node-version:
+    description: Node.js version to use.
+    required: false
+    default: "22.x"
+  global-package:
+    description: npm package to install globally when no package.json exists.
+    required: false
+    default: ""
+  require-lockfile:
+    description: Fail if package-lock.json is missing when package.json exists.
+    required: false
+    default: "false"
+  install-jq:
+    description: Install jq when package.json exists.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        GLOBAL_PACKAGE: ${{ inputs.global-package }}
+        REQUIRE_LOCKFILE: ${{ inputs.require-lockfile }}
+        INSTALL_JQ: ${{ inputs.install-jq }}
+      run: |
+        set -euo pipefail
+
+        if [ -f "package.json" ]; then
+          if [ "$INSTALL_JQ" = "true" ] && ! command -v jq >/dev/null 2>&1; then
+            if [ "${RUNNER_OS:-}" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y jq
+            else
+              echo "::error::install-jq requires apt-get. Preinstall jq on this runner or set install-jq: false." >&2
+              exit 1
+            fi
+          fi
+
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          elif [ "$REQUIRE_LOCKFILE" = "true" ]; then
+            echo "::error::package-lock.json not found. Commit a lock file or disable require-lockfile." >&2
+            exit 1
+          else
+            echo "::warning::No package-lock.json found. Using npm install instead of npm ci." >&2
+            echo "::warning::Consider committing package-lock.json for reproducible builds." >&2
+            npm install
+          fi
+        elif [ -n "$GLOBAL_PACKAGE" ]; then
+          npm install -g "$GLOBAL_PACKAGE"
+        else
+          echo "No package.json found and no global package requested; skipping npm dependency installation."
+        fi
