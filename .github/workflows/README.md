@@ -39,6 +39,8 @@ jobs:
 
 Checks code formatting with Prettier.
 
+When a repository has a `package.json`, the workflow uses `npm ci` by default and falls back to `npm install` with a warning if `package-lock.json` is missing. Set `require-lockfile: true` to make missing lock files fail the workflow.
+
 **Usage:**
 
 ```yaml
@@ -48,6 +50,7 @@ jobs:
     with:
       node-version: "22.x" # optional, default: '22.x'
       files: "**/*.{md,yml,yaml,json}" # optional
+      require-lockfile: false # optional, default: false
 ```
 
 #### `reusable-markdown-lint.yml`
@@ -163,6 +166,8 @@ jobs:
 
 Validates OpenAPI specifications.
 
+When a repository has a `package.json`, the workflow uses `npm ci` by default and falls back to `npm install` with a warning if `package-lock.json` is missing. Set `require-lockfile: true` to make missing lock files fail the workflow.
+
 **Usage:**
 
 ```yaml
@@ -172,7 +177,14 @@ jobs:
     with:
       openapi-file: "openapi.yaml" # optional, default: 'openapi.yaml'
       node-version: "22.x" # optional, default: '22.x'
+      require-lockfile: false # optional, default: false
 ```
+
+## Internal Helper Actions
+
+### `setup-node-with-deps`
+
+Internal composite action used by the reusable Node-based validation workflows to keep Node setup, `jq` installation, and lockfile-aware npm installation behavior consistent.
 
 ## Example: Complete CI Workflow for Frontend
 

@@ -9,6 +9,14 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-01 - Refactor Reusable Node Workflow Setup
+
+**Changed:**
+
+- extracted the duplicated Node setup and dependency-install logic from the reusable Prettier and OpenAPI lint workflows into a shared composite action
+- added explicit lockfile handling for those reusable workflows so missing `package-lock.json` now warns and falls back to `npm install` by default, with an opt-in `require-lockfile` mode for stricter callers
+- aligned the touched reusable workflows with current governance expectations by adding explicit `contents: read` permissions and job timeouts
+
 ## 2026-04-01 - Tighten Local Tooling Guidance And Workspace Hook Coverage
 
 **Changed:**
