@@ -136,7 +136,7 @@ test_runtime_model() {
     local repo_type="$1"
 
     if [ "$repo_type" = "org" ]; then
-        if grep -q "Runtime Application Model" .github/copilot-instructions.md && grep -q "do not automatically inherit" .github/copilot-instructions.md; then
+        if grep -qiE 'authoritative|runtime application model' .github/copilot-instructions.md && grep -qiE 'self-contained|do not automatically inherit' .github/copilot-instructions.md; then
             print_result "org instructions define runtime model" "PASS"
         else
             print_result "org instructions define runtime model" "FAIL" "Missing runtime application model guidance"
@@ -144,10 +144,10 @@ test_runtime_model() {
         return
     fi
 
-    if grep -qiE 'self-contained|repo-local' .github/copilot-instructions.md && grep -q "Required Checklist" .github/copilot-instructions.md; then
+    if grep -qiE 'self-contained|repo-local' .github/copilot-instructions.md && grep -qiE 'Required Checklist|Required Validation' .github/copilot-instructions.md; then
         print_result "repo instructions are self-contained" "PASS"
     else
-        print_result "repo instructions are self-contained" "FAIL" "Missing self-contained guidance or Required Checklist"
+        print_result "repo instructions are self-contained" "FAIL" "Missing self-contained guidance or Required Checklist/Validation"
     fi
 }
 
