@@ -52,9 +52,9 @@ Use only these domains and identifiers:
 - `api.secpal.dev` for the live API host
 - `app.secpal.dev` for the live PWA/frontend host
 - `secpal.dev` for dev, staging, testing, and examples
-- `app.secpal.app` only as the Android application identifier
+- `app.secpal` only as the Android application identifier
 
-Treat `api.secpal.app` and `app.secpal.app` as deprecated web hosts.
+Treat `api.secpal.app` as a deprecated web host.
 
 ## Repository Conventions
 

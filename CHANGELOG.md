@@ -54,13 +54,19 @@ Chronological log of notable changes to SecPal organization defaults.
 - tightened the guidance to the rules that actually need to stay always-on so multi-repo VS Code workspaces send less redundant governance text with each Copilot request
 - updated `validate-copilot-instructions.sh` runtime-model checks to accept the new condensed phrasing alongside the original wording
 
+## 2026-04-03 - Rename Android Identifier To app.secpal
+
+**Changed:**
+
+- updated the organization-wide Android identifier baseline to `app.secpal`, removed the old identifier exception from current governance text and Copilot configuration, and tightened the shared domain-check allowlist so legacy former host-style strings are no longer implicitly accepted
+
 ## 2026-03-29 - Align Cross-Repo Domain Policy With Active .dev Hosts
 
 **Changed:**
 
-- corrected the organization-wide domain policy text so `secpal.app` is limited to the public homepage and real email addresses, while `api.secpal.dev` and `app.secpal.dev` are the active API/PWA hosts and `app.secpal.app` remains Android identifier-only
+- corrected the organization-wide domain policy text so `secpal.app` is limited to the public homepage and real email addresses, while `api.secpal.dev` and `app.secpal.dev` are the active API/PWA hosts and the Android application identifier remains Android-only
 - updated the shared `check-domains.sh` guidance to flag deprecated `.app` web-host usage separately from valid Android identifier references
-- refreshed historical ADR and feature-requirement examples that still used `.secpal.app` subdomains as active tenant or employee web-host examples
+- refreshed historical ADR and feature-requirement examples that still used legacy `.app`-style SecPal subdomains as active tenant or employee web-host examples
 
 ## 2026-03-22 - Refresh Governance Baseline Docs For Live Repository State
 
