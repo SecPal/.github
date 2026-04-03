@@ -359,14 +359,14 @@ By contributing to SecPal projects, you agree to our [Contributor License Agreem
 
 **CLA Signing Process:**
 
-When you submit your first pull request, [CLA Assistant](https://cla-assistant.io/) will automatically comment with instructions. Simply:
+When you submit or update a pull request, SecPal's repo-local `license/cla` workflow checks every non-exempt contributor and posts instructions directly on the pull request when a signature is still missing.
 
-1. Click the link in the comment
-2. Sign in with GitHub (OAuth)
-3. Click "I agree" to sign the CLA
-4. Your PR status will update automatically
+1. Open the CLA document linked by the workflow comment
+2. Add this exact pull request comment from each missing contributor account: `I have read the CLA and I hereby sign it.`
+3. Wait for the `license/cla` status to turn green
+4. If the status does not refresh automatically, add `recheck cla`
 
-All signatures are stored securely in a GDPR-compliant database hosted in Europe.
+Each repository stores its own signature metadata on the `cla-signatures` branch in `signatures/version1/cla.json`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
@@ -374,17 +374,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ### For Repository Maintainers
 
-To enable CLA checks in your SecPal repository:
+To enable CLA checks in a SecPal repository:
 
-1. Go to [CLA Assistant](https://cla-assistant.io/) and sign in with GitHub
-2. Click "Configure CLA"
-3. Select your repository from the dropdown
-4. Link it to the SecPal CLA Gist (ask an organization admin for the Gist URL)
-5. Done! CLA Assistant will automatically monitor all pull requests
+1. Commit `.github/workflows/license-cla.yml` to the repository's default branch
+2. Run `.github/scripts/enable-cla-required-checks.sh` from this repository after rollout
+3. Verify that `license/cla` appears in branch protection and on new pull requests
 
-**Unlike the previous GitHub Action approach, no workflow files are needed** – CLA Assistant uses GitHub webhooks directly.
-
-All CLA signatures are stored centrally in a secure database (Azure Europe, GDPR-compliant).
+This workflow replaces the previously flaky hosted `CLA Assistant` status with a repo-local GitHub Actions flow that owns the `license/cla` commit status directly.
 
 ---
 

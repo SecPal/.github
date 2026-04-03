@@ -148,18 +148,17 @@ You agree to notify SecPal of any facts or circumstances of which you become awa
 
 ### Automated Signing (Recommended)
 
-We use **[CLA Assistant](https://cla-assistant.io/)** to manage CLA signatures. When you submit your first pull request, the CLA Assistant will automatically comment on your PR with instructions.
+SecPal uses a repo-local `license/cla` workflow to manage CLA signatures. When you open or update a pull request, the workflow checks every non-exempt contributor and posts instructions directly on the pull request when a signature is missing.
 
 **Steps:**
 
 1. **Submit your pull request**
-2. **Wait for CLA Assistant** to comment on your PR
-3. **Click the link** in the comment to review the CLA
-4. **Sign in with GitHub** (OAuth authentication)
-5. **Click "I agree"** to sign the CLA
-6. **The PR status will update** automatically once signed
+2. **Open the CLA document** linked by the workflow comment
+3. **Add this exact pull request comment** from each missing contributor account: `I have read the CLA and I hereby sign it.`
+4. **Wait for the `license/cla` status** to update automatically
+5. **Comment `recheck cla`** if the status needs to be recalculated manually
 
-The signature is stored securely in a database hosted in the Azure Europe region ("West Europe" - Netherlands) and is GDPR-compliant.
+Each repository stores its own signature metadata on the `cla-signatures` branch in `signatures/version1/cla.json`.
 
 ### Manual Signing (Alternative)
 

@@ -1,0 +1,350 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+---
+name: CLA Status
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
+  issue_comment:
+    types:
+      - created
+      - edited
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: cla-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sync-cla-status:
+    name: Synchronize CLA Status
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Synchronize signature state and commit status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLA_BRANCH: cla-signatures
+          CLA_CONTEXT: license/cla
+          CLA_DOCUMENT_URL: https://github.com/SecPal/.github/blob/main/CLA.md
+          CLA_FILE: signatures/version1/cla.json
+          CLA_RECHECK_COMMENT: recheck cla
+          CLA_SIGN_COMMENT: I have read the CLA and I hereby sign it.
+          CLA_STATUS_MARKER: <!-- secpal-cla-status -->
+          CLA_VERSION: 2026-04-03
+          EXEMPT_LOGINS: dependabot[bot],renovate[bot],github-actions[bot],copilot-pull-request-reviewer
+        run: |
+          set -euo pipefail
+
+          api() {
+            gh api -H "X-GitHub-Api-Version: 2022-11-28" "$@"
+          }
+
+          is_exempt_login() {
+            local login="$1"
+            local pattern
+
+            IFS=',' read -r -a exempt_patterns <<< "$EXEMPT_LOGINS"
+            for pattern in "${exempt_patterns[@]}"; do
+              if [[ -n "$pattern" && "$login" == "$pattern" ]]; then
+                return 0
+              fi
+            done
+
+            return 1
+          }
+
+          update_status() {
+            local state="$1"
+            local description="$2"
+
+            api -X POST "repos/$repository/statuses/$head_sha" \
+              -f state="$state" \
+              -f context="$CLA_CONTEXT" \
+              -f description="$description" \
+              -f target_url="$CLA_DOCUMENT_URL" >/dev/null
+          }
+
+          ensure_signature_branch() {
+            if api "repos/$repository/git/ref/heads/$CLA_BRANCH" >/dev/null 2>&1; then
+              return 0
+            fi
+
+            local default_head_sha
+            default_head_sha="$(api "repos/$repository/git/ref/heads/$default_branch" --jq '.object.sha')"
+
+            api -X POST "repos/$repository/git/refs" \
+              -f ref="refs/heads/$CLA_BRANCH" \
+              -f sha="$default_head_sha" >/dev/null
+          }
+
+          load_signatures() {
+            signature_file_sha=""
+
+            if api "repos/$repository/contents/$CLA_FILE?ref=$CLA_BRANCH" >"$signature_response" 2>/dev/null; then
+              signature_file_sha="$(jq -r '.sha' "$signature_response")"
+              jq -r '.content' "$signature_response" | tr -d '\n' | base64 --decode >"$signature_json"
+            else
+              printf '%s\n' '{"document_version":"","document_url":"","signatures":[]}' >"$signature_json"
+            fi
+          }
+
+          save_signatures() {
+            local commit_message="$1"
+            local payload_file
+            local encoded_content
+
+            ensure_signature_branch
+            payload_file="$(mktemp)"
+            encoded_content="$(base64 -w 0 <"$signature_json")"
+
+            if [[ -n "$signature_file_sha" ]]; then
+              jq -n \
+                --arg message "$commit_message" \
+                --arg branch "$CLA_BRANCH" \
+                --arg content "$encoded_content" \
+                --arg sha "$signature_file_sha" \
+                '{message:$message, branch:$branch, content:$content, sha:$sha}' >"$payload_file"
+            else
+              jq -n \
+                --arg message "$commit_message" \
+                --arg branch "$CLA_BRANCH" \
+                --arg content "$encoded_content" \
+                '{message:$message, branch:$branch, content:$content}' >"$payload_file"
+            fi
+
+            api -X PUT "repos/$repository/contents/$CLA_FILE" --input "$payload_file" >"$signature_update_response"
+            signature_file_sha="$(jq -r '.content.sha' "$signature_update_response")"
+          }
+
+          upsert_pr_comment() {
+            local body="$1"
+            local existing_comment_id
+            local payload_file
+
+            existing_comment_id="$({
+              api --paginate "repos/$repository/issues/$pr_number/comments?per_page=100" \
+                --jq ".[] | select((.body // \"\") | contains(\"$CLA_STATUS_MARKER\")) | .id"
+            } | tail -n 1)"
+
+            payload_file="$(mktemp)"
+            jq -n --arg body "$body" '{body:$body}' >"$payload_file"
+
+            if [[ -n "$existing_comment_id" ]]; then
+              api -X PATCH "repos/$repository/issues/comments/$existing_comment_id" --input "$payload_file" >/dev/null
+            else
+              api -X POST "repos/$repository/issues/$pr_number/comments" --input "$payload_file" >/dev/null
+            fi
+          }
+
+          normalize_comment() {
+            tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
+          }
+
+          repository="$GITHUB_REPOSITORY"
+          event_path="$GITHUB_EVENT_PATH"
+          event_name="$GITHUB_EVENT_NAME"
+          default_branch="$(jq -r '.repository.default_branch' "$event_path")"
+
+          pr_response="$(mktemp)"
+          signature_response="$(mktemp)"
+          signature_update_response="$(mktemp)"
+          signature_json="$(mktemp)"
+          trap 'rm -f "$pr_response" "$signature_response" "$signature_update_response" "$signature_json"' EXIT
+
+          if [[ "$event_name" == "issue_comment" ]]; then
+            pr_number="$(jq -r '.issue.number' "$event_path")"
+            if ! api "repos/$repository/pulls/$pr_number" >"$pr_response" 2>/dev/null; then
+              echo "Issue comment is not attached to a pull request."
+              exit 0
+            fi
+
+            comment_author="$(jq -r '.comment.user.login // ""' "$event_path")"
+            normalized_comment="$(jq -r '.comment.body // ""' "$event_path" | normalize_comment)"
+
+            if [[ "$normalized_comment" != "$CLA_SIGN_COMMENT" && "$normalized_comment" != "$CLA_RECHECK_COMMENT" ]]; then
+              echo "Ignoring unrelated pull request comment."
+              exit 0
+            fi
+          else
+            pr_number="$(jq -r '.pull_request.number' "$event_path")"
+            api "repos/$repository/pulls/$pr_number" >"$pr_response"
+            comment_author=""
+            normalized_comment=""
+          fi
+
+          head_sha="$(jq -r '.head.sha' "$pr_response")"
+          pr_author="$(jq -r '.user.login' "$pr_response")"
+
+          update_status pending "Checking contributor signatures"
+
+          contributor_logins="$({
+            printf '%s\n' "$pr_author"
+            api --paginate "repos/$repository/pulls/$pr_number/commits?per_page=100" --jq '.[].author.login // empty'
+            api --paginate "repos/$repository/pulls/$pr_number/commits?per_page=100" --jq '.[].committer.login // empty'
+          } | awk 'NF' | sort -u)"
+
+          unresolved_authors="$({
+            api --paginate "repos/$repository/pulls/$pr_number/commits?per_page=100" \
+              --jq '.[ ] | select(.author == null) | "\(.commit.author.name // "unknown") <\(.commit.author.email // "unknown")>"'
+          } | awk 'NF' | sort -u)"
+
+          required_contributors=()
+          exempt_contributors=()
+
+          while IFS= read -r contributor_login; do
+            [[ -z "$contributor_login" ]] && continue
+            if is_exempt_login "$contributor_login"; then
+              exempt_contributors+=("$contributor_login")
+            else
+              required_contributors+=("$contributor_login")
+            fi
+          done <<< "$contributor_logins"
+
+          load_signatures
+
+          if [[ "$normalized_comment" == "$CLA_SIGN_COMMENT" ]]; then
+            signer_is_required=0
+            for contributor_login in "${required_contributors[@]}"; do
+              if [[ "$comment_author" == "$contributor_login" ]]; then
+                signer_is_required=1
+                break
+              fi
+            done
+
+            if [[ "$signer_is_required" -eq 1 ]]; then
+              tmp_signature_json="$(mktemp)"
+              jq \
+                --arg version "$CLA_VERSION" \
+                --arg document_url "$CLA_DOCUMENT_URL" \
+                --arg login "$comment_author" \
+                --arg repository_name "$repository" \
+                --arg signed_at "$(date -u +%FT%TZ)" \
+                --argjson pull_request_number "$pr_number" \
+                ".document_version = \$version
+                | .document_url = \$document_url
+                | .signatures = (
+                    (.signatures // [])
+                    | map(select(.login != \$login or .version != \$version))
+                    + [{
+                        login: \$login,
+                        version: \$version,
+                        document_url: \$document_url,
+                        repository: \$repository_name,
+                        pull_request: \$pull_request_number,
+                        signed_at: \$signed_at,
+                        source: \"pull_request_comment\"
+                      }]
+                  )" "$signature_json" >"$tmp_signature_json"
+              mv "$tmp_signature_json" "$signature_json"
+              save_signatures "chore(cla): record signature for $comment_author"
+            else
+              echo "Comment author is not a missing contributor for this pull request."
+            fi
+          fi
+
+          signed_contributors="$({
+            jq -r --arg version "$CLA_VERSION" ".signatures[]? | select(.version == \$version) | .login" "$signature_json"
+          } | awk 'NF' | sort -u)"
+
+          missing_contributors=()
+          for contributor_login in "${required_contributors[@]}"; do
+            if ! grep -Fxq "$contributor_login" <<< "$signed_contributors"; then
+              missing_contributors+=("$contributor_login")
+            fi
+          done
+
+          if [[ -n "$unresolved_authors" ]]; then
+            unresolved_list="$(printf '%s\n' "$unresolved_authors" | sed 's/^/- /')"
+            missing_block=""
+            if [[ "${#missing_contributors[@]}" -gt 0 ]]; then
+              missing_list="$(printf '%s\n' "${missing_contributors[@]}" | sed 's/^/- @/')"
+              missing_block="$(printf "The following linked contributors still need to sign the CLA for version \`%s\`:\n\n%s\n\n" "$CLA_VERSION" "$missing_list")"
+            fi
+            update_status failure "Maintainer action required for unlinked commit authors"
+            comment_body="$(printf '%s\n' \
+              "${CLA_STATUS_MARKER}" \
+              "## CLA Status" \
+              "" \
+              "This pull request cannot pass the CLA gate yet." \
+              "" \
+              "Unlinked commit authors require maintainer review before SecPal can record a signature for them:" \
+              "" \
+              "${unresolved_list}" \
+              "" \
+              "${missing_block}Document: ${CLA_DOCUMENT_URL}" \
+              "" \
+              "To sign, a missing contributor must add this exact pull request comment:" \
+              "" \
+              "> ${CLA_SIGN_COMMENT}" \
+              "" \
+              "If the status does not refresh after signing, comment:" \
+              "" \
+              "> ${CLA_RECHECK_COMMENT}" \
+              "" \
+              "Signature records are stored on branch \`${CLA_BRANCH}\` in \`${CLA_FILE}\`." \
+            )"
+            upsert_pr_comment "$comment_body"
+            exit 1
+          fi
+
+          if [[ "${#missing_contributors[@]}" -eq 0 ]]; then
+            exempt_block=""
+            if [[ "${#exempt_contributors[@]}" -gt 0 ]]; then
+              exempt_block="Exempt contributors: $(printf '@%s ' "${exempt_contributors[@]}" | sed 's/ $//')."
+            fi
+            update_status success "All contributors signed CLA version $CLA_VERSION"
+            comment_body="$(printf '%s\n' \
+              "${CLA_STATUS_MARKER}" \
+              "## CLA Status" \
+              "" \
+              "All non-exempt contributors have signed CLA version \`${CLA_VERSION}\`." \
+              "" \
+              "Document: ${CLA_DOCUMENT_URL}" \
+              "${exempt_block}" \
+              "" \
+              "Signature records are stored on branch \`${CLA_BRANCH}\` in \`${CLA_FILE}\`." \
+            )"
+            upsert_pr_comment "$comment_body"
+            exit 0
+          fi
+
+          missing_list="$(printf '%s\n' "${missing_contributors[@]}" | sed 's/^/- @/')"
+          update_status failure "${#missing_contributors[@]} contributor(s) still need to sign the CLA"
+          comment_body="$(printf '%s\n' \
+            "${CLA_STATUS_MARKER}" \
+            "## CLA Status" \
+            "" \
+            "This pull request is blocked until every non-exempt contributor signs CLA version \`${CLA_VERSION}\`." \
+            "" \
+            "Missing contributors:" \
+            "" \
+            "${missing_list}" \
+            "" \
+            "Document: ${CLA_DOCUMENT_URL}" \
+            "" \
+            "To sign, a missing contributor must add this exact pull request comment:" \
+            "" \
+            "> ${CLA_SIGN_COMMENT}" \
+            "" \
+            "If the status does not refresh after signing, comment:" \
+            "" \
+            "> ${CLA_RECHECK_COMMENT}" \
+            "" \
+            "Signature records are stored on branch \`${CLA_BRANCH}\` in \`${CLA_FILE}\`." \
+          )"
+          upsert_pr_comment "$comment_body"
+          exit 1

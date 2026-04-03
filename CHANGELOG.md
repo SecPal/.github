@@ -9,6 +9,14 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-03 - Replace Flaky Hosted CLA Status With Repo-Local Workflow
+
+**Changed:**
+
+- replaced the previously unreliable hosted `CLA Assistant` dependency for the `license/cla` status with a repo-local GitHub Actions workflow design that owns the commit status directly, stores signature metadata on a dedicated `cla-signatures` branch, and documents the exact pull-request comment contributors must use to sign
+- added `scripts/enable-cla-required-checks.sh` so maintainers can re-enable `license/cla` as a required branch-protection check across all SecPal repositories only after the workflow exists on each default branch
+- updated the central CLA, licensing, and workflow-template documentation to describe the new deterministic signing flow instead of the old external webhook model
+
 ## 2026-04-03 - Document Local actionlint Remediation For Preflight Warnings
 
 **Changed:**
