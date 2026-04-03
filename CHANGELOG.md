@@ -9,6 +9,13 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-03 - Document Local actionlint Remediation For Preflight Warnings
+
+**Changed:**
+
+- made the local `scripts/preflight.sh` warning for missing `actionlint` explicitly point maintainers to `pre-commit run actionlint --all-files` and an optional standalone install path via `go install github.com/rhysd/actionlint/cmd/actionlint@latest`
+- extended `setup-hooks.sh`, `WORKSPACE_SETUP.md`, and system-requirements guidance so workspace bootstrap now explains that workflow linting already works through pre-commit hooks and CI even when the standalone `actionlint` binary is absent
+
 ## 2026-04-01 - Fix Cross-Repo Composite Action Resolution In Reusable Workflows
 
 **Fixed:**

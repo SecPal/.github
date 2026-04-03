@@ -137,7 +137,7 @@ check_npx_tool "prettier"
 
 check_command "shellcheck" "ShellCheck" "critical" "Install: sudo apt install shellcheck / brew install shellcheck"
 check_command "yamllint" "yamllint" "optional" "Install: pip3 install yamllint"
-check_command "actionlint" "actionlint (GitHub Actions)" "optional" "Install: brew install actionlint or place a release binary on PATH"
+check_command "actionlint" "actionlint (GitHub Actions)" "optional" "Install: go install github.com/rhysd/actionlint/cmd/actionlint@latest, brew install actionlint, or place a release binary on PATH"
 
 print_section "Git Configuration"
 

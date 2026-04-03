@@ -76,6 +76,8 @@ SecPal uses two types of Git hooks:
 
 Workflow linting via `actionlint` is enforced through pre-commit hooks and CI. If you need to run it manually, prefer `pre-commit run actionlint --all-files`, or wrap any direct `actionlint` invocation in a short timeout (e.g. `timeout 30 actionlint`) to avoid environment-specific hangs.
 
+If `./scripts/preflight.sh` reports that `actionlint` is not installed, that only affects direct manual `actionlint` runs. After `./setup-hooks.sh`, the supported local path remains `pre-commit run actionlint --all-files`. Install the standalone binary only if you also want direct CLI usage, for example via `go install github.com/rhysd/actionlint/cmd/actionlint@latest`.
+
 ## Bypassing Hooks (Emergencies Only)
 
 ```bash

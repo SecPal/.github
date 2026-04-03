@@ -42,7 +42,7 @@ The `check-system-requirements.sh` script validates that all required tools and 
 - yamllint - optional
 - actionlint (GitHub Actions, optional manual local workflow linting) - optional
 
-If you want to run workflow linting locally outside pre-commit and CI, install `actionlint` with your package manager or place a release binary on your `PATH`.
+If you want to run workflow linting locally outside pre-commit and CI, install `actionlint` with `go install github.com/rhysd/actionlint/cmd/actionlint@latest`, your package manager, or a release binary on your `PATH`.
 
 **Git Configuration:**
 
