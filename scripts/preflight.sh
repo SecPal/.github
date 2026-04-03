@@ -55,7 +55,10 @@ fi
 # have caused hangs in some environments.
 if [ -d .github/workflows ]; then
   if ! command -v actionlint >/dev/null 2>&1; then
-    echo "ℹ️  actionlint is optional for manual local workflow linting; pre-commit hooks and CI still enforce workflow checks. Install actionlint if you want to run 'actionlint' manually." >&2
+    echo "ℹ️  actionlint is not installed, so direct local workflow linting via 'actionlint' is unavailable." >&2
+    echo "   Workflow checks still run through pre-commit hooks and CI." >&2
+    echo "   Prefer: pre-commit run actionlint --all-files" >&2
+    echo "   Direct install (optional): go install github.com/rhysd/actionlint/cmd/actionlint@latest" >&2
   fi
 fi
 if command -v reuse >/dev/null 2>&1; then

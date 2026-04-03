@@ -74,6 +74,15 @@ echo "✨ Summary"
 echo "════════════════════════════════════════"
 echo "Successfully installed: $SUCCESS_COUNT hooks"
 
+if command -v actionlint &>/dev/null; then
+	echo "Optional workflow lint binary: actionlint found on PATH"
+else
+	echo "Optional workflow lint binary: actionlint not found on PATH"
+	echo "  • Workflow linting still works via pre-commit hooks and CI"
+	echo "  • Prefer manual runs with: pre-commit run actionlint --all-files"
+	echo "  • Optional direct install: go install github.com/rhysd/actionlint/cmd/actionlint@latest"
+fi
+
 if [ ${#FAILED_REPOS[@]} -gt 0 ]; then
 	echo "Failed: ${#FAILED_REPOS[@]} repositories"
 	for failed in "${FAILED_REPOS[@]}"; do
@@ -91,6 +100,7 @@ else
 	echo "💡 Usage:"
 	echo "  • Hooks run automatically on commit/push"
 	echo "  • Test manually: cd <repo> && ./scripts/preflight.sh"
+	echo "  • Manual workflow lint: pre-commit run actionlint --all-files"
 	echo "  • Bypass (emergencies only): git push --no-verify"
 	echo ""
 fi
