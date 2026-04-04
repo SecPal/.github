@@ -61,6 +61,8 @@ multi_repo:
       - "TDD-First Development"
       - "Never Skip Preflight Checks"
       - "1 PR = 1 Topic"
+      - "Issue Management Protocol"
+      - "Quality Over Speed"
       - "Signed Commits Only"
       - "REUSE Compliance"
       - "Domain Policy"
@@ -768,11 +770,11 @@ review_automation:
 
     - step: 7
       name: "Commit and push"
-      description: "ONLY after local reviews find ZERO issues"
+      description: "ONLY after local reviews find ZERO issues; PR creation happens after this step, never before"
 
     - step: 8
       name: "Create PR as DRAFT"
-      description: "gh pr create --draft (Copilot does NOT review drafts)"
+      description: "Create the first PR as draft only; NEVER open a normal PR before draft review is complete"
       critical: true
       why: "Draft status prevents premature Copilot review"
 
@@ -818,6 +820,8 @@ review_automation:
     create_command: "gh pr create --draft --title '...' --body '...'"
     mark_ready_command: "gh pr ready"
     why_draft_first:
+      - "The branch must already be self-reviewed, committed, and pushed before PR creation"
+      - "The first PR state must be draft, not ready-for-review"
       - "Prevents premature Copilot review"
       - "Allows final self-review in GitHub UI"
       - "Copilot only reviews non-draft PRs"
@@ -847,6 +851,7 @@ review_automation:
   anti_patterns:
     - "Commit without local review"
     - "Single-pass review only"
+    - "Create a normal PR before creating a draft PR"
     - "Create PR as ready (not draft) immediately"
     - "Mark draft ready before final self-review"
     - "Update PR description before all Copilot comments received"
@@ -1082,6 +1087,22 @@ checklists:
           - "Dependency Inversion: Depend on abstractions, not concretions"
         validation: "Code review for SOLID compliance"
 
+      - id: kiss-principle
+        title: KISS Principle
+        items:
+          - "The solution is as simple as possible for the current requirement"
+          - "No clever indirection or abstraction without clear present value"
+          - "A maintainer can understand the approach quickly"
+        validation: "Code review for unnecessary complexity"
+
+      - id: yagni-principle
+        title: YAGNI Principle
+        items:
+          - "Only current requirements were implemented"
+          - "No speculative extension points, flags, or formats were added"
+          - "Future ideas were tracked as issues instead of built preemptively"
+        validation: "Review diff against current issue scope"
+
       - id: quality-over-speed
         title: Quality Over Speed
         items:
@@ -1147,6 +1168,14 @@ checklists:
           - "No --no-verify flag"
           - "Exception: Large PR with large-pr-approved label only"
         validation: "Git history check"
+
+      - id: one-topic-rule
+        title: One Topic Rule
+        items:
+          - "Current branch, commit, and PR still address exactly one logical change"
+          - "Unrelated discoveries were moved to separate issues or sub-issues"
+          - "No opportunistic side fixes were mixed into the current work"
+        validation: "Review diff against issue and branch scope"
 
       - id: issue-creation
         title: Issue Creation Protocol
@@ -1233,10 +1262,12 @@ checklists:
   validation:
     description: "General validation checklist before completing any task"
     checks:
-      - "All Critical Rules followed? (TDD, One Topic, No Bypass, CHANGELOG)"
+      - "All Critical Rules followed? (TDD, One Topic, Issue Management, Quality First, No Bypass, CHANGELOG)"
       - "Preflight script would pass? (formatting, linting, tests, REUSE)"
       - "CHANGELOG.md updated? (if feature/fix/breaking change)"
       - "Tests added/updated? (80% coverage minimum)"
+      - "Out-of-scope findings converted into GitHub issues immediately?"
+      - "EPIC + sub-issues used when work spans more than one PR or probably will?"
       - "Documentation updated? (if public API changed)"
       - "Correct repository context? (api/ vs frontend/ vs contracts/)"
       - "Multi-repo coordination needed? (contracts first?)"

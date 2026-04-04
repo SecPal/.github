@@ -11,27 +11,49 @@ Other repositories must keep their own self-contained runtime instructions.
 ## Always-On Rules
 
 - Run `git status --short --branch` before any write action. Never start implementation on local `main`, and stop if a dirty non-`main` branch contains unrelated work.
-- Keep one topic per change, fail fast, and never use bypasses such as `--no-verify` or force-push.
+- TDD is mandatory for behavior, automation, or executable policy changes. Add or update the smallest relevant failing test or validation first, then implement, then refactor with checks green.
+- Quality first. Do not trade correctness, review depth, validation depth, or issue tracking for speed.
+- Keep one topic per change. 1 topic = 1 PR = 1 branch. Do not mix unrelated fixes, features, refactors, docs, or governance cleanup.
+- Never use bypasses such as `--no-verify` or force-push.
 - Update `CHANGELOG.md` for real fixes, features, and breaking changes in the same change set.
-- Create a GitHub issue immediately for out-of-scope bugs, technical debt, missing tests, documentation gaps, and actionable warnings you cannot fix now.
+- Create a GitHub issue immediately for every real out-of-scope bug, technical debt, missing test, documentation gap, warning, audit finding, or deprecation you cannot fix now. Do not leave untracked `TODO`, `FIXME`, or "follow-up" work.
+- Use EPIC plus sub-issues before implementation whenever work will span more than one PR; if in doubt, choose EPIC plus sub-issues.
 - Keep GitHub-facing communication in English and reference files and lines instead of pasting large code blocks.
 - Treat warnings, audit findings, and deprecations as actionable. Fix them in scope or track them immediately.
 - Keep `SPDX-FileCopyrightText` years current in edited files or companion `.license` sidecars.
 - Never reply to Copilot review comments with GitHub comment tools. Fix the code, push, and resolve threads
   using the approved non-comment workflow (`docs/copilot-review-automation.md` or `scripts/copilot-review-tool.sh`).
-- Use EPIC plus sub-issues before starting work that will span more than one PR.
+
+## Design Principles
+
+- DRY: eliminate duplicated logic and repeated policy text; extract shared guidance before it drifts.
+- KISS: prefer the simplest solution that satisfies the current requirement and remains obvious in six months.
+- YAGNI: implement only what the current issue, PR, or acceptance criteria require; avoid speculative abstractions.
+- SOLID: keep responsibilities narrow, interfaces small, and extension points explicit.
+- Fail fast: stop on the first failed check, fix the problem, and do not accumulate known breakage.
 
 ## Required Validation
 
 Before any commit, PR, or merge, announce the checklist you are executing and stop on the first failed item.
 At minimum verify:
 
+- the active branch and PR scope still address exactly one topic
+- TDD happened where executable behavior or validation changed
 - the smallest relevant validation for the touched area passed, and `./scripts/preflight.sh` ran for substantial governance or workflow changes
+- out-of-scope findings were turned into GitHub issues immediately
 - `CHANGELOG.md` was updated for real changes
 - commits are GPG-signed
 - REUSE compliance was checked when changed files require it
-- the local 4-pass review was completed
+- the local 4-pass review was completed, including DRY, KISS, YAGNI, SOLID, quality-first, and issue-management checks
 - no bypass was used
+
+## Issue And PR Discipline
+
+- Every real out-of-scope finding becomes a GitHub issue immediately; no untracked follow-up work is allowed.
+- Complex work uses EPIC plus sub-issues before implementation. PRs should close sub-issues, not the epic, until the final linked step.
+- When local review finds zero issues, commit and push the finished branch before opening any PR.
+- The first PR state must be draft. Do not open a normal PR first.
+- Mark a draft PR ready only after the final self-review in the PR view still finds zero issues.
 
 ## Local Review Standard
 
@@ -42,7 +64,7 @@ Run these four passes before creating a PR:
 3. Best-practices review: hidden files, governance docs, package metadata, workflow hygiene.
 4. Security review: explicit permissions, secret handling, ignore rules, automation safety.
 
-Create PRs as draft first. Mark them ready only after local review finds zero issues.
+When all passes are clean, commit and push before creating the draft PR.
 
 ## Domain Policy
 
