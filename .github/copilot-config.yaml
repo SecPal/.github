@@ -252,6 +252,8 @@ policies:
       required: true
       check_command: "git status --short --branch"
       rules:
+        - "Before creating a new work branch: switch to local main, pull --ff-only from origin/main, and verify the working tree is clean."
+        - "Create every new work branch from that clean, up-to-date local main state."
         - "If the current branch is main: create or switch to a dedicated topic branch BEFORE any edit, file creation, or commit."
         - "If a non-main branch already has uncommitted changes: verify they belong to the current task before continuing."
         - "If existing changes are unrelated or ambiguous: STOP and ask whether to commit, stash, or split them before proceeding."
@@ -1034,6 +1036,14 @@ checklists:
           - "Current branch and local changes understood before work starts"
         validation: "git status --short --branch"
 
+      - id: clean-main-baseline
+        title: Clean Main Baseline
+        items:
+          - "Local main was checked before creating a new topic branch"
+          - "Local main was updated with pull --ff-only from origin/main"
+          - "The new topic branch starts from a clean, up-to-date main"
+        validation: "Review branch creation steps and git status output"
+
       - id: not-working-on-main
         title: Not Working On Main
         items:
@@ -1239,12 +1249,12 @@ checklists:
     mandatory: true
     steps:
       - step: 1
-        command: "git checkout main"
+        command: "git switch main"
         description: "Switch to main branch"
 
       - step: 2
-        command: "git pull"
-        description: "Pull latest changes"
+        command: "git pull --ff-only origin main"
+        description: "Update local main without merge commits"
 
       - step: 3
         command: "git branch -d <feature-branch-name>"
@@ -1261,15 +1271,26 @@ checklists:
 
       - step: 6
         command: "composer install --no-interaction --no-progress --prefer-dist"
-        description: "Sync PHP dependencies after pull (run only if composer.json is present)"
+        description: "Refresh PHP dependencies after merge when the repository uses Composer"
         condition: "[ -f composer.json ]"
-        rationale: "Merged PRs may have added, removed, or updated Composer dependencies. Running install keeps the local vendor/ directory in sync so the next dev session starts clean."
+        rationale: "Merged changes can update Composer dependencies. Running install immediately keeps the local PHP environment ready for the next task."
 
       - step: 7
         command: "npm ci"
-        description: "Sync Node dependencies after pull (run only if package-lock.json is present)"
+        description: "Refresh Node dependencies after merge when the repository uses a lockfile"
         condition: "[ -f package-lock.json ]"
-        rationale: "Merged PRs may have changed package.json or package-lock.json. npm ci (not npm install) enforces the lock file and keeps node_modules exactly in sync. Preflight already runs this before each push, but running it post-merge prevents stale-deps errors in the gap between merges."
+        rationale: "Merged changes can update package manifests or lockfiles. npm ci keeps node_modules exactly aligned with the committed lockfile."
+
+      - step: 8
+        command: "npm run build"
+        description: "Run the local build after dependency refresh when the repository has a build script"
+        condition: "[ -f package.json ] and package.json defines a build script"
+        rationale: "A post-merge build is a fast readiness check that catches stale local environments before the next work branch starts."
+
+      - step: 9
+        command: "git status --short --branch"
+        description: "Confirm the repo is back on a clean, ready main after cleanup"
+        expected_output: "## main...origin/main with no additional changes"
 
   validation:
     description: "General validation checklist before completing any task"
