@@ -16,6 +16,12 @@ Chronological log of notable changes to SecPal organization defaults.
 - made the local `scripts/preflight.sh` warning for missing `actionlint` explicitly point maintainers to `pre-commit run actionlint --all-files` and an optional standalone install path via `go install github.com/rhysd/actionlint/cmd/actionlint@latest`
 - extended `setup-hooks.sh`, `WORKSPACE_SETUP.md`, and system-requirements guidance so workspace bootstrap now explains that workflow linting already works through pre-commit hooks and CI even when the standalone `actionlint` binary is absent
 
+## 2026-04-03 - Rename Android Identifier To app.secpal
+
+**Changed:**
+
+- updated the organization-wide Android identifier baseline to `app.secpal`, removed the old identifier exception from current governance text and Copilot configuration, and tightened the shared domain-check allowlist so legacy former host-style strings are no longer implicitly accepted
+
 ## 2026-04-01 - Fix Cross-Repo Composite Action Resolution In Reusable Workflows
 
 **Fixed:**
@@ -53,12 +59,6 @@ Chronological log of notable changes to SecPal organization defaults.
 - replaced the oversized organization-level Copilot runtime instructions with a shorter self-contained baseline and removed dead `copilot-config.yaml` references that no longer resolve in this repository
 - tightened the guidance to the rules that actually need to stay always-on so multi-repo VS Code workspaces send less redundant governance text with each Copilot request
 - updated `validate-copilot-instructions.sh` runtime-model checks to accept the new condensed phrasing alongside the original wording
-
-## 2026-04-03 - Rename Android Identifier To app.secpal
-
-**Changed:**
-
-- updated the organization-wide Android identifier baseline to `app.secpal`, removed the old identifier exception from current governance text and Copilot configuration, and tightened the shared domain-check allowlist so legacy former host-style strings are no longer implicitly accepted
 
 ## 2026-03-29 - Align Cross-Repo Domain Policy With Active .dev Hosts
 
