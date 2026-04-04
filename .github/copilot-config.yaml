@@ -1299,7 +1299,7 @@ domain_policy:
   development_domain: "secpal.dev"
   real_email_domain: "secpal.app"
   example_email_domain: "secpal.dev"
-  android_application_identifier: "app.secpal.app"
+  android_application_identifier: "app.secpal"
 
   # Use Case Rules
   use_cases:
@@ -1320,13 +1320,12 @@ domain_policy:
       - "OpenAPI specification examples"
       - "Documentation examples (non-production)"
       - "Non-real example email addresses"
-    app_secpal_app:
+    app_secpal:
       - "Android application identifier only"
       - "Android package, namespace, and Capacitor appId"
 
   deprecated_web_hosts:
     - "api.secpal.app"
-    - "app.secpal.app"
 
   forbidden_domains:
     - "secpal.com"
