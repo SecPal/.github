@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-04 - Extend Post-Merge Cleanup With Dependency Sync
+
+**Changed:**
+
+- extended the `post_merge_cleanup` checklist in `.github/copilot-config.yaml` with two conditional steps: `composer install` (when `composer.json` is present) and `npm ci` (when `package-lock.json` is present), so local dependencies are synced immediately after pulling main rather than waiting until the next preflight run
+
 ## 2026-04-04 - Restore Strict Copilot Governance Clarity
 
 **Changed:**

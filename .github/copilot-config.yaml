@@ -1259,6 +1259,18 @@ checklists:
         description: "Verify clean state"
         expected_output: "nothing to commit, working tree clean"
 
+      - step: 6
+        command: "composer install --no-interaction --no-progress --prefer-dist"
+        description: "Sync PHP dependencies after pull (run only if composer.json is present)"
+        condition: "[ -f composer.json ]"
+        rationale: "Merged PRs may have added, removed, or updated Composer dependencies. Running install keeps the local vendor/ directory in sync so the next dev session starts clean."
+
+      - step: 7
+        command: "npm ci"
+        description: "Sync Node dependencies after pull (run only if package-lock.json is present)"
+        condition: "[ -f package-lock.json ]"
+        rationale: "Merged PRs may have changed package.json or package-lock.json. npm ci (not npm install) enforces the lock file and keeps node_modules exactly in sync. Preflight already runs this before each push, but running it post-merge prevents stale-deps errors in the gap between merges."
+
   validation:
     description: "General validation checklist before completing any task"
     checks:
