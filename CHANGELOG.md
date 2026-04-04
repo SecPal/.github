@@ -9,6 +9,15 @@ Chronological log of notable changes to SecPal organization defaults.
 
 ---
 
+## 2026-04-04 - Restore Strict Copilot Governance Clarity
+
+**Changed:**
+
+- restored explicit always-on Copilot governance in the repo baselines, reinstating unambiguous TDD-first, quality-first, one-topic-per-PR, immediate issue-creation, and EPIC-plus-sub-issue rules after the earlier context-bloat reduction made them too implicit at runtime
+- re-enabled repo-wide runtime overlays in the application repositories so DRY, KISS, YAGNI, SOLID, and fail-fast guidance remain auto-loaded instead of opt-in only
+- tightened `.github/copilot-config.yaml` validation with explicit KISS, YAGNI, one-topic, issue-management, and quality-first emphasis so the central source of truth is stricter than before the rollback
+- clarified the PR lifecycle so finished work must be self-reviewed, committed, and pushed before any PR exists, and the first PR state must always be draft until the final PR-view self-review is clean
+
 ## 2026-04-03 - Document Local actionlint Remediation For Preflight Warnings
 
 **Changed:**
