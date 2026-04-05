@@ -1271,9 +1271,9 @@ checklists:
 
       - step: 6
         command: "composer install --no-interaction --no-progress --prefer-dist"
-        description: "Refresh PHP dependencies after merge when the repository uses Composer"
-        condition: "[ -f composer.json ] && command -v composer > /dev/null 2>&1"
-        rationale: "Merged changes can update Composer dependencies. Running install immediately keeps the local PHP environment ready for the next task."
+        description: "Refresh PHP dependencies after merge when the repository has a committed Composer lockfile"
+        condition: "[ -f composer.json ] && [ -f composer.lock ] && command -v composer > /dev/null 2>&1"
+        rationale: "Merged changes can update Composer dependencies or the lockfile. Running install only when composer.lock is present keeps the local PHP environment ready without creating new tracked changes."
 
       - step: 7
         command: "npm ci"
@@ -1284,7 +1284,7 @@ checklists:
       - step: 8
         command: "git status --short --branch"
         description: "Confirm the repo is back on a clean, ready main after cleanup"
-        expected_output: "## main...origin/main with no additional changes"
+        expected_output: "## main...origin/main"
 
   validation:
     description: "General validation checklist before completing any task"

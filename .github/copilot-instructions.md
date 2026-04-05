@@ -29,9 +29,9 @@ Other repositories must keep their own self-contained runtime instructions.
   using the approved non-comment workflow (`docs/copilot-review-automation.md` or `scripts/copilot-review-tool.sh`).
 - After every merge, immediately return the local repo to a ready state:
   switch to `main`, pull with fast-forward only, delete the merged topic
-  branch, prune remotes, refresh dependencies where applicable, run the
-  smallest relevant build/readiness command, and confirm the working tree is
-  clean.
+  branch, prune remotes, refresh dependencies where applicable as the
+  smallest relevant readiness step for this repository, and confirm the
+  working tree is clean.
 
 ## Design Principles
 
