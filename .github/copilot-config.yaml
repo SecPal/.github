@@ -1272,13 +1272,13 @@ checklists:
       - step: 6
         command: "composer install --no-interaction --no-progress --prefer-dist"
         description: "Refresh PHP dependencies after merge when the repository uses Composer"
-        condition: "[ -f composer.json ]"
+        condition: "[ -f composer.json ] && command -v composer > /dev/null 2>&1"
         rationale: "Merged changes can update Composer dependencies. Running install immediately keeps the local PHP environment ready for the next task."
 
       - step: 7
         command: "npm ci"
-        description: "Refresh Node dependencies after merge when the repository uses a lockfile"
-        condition: "[ -f package-lock.json ]"
+        description: "Refresh Node dependencies after merge when npm and a lockfile are present"
+        condition: "command -v npm > /dev/null 2>&1 && [ -f package.json ] && [ -f package-lock.json ]"
         rationale: "Merged changes can update package manifests or lockfiles. npm ci keeps node_modules exactly aligned with the committed lockfile."
 
       - step: 8
