@@ -1282,12 +1282,6 @@ checklists:
         rationale: "Merged changes can update package manifests or lockfiles. npm ci keeps node_modules exactly aligned with the committed lockfile."
 
       - step: 8
-        command: "npm run build"
-        description: "Run the local build after dependency refresh when the repository has a build script"
-        condition: "[ -f package.json ] and package.json defines a build script"
-        rationale: "A post-merge build is a fast readiness check that catches stale local environments before the next work branch starts."
-
-      - step: 9
         command: "git status --short --branch"
         description: "Confirm the repo is back on a clean, ready main after cleanup"
         expected_output: "## main...origin/main with no additional changes"
