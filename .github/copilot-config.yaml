@@ -252,6 +252,8 @@ policies:
       required: true
       check_command: "git status --short --branch"
       rules:
+        - "Before creating a new work branch: switch to local main, pull --ff-only from origin/main, and verify the working tree is clean."
+        - "Create every new work branch from that clean, up-to-date local main state."
         - "If the current branch is main: create or switch to a dedicated topic branch BEFORE any edit, file creation, or commit."
         - "If a non-main branch already has uncommitted changes: verify they belong to the current task before continuing."
         - "If existing changes are unrelated or ambiguous: STOP and ask whether to commit, stash, or split them before proceeding."
@@ -1034,6 +1036,14 @@ checklists:
           - "Current branch and local changes understood before work starts"
         validation: "git status --short --branch"
 
+      - id: clean-main-baseline
+        title: Clean Main Baseline
+        items:
+          - "Local main was checked before creating a new topic branch"
+          - "Local main was updated with pull --ff-only from origin/main"
+          - "The new topic branch starts from a clean, up-to-date main"
+        validation: "Review branch creation steps and git status output"
+
       - id: not-working-on-main
         title: Not Working On Main
         items:
@@ -1239,12 +1249,12 @@ checklists:
     mandatory: true
     steps:
       - step: 1
-        command: "git checkout main"
+        command: "git switch main"
         description: "Switch to main branch"
 
       - step: 2
-        command: "git pull"
-        description: "Pull latest changes"
+        command: "git pull --ff-only origin main"
+        description: "Update local main without merge commits"
 
       - step: 3
         command: "git branch -d <feature-branch-name>"
@@ -1258,6 +1268,23 @@ checklists:
         command: "git status"
         description: "Verify clean state"
         expected_output: "nothing to commit, working tree clean"
+
+      - step: 6
+        command: "composer install --no-interaction --no-progress --prefer-dist"
+        description: "Refresh PHP dependencies after merge when the repository has a committed Composer lockfile"
+        condition: "[ -f composer.json ] && [ -f composer.lock ] && command -v composer > /dev/null 2>&1"
+        rationale: "Merged changes can update Composer dependencies or the lockfile. Running install only when composer.lock is present keeps the local PHP environment ready without creating new tracked changes."
+
+      - step: 7
+        command: "npm ci"
+        description: "Refresh Node dependencies after merge when npm and a lockfile are present"
+        condition: "command -v npm > /dev/null 2>&1 && [ -f package.json ] && [ -f package-lock.json ]"
+        rationale: "Merged changes can update package manifests or lockfiles. npm ci keeps node_modules exactly aligned with the committed lockfile."
+
+      - step: 8
+        command: "git status --short --branch"
+        description: "Confirm the repo is back on a clean, ready main after cleanup"
+        expected_output: "## main...origin/main"
 
   validation:
     description: "General validation checklist before completing any task"

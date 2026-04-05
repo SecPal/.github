@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-04 - Clarify Clean Main Start And Post-Merge Readiness
+
+**Changed:**
+
+- clarified that every new work branch must start from a clean, up-to-date local `main`, including an explicit fast-forward pull before the topic branch is created
+- extended the documented post-merge cleanup sequence to cover returning to `main`, pulling with fast-forward only, pruning and deleting merged branches, refreshing Composer or Node dependencies where applicable, and confirming the repository is clean again afterward
+
 ## 2026-04-04 - Restore Strict Copilot Governance Clarity
 
 **Changed:**
