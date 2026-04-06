@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-06 - Adopt apk.secpal.app Android Distribution Governance
+
+**Changed:**
+
+- accepted `apk.secpal.app` as the canonical Android artifact and download host in the organization-wide domain policy, machine-readable Copilot governance, and local domain validation script
+- documented the split between the technical Android artifact host and the human-facing Android landing surface at `secpal.app/android`
+- recorded the single-package Android distribution strategy and the rule that provisioning QR codes must be generated privately inside SecPal with short-lived bootstrap tokens rather than published as public static artifacts
+
 ## 2026-04-06 - Strengthen Validation Governance
 
 **Changed:**

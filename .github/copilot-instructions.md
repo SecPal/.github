@@ -82,12 +82,22 @@ When all passes are clean, commit and push before creating the draft PR.
 Use only these domains and identifiers:
 
 - `secpal.app` for the public homepage and real email addresses
+- `apk.secpal.app` for the canonical Android artifact and download host
 - `api.secpal.dev` for the live API host
 - `app.secpal.dev` for the live PWA/frontend host
 - `secpal.dev` for dev, staging, testing, and examples
 - `app.secpal` only as the Android application identifier
 
 Treat `api.secpal.app` as a deprecated web host.
+
+## Android Distribution Policy
+
+- Ship one Android application package: `app.secpal`.
+- Keep one signing identity and one version line across Play Store, GitHub Releases, Obtainium, direct APK downloads, and Device Owner provisioning.
+- Use `apk.secpal.app` as the technical APK/checksum/release-metadata host.
+- Use `secpal.app/android` as the human-facing Android landing surface.
+- Provisioning QR codes must be generated inside SecPal for authorized users only.
+- Provisioning QR payloads must stay minimal and use short-lived bootstrap tokens instead of public static policy blobs or long-lived secrets.
 
 ## Repository Conventions
 
