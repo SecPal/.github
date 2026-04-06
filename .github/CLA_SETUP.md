@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 
 SPDX-License-Identifier: CC0-1.0
 -->
@@ -36,8 +36,9 @@ When you link an organization with CLA Assistant:
    - Save configuration
 
 4. **Allowlist Configuration**
-   - Add bot users to allowlist: `bot*`, `dependabot[bot]`, `dependabot-preview[bot]`
+   - Add bot users to allowlist: `bot*`, `dependabot[bot]`, `dependabot-preview[bot]`, `copilot-swe-agent`
    - This allows automated PRs without CLA signature
+   - Copilot-created pull requests in SecPal currently appear as author `copilot-swe-agent`; keep that exact account in the allowlist alongside Dependabot
 
 ### How It Works
 

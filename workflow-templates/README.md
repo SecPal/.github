@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 
 SPDX-License-Identifier: CC0-1.0
 -->
@@ -28,6 +28,7 @@ This directory contains reusable GitHub Actions workflow templates for SecPal re
 - All repositories automatically protected
 - Contributors sign via <https://cla-assistant.io/>
 - Signatures are centrally managed
+- Allowlist automated authors such as `dependabot[bot]`, `dependabot-preview[bot]`, and `copilot-swe-agent` directly in CLA Assistant
 
 ### Adding CLA to a New Repository
 

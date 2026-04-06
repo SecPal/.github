@@ -380,7 +380,8 @@ To enable CLA checks in your SecPal repository:
 2. Click "Configure CLA"
 3. Select your repository from the dropdown
 4. Link it to the SecPal CLA Gist (ask an organization admin for the Gist URL)
-5. Done! CLA Assistant will automatically monitor all pull requests
+5. Add automated authors such as `dependabot[bot]`, `dependabot-preview[bot]`, and `copilot-swe-agent` to the CLA Assistant allowlist
+6. Done! CLA Assistant will automatically monitor all pull requests
 
 **Unlike the previous GitHub Action approach, no workflow files are needed** – CLA Assistant uses GitHub webhooks directly.
 
