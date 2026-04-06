@@ -53,6 +53,7 @@ At minimum verify:
 - `CHANGELOG.md` was updated for real changes
 - commits are GPG-signed
 - REUSE compliance was checked when changed files require it
+- when a fix alters observable behavior, validation rules, or automation logic, the corresponding tests or validations were identified and updated in the same commit
 - the local 4-pass review was completed, including DRY, KISS, YAGNI, SOLID, quality-first, and issue-management checks
 - no bypass was used
 
@@ -63,6 +64,7 @@ At minimum verify:
 - When local review finds zero issues, commit and push the finished branch before opening any PR.
 - The first PR state must be draft. Do not open a normal PR first.
 - Mark a draft PR ready only after the final self-review in the PR view still finds zero issues.
+- When creating or editing PRs programmatically, write multi-line body content to a file and use `--body-file` to prevent shell escaping issues.
 
 ## Local Review Standard
 
