@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-06 - Document Copilot CLA Allowlist Exception
+
+**Changed:**
+
+- documented that Copilot-created pull requests currently use the author account `copilot-swe-agent` and must be allowlisted in CLA Assistant alongside the existing Dependabot bot exceptions so the organization-wide `cla/check` status does not block automated PRs
+
 ## 2026-04-04 - Clarify Clean Main Start And Post-Merge Readiness
 
 **Changed:**
