@@ -54,9 +54,9 @@ The Validation System ensures that Copilot instructions and configuration files 
 **Steps:**
 
 1. Checkout repository
-2. Setup Node.js 20
+2. Setup Node.js 22
 3. Install markdownlint-cli2
-4. Install yq (YAML processor)
+4. Run YAML syntax validation via Ruby stdlib
 5. Run validation script
 6. Report summary
 
@@ -336,15 +336,15 @@ chmod +x scripts/validate-copilot-instructions.sh
 npm install -g markdownlint-cli2
 ```
 
-### yq Not Found
+### Ruby Not Found
 
 ```bash
-# Linux
-sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-sudo chmod +x /usr/local/bin/yq
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y ruby
 
 # macOS
-brew install yq
+brew install ruby
 ```
 
 ### False Positive on @EXTENDS
