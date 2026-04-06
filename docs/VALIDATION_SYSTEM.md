@@ -128,9 +128,9 @@ The Validation System ensures that Copilot instructions and configuration files 
 
 **Purpose:** Ensure YAML is parseable
 
-**Tool:** yq
+**Tool:** Ruby stdlib (`Psych.parse_file`)
 
-**Test:** Parse `.version` key
+**Test:** Parse `.github/copilot-config.yaml` without object instantiation
 
 **Failure Impact:** CRITICAL (if YAML present) - Invalid YAML
 
@@ -254,8 +254,8 @@ npx markdownlint-cli2 .github/copilot-instructions.md
 ### Test 6 Failed: YAML Syntax
 
 ```bash
-# Check YAML syntax
-yq eval '.version' .github/copilot-config.yaml
+# Check YAML syntax with Ruby Psych
+ruby -e 'require "psych"; Psych.parse_file(ARGV[0])' .github/copilot-config.yaml
 
 # Common issues:
 # - Incorrect indentation

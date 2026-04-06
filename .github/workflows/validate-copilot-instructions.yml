@@ -25,6 +25,7 @@ jobs:
   validate:
     name: Validate Copilot Instructions
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
 
