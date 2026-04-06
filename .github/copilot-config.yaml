@@ -1352,6 +1352,7 @@ workflows:
 domain_policy:
   critical: true
   homepage_domain: "secpal.app"
+  android_artifact_domain: "apk.secpal.app"
   api_domain: "api.secpal.dev"
   frontend_domain: "app.secpal.dev"
   development_domain: "secpal.dev"
@@ -1365,6 +1366,9 @@ domain_policy:
       - "Public homepage and website content"
       - "Official contact information"
       - "Real email addresses"
+    apk_secpal_app:
+      - "Canonical Android artifact host"
+      - "Stable APK, checksum, and release metadata downloads"
     api_secpal_dev:
       - "Live API host"
       - "API deployment and operational examples"
@@ -1394,6 +1398,27 @@ domain_policy:
   validation_command: "./scripts/check-domains.sh"
   validation_rule: "Script must exit 0; any non-approved secpal.* domain or deprecated .app web-host usage causes a non-zero exit"
   enforcement: "Any other domain or deprecated .app web-host usage = PR rejected"
+
+android_distribution_policy:
+  critical: true
+  package_name: "app.secpal"
+  canonical_artifact_host: "apk.secpal.app"
+  human_android_landing_page: "https://secpal.app/android"
+  signing_identity_strategy: "Single signing identity across all Android distribution channels"
+  versioning_strategy: "Single version line across Play Store, GitHub Releases, Obtainium, direct APK downloads, and Device Owner provisioning"
+  provisioning_qr_generation: "Generate provisioning QR codes only inside SecPal for authorized users"
+  provisioning_qr_payload: "Keep payloads minimal and exchange short-lived bootstrap tokens for tenant-specific configuration after provisioning"
+  forbidden_patterns:
+    - "Public generic provisioning QR codes"
+    - "Second Android package or enterprise-only flavor"
+    - "Long-lived provisioning secrets embedded in QR payloads"
+  repo_follow_up_impacts:
+    - ".github#328: central governance and policy baseline for apk.secpal.app and single-app Android distribution"
+    - "api#800: enrollment sessions, bootstrap tokens, audited provisioning APIs"
+    - "contracts#183: enrollment, bootstrap, and release metadata contracts"
+    - "frontend#751: permission-gated provisioning QR generation and enrollment management UI"
+    - "android#102: enrollment-token bootstrap and channel-aware provisioning/update handling"
+    - "secpal.app#46: stable Android download endpoints and human-facing Android landing flow"
 
 # Bot PR Validation
 bot_pr_validation:

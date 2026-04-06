@@ -115,12 +115,12 @@ test_yaml_syntax() {
         return
     fi
 
-    if command -v yq >/dev/null 2>&1 && yq eval '.version' .github/copilot-config.yaml >/dev/null 2>&1; then
+    if command -v ruby >/dev/null 2>&1 && ruby -e 'require "psych"; Psych.parse_file(ARGV[0])' .github/copilot-config.yaml >/dev/null 2>&1; then
         print_result "copilot-config.yaml has valid syntax" "PASS"
-    elif command -v yq >/dev/null 2>&1; then
+    elif command -v ruby >/dev/null 2>&1; then
         print_result "copilot-config.yaml has valid syntax" "FAIL" "YAML parsing error"
     else
-        print_result "copilot-config.yaml has valid syntax" "PASS" "Skipped (yq not available)"
+        print_result "copilot-config.yaml has valid syntax" "PASS" "Skipped (Ruby not available)"
     fi
 }
 

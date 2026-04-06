@@ -16,8 +16,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}=== Domain Policy Check ===${NC}"
-echo "Allowed: secpal.app, secpal.dev"
+echo "Allowed: secpal.app, apk.secpal.app, secpal.dev"
 echo "Active web hosts: api.secpal.dev, app.secpal.dev"
+echo "Android artifact host: apk.secpal.app"
+echo "Human-facing Android landing page: secpal.app/android"
 echo "Identifier-only: app.secpal (Android application ID)"
 echo "Deprecated web hosts: api.secpal.app"
 echo "Forbidden: secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, app.secpal.app, ANY other"
@@ -46,11 +48,11 @@ matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     grep -v -- '^[[:space:]]*- \[' || true)
 
 # Allowlist approach: flag any secpal.* domain not matching an approved pattern.
-# Approved: secpal.app, secpal.dev, api.secpal.dev, app.secpal.dev.
+# Approved: secpal.app, apk.secpal.app, secpal.dev, api.secpal.dev, app.secpal.dev.
 # api.secpal.app is temporarily tolerated (deprecated web host, flagged separately).
 # This catches unknown domains (e.g. secpal.xyz) that a denylist-only check would miss.
 violations=$(printf '%s\n' "$matches" | \
-    grep -Ev '(^|[^A-Za-z0-9.-])secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])(\*\.|\.)?([A-Za-z0-9-]+\.)*secpal\.dev(\.[A-Za-z0-9_-]+)*($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])api\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)' | \
+    grep -Ev '(^|[^A-Za-z0-9.-])secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])apk\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])(\*\.|\.)?([A-Za-z0-9-]+\.)*secpal\.dev(\.[A-Za-z0-9_-]+)*($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])api\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)' | \
     grep -E 'secpal\.' || true)
 
 deprecated_web_hosts=$(printf '%s\n' "$matches" | \
@@ -105,10 +107,12 @@ else
     fi
     echo -e "${YELLOW}Policy:${NC}"
     echo "  - secpal.app: public homepage and real email addresses"
+    echo "  - apk.secpal.app: canonical Android artifact/download host"
     echo "  - api.secpal.dev: live API host"
     echo "  - app.secpal.dev: live PWA/frontend host"
     echo "  - secpal.dev: development, staging, testing, examples"
     echo "  - app.secpal: Android application identifier only"
+    echo "  - secpal.app/android: human-facing Android landing page"
     echo "  - DEPRECATED as web hosts: api.secpal.app"
     echo "  - FORBIDDEN: secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, app.secpal.app"
     echo ""

@@ -54,9 +54,9 @@ The Validation System ensures that Copilot instructions and configuration files 
 **Steps:**
 
 1. Checkout repository
-2. Setup Node.js 20
+2. Setup Node.js 22
 3. Install markdownlint-cli2
-4. Install yq (YAML processor)
+4. Run YAML syntax validation via Ruby stdlib
 5. Run validation script
 6. Report summary
 
@@ -128,9 +128,9 @@ The Validation System ensures that Copilot instructions and configuration files 
 
 **Purpose:** Ensure YAML is parseable
 
-**Tool:** yq
+**Tool:** Ruby stdlib (`Psych.parse_file`)
 
-**Test:** Parse `.version` key
+**Test:** Parse `.github/copilot-config.yaml` without object instantiation
 
 **Failure Impact:** CRITICAL (if YAML present) - Invalid YAML
 
@@ -254,8 +254,8 @@ npx markdownlint-cli2 .github/copilot-instructions.md
 ### Test 6 Failed: YAML Syntax
 
 ```bash
-# Check YAML syntax
-yq eval '.version' .github/copilot-config.yaml
+# Check YAML syntax with Ruby Psych
+ruby -e 'require "psych"; Psych.parse_file(ARGV[0])' .github/copilot-config.yaml
 
 # Common issues:
 # - Incorrect indentation
@@ -336,15 +336,15 @@ chmod +x scripts/validate-copilot-instructions.sh
 npm install -g markdownlint-cli2
 ```
 
-### yq Not Found
+### Ruby Not Found
 
 ```bash
-# Linux
-sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-sudo chmod +x /usr/local/bin/yq
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y ruby
 
 # macOS
-brew install yq
+brew install ruby
 ```
 
 ### False Positive on @EXTENDS
