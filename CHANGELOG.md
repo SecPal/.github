@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-06 - Strengthen Validation Governance
+
+**Changed:**
+
+- strengthened Required Validation to require same-commit test or validation updates when a fix alters observable behavior, validation rules, or automation logic
+- mandated `--body-file` for programmatic PR creation in Issue And PR Discipline to prevent shell escaping issues
+
 ## 2026-04-06 - Document Copilot CLA Allowlist Exception
 
 **Changed:**
