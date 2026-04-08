@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-workspace="$(mktemp -d)"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/setup-hooks.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p "$workspace/.github"
