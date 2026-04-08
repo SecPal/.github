@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-08 - Fix setup-hooks Success Counter Abort
+
+**Fixed:**
+
+- replaced the `((SUCCESS_COUNT++))` arithmetic post-increments in `setup-hooks.sh` with `set -e` safe assignment increments so the workspace hook bootstrap no longer aborts after the first successful repository
+- added a focused shell regression test that exercises the happy-path multi-repository bootstrap and verifies the final success summary is reported
+
 ## 2026-04-06 - Adopt apk.secpal.app Android Distribution Governance
 
 **Changed:**
