@@ -55,7 +55,7 @@ for repo in "${REPOS[@]}"; do
         if [ -f "scripts/setup-pre-commit.sh" ]; then
                 if ./scripts/setup-pre-commit.sh; then
                         echo "  ✓ Pre-commit hook installed"
-				SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
                 else
                         echo "  ✗ Pre-commit hook installation failed"
                         FAILED_REPOS+=("$repo (pre-commit)")
