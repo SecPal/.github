@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: 📦 Sub-Issue (Part of Epic)
@@ -24,7 +24,7 @@ body:
         3. Your PR should reference the epic: `Part of: #<epic-number>`
         4. Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
 
-        📚 Full documentation: See `docs/EPIC_WORKFLOW.md` in the api repository
+        📚 Full documentation: See `SecPal/.github/docs/EPIC_WORKFLOW.md`
 
   - type: input
     id: parent_epic
@@ -124,4 +124,5 @@ body:
         **⚠️ Important:**
         - Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
         - The epic should only close when ALL sub-issues are complete
+        - If you discover remaining in-scope gaps, reopen or file follow-up issues before asking to close the parent epic
         - If you're unsure, ask in the epic discussion thread

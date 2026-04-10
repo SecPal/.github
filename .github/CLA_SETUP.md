@@ -48,6 +48,18 @@ When you link an organization with CLA Assistant:
 - **Re-signing**: Contributors must re-sign if the CLA document changes
 - **Organization-Wide**: One signature applies to all SecPal repositories
 
+### Required Verification
+
+Changing the allowlist in documentation is not enough. Because CLA Assistant is an external service with live organization settings, verify the active configuration after setup changes.
+
+Use this checklist:
+
+1. Confirm the allowlist includes `dependabot[bot]`, `dependabot-preview[bot]`, and `copilot-swe-agent`
+2. Confirm the organization or repository link still points to the current SecPal CLA document
+3. Confirm the expected required status check is `cla/check`
+4. Verify a recent automated PR shows `cla/check` passing instead of blocking on signature
+5. If the live config does not match the documented setup, track that drift as a `.github` issue before closing the related repository-specific issue
+
 ### Required Branch Protection
 
 Add the following status check to branch protection rules for each repository:

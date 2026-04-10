@@ -413,6 +413,14 @@ issue_management:
         why: "Prevents premature epic closure, maintains granular tracking"
         example: "PR description: 'Fixes #52' (sub-issue), NOT 'Fixes #50' (epic)"
 
+      closure_verification:
+        rule: "A parent epic closes only after every acceptance slice is mapped to exact child issues and merged PRs"
+        required_steps:
+          - "Verify acceptance coverage repo by repo for every touched repository"
+          - "Post a closure comment mapping acceptance criteria to child issues and PRs"
+          - "Re-open or re-file any discovered acceptance gap before closure"
+          - "Link deferred but still relevant follow-up issues before closure"
+
     commands:
       create_epic: 'gh issue create --template epic.yml --title "[EPIC] Feature name"'
       create_sub_issue: 'gh issue create --template sub-issue.yml --title "PR-X: Step name"'
@@ -441,10 +449,10 @@ issue_management:
 
       - step: 6
         action: "Last sub-issue PR closes the epic"
-        validation: "PR description: 'Fixes #<last-sub-issue> and closes #<epic>'"
+        validation: "PR description uses 'Fixes #<last-sub-issue> and closes #<epic>' only after epic closure evidence is prepared"
 
     documentation_reference:
-      detailed_guide: "api/docs/EPIC_WORKFLOW.md"
+      detailed_guide: "docs/EPIC_WORKFLOW.md"
       real_world_example: "Issue #50 with 7 sub-issues (#52, #53, #55, #60, #64, #65, #67)"
 
   ai_protocol:

@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Centralize Epic Closure Evidence And CLA Ops Verification
+
+**Changed:**
+
+- added a central `docs/EPIC_WORKFLOW.md` guide in the `.github` repository so epic and sub-issue governance no longer depends on the `api` repository as the documentation source of truth
+- strengthened the organization issue templates, markdown Copilot baseline, and machine-readable Copilot config to require explicit parent-epic closure evidence, repo-by-repo acceptance verification, and pre-closure tracking of reopened or deferred follow-up work
+- extended CLA setup guidance and maintainer-facing docs to require live verification of the external CLA Assistant allowlist and `cla/check` behavior for automated authors such as `copilot-swe-agent`, reducing the chance of future bot PR blockage being treated as fixed based on documentation alone
+
 ## 2026-04-08 - Fix setup-hooks Success Counter Abort
 
 **Fixed:**
