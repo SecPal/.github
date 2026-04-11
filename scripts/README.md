@@ -9,6 +9,38 @@ This directory contains utility scripts for SecPal development.
 
 ## Validation Scripts
 
+### `audit-closed-epics.sh`
+
+Audits closed Epic issues and reports checklist drift, such as child issues that
+are still open or already closed while the parent epic checklist remains
+unchecked.
+
+**Usage:**
+
+```bash
+# Audit the full SecPal workspace set
+bash scripts/audit-closed-epics.sh
+
+# Audit a smaller scope
+bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
+```
+
+**What It Checks:**
+
+1. Searches for closed Epic issues by label and title
+2. Parses checklist-linked child issues from each epic body
+3. Ignores PR references so merged PR numbers are not mistaken for issues
+4. Reports:
+   - open child issues in closed epics
+   - checked items that point to non-closed issues
+   - stale unchecked checklist items whose child issues are already closed
+
+**Exit Codes:**
+
+- `0`: No checklist issues found
+- `1`: One or more checklist issues found
+- `2`: Usage or dependency error
+
 ### `validate-copilot-instructions.sh`
 
 Validates Copilot instructions and configuration files across all repositories.

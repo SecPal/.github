@@ -98,6 +98,15 @@ if [ -f tests/reusable-workflow-timeouts.sh ]; then
   }
 fi
 
+if [ -f tests/audit-closed-epics.sh ]; then
+  bash tests/audit-closed-epics.sh || {
+    echo "" >&2
+    echo "❌ Closed epic audit regression test failed!" >&2
+    echo "Fix scripts/audit-closed-epics.sh before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
