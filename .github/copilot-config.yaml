@@ -1360,6 +1360,7 @@ workflows:
 domain_policy:
   critical: true
   homepage_domain: "secpal.app"
+  changelog_domain: "changelog.secpal.app"
   android_artifact_domain: "apk.secpal.app"
   api_domain: "api.secpal.dev"
   frontend_domain: "app.secpal.dev"
@@ -1374,6 +1375,9 @@ domain_policy:
       - "Public homepage and website content"
       - "Official contact information"
       - "Real email addresses"
+    changelog_secpal_app:
+      - "Public changelog site"
+      - "Changelog entries and release notes"
     apk_secpal_app:
       - "Canonical Android artifact host"
       - "Stable APK, checksum, and release metadata downloads"
