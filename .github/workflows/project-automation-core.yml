@@ -34,6 +34,7 @@ jobs:
     name: Handle issue lifecycle events
     if: github.event.issue != null
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       issues: write
       contents: read
@@ -303,6 +304,7 @@ jobs:
     # Skip for bot-created PRs (Dependabot, etc.) - they don't have access to secrets
     if: github.event.pull_request != null && github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       pull-requests: read
       issues: write
@@ -478,6 +480,7 @@ jobs:
     name: Handle pull request review events
     if: github.event.review != null && github.event.review.state == 'changes_requested'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       pull-requests: read
       issues: write

@@ -25,6 +25,7 @@ jobs:
   reuse:
     name: Check REUSE Compliance
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -35,6 +36,7 @@ jobs:
   license-compatibility:
     name: Check License Compatibility
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -53,6 +55,7 @@ jobs:
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -71,6 +74,7 @@ jobs:
   markdown-lint:
     name: Lint Markdown Files
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

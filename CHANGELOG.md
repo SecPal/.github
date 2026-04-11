@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Add Timeouts To Inline Workflow Jobs
+
+**Changed:**
+
+- added explicit `timeout-minutes` values to the remaining inline `.github` workflow jobs so organization automation no longer falls back to GitHub Actions' six-hour default for actionlint, draft PR reminders, license checks, project automation, quality checks, REUSE, and the inline workflow test harness job
+
 ## 2026-04-11 - Add OFL-1.1 To License Compatibility Allowlist
 
 **Changed:**
