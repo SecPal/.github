@@ -16,6 +16,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added explicit `timeout-minutes` values to every previously unbounded job in the reusable GitHub Actions workflows so caller repositories inherit bounded execution instead of GitHub's six-hour default
 - added a focused `tests/reusable-workflow-timeouts.sh` regression check and wired it into local preflight so missing reusable workflow timeouts fail before push
 
+## 2026-04-11 - Centralize Epic Closure Evidence And CLA Ops Verification
+
+**Changed:**
+
+- added a central `docs/EPIC_WORKFLOW.md` guide in the `.github` repository so epic and sub-issue governance no longer depends on the `api` repository as the documentation source of truth
+- strengthened the organization issue templates, markdown Copilot baseline, and machine-readable Copilot config to require explicit parent-epic closure evidence, repo-by-repo acceptance verification, and pre-closure tracking of reopened or deferred follow-up work
+- extended CLA setup guidance and maintainer-facing docs to require live verification of the external CLA Assistant allowlist and `cla/check` behavior for automated authors such as `copilot-swe-agent`, reducing the chance of future bot PR blockage being treated as fixed based on documentation alone
+
 ## 2026-04-08 - Fix setup-hooks Success Counter Abort
 
 **Fixed:**
@@ -439,7 +447,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
   - Pre-commit checklist item: "Issue Creation Protocol" validates all findings documented as GitHub issues
   - AI Execution Protocol updated with prominent reminder: "Found bug → CREATE GITHUB ISSUE NOW"
   - Forbidden patterns: "TODO: fix later" without issue reference, "we should fix X" without creating issue
-  - Cross-reference to `api/docs/EPIC_WORKFLOW.md` for detailed EPIC/sub-issue guidance
+  - Cross-reference to `api/docs/EPIC_WORKFLOW.md` for detailed EPIC/sub-issue guidance (superseded by `docs/EPIC_WORKFLOW.md` in this repository)
 
 - **Issue Management section in Markdown** - Clear, concise rules added before Critical Rules section
   - Immediate issue creation protocol: 8 scenarios requiring immediate action (bugs, tech debt, coverage gaps, etc.)
@@ -470,7 +478,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 - Complete AI workflows: Discovery workflow (assess → create issue) and Feature planning workflow (assess complexity → EPIC or simple issue)
 - Examples: Security bug during docs work, test coverage gap during feature implementation, duplication refactoring
 - EPIC workflow: 6-step process from epic creation to final PR closing epic
-- Cross-references: `api/docs/EPIC_WORKFLOW.md` for detailed guide with Issue #50 real-world example
+- Cross-references: `api/docs/EPIC_WORKFLOW.md` for detailed guide with Issue #50 real-world example (superseded by `docs/EPIC_WORKFLOW.md` in this repository)
 
 ---
 

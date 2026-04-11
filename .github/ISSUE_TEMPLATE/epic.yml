@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: 🗺️ Epic (Multi-PR Feature)
@@ -25,7 +25,7 @@ body:
         4. Each PR closes its sub-issue: `Fixes #<sub-issue-number>`
         5. Only the LAST PR closes this epic: `Closes #<epic-number>`
 
-        📚 Full documentation: See `docs/EPIC_WORKFLOW.md` in the api repository
+        📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
 
   - type: textarea
     id: goal
@@ -84,6 +84,20 @@ body:
       required: true
 
   - type: textarea
+    id: closure_checklist
+    attributes:
+      label: 🔒 Closure Checklist
+      description: What must be verified before this parent epic may actually be closed?
+      value: |
+        - [ ] Each acceptance criterion is mapped to exact child issues and merged PRs
+        - [ ] Cross-repo work was checked repo by repo where applicable
+        - [ ] Any discovered acceptance gap was reopened or re-filed before closure
+        - [ ] Deferred but still relevant work is linked as dedicated follow-up issues
+        - [ ] A closure comment will be posted with the final acceptance mapping
+    validations:
+      required: true
+
+  - type: textarea
     id: non_goals
     attributes:
       label: 🚫 Non-Goals
@@ -116,6 +130,19 @@ body:
         2. **Update This Epic**: Edit the "Sub-Issues & Work Plan" section with actual issue numbers
         3. **Start Work**: Begin with the first sub-issue
         4. **PR Linking**: Each PR should reference its sub-issue (`Fixes #<sub-issue>`), not this epic
-        5. **Close Epic**: Only the LAST PR should close this epic (`Closes #<epic-number>`)
+        5. **Close Epic**: Only the LAST PR should close this epic (`Closes #<epic-number>`) and only after the closure checklist is satisfied
+
+        **Required closure comment template:**
+
+        ```markdown
+        ## Epic Closure Evidence
+
+        ### Acceptance Criteria Mapping
+        - Criterion: <acceptance slice>
+          Delivered by: <child issue>, <PR>, <repo>
+
+        ### Deferred Follow-Up
+        - <issue link> — <why it remains out of scope>
+        ```
 
         **Example:** See Issue #50 in the api repository for a real-world example.
