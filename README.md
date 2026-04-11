@@ -18,8 +18,11 @@ SecPal is a digital guard book and much more. It's the "guard's friend" in every
 
 - [`.github`](https://github.com/SecPal/.github): Organization-wide settings and documentation
 - [`api`](https://github.com/SecPal/api): Laravel backend API
+- [`android`](https://github.com/SecPal/android): React/TypeScript Android app via Capacitor
+- [`changelog`](https://github.com/SecPal/changelog): Public changelog site for SecPal releases
 - [`contracts`](https://github.com/SecPal/contracts): OpenAPI 3.1 API specifications
 - [`frontend`](https://github.com/SecPal/frontend): React/TypeScript frontend application
+- [`secpal.app`](https://github.com/SecPal/secpal.app): Astro public website
 
 ## Multi-Repository Workspace Setup
 

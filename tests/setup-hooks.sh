@@ -38,7 +38,7 @@ STUB
   chmod +x "$workspace/$repo/scripts/setup-pre-push.sh" "$workspace/$repo/scripts/setup-pre-commit.sh"
 }
 
-for repo in api frontend contracts android secpal.app .github; do
+for repo in api frontend contracts android secpal.app changelog .github; do
   create_repo "$repo"
 done
 
@@ -50,5 +50,5 @@ if ! PATH="$workspace/bin:$PATH" bash "$workspace/.github/setup-hooks.sh" >"$out
   exit 1
 fi
 
-grep -q 'Successfully installed: 12 hooks' "$output_file"
+grep -q 'Successfully installed: 14 hooks' "$output_file"
 grep -q 'All Git hooks have been successfully installed' "$output_file"

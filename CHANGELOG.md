@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Add changelog Repository To Workspace Inventory
+
+**Changed:**
+
+- added the new `changelog` repository to the shared VS Code workspace definition so it is loaded alongside the other active SecPal repositories
+- extended the master `.github/setup-hooks.sh` bootstrap and its regression test to install hooks in `changelog` together with the existing repositories
+- refreshed organization workspace documentation and repository listings so contributor setup guidance reflects the current seven-repository SecPal workspace
+
 ## 2026-04-08 - Fix setup-hooks Success Counter Abort
 
 **Fixed:**

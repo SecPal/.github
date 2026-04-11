@@ -15,6 +15,7 @@ SecPal/
 │   └── setup-hooks.sh  # Master script to setup hooks in all repos
 ├── api/           # Laravel backend API
 ├── android/       # React/TypeScript Android app via Capacitor
+├── changelog/     # Next.js public changelog site
 ├── contracts/     # OpenAPI 3.1 API specifications
 ├── frontend/      # React/TypeScript frontend application
 └── secpal.app/    # Astro public website
