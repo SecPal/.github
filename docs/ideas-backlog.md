@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Add ideas freely, review quarterly
 
-**Last Updated:** 2025-10-27
+**Last Updated:** 2026-04-11
 
 > **Note:** Core features (RBAC, Employee Management, Shift Planning) have been moved to `feature-requirements.md` for detailed specification. This document focuses on long-term/experimental ideas.
 
@@ -41,7 +41,7 @@ in principle target iOS, but no timeline or priority has been set.
 
 **When to revisit:**
 
-- When Android reach and field usage justifies the additional platform investment
+- When Android reach and field usage justify the additional platform investment
 - When Apple enterprise distribution (VPP / MDM) strategy is defined
 
 **Priority:** Future (no active work)

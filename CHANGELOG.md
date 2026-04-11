@@ -22,8 +22,6 @@ Log of notable changes to SecPal organization defaults (newest first).
 - `.github/PULL_REQUEST_TEMPLATE.md`: duplicate PR template (uppercase); GitHub uses the lowercase `pull_request_template.md` — the uppercase file was inert and confusing
 - `.github/copilot-config.yaml` and its `.license` sidecar: inert ~60 KB YAML from an experimental period; no Copilot mechanism reads this file; governance baseline is now fully in `copilot-instructions.md` and per-repo instruction files
 
----
-
 ## 2026-04-11 - Add Closed Epic Audit Helper
 
 **Changed:**

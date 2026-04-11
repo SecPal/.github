@@ -642,6 +642,6 @@ npm run lint
 
 ---
 
-**Last Updated:** November 23, 2025
+**Last Updated:** April 11, 2026
 **Maintained by:** SecPal Organization
 **Source of Truth:** [`.github/copilot-instructions.md`](../.github/copilot-instructions.md) and per-repo `.github/instructions/*.instructions.md` files
