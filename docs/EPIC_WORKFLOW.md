@@ -120,6 +120,25 @@ If epic closure review finds that something was assumed complete but is not actu
 
 Do not close the epic first and clean up the tracking later.
 
+## Retrospective Audit Helper
+
+When you need to verify already-closed epics, use the audit helper in this
+repository:
+
+```bash
+bash scripts/audit-closed-epics.sh
+```
+
+You can scope it to specific repositories when investigating a narrower set of
+epics:
+
+```bash
+bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
+```
+
+This catches stale checklist state, open child issues, and checked items that do
+not resolve to closed issues.
+
 ## CLA And Other External Services
 
 If a workflow depends on repository settings or external services, merged code alone is not enough evidence. Verify the live configuration separately and track any missing operational step as its own issue.

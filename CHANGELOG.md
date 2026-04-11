@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Add Closed Epic Audit Helper
+
+**Changed:**
+
+- added `scripts/audit-closed-epics.sh` to audit closed Epic issues for stale checklist state, unresolved child issues, and false positives caused by PR references in issue bodies
+- added a focused shell regression test and wired it into local preflight so future changes keep the audit helper correctly distinguishing issue links from PR links
+- documented the retrospective audit command in the shared Epic workflow guide and scripts reference so maintainers can re-check closed epics before trusting their closure state
+
 ## 2026-04-11 - Add Timeouts To Inline Workflow Jobs
 
 **Changed:**
