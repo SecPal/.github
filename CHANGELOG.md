@@ -16,6 +16,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added explicit `timeout-minutes` values to every previously unbounded job in the reusable GitHub Actions workflows so caller repositories inherit bounded execution instead of GitHub's six-hour default
 - added a focused `tests/reusable-workflow-timeouts.sh` regression check and wired it into local preflight so missing reusable workflow timeouts fail before push
 
+## 2026-04-11 - Add changelog Repository To Workspace Inventory
+
+**Changed:**
+
+- added the new `changelog` repository to the shared workspace inventory and contributor setup documentation so contributors know to clone and configure it alongside the other active SecPal repositories
+- extended the master `.github/setup-hooks.sh` bootstrap and its regression test to install hooks in `changelog` together with the existing repositories
+- refreshed organization workspace documentation and repository listings so contributor setup guidance reflects the current seven-repository SecPal workspace
+
 ## 2026-04-11 - Centralize Epic Closure Evidence And CLA Ops Verification
 
 **Changed:**

@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$WORKSPACE_ROOT"
 
-REPOS=("api" "frontend" "contracts" "android" "secpal.app" ".github")
+REPOS=("api" "frontend" "contracts" "android" "secpal.app" "changelog" ".github")
 SUCCESS_COUNT=0
 FAILED_REPOS=()
 
