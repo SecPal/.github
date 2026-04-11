@@ -61,14 +61,10 @@ test_instructions_exists() {
 }
 
 test_yaml_config_exists() {
-    local repo_type="$1"
-
     if [ -f ".github/copilot-config.yaml" ]; then
         print_result "copilot-config.yaml exists" "PASS"
-    elif [ "$repo_type" = "org" ]; then
-        print_result "copilot-config.yaml exists" "FAIL" "File not found"
     else
-        print_result "copilot-config.yaml exists" "PASS" "Skipped (repo-local config not required)"
+        print_result "copilot-config.yaml exists" "PASS" "Skipped (optional legacy file; runtime baseline is copilot-instructions.md)"
     fi
 }
 
@@ -81,14 +77,8 @@ test_instructions_reuse() {
 }
 
 test_yaml_config_reuse() {
-    local repo_type="$1"
-
     if [ ! -f ".github/copilot-config.yaml" ]; then
-        if [ "$repo_type" = "org" ]; then
-            print_result "copilot-config.yaml has REUSE license" "FAIL" "Config file missing"
-        else
-            print_result "copilot-config.yaml has REUSE license" "PASS" "Skipped (repo-local config not present)"
-        fi
+        print_result "copilot-config.yaml has REUSE license" "PASS" "Skipped (legacy config not present)"
         return
     fi
 
@@ -194,9 +184,9 @@ main() {
     echo ""
 
     test_instructions_exists
-    test_yaml_config_exists "$repo_type"
+    test_yaml_config_exists
     test_instructions_reuse
-    test_yaml_config_reuse "$repo_type"
+    test_yaml_config_reuse
     test_markdown_lint
     test_yaml_syntax
     test_no_pseudo_inheritance
