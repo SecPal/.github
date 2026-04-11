@@ -440,7 +440,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
   - Pre-commit checklist item: "Issue Creation Protocol" validates all findings documented as GitHub issues
   - AI Execution Protocol updated with prominent reminder: "Found bug → CREATE GITHUB ISSUE NOW"
   - Forbidden patterns: "TODO: fix later" without issue reference, "we should fix X" without creating issue
-  - Cross-reference to `api/docs/EPIC_WORKFLOW.md` for detailed EPIC/sub-issue guidance
+  - Cross-reference to `api/docs/EPIC_WORKFLOW.md` for detailed EPIC/sub-issue guidance (superseded by `docs/EPIC_WORKFLOW.md` in this repository)
 
 - **Issue Management section in Markdown** - Clear, concise rules added before Critical Rules section
   - Immediate issue creation protocol: 8 scenarios requiring immediate action (bugs, tech debt, coverage gaps, etc.)
@@ -471,7 +471,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 - Complete AI workflows: Discovery workflow (assess → create issue) and Feature planning workflow (assess complexity → EPIC or simple issue)
 - Examples: Security bug during docs work, test coverage gap during feature implementation, duplication refactoring
 - EPIC workflow: 6-step process from epic creation to final PR closing epic
-- Cross-references: `api/docs/EPIC_WORKFLOW.md` for detailed guide with Issue #50 real-world example
+- Cross-references: `api/docs/EPIC_WORKFLOW.md` for detailed guide with Issue #50 real-world example (superseded by `docs/EPIC_WORKFLOW.md` in this repository)
 
 ---
 

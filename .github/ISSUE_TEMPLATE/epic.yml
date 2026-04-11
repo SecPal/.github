@@ -25,7 +25,7 @@ body:
         4. Each PR closes its sub-issue: `Fixes #<sub-issue-number>`
         5. Only the LAST PR closes this epic: `Closes #<epic-number>`
 
-        📚 Full documentation: See `SecPal/.github/docs/EPIC_WORKFLOW.md`
+        📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
 
   - type: textarea
     id: goal

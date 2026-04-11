@@ -24,7 +24,7 @@ body:
         3. Your PR should reference the epic: `Part of: #<epic-number>`
         4. Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
 
-        📚 Full documentation: See `SecPal/.github/docs/EPIC_WORKFLOW.md`
+        📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
 
   - type: input
     id: parent_epic
