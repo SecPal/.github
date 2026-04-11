@@ -76,12 +76,19 @@ checklist_line = re.compile(r"^- \[[ xX]\]")
 
 
 def gh_json(*args):
-    output = subprocess.check_output(
-        ["gh", "api", *args],
-        text=True,
-        stderr=subprocess.DEVNULL,
-    )
-    return json.loads(output)
+    try:
+        output = subprocess.check_output(
+            ["gh", "api", *args],
+            text=True,
+            stderr=subprocess.PIPE,
+        )
+        return json.loads(output)
+    except subprocess.CalledProcessError as exc:
+        first_line = (exc.stderr or "").strip().splitlines()[:1]
+        raise RuntimeError(
+            f"gh api {args[0] if args else ''} failed: "
+            f"{first_line[0] if first_line else exc.returncode}"
+        ) from exc
 
 
 def search_epics(owner: str, repo: str):
@@ -91,16 +98,24 @@ def search_epics(owner: str, repo: str):
     ]
     results = []
     for query in queries:
-        payload = gh_json(
-            "/search/issues",
-            "-X",
-            "GET",
-            "-f",
-            f"q={query}",
-            "-f",
-            "per_page=100",
-        )
-        results.extend(payload.get("items", []))
+        page = 1
+        while True:
+            payload = gh_json(
+                "/search/issues",
+                "-X",
+                "GET",
+                "-f",
+                f"q={query}",
+                "-f",
+                "per_page=100",
+                "-f",
+                f"page={page}",
+            )
+            items = payload.get("items", [])
+            results.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
     unique = {}
     for item in results:
         key = (item["repository_url"], item["number"])
@@ -122,7 +137,7 @@ def fetch_issue_state(owner_repo: str, number: int):
             "state": payload.get("state", "unknown"),
             "title": payload.get("title", ""),
         }
-    except subprocess.CalledProcessError:
+    except RuntimeError:
         state = {"state": "missing", "title": ""}
 
     issue_state_cache[cache_key] = state
@@ -154,115 +169,119 @@ def parse_issue_refs(line: str, epic_repo: str):
     return deduped
 
 
-epics = []
-for repo in repos:
-    epics.extend(search_epics(org, repo))
+try:
+    epics = []
+    for repo in repos:
+        epics.extend(search_epics(org, repo))
 
-unique_epics = {}
-for item in epics:
-    key = (item["repository_url"], item["number"])
-    unique_epics[key] = item
+    unique_epics = {}
+    for item in epics:
+        key = (item["repository_url"], item["number"])
+        unique_epics[key] = item
 
-findings = []
-for item in sorted(unique_epics.values(), key=lambda epic: (epic["repository_url"], epic["number"])):
-    epic_repo = item["repository_url"].split("/repos/", 1)[1]
-    epic_number = item["number"]
-    epic_title = item["title"]
-    body = item.get("body") or ""
+    findings = []
+    for item in sorted(unique_epics.values(), key=lambda epic: (epic["repository_url"], epic["number"])):
+        epic_repo = item["repository_url"].split("/repos/", 1)[1]
+        epic_number = item["number"]
+        epic_title = item["title"]
+        body = item.get("body") or ""
 
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not checklist_line.match(stripped):
-            continue
-
-        marked_checked = stripped.startswith("- [x]") or stripped.startswith("- [X]")
-        refs = parse_issue_refs(stripped, epic_repo)
-        for ref_repo, ref_number in refs:
-            if (ref_repo, ref_number) == (epic_repo, epic_number):
+        for line in body.splitlines():
+            stripped = line.strip()
+            if not checklist_line.match(stripped):
                 continue
 
-            state = fetch_issue_state(ref_repo, ref_number)["state"]
-            if state == "missing":
-                findings.append(
-                    {
-                        "kind": "missing-child",
-                        "epic_repo": epic_repo,
-                        "epic_number": epic_number,
-                        "epic_title": epic_title,
-                        "child_repo": ref_repo,
-                        "child_number": ref_number,
-                        "line": stripped,
-                    }
-                )
-            elif marked_checked and state != "closed":
-                findings.append(
-                    {
-                        "kind": "checked-open-child",
-                        "epic_repo": epic_repo,
-                        "epic_number": epic_number,
-                        "epic_title": epic_title,
-                        "child_repo": ref_repo,
-                        "child_number": ref_number,
-                        "line": stripped,
-                    }
-                )
-            elif not marked_checked and state == "closed":
-                findings.append(
-                    {
-                        "kind": "stale-unchecked-child",
-                        "epic_repo": epic_repo,
-                        "epic_number": epic_number,
-                        "epic_title": epic_title,
-                        "child_repo": ref_repo,
-                        "child_number": ref_number,
-                        "line": stripped,
-                    }
-                )
-            elif not marked_checked and state != "closed":
-                findings.append(
-                    {
-                        "kind": "open-child",
-                        "epic_repo": epic_repo,
-                        "epic_number": epic_number,
-                        "epic_title": epic_title,
-                        "child_repo": ref_repo,
-                        "child_number": ref_number,
-                        "line": stripped,
-                    }
-                )
+            marked_checked = stripped.startswith("- [x]") or stripped.startswith("- [X]")
+            refs = parse_issue_refs(stripped, epic_repo)
+            for ref_repo, ref_number in refs:
+                if (ref_repo, ref_number) == (epic_repo, epic_number):
+                    continue
 
-if not findings:
-    print(f"No closed epic checklist issues found across {len(unique_epics)} epic(s).")
-    sys.exit(0)
+                state = fetch_issue_state(ref_repo, ref_number)["state"]
+                if state == "missing":
+                    findings.append(
+                        {
+                            "kind": "missing-child",
+                            "epic_repo": epic_repo,
+                            "epic_number": epic_number,
+                            "epic_title": epic_title,
+                            "child_repo": ref_repo,
+                            "child_number": ref_number,
+                            "line": stripped,
+                        }
+                    )
+                elif marked_checked and state != "closed":
+                    findings.append(
+                        {
+                            "kind": "checked-open-child",
+                            "epic_repo": epic_repo,
+                            "epic_number": epic_number,
+                            "epic_title": epic_title,
+                            "child_repo": ref_repo,
+                            "child_number": ref_number,
+                            "line": stripped,
+                        }
+                    )
+                elif not marked_checked and state == "closed":
+                    findings.append(
+                        {
+                            "kind": "stale-unchecked-child",
+                            "epic_repo": epic_repo,
+                            "epic_number": epic_number,
+                            "epic_title": epic_title,
+                            "child_repo": ref_repo,
+                            "child_number": ref_number,
+                            "line": stripped,
+                        }
+                    )
+                elif not marked_checked and state != "closed":
+                    findings.append(
+                        {
+                            "kind": "open-child",
+                            "epic_repo": epic_repo,
+                            "epic_number": epic_number,
+                            "epic_title": epic_title,
+                            "child_repo": ref_repo,
+                            "child_number": ref_number,
+                            "line": stripped,
+                        }
+                    )
 
-deduped_findings = []
-seen_findings = set()
-for finding in findings:
-    key = (
-        finding["kind"],
-        finding["epic_repo"],
-        finding["epic_number"],
-        finding["child_repo"],
-        finding["child_number"],
-    )
-    if key in seen_findings:
-        continue
-    seen_findings.add(key)
-    deduped_findings.append(finding)
+    if not findings:
+        print(f"No closed epic checklist issues found across {len(unique_epics)} epic(s).")
+        sys.exit(0)
 
-print(f"Closed epic checklist issues found: {len(deduped_findings)} across {len(unique_epics)} epic(s).")
-for finding in deduped_findings:
-    epic_prefix = f"{finding['epic_repo']}#{finding['epic_number']}"
-    child_prefix = f"{finding['child_repo']}#{finding['child_number']}"
-    if finding["kind"] == "stale-unchecked-child":
-        message = f"{child_prefix} is closed but still unchecked"
-    elif finding["kind"] == "open-child":
-        message = f"{child_prefix} is still open"
-    elif finding["kind"] == "checked-open-child":
-        message = f"{child_prefix} is not closed but is marked done"
-    else:
-        message = f"{child_prefix} could not be resolved from the checklist reference"
-    print(f"- {epic_prefix} \"{finding['epic_title']}\": {message}")
+    deduped_findings = []
+    seen_findings = set()
+    for finding in findings:
+        key = (
+            finding["kind"],
+            finding["epic_repo"],
+            finding["epic_number"],
+            finding["child_repo"],
+            finding["child_number"],
+        )
+        if key in seen_findings:
+            continue
+        seen_findings.add(key)
+        deduped_findings.append(finding)
 
-sys.exit(1)
+    print(f"Closed epic checklist issues found: {len(deduped_findings)} across {len(unique_epics)} epic(s).")
+    for finding in deduped_findings:
+        epic_prefix = f"{finding['epic_repo']}#{finding['epic_number']}"
+        child_prefix = f"{finding['child_repo']}#{finding['child_number']}"
+        if finding["kind"] == "stale-unchecked-child":
+            message = f"{child_prefix} is closed but still unchecked"
+        elif finding["kind"] == "open-child":
+            message = f"{child_prefix} is still open"
+        elif finding["kind"] == "checked-open-child":
+            message = f"{child_prefix} is not closed but is marked done"
+        else:
+            message = f"{child_prefix} could not be resolved from the checklist reference"
+        print(f"- {epic_prefix} \"{finding['epic_title']}\": {message}")
+
+    sys.exit(1)
+except RuntimeError as exc:
+    print(f"Error: {exc}", file=sys.stderr)
+    sys.exit(2)
 PY
