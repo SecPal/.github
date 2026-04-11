@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal Contributors
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 
 name: Reusable - Check for Merge Conflict Markers
@@ -19,6 +19,7 @@ jobs:
   check-conflict-markers:
     runs-on: ubuntu-latest
     name: Detect Git Conflict Markers
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code

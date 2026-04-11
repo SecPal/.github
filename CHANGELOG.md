@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Add Job Timeouts To Reusable Workflows
+
+**Changed:**
+
+- added explicit `timeout-minutes` values to every previously unbounded job in the reusable GitHub Actions workflows so caller repositories inherit bounded execution instead of GitHub's six-hour default
+- added a focused `tests/reusable-workflow-timeouts.sh` regression check and wired it into local preflight so missing reusable workflow timeouts fail before push
+
 ## 2026-04-08 - Fix setup-hooks Success Counter Abort
 
 **Fixed:**

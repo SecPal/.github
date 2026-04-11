@@ -89,6 +89,15 @@ if [ -f scripts/check-conflict-markers.sh ]; then
   }
 fi
 
+if [ -f tests/reusable-workflow-timeouts.sh ]; then
+  bash tests/reusable-workflow-timeouts.sh || {
+    echo "" >&2
+    echo "❌ Reusable workflow timeout validation failed!" >&2
+    echo "Add timeout-minutes to every reusable workflow job before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
