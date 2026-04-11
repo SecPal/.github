@@ -82,6 +82,7 @@ When all passes are clean, commit and push before creating the draft PR.
 Use only these domains and identifiers:
 
 - `secpal.app` for the public homepage and real email addresses
+- `changelog.secpal.app` for the public changelog site
 - `apk.secpal.app` for the canonical Android artifact and download host
 - `api.secpal.dev` for the live API host
 - `app.secpal.dev` for the live PWA/frontend host
