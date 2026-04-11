@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: Reusable - Node.js Tests
@@ -26,6 +26,7 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Skip tests for spike branches (exploration/prototyping)
     # Spike branches are for experimentation and cannot be merged to main
     # See: CONTRIBUTING.md - Spike Branch Policy
