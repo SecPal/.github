@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Add OFL-1.1 To License Compatibility Allowlist
+
+**Changed:**
+
+- added OFL-1.1 (SIL Open Font License 1.1) to the compatible licenses list in the reusable
+  license-compatibility workflow; OFL-1.1 fonts are embeddable in AGPL-3.0-or-later projects
+  without conflict
+
+---
+
 ## 2026-04-11 - Add Job Timeouts To Reusable Workflows
 
 **Changed:**
