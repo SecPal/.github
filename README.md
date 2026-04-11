@@ -12,7 +12,7 @@ This repository contains general project documentation, settings, and community 
 
 ## About SecPal
 
-SecPal is a digital guard book and much more. It's the "guard's friend" in every respect. The target group is private, German security services.
+SecPal is the operations software for German private security services. Everything the day-to-day operation needs — in one system that just works.
 
 ## Repositories
 
