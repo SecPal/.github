@@ -61,6 +61,9 @@ At minimum verify:
 
 - Every real out-of-scope finding becomes a GitHub issue immediately; no untracked follow-up work is allowed.
 - Complex work uses EPIC plus sub-issues before implementation. PRs should close sub-issues, not the epic, until the final linked step.
+- Before closing a parent epic, verify each acceptance slice against the exact child issues and merged PRs across every touched repository.
+- Parent epic closure comments must list the child issues and PRs that satisfied each acceptance slice, and any remaining gap must be reopened or re-filed before closure.
+- Deferred but still relevant follow-up work must be linked as dedicated issues before a parent epic is closed.
 - When local review finds zero issues, commit and push the finished branch before opening any PR.
 - The first PR state must be draft. Do not open a normal PR first.
 - Mark a draft PR ready only after the final self-review in the PR view still finds zero issues.
@@ -82,6 +85,7 @@ When all passes are clean, commit and push before creating the draft PR.
 Use only these domains and identifiers:
 
 - `secpal.app` for the public homepage and real email addresses
+- `changelog.secpal.app` for the public changelog site
 - `apk.secpal.app` for the canonical Android artifact and download host
 - `api.secpal.dev` for the live API host
 - `app.secpal.dev` for the live PWA/frontend host

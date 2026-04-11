@@ -29,6 +29,8 @@ This directory contains reusable GitHub Actions workflow templates for SecPal re
 - Contributors sign via <https://cla-assistant.io/>
 - Signatures are centrally managed
 - Allowlist automated authors such as `dependabot[bot]`, `dependabot-preview[bot]`, and `copilot-swe-agent` directly in CLA Assistant
+- Verify the live `cla/check` status on a recent automated PR after changing CLA Assistant settings; documentation alone does not prove the external service is in sync
+- Track any live CLA Assistant config drift in `SecPal/.github` before treating a repository-specific CLA blockage as resolved
 
 ### Adding CLA to a New Repository
 
