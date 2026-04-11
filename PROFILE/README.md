@@ -5,7 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Hi there 👋
 
-SecPal is a digital guard book and much more. It's the "guard's friend" in every respect. The target group is private, German security services.
+SecPal is the operations software for German private security services. Everything the day-to-day operation needs — in one system that just works.
+
+_SecPal – A guard's best friend._
 
 - 🌐 Main Domain: [secpal.app](https://secpal.app)
 - 🛠️ Development/Demo Domain: [secpal.dev](https://secpal.dev)
