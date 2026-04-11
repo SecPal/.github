@@ -268,4 +268,3 @@ Add to your `.zshrc` or `.bashrc`.
 - [Full Documentation](./PROJECT_AUTOMATION.md)
 - [Rollout Guide](./ROLLOUT_GUIDE.md)
 - [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1)
-- [Test Scenarios](../../WORKFLOW_REVIEW.md)

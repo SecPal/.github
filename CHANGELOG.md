@@ -13,7 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Changed:**
 
-- removed stale one-time artefacts and historical docs: YAML Copilot config experiment note (`docs/YAML_COPILOT_CONFIG_TEST.md`), single-fix compliance report (`docs/RETROACTIVE_COMPLIANCE_FIX_ISSUE187.md`), draft-PR-reminder bugfix note (`docs/BUGFIX_DRAFT_PR_REMINDER.md`), and implementation summaries for already-merged automation work (`IMPLEMENTATION_SUMMARY.md`, `WORKFLOW_REVIEW.md`)
+- removed stale one-time artifacts and historical docs: YAML Copilot config experiment note (`docs/YAML_COPILOT_CONFIG_TEST.md`), single-fix compliance report (`docs/RETROACTIVE_COMPLIANCE_FIX_ISSUE187.md`), draft-PR-reminder bugfix note (`docs/BUGFIX_DRAFT_PR_REMINDER.md`), and implementation summaries for already-merged automation work (`IMPLEMENTATION_SUMMARY.md`, `WORKFLOW_REVIEW.md`)
 
 ## 2026-04-11 - Add Closed Epic Audit Helper
 
@@ -679,7 +679,7 @@ jobs:
 - Fix automatically applies to all repositories (api, frontend, contracts) using the reusable workflow
 - DRY compliance maintained - single centralized fix
 
-**Documentation:** See `docs/BUGFIX_DRAFT_PR_REMINDER.md` for detailed analysis
+**Documentation:** `docs/BUGFIX_DRAFT_PR_REMINDER.md` (removed — historical reference only)
 
 ---
 
