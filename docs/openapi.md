@@ -15,7 +15,7 @@ This document outlines the OpenAPI conventions and standards used across SecPal 
 
 - **Specification:** `docs/openapi.yaml` or `contracts/openapi.yaml`
 - **Format:** OpenAPI 3.1
-- **Validation:** Spectral CLI
+- **Validation:** Redocly CLI (`redocly lint`)
 
 ## Naming Conventions
 

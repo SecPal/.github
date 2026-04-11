@@ -17,30 +17,34 @@ SPDX-License-Identifier: CC0-1.0
 
 ## 📱 Mobile Apps
 
-### Idea: Native Mobile Apps for Guards
+### Android App — Active Development
+
+**Status:** ✅ **IN PROGRESS** — The `android` repository is active.
+
+The Android app is built with React, TypeScript, and Capacitor 7. It targets
+enterprise deployments via Android Device Owner (MDM/managed device provisioning).
+
+**Delivered so far:**
+
+- Device Owner / Android Enterprise provisioning QR flow (bootstrap token exchange)
+- Capacitor bridge for native enterprise capabilities
+- Offline persistence layer
+
+**Related repository:** [SecPal/android](https://github.com/SecPal/android)
+**Related issues:** See SecPal/android issue tracker
+
+### iOS App — Future Consideration
 
 **Context:**
-Guards in the field need quick access to the guard book while on patrol, often in areas with poor network connectivity.
-
-**Concept:**
-
-- Native iOS/Android apps (React Native or Flutter)
-- Offline-first architecture with sync
-- Biometric authentication (fingerprint, Face ID)
-- Camera integration for incident photos
-- GPS tracking for patrol routes
-- NFC/QR code scanning for checkpoints
+iOS support remains a future idea. The Capacitor stack in the `android` repo could
+in principle target iOS, but no timeline or priority has been set.
 
 **When to revisit:**
 
-- After web frontend reaches v1.0
-- When field testing shows demand
-- When budget allows native development
+- When Android reach and field usage justifies the additional platform investment
+- When Apple enterprise distribution (VPP / MDM) strategy is defined
 
-**Complexity:** High
-**Priority:** Future (post-1.0)
-
-**Related Issues:** _None yet_
+**Priority:** Future (no active work)
 
 ---
 

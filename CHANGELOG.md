@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-11 - Fix stale doc content and remove dead files
+
+**Changed:**
+
+- `docs/ideas-backlog.md`: replaced the "Native Mobile Apps" future-idea stub with the current reality — Android app (`SecPal/android`, Capacitor) is in active development; iOS remains a future consideration
+- `docs/development-principles.md`: replaced three stale references to `copilot-config.yaml` as "machine-readable source of truth" with correct references to `copilot-instructions.md` and per-repo `.github/instructions/*.instructions.md` files
+- `docs/openapi.md`: corrected validation tool reference from Spectral CLI to Redocly CLI (`redocly lint`)
+
+**Removed:**
+
+- `.github/PULL_REQUEST_TEMPLATE.md`: duplicate PR template (uppercase); GitHub uses the lowercase `pull_request_template.md` — the uppercase file was inert and confusing
+- `.github/copilot-config.yaml` and its `.license` sidecar: inert ~60 KB YAML from an experimental period; no Copilot mechanism reads this file; governance baseline is now fully in `copilot-instructions.md` and per-repo instruction files
+
+---
+
 ## 2026-04-11 - Add Closed Epic Audit Helper
 
 **Changed:**
