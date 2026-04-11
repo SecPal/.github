@@ -31,6 +31,7 @@ while IFS= read -r workflow; do
         if (current_job != "" && current_has_timeout == 0) {
           print path ":" current_job
         }
+        in_jobs = 0
         exit
       }
 
