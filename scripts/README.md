@@ -56,11 +56,11 @@ Validates Copilot instructions and configuration files across all repositories.
 
 1. **File Existence**
    - Checks for `copilot-instructions.md`
-   - Checks for `copilot-config.yaml` (optional)
+   - `copilot-config.yaml` check always skips (file removed 2026-04-11)
 
 2. **REUSE Compliance**
    - Validates `copilot-instructions.md.license` exists
-   - Validates `copilot-config.yaml.license` exists (if YAML present)
+   - `copilot-config.yaml.license` check always skips (file removed 2026-04-11)
    - Verifies CC0-1.0 license
 
 3. **Markdown Linting**
@@ -94,11 +94,11 @@ Copilot Instructions Validation
 Repository Type: api
 
 ✓ copilot-instructions.md exists
-✓ copilot-config.yaml exists
+✓ copilot-config.yaml exists (Skipped - removed 2026-04-11)
 ✓ copilot-instructions.md has REUSE license
-✓ copilot-config.yaml has REUSE license
+✓ copilot-config.yaml has REUSE license (Skipped - removed 2026-04-11)
 ✓ copilot-instructions.md passes markdown lint
-✓ copilot-config.yaml has valid syntax
+✓ copilot-config.yaml has valid syntax (Skipped - removed 2026-04-11)
 ✓ repo-specific instructions use @EXTENDS
 ✓ instructions contain critical rules
 

@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Development Principles & Best Practices
 
-> **Note:** This is the **human-readable** version of our development principles. The machine-readable source of truth is [`.github/copilot-config.yaml`](../.github/copilot-config.yaml).
+> **Note:** This is the **human-readable** version of our development principles. The runtime baseline for each repository is its own `copilot-instructions.md` and `.github/instructions/*.instructions.md` files.
 
 This document explains the design principles and best practices that guide all SecPal projects (api, frontend, contracts).
 
@@ -612,7 +612,7 @@ npm run lint
 
 ### Organization-Wide (`.github` repo)
 
-- [copilot-config.yaml](../.github/copilot-config.yaml) - Machine-readable source of truth
+- [copilot-instructions.md](../.github/copilot-instructions.md) - Runtime baseline (org-wide)
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - How to contribute
 - [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) - Community standards
 
@@ -642,6 +642,6 @@ npm run lint
 
 ---
 
-**Last Updated:** November 23, 2025
+**Last Updated:** April 11, 2026
 **Maintained by:** SecPal Organization
-**Source of Truth:** [`.github/copilot-config.yaml`](../.github/copilot-config.yaml)
+**Source of Truth:** [`.github/copilot-instructions.md`](../.github/copilot-instructions.md) and per-repo `.github/instructions/*.instructions.md` files
