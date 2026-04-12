@@ -19,12 +19,14 @@ The Validation System ensures that Copilot instructions and configuration files 
 │   ├── validate-copilot-instructions.sh  # Main validation script
 │   └── README.md                          # Script documentation
 ├── .github/
-│   ├── copilot-instructions.md            # Markdown instructions
-│   ├── copilot-config.yaml                # YAML configuration
+│   ├── copilot-instructions.md            # Markdown instructions (authoritative)
 │   └── workflows/
 │       └── validate-copilot-instructions.yml  # CI workflow
 └── docs/
     └── VALIDATION_SYSTEM.md               # This document
+
+> **Note:** `.github/copilot-config.yaml` was permanently removed on 2026-04-11.
+> Governance baseline is now fully in `copilot-instructions.md` and per-repo instruction files.
 ```
 
 ### Validation Script
@@ -69,19 +71,18 @@ The Validation System ensures that Copilot instructions and configuration files 
 **Files Checked:**
 
 - `.github/copilot-instructions.md` (required)
-- `.github/copilot-config.yaml` (optional)
 
 **Failure Impact:** CRITICAL - Instructions missing
 
 ### 2. YAML Config Existence
 
-**Purpose:** Check for YAML configuration (optional enhancement)
+**Purpose:** Check for YAML configuration (removed as of 2026-04-11)
 
-**Files Checked:**
+**Note:** `.github/copilot-config.yaml` has been permanently removed. No Copilot mechanism reads this file;
+governance baseline is in `copilot-instructions.md` and per-repo instruction files. This test
+always skips.
 
-- `.github/copilot-config.yaml`
-
-**Failure Impact:** LOW - YAML is optional
+**Failure Impact:** N/A - File removed
 
 ### 3. Instructions REUSE Compliance
 
@@ -96,14 +97,12 @@ The Validation System ensures that Copilot instructions and configuration files 
 
 ### 4. YAML Config REUSE Compliance
 
-**Purpose:** Validate REUSE licensing for YAML config
+**Purpose:** Validate REUSE licensing for YAML config (removed as of 2026-04-11)
 
-**Files Checked:**
+**Note:** `.github/copilot-config.yaml` and its `.license` sidecar have been permanently removed.
+This test always skips.
 
-- `.github/copilot-config.yaml.license`
-- License identifier: `CC0-1.0`
-
-**Failure Impact:** CRITICAL (if YAML present) - REUSE compliance required
+**Failure Impact:** N/A - File removed
 
 ### 5. Markdown Linting
 
@@ -126,13 +125,11 @@ The Validation System ensures that Copilot instructions and configuration files 
 
 ### 6. YAML Syntax Validation
 
-**Purpose:** Ensure YAML is parseable
+**Purpose:** Ensure YAML is parseable (removed as of 2026-04-11)
 
-**Tool:** Ruby stdlib (`Psych.parse_file`)
+**Note:** `.github/copilot-config.yaml` has been permanently removed. This test always skips.
 
-**Test:** Parse `.github/copilot-config.yaml` without object instantiation
-
-**Failure Impact:** CRITICAL (if YAML present) - Invalid YAML
+**Failure Impact:** N/A - File removed
 
 ### 7. @EXTENDS Reference
 
@@ -161,11 +158,11 @@ The Validation System ensures that Copilot instructions and configuration files 
 Repository Type: org
 
 ✓ copilot-instructions.md exists
-✓ copilot-config.yaml exists
+✓ copilot-config.yaml exists (Skipped - removed 2026-04-11)
 ✓ copilot-instructions.md has REUSE license
-✓ copilot-config.yaml has REUSE license
+✓ copilot-config.yaml has REUSE license (Skipped - removed 2026-04-11)
 ✓ copilot-instructions.md passes markdown lint
-✓ copilot-config.yaml has valid syntax
+✓ copilot-config.yaml has valid syntax (Skipped - removed 2026-04-11)
 ✓ repo-specific instructions use @EXTENDS (Skipped - org-level)
 ✓ instructions contain critical rules
 ```
@@ -253,15 +250,8 @@ npx markdownlint-cli2 .github/copilot-instructions.md
 
 ### Test 6 Failed: YAML Syntax
 
-```bash
-# Check YAML syntax with Ruby Psych
-ruby -e 'require "psych"; Psych.parse_file(ARGV[0])' .github/copilot-config.yaml
-
-# Common issues:
-# - Incorrect indentation
-# - Missing colons
-# - Unclosed quotes
-```
+This test always skips as of 2026-04-11 because `.github/copilot-config.yaml` has been permanently
+removed from the repository.
 
 ### Test 7 Failed: Missing @EXTENDS
 
