@@ -218,13 +218,10 @@ Create these labels in your repository or adjust the workflow logic.
 ## 📚 Additional Documentation
 
 - [Rollout Guide](./ROLLOUT_GUIDE.md) - Deploy to other repositories
-- [Testing Guide](../../WORKFLOW_REVIEW.md) - Complete test scenarios
-- [Implementation Summary](../../IMPLEMENTATION_SUMMARY.md) - Technical details
 
 ## 🆘 Support
 
 For issues or questions:
 
 - Check workflow runs in Actions tab
-- Review [WORKFLOW_REVIEW.md](../../WORKFLOW_REVIEW.md) for expected behavior
 - Open an issue with `workflow` label
