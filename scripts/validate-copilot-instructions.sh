@@ -154,27 +154,22 @@ test_runtime_model() {
 
     if [ "$repo_type" = "org" ]; then
         local has_authoritative=1
-        local has_runtime=1
-        local has_application_or_model=1
+        local has_runtime_application_model=1
         local has_self_contained_or_no_auto_inherit=1
 
         if grep -qiE 'authoritative' .github/copilot-instructions.md; then
             has_authoritative=0
         fi
 
-        if grep -qiE 'runtime' .github/copilot-instructions.md; then
-            has_runtime=0
-        fi
-
-        if grep -qiE 'application|model' .github/copilot-instructions.md; then
-            has_application_or_model=0
+        if grep -qiE 'runtime[^[:alpha:]]*(application|model)|(application|model)[^[:alpha:]]*runtime' .github/copilot-instructions.md; then
+            has_runtime_application_model=0
         fi
 
         if grep -qiE 'self-contained|(do not.*automatically.*(inherit|inheritance))' .github/copilot-instructions.md; then
             has_self_contained_or_no_auto_inherit=0
         fi
 
-        if { [ "$has_authoritative" -eq 0 ] || { [ "$has_runtime" -eq 0 ] && [ "$has_application_or_model" -eq 0 ]; }; } \
+        if { [ "$has_authoritative" -eq 0 ] || [ "$has_runtime_application_model" -eq 0 ]; } \
             && [ "$has_self_contained_or_no_auto_inherit" -eq 0 ]; then
             print_result "org instructions define runtime model" "PASS"
         else

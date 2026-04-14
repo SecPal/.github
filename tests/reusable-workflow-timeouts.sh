@@ -18,7 +18,9 @@ failures=()
 
 while IFS= read -r workflow; do
   current_failures=()
-  mapfile -t current_failures < <(
+  while IFS= read -r current_failure; do
+    current_failures+=("$current_failure")
+  done < <(
     awk -v path="$workflow" '
       BEGIN {
         in_jobs = 0
