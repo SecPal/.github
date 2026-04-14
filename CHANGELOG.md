@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-14 - Harden Copilot Instruction And Workflow Timeout Validations
+
+**Changed:**
+
+- updated SPDX copyright headers in `docs/workflows/PROJECT_AUTOMATION.md` and `docs/workflows/QUICK_REFERENCE.md` to `2025-2026`
+- clarified legacy optional status messaging for `.github/copilot-config.yaml` checks in `scripts/validate-copilot-instructions.sh`
+- hardened `scripts/validate-copilot-instructions.sh` against missing instruction paths, made runtime/critical-rules pattern matching more resilient, and fixed summary indentation consistency
+- strengthened `tests/audit-closed-epics.sh` with explicit non-zero exit-code expectation (`1`) and a positive guard that valid checked-and-closed issues are not falsely flagged
+- improved `tests/reusable-workflow-timeouts.sh` job and timeout detection to handle flexible indentation and avoid prematurely stopping scan after the first `jobs:` block
+
 ## 2026-04-11 - Fix stale doc content and remove dead files
 
 **Changed:**

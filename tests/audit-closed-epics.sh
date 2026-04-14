@@ -93,14 +93,21 @@ bash "$REPO_ROOT/scripts/audit-closed-epics.sh" --org SecPal --repo .github >"$o
 exit_code=$?
 set -e
 
-if [ "$exit_code" -eq 0 ]; then
+if [ "$exit_code" -ne 1 ]; then
   cat "$output_file"
-  echo "audit-closed-epics.sh unexpectedly passed" >&2
+  echo "audit-closed-epics.sh exited with $exit_code; expected 1" >&2
   exit 1
 fi
 
 grep -q 'SecPal/frontend#30 is closed but still unchecked' "$output_file"
 grep -q 'SecPal/.github#40 is still open' "$output_file"
+
+# SecPal/api#10 is a valid checked and closed checklist item and must not be reported.
+if grep -q 'SecPal/api#10' "$output_file"; then
+  cat "$output_file"
+  echo "audit-closed-epics.sh incorrectly flagged a valid checked-and-closed issue" >&2
+  exit 1
+fi
 
 if grep -q '#20' "$output_file"; then
   cat "$output_file"
