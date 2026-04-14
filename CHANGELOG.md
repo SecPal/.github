@@ -9,7 +9,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-04-14 - Harden Copilot Instruction And Workflow Timeout Validations
+## 2026-04-14 - Harden Copilot Instructions And Workflow Timeout Validations
 
 **Changed:**
 

@@ -22,6 +22,9 @@ print_result() {
 
     if [ "$status" = "PASS" ]; then
         printf '%b✓%b %s\n' "$GREEN" "$NC" "$test_name"
+        if [ -n "$message" ]; then
+            printf '  %b→%b %s\n' "$YELLOW" "$NC" "$message"
+        fi
         PASSED_TESTS=$((PASSED_TESTS + 1))
         return
     fi
@@ -139,6 +142,15 @@ test_no_pseudo_inheritance() {
 
 test_runtime_model() {
     local repo_type="$1"
+
+    if [ ! -f ".github/copilot-instructions.md" ]; then
+        if [ "$repo_type" = "org" ]; then
+            print_result "org instructions define runtime model" "FAIL" "Missing .github/copilot-instructions.md"
+        else
+            print_result "repo instructions are self-contained" "FAIL" "Missing .github/copilot-instructions.md"
+        fi
+        return
+    fi
 
     if [ "$repo_type" = "org" ]; then
         if grep -qiE 'authoritative|(runtime.*(application|model))' .github/copilot-instructions.md && grep -qiE 'self-contained|(do not.*automatically.*(inherit|inheritance))' .github/copilot-instructions.md; then
