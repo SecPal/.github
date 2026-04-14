@@ -18,36 +18,60 @@ while IFS= read -r workflow; do
     awk -v path="$workflow" '
       BEGIN {
         in_jobs = 0
+        jobs_indent = -1
+        job_entry_indent = -1
         current_job = ""
+        current_job_indent = -1
         current_has_timeout = 0
       }
 
-      /^jobs:$/ {
+      {
+        line = $0
+        indent = match(line, /[^ ]/) - 1
+        if (indent < 0) {
+          indent = length(line)
+        }
+      }
+
+      /^[[:space:]]*jobs:[[:space:]]*$/ {
         in_jobs = 1
+        jobs_indent = indent
+        job_entry_indent = -1
+        current_job = ""
+        current_job_indent = -1
+        current_has_timeout = 0
         next
       }
 
-      in_jobs && /^[^[:space:]]/ {
+      in_jobs && line !~ /^[[:space:]]*$/ && indent <= jobs_indent {
         if (current_job != "" && current_has_timeout == 0) {
           print path ":" current_job
         }
         in_jobs = 0
-        exit
+        next
       }
 
-      in_jobs && /^  [A-Za-z0-9_-]+:$/ {
+      in_jobs && line ~ /^[[:space:]]+[A-Za-z0-9_-]+:[[:space:]]*$/ && indent > jobs_indent {
+        if (job_entry_indent == -1) {
+          job_entry_indent = indent
+        }
+        if (indent != job_entry_indent) {
+          next
+        }
+
         if (current_job != "" && current_has_timeout == 0) {
           print path ":" current_job
         }
 
-        current_job = $0
-        sub(/^  /, "", current_job)
-        sub(/:$/, "", current_job)
+        current_job = line
+        sub(/^[[:space:]]+/, "", current_job)
+        sub(/:[[:space:]]*$/, "", current_job)
+        current_job_indent = indent
         current_has_timeout = 0
         next
       }
 
-      in_jobs && current_job != "" && /^    timeout-minutes:/ {
+      in_jobs && current_job != "" && line ~ /^[[:space:]]+timeout-minutes:[[:space:]]*/ && indent > current_job_indent {
         current_has_timeout = 1
         next
       }

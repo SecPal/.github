@@ -22,6 +22,9 @@ print_result() {
 
     if [ "$status" = "PASS" ]; then
         printf '%b✓%b %s\n' "$GREEN" "$NC" "$test_name"
+        if [ -n "$message" ]; then
+            printf '  %b→%b %s\n' "$YELLOW" "$NC" "$message"
+        fi
         PASSED_TESTS=$((PASSED_TESTS + 1))
         return
     fi
@@ -62,9 +65,9 @@ test_instructions_exists() {
 
 test_yaml_config_exists() {
     if [ -f ".github/copilot-config.yaml" ]; then
-        print_result "copilot-config.yaml exists" "PASS"
+        print_result "copilot-config.yaml optional (legacy)" "PASS"
     else
-        print_result "copilot-config.yaml exists" "PASS" "Skipped (optional legacy file; runtime baseline is copilot-instructions.md)"
+        print_result "copilot-config.yaml optional (legacy)" "PASS" "Skipped (optional legacy file; runtime baseline is copilot-instructions.md)"
     fi
 }
 
@@ -115,7 +118,22 @@ test_yaml_syntax() {
 }
 
 test_no_pseudo_inheritance() {
-    if grep -RInE '@EXTENDS|INHERITANCE' .github/copilot-instructions.md .github/instructions >/dev/null 2>&1; then
+    local search_targets=()
+
+    if [ -f ".github/copilot-instructions.md" ]; then
+        search_targets+=(".github/copilot-instructions.md")
+    fi
+
+    if [ -d ".github/instructions" ]; then
+        search_targets+=(".github/instructions")
+    fi
+
+    if [ "${#search_targets[@]}" -eq 0 ]; then
+        print_result "instructions avoid pseudo-inheritance markers" "PASS" "Skipped (no instruction files/directories present)"
+        return
+    fi
+
+    if grep -RInE '@EXTENDS|INHERITANCE' "${search_targets[@]}" >/dev/null 2>&1; then
         print_result "instructions avoid pseudo-inheritance markers" "FAIL" "Found @EXTENDS or INHERITANCE markers in active instructions"
     else
         print_result "instructions avoid pseudo-inheritance markers" "PASS"
@@ -125,8 +143,17 @@ test_no_pseudo_inheritance() {
 test_runtime_model() {
     local repo_type="$1"
 
+    if [ ! -f ".github/copilot-instructions.md" ]; then
+        if [ "$repo_type" = "org" ]; then
+            print_result "org instructions define runtime model" "FAIL" "Missing .github/copilot-instructions.md"
+        else
+            print_result "repo instructions are self-contained" "FAIL" "Missing .github/copilot-instructions.md"
+        fi
+        return
+    fi
+
     if [ "$repo_type" = "org" ]; then
-        if grep -qiE 'authoritative|runtime application model' .github/copilot-instructions.md && grep -qiE 'self-contained|do not automatically inherit' .github/copilot-instructions.md; then
+        if grep -qiE 'authoritative|(runtime.*(application|model))' .github/copilot-instructions.md && grep -qiE 'self-contained|(do not.*automatically.*(inherit|inheritance))' .github/copilot-instructions.md; then
             print_result "org instructions define runtime model" "PASS"
         else
             print_result "org instructions define runtime model" "FAIL" "Missing runtime application model guidance"
@@ -142,7 +169,7 @@ test_runtime_model() {
 }
 
 test_critical_rules() {
-    if grep -qiE "critical[[:space:]]+rules|core[[:space:]]+principles|always-on[[:space:]]+rules" .github/copilot-instructions.md; then
+    if grep -qiE "critical[[:space:]_-]+rules|core[[:space:]_-]+principles|always[-[:space:]_]*on[[:space:]_-]+rules" .github/copilot-instructions.md; then
         print_result "instructions contain critical rules" "PASS"
     else
         print_result "instructions contain critical rules" "FAIL" "No critical rules/principles found"
@@ -204,11 +231,11 @@ main() {
     echo ""
 
     if [ "$FAILED_TESTS" -eq 0 ]; then
-            printf '%b✓ All tests passed!%b\n' "$GREEN" "$NC"
+        printf '%b✓ All tests passed!%b\n' "$GREEN" "$NC"
         exit 0
     fi
 
-        printf '%b✗ Some tests failed%b\n' "$RED" "$NC"
+    printf '%b✗ Some tests failed%b\n' "$RED" "$NC"
     exit 1
 }
 
