@@ -186,7 +186,7 @@ gh pr list --json number,title,isDraft,state \
 # Issues in Discussion > 30 days
 gh issue list --state open --label "discussion" \
   --json number,title,updatedAt \
-  --jq '.[] | select(.updatedAt < (now - 2592000))'
+  --jq '.[] | select((.updatedAt | fromdateiso8601) < (now - 2592000))'
 ```
 
 ## 📊 Status Transitions
