@@ -9,12 +9,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
 
+if [ ! -d ".github/workflows" ]; then
+  echo "Expected directory '.github/workflows' was not found." >&2
+  exit 1
+fi
+
 failures=()
 
 while IFS= read -r workflow; do
-  while IFS= read -r failure; do
-    failures+=("$failure")
-  done < <(
+  current_failures=()
+  mapfile -t current_failures < <(
     awk -v path="$workflow" '
       BEGIN {
         in_jobs = 0
@@ -27,9 +31,10 @@ while IFS= read -r workflow; do
 
       {
         line = $0
-        indent = match(line, /[^ ]/) - 1
-        if (indent < 0) {
-          indent = length(line)
+        if (line ~ /^[[:space:]]*$/) {
+          indent = 0
+        } else {
+          indent = match(line, /[^[:space:]]/) - 1
         }
       }
 
@@ -83,6 +88,9 @@ while IFS= read -r workflow; do
       }
     ' "$workflow"
   )
+  if [ ${#current_failures[@]} -gt 0 ]; then
+    failures+=("${current_failures[@]}")
+  fi
 done < <(find .github/workflows -maxdepth 1 -type f -name 'reusable-*.yml' | sort)
 
 if [ ${#failures[@]} -gt 0 ]; then

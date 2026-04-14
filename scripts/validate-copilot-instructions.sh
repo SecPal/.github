@@ -153,7 +153,29 @@ test_runtime_model() {
     fi
 
     if [ "$repo_type" = "org" ]; then
-        if grep -qiE 'authoritative|(runtime.*(application|model))' .github/copilot-instructions.md && grep -qiE 'self-contained|(do not.*automatically.*(inherit|inheritance))' .github/copilot-instructions.md; then
+        local has_authoritative=1
+        local has_runtime=1
+        local has_application_or_model=1
+        local has_self_contained_or_no_auto_inherit=1
+
+        if grep -qiE 'authoritative' .github/copilot-instructions.md; then
+            has_authoritative=0
+        fi
+
+        if grep -qiE 'runtime' .github/copilot-instructions.md; then
+            has_runtime=0
+        fi
+
+        if grep -qiE 'application|model' .github/copilot-instructions.md; then
+            has_application_or_model=0
+        fi
+
+        if grep -qiE 'self-contained|(do not.*automatically.*(inherit|inheritance))' .github/copilot-instructions.md; then
+            has_self_contained_or_no_auto_inherit=0
+        fi
+
+        if { [ "$has_authoritative" -eq 0 ] || { [ "$has_runtime" -eq 0 ] && [ "$has_application_or_model" -eq 0 ]; }; } \
+            && [ "$has_self_contained_or_no_auto_inherit" -eq 0 ]; then
             print_result "org instructions define runtime model" "PASS"
         else
             print_result "org instructions define runtime model" "FAIL" "Missing runtime application model guidance"
@@ -226,8 +248,8 @@ main() {
     echo "Summary"
     echo "========================================="
     echo "Total Tests: $TOTAL_TESTS"
-    echo -e "Passed: ${GREEN}$PASSED_TESTS${NC}"
-    echo -e "Failed: ${RED}$FAILED_TESTS${NC}"
+    printf 'Passed: %b%s%b\n' "$GREEN" "$PASSED_TESTS" "$NC"
+    printf 'Failed: %b%s%b\n' "$RED" "$FAILED_TESTS" "$NC"
     echo ""
 
     if [ "$FAILED_TESTS" -eq 0 ]; then
