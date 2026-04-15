@@ -119,6 +119,9 @@ test_yaml_syntax() {
 
 test_no_pseudo_inheritance() {
     local search_targets=()
+    # Pseudo-inheritance markers include explicit directives and common textual variants.
+    # Keep this list centralized so it is easy to review and extend as conventions evolve.
+    local pseudo_inheritance_pattern='@?extends|inherits?|inheritance|base[_ -]?instructions?|parent[_ -]?instructions?'
 
     if [ -f ".github/copilot-instructions.md" ]; then
         search_targets+=(".github/copilot-instructions.md")
@@ -133,8 +136,8 @@ test_no_pseudo_inheritance() {
         return
     fi
 
-    if grep -RInE '@EXTENDS|INHERITANCE' "${search_targets[@]}" >/dev/null 2>&1; then
-        print_result "instructions avoid pseudo-inheritance markers" "FAIL" "Found @EXTENDS or INHERITANCE markers in active instructions"
+    if grep -RInEi "$pseudo_inheritance_pattern" "${search_targets[@]}" >/dev/null 2>&1; then
+        print_result "instructions avoid pseudo-inheritance markers" "FAIL" "Found pseudo-inheritance markers in active instructions"
     else
         print_result "instructions avoid pseudo-inheritance markers" "PASS"
     fi
