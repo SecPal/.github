@@ -67,7 +67,7 @@ test_yaml_config_exists() {
     if [ -f ".github/copilot-config.yaml" ]; then
         print_result "copilot-config.yaml optional (legacy)" "PASS"
     else
-        print_result "copilot-config.yaml optional (legacy)" "PASS" "Skipped (optional legacy file; runtime baseline is copilot-instructions.md)"
+        print_result "copilot-config.yaml optional (legacy)" "PASS" "Legacy file not present"
     fi
 }
 
