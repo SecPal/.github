@@ -82,12 +82,14 @@ test_yaml_config_exists() {
 }
 
 test_instructions_reuse() {
+    local spdx_license_marker='SPDX-License''-Identifier:'
+
     if [ -f ".github/copilot-instructions.md.license" ] && grep -q "CC0-1.0" ".github/copilot-instructions.md.license"; then
         print_result "copilot-instructions.md has REUSE license" "PASS"
         return
     fi
 
-    if head -n 10 ".github/copilot-instructions.md" | grep -q "SPDX-License-Identifier:"; then
+    if head -n 10 ".github/copilot-instructions.md" | grep -q "$spdx_license_marker"; then
         print_result "copilot-instructions.md has REUSE license" "PASS"
     else
         print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing inline SPDX header or wrong license file"
