@@ -32,35 +32,35 @@ For setting up a local development environment with all repositories, see [WORKS
 
 ### Feature Management & Project Tracking
 
-SecPal uses a structured approach to feature planning and tracking:
+SecPal uses an issue-first planning model:
 
-- **📝 Documentation**: Features start in `docs/ideas-backlog.md` and mature to `docs/feature-requirements.md`
-- **🎫 Issue Templates**: Use structured templates (`core_feature.yml`, `feature_request.yml`) for consistency
-- **📊 Project Board**: Kanban-style tracking with automatic issue assignment
-- **🏷️ Labels**: Organized by area (`area: RBAC`, `area: employee-mgmt`), priority (`P0-P3`), and status
+- **🎫 GitHub Issues**: Canonical source of truth for active work and deferred follow-up
+- **🏷️ Labels and Milestones**: Priority, type, component, and release grouping
+- **🧭 ADRs**: Durable records for planning and architecture decisions
+- **📊 Project Board**: Optional mirrored view for cross-repository status tracking
 
 **Quick Start:**
 
 ```bash
-# Set up project board integration and labels
-./scripts/setup-project-board.sh
+# Read the canonical planning guide
+cat docs/planning.md
 
-# Read the full workflow guide
+# Optional: read the board mirror guide
 cat docs/project-board-integration.md
 ```
 
 **Workflow:**
 
-1. **New Idea** → Add to `docs/ideas-backlog.md`
-2. **Ready to Specify** → Detail in `docs/feature-requirements.md`
-3. **Ready to Build** → Create issue via template → Auto-added to Project Board
-4. **Track Progress** → Move through Kanban columns: Ideas → Backlog → Ready → In Progress → Done
+1. **Open or refine an issue** in the repository that owns the work
+2. **Add labels and milestone** to make priority and delivery intent explicit
+3. **Split multi-PR work** into an epic plus sub-issues before implementation
+4. **Open a draft PR** linked to the issue; board automation mirrors progress only when enabled
 
-See [docs/project-board-integration.md](docs/project-board-integration.md) for detailed instructions.
+See [docs/planning.md](docs/planning.md) for the canonical process and [docs/project-board-integration.md](docs/project-board-integration.md) for the optional board layer.
 
 ### 🤖 Automated Project Board Management
 
-SecPal uses automated workflows to manage the [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) project board. Issues and pull requests are automatically added and their status is updated based on labels, PR state, and review activity.
+SecPal uses automated workflows to manage the optional [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) project board. Issues and pull requests are automatically added and their status is updated based on labels, PR state, and review activity, but the board remains a mirrored view rather than the planning source of truth.
 
 **Status Flow:**
 
@@ -110,7 +110,7 @@ gh pr merge <PR> --squash                   # → Done (auto-closes issue)
 - [📋 Quick Reference](docs/workflows/QUICK_REFERENCE.md) - Daily usage commands
 - [🚀 Rollout Guide](docs/workflows/ROLLOUT_GUIDE.md) - Deployment to repositories
 
-See [docs/project-board-integration.md](docs/project-board-integration.md) for detailed instructions.
+See [docs/project-board-integration.md](docs/project-board-integration.md) for board-specific guidance and [docs/planning.md](docs/planning.md) for the canonical planning model.
 
 ### Pre-commit Hooks
 

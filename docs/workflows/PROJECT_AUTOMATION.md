@@ -3,7 +3,7 @@
 
 # Project Board Automation
 
-Automated project board management that keeps your [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) in sync with issues and pull requests.
+Automated project board management that keeps the optional [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) board in sync with issues and pull requests.
 
 ## 🎯 Overview
 
@@ -13,6 +13,8 @@ This workflow automatically:
 - 🔄 Updates status based on labels, events, and PR state
 - 💬 Posts helpful comments explaining status transitions
 - 🚧 Supports draft PR workflow for incremental development
+
+Issues, milestones, ADRs, and linked PRs remain the source of truth. The board is only a mirrored view.
 
 ## 📊 Status Flow
 
