@@ -17,6 +17,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 - clarified `docs/workflows/QUICK_REFERENCE.md` and `docs/workflows/ROLLOUT_GUIDE.md` so rollout and daily board usage explicitly preserve issues, milestones, and linked PRs as the source of truth
 - added a focused shell regression check for the project-board helper collateral and wired it into local preflight
 
+## 2026-04-15 - Replace Non-Applicable CodeQL Scan With Guardrail Check
+
+**Changed:**
+
+- replaced the `.github` repository's stale CodeQL workflow with a lightweight applicability guardrail because the repository no longer contains any tracked CodeQL-supported JS/TS source files, which had left Code Scanning stuck on a November 2025 analysis record
+- added a focused regression test plus local preflight enforcement so future changes must keep the workflow aligned with whether this repository actually contains tracked CodeQL-supported files
+
 ## 2026-04-15 - Add Changelog Accuracy PR Guardrail
 
 **Changed:**
