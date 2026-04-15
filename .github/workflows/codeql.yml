@@ -26,12 +26,11 @@ jobs:
 
       - name: Verify CodeQL applicability
         run: |
-          # This repository no longer contains any tracked CodeQL-supported source files.
-          # Keep a stable branch-protection check and fail fast if JS/TS code returns.
-          if git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs' | grep -q .; then
+          # Delegate detection to the test script so the glob list stays in one place.
+          if tests/codeql-applicability.sh; then
+            echo "No tracked CodeQL-supported source files detected. CodeQL is not applicable to this repository."
+          else
             echo "Tracked JavaScript/TypeScript files were detected." >&2
             echo "Restore a real CodeQL workflow before merging supported source files into this repository." >&2
             exit 1
           fi
-
-          echo "No tracked CodeQL-supported source files detected. CodeQL is not applicable to this repository."
