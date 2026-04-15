@@ -84,15 +84,24 @@ test_yaml_config_exists() {
 test_instructions_reuse() {
     local spdx_license_marker='SPDX-License''-Identifier:'
 
-    if [ -f ".github/copilot-instructions.md.license" ] && grep -q "CC0-1.0" ".github/copilot-instructions.md.license"; then
-        print_result "copilot-instructions.md has REUSE license" "PASS"
+    if [ ! -f ".github/copilot-instructions.md" ]; then
+        print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing .github/copilot-instructions.md"
+        return
+    fi
+
+    if [ -f ".github/copilot-instructions.md.license" ]; then
+        if grep -q "CC0-1.0" ".github/copilot-instructions.md.license"; then
+            print_result "copilot-instructions.md has REUSE license" "PASS"
+        else
+            print_result "copilot-instructions.md has REUSE license" "FAIL" "Sidecar .license exists but does not declare CC0-1.0"
+        fi
         return
     fi
 
     if head -n 10 ".github/copilot-instructions.md" | grep -q "$spdx_license_marker"; then
         print_result "copilot-instructions.md has REUSE license" "PASS"
     else
-        print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing inline SPDX header or wrong license file"
+        print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing inline SPDX header or .license sidecar"
     fi
 }
 
@@ -215,19 +224,25 @@ test_critical_rules() {
 }
 
 test_ai_findings_guidance() {
+    local instructions_file=".github/copilot-instructions.md"
     local has_ai_findings=1
     local has_proof_requirement=1
     local has_ci_guardrail=1
 
-    if grep -qiE 'AI findings?|AI-generated' .github/copilot-instructions.md; then
+    if [ ! -f "$instructions_file" ]; then
+        print_result "instructions contain AI findings triage guidance" "FAIL" "Missing $instructions_file"
+        return
+    fi
+
+    if grep -qiE 'AI findings?|AI-generated' "$instructions_file"; then
         has_ai_findings=0
     fi
 
-    if grep -qiE 'failing test|reproducible defect|stated invariant|prove the defect|proof of the defect|violates it' .github/copilot-instructions.md; then
+    if grep -qiE 'failing test|reproducible defect|stated invariant|prove the defect|proof of the defect|violates it' "$instructions_file"; then
         has_proof_requirement=0
     fi
 
-    if grep -qiE 'green CI alone|CI alone|green checks alone' .github/copilot-instructions.md; then
+    if grep -qiE 'green CI alone|CI alone|green checks alone' "$instructions_file"; then
         has_ci_guardrail=0
     fi
 
