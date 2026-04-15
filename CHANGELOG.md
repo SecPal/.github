@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-15 - Align Project Board Helper Collateral With Issue-First Planning
+
+**Changed:**
+
+- updated `scripts/setup-project-board.sh` so its status-label guidance and setup messaging no longer depend on `feature-requirements.md` and instead describe the project board as an optional mirror of issue and PR state
+- clarified `docs/workflows/QUICK_REFERENCE.md` and `docs/workflows/ROLLOUT_GUIDE.md` so rollout and daily board usage explicitly preserve issues, milestones, and linked PRs as the source of truth
+- added a focused shell regression check for the project-board helper collateral and wired it into local preflight
+
 ## 2026-04-15 - Add Changelog Accuracy PR Guardrail
 
 **Changed:**

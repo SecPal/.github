@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
 set -euo pipefail
 
-echo "🚀 Setting up GitHub Project Board Integration for SecPal"
-echo "=========================================================="
+echo "🚀 Setting up the optional GitHub Project Board mirror for SecPal"
+echo "================================================================"
 echo ""
 
 # Colors
@@ -65,8 +65,8 @@ echo "📋 Step 2: Creating status labels..."
 echo ""
 
 status_labels=(
-    "status: backlog|FBCA04|In Ideas Backlog"
-    "status: specified|0075CA|Specified in feature-requirements.md"
+    "status: backlog|FBCA04|Waiting for issue triage or planning"
+    "status: discussion|BFD4F2|Needs decision before implementation"
     "status: ready|0E8A16|Ready for Implementation"
     "core-feature|7057FF|Core platform feature (not small enhancement)"
 )
@@ -87,10 +87,10 @@ echo "✅ All labels created successfully!"
 echo ""
 
 # Step 3: Instructions for Project setup
-echo "📊 Step 3: GitHub Project Setup"
-echo "================================"
+echo "📊 Step 3: Optional GitHub Project Setup"
+echo "========================================"
 echo ""
-echo "Next, you need to create a GitHub Project Board:"
+echo "If you want the optional visual board mirror, create a GitHub Project:"
 echo ""
 echo "1. Go to: https://github.com/orgs/SecPal/projects"
 echo "2. Click 'New project'"
@@ -111,6 +111,9 @@ echo "7. Update .github/workflows/project-automation.yml:"
 echo "   Replace 'project-url: https://github.com/orgs/SecPal/projects/1'"
 echo "   with your actual project number"
 echo ""
+echo "Issues, milestones, and linked PRs remain the source of truth."
+echo "The board is only a mirrored status view."
+echo ""
 
 # Optional: Ask if user wants to create a test issue
 echo ""
@@ -123,28 +126,30 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     gh issue create \
         --repo SecPal/.github \
         --title "[Test] Project Board Integration Test" \
-        --body "This is a test issue to verify the project board automation.
+        --body "This is a test issue to verify the optional project board mirror.
 
 **Feature Area:** Infrastructure
 **Priority:** P3 (Low)
 **Status:** Testing
+
+Issues and linked PRs remain the source of truth.
 
 This issue can be closed after verifying it appears on the project board." \
         --label "core-feature,area: infrastructure,priority: low"
 
     echo ""
     echo -e "${GREEN}✅ Test issue created!${NC}"
-    echo "Check your project board to see if it was added automatically."
+    echo "Check your project board to see if it was added automatically as a mirror of issue state."
 fi
 
 echo ""
 echo "🎉 Setup complete!"
 echo ""
 echo "Next steps:"
-echo "1. Create your GitHub Project Board (see instructions above)"
+echo "1. Create the optional GitHub Project Board (see instructions above)"
 echo "2. Update project-automation.yml with the project number"
 echo "3. Commit and push the new templates and workflow"
-echo "4. Start creating feature issues using the templates!"
+echo "4. Track active work through issues and linked PRs; let the board mirror progress"
 echo ""
 echo "Documentation: docs/project-board-integration.md"
 echo ""

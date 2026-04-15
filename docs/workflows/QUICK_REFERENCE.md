@@ -5,6 +5,8 @@
 
 Quick reference card for daily usage of the project automation workflow.
 
+Issues, milestones, and linked PRs remain the source of truth. The project board is an optional mirrored view.
+
 ## 🎯 Status at a Glance
 
 | Status             | When             | How                            |
@@ -118,6 +120,8 @@ Resolves #789
 
 ### Via GitHub UI
 
+If the project board is enabled:
+
 1. Go to [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1)
 2. Find your issue/PR
 3. Check status column
@@ -157,6 +161,8 @@ gh run view --log
 1. Go to project board
 2. Drag issue to correct column
 3. Or edit issue status field directly
+
+Use manual board edits only to correct the mirror after checking the underlying issue or PR state first.
 
 ## ⚡ Power User Tips
 
