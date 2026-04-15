@@ -111,7 +111,7 @@ if [ -f tests/pull-request-template.sh ]; then
   bash tests/pull-request-template.sh || {
     echo "" >&2
     echo "❌ Pull request template regression test failed!" >&2
-    echo "Restore the required changelog verification checklist item before continuing." >&2
+    echo "Review the test output above and restore any required pull request template content, including the changelog verification checklist item and the no-overstatement reminder, before continuing." >&2
     exit 1
   }
 fi
