@@ -98,6 +98,15 @@ if [ -f tests/reusable-workflow-timeouts.sh ]; then
   }
 fi
 
+if [ -f tests/codeql-applicability.sh ]; then
+  bash tests/codeql-applicability.sh || {
+    echo "" >&2
+    echo "❌ CodeQL applicability regression test failed!" >&2
+    echo "Match the CodeQL workflow to the repository's tracked supported-language files before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/audit-closed-epics.sh ]; then
   bash tests/audit-closed-epics.sh || {
     echo "" >&2
