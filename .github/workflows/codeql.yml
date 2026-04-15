@@ -27,7 +27,7 @@ jobs:
       - name: Verify CodeQL applicability
         run: |
           # Delegate detection to the test script so the glob list stays in one place.
-          if tests/codeql-applicability.sh; then
+          if bash tests/codeql-applicability.sh; then
             echo "No tracked CodeQL-supported source files detected. CodeQL is not applicable to this repository."
           else
             echo "Tracked JavaScript/TypeScript files were detected." >&2
