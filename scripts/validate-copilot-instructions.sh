@@ -156,12 +156,13 @@ test_runtime_model() {
         local has_authoritative=1
         local has_runtime_application_model=1
         local has_self_contained_or_no_auto_inherit=1
+        local runtime_model_pattern='runtime[^[:alpha:]]*(application|model)|(application|model)[^[:alpha:]]*runtime'
 
         if grep -qiE 'authoritative' .github/copilot-instructions.md; then
             has_authoritative=0
         fi
 
-        if grep -qiE 'runtime[^[:alpha:]]*(application|model)|(application|model)[^[:alpha:]]*runtime' .github/copilot-instructions.md; then
+        if grep -qiE "$runtime_model_pattern" .github/copilot-instructions.md; then
             has_runtime_application_model=0
         fi
 
