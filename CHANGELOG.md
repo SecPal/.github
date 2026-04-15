@@ -9,8 +9,6 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-04-14 - Harden Copilot Instructions And Workflow Timeout Validations
-
 ## 2026-04-15 - Adopt Issue-First Planning Governance
 
 **Changed:**

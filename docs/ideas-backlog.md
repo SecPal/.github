@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Add ideas freely, review quarterly
 
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-04-15
 
 > **Note:** This document is non-canonical idea parking only. Active planning lives in GitHub Issues and milestones. Historical detailed specifications remain in `feature-requirements.md`, which is archived for active planning.
 
