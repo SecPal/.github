@@ -116,6 +116,15 @@ if [ -f tests/pull-request-template.sh ]; then
   }
 fi
 
+if [ -f tests/setup-project-board.sh ]; then
+  bash tests/setup-project-board.sh || {
+    echo "" >&2
+    echo "❌ Project board helper regression test failed!" >&2
+    echo "Fix project board helper collateral before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then

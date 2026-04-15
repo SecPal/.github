@@ -1,9 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2025 SecPal -->
+<!-- SPDX-FileCopyrightText: 2025-2026 SecPal -->
 <!-- SPDX-License-Identifier: CC0-1.0 -->
 
 # Rollout Guide: Project Automation Workflow
 
 Guide for deploying the project automation workflow to other repositories (api, frontend, contracts).
+
+Issues, milestones, and linked PRs remain the source of truth. The project board is an optional mirrored view for cross-repository status.
 
 ## 📋 Prerequisites
 
@@ -121,6 +123,8 @@ Expected: Should be added to SecPal Roadmap with status 💡 Ideas"
 2. Check that issue appears with status "💡 Ideas"
 3. Check Actions tab for workflow run
 4. Issue should have a comment explaining status
+
+This verifies board mirroring only. The issue itself remains the authoritative work record.
 
 ### Step 5: Test Draft PR Workflow
 
@@ -313,9 +317,10 @@ After rollout, update each repository's README with:
 ```markdown
 ## 🤖 Automation
 
-This repository uses automated project board management. Issues and PRs are
-automatically added to the [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1)
-with status based on labels and PR state.
+This repository uses automated project board mirroring. Issues and PRs remain
+the source of truth and are automatically mirrored to the
+[SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) with status based
+on labels and PR state.
 
 See [Project Automation docs](https://github.com/SecPal/.github/blob/main/docs/workflows/PROJECT_AUTOMATION.md)
 for details.
