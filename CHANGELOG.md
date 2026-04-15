@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-15 - Add Changelog Accuracy PR Guardrail
+
+**Changed:**
+
+- added an explicit PR checklist guardrail requiring `CHANGELOG.md` edits to be checked against the actual implementation, tests, schema, or config touched by the PR and to avoid overstating behavior the code does not yet enforce
+- added a focused regression test plus local preflight enforcement so the changelog-accuracy checklist item stays present in the shared pull request template
+
 ## 2026-04-15 - Adopt Issue-First Planning Governance
 
 **Changed:**

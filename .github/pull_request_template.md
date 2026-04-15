@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2025 SecPal -->
+<!-- SPDX-FileCopyrightText: 2025-2026 SecPal -->
 <!-- SPDX-License-Identifier: CC0-1.0 -->
 
 ## ⚠️ Important: Open as Draft PR First
@@ -46,6 +46,7 @@ Closes #
 
 - [ ] Code follows project style guidelines
 - [ ] Self-review completed
+- [ ] If CHANGELOG.md changed, every entry was checked against the implementation, tests, schema, or config changed in this PR and avoids claims that the code does not actually enforce yet
 - [ ] Comments added for complex logic
 - [ ] Documentation updated (if needed)
 - [ ] No new warnings introduced

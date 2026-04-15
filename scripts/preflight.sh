@@ -107,6 +107,15 @@ if [ -f tests/audit-closed-epics.sh ]; then
   }
 fi
 
+if [ -f tests/pull-request-template.sh ]; then
+  bash tests/pull-request-template.sh || {
+    echo "" >&2
+    echo "❌ Pull request template regression test failed!" >&2
+    echo "Restore the required changelog verification checklist item before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
