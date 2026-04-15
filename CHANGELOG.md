@@ -11,6 +11,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ## 2026-04-14 - Harden Copilot Instructions And Workflow Timeout Validations
 
+## 2026-04-15 - Adopt Issue-First Planning Governance
+
+**Changed:**
+
+- accepted ADR-013 to establish GitHub Issues, milestones, ADRs, and linked PRs as the canonical planning model, with the organization project board retained only as an optional mirrored view
+- rewrote `docs/planning.md` as the canonical contributor planning guide and reframed `docs/project-board-integration.md` as optional board operations guidance
+- archived `docs/feature-requirements.md` for active planning, clarified the non-canonical role of `docs/ideas-backlog.md`, and updated `README.md` plus `docs/workflows/PROJECT_AUTOMATION.md` to match the issue-first process
+- updated the ADR index with the new planning-governance decision
+
+## 2026-04-14 - Harden Copilot Instructions And Workflow Timeout Validations
+
 **Changed:**
 
 - updated SPDX copyright headers in `docs/workflows/PROJECT_AUTOMATION.md` and `docs/workflows/QUICK_REFERENCE.md` to `2025-2026`

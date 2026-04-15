@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -11,7 +11,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Last Updated:** 2026-04-11
 
-> **Note:** Core features (RBAC, Employee Management, Shift Planning) have been moved to `feature-requirements.md` for detailed specification. This document focuses on long-term/experimental ideas.
+> **Note:** This document is non-canonical idea parking only. Active planning lives in GitHub Issues and milestones. Historical detailed specifications remain in `feature-requirements.md`, which is archived for active planning.
 
 ---
 

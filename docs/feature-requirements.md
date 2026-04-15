@@ -1,15 +1,17 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
 # Feature Requirements & Business Logic
 
-**Purpose:** Document business requirements and feature specifications for SecPal.
+**Purpose:** Historical business-context archive from SecPal's early planning phase.
 
-**Status:** Living document - Features move to GitHub Issues when prioritized
+**Status:** Archived for active planning as of 2026-04-15. Do not add new planning content here. Active planning lives in GitHub Issues, milestones, and ADRs as defined in `docs/planning.md` and ADR-013.
 
-**Last Updated:** 2025-11-26
+**Preserved For:** Historical context, legacy references, and extracting deferred follow-up issues into repository-local trackers.
+
+**Last Updated:** 2026-04-15
 
 ---
 
