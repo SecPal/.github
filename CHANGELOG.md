@@ -17,6 +17,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - clarified `docs/workflows/QUICK_REFERENCE.md` and `docs/workflows/ROLLOUT_GUIDE.md` so rollout and daily board usage explicitly preserve issues, milestones, and linked PRs as the source of truth
 - added a focused shell regression check for the project-board helper collateral and wired it into local preflight
 
+## 2026-04-15 - Add AI Finding Triage Guardrails
+
+**Changed:**
+
+- added an explicit AI-findings triage section to the organization Copilot baseline so AI-generated fix PRs now require proof of the defect instead of relying on green CI alone
+- extended `scripts/validate-copilot-instructions.sh` plus its documentation so the central validator now fails when Copilot instructions omit proof-of-defect and green-CI-is-not-enough guidance, while still accepting inline SPDX headers and repo-local "do not inherit" wording without false positives
+- clarified `.github` repository conventions so shell and regex policy changes are reviewed as governance changes with explicit positive and negative evidence
+
 ## 2026-04-15 - Replace Non-Applicable CodeQL Scan With Guardrail Check
 
 **Changed:**

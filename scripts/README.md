@@ -77,6 +77,7 @@ Validates Copilot instructions and configuration files across all repositories.
 
 6. **Content Validation**
    - Ensures critical rules/principles section exists
+   - Ensures AI findings triage guidance exists
    - Validates core content presence
 
 **Exit Codes:**
@@ -135,7 +136,9 @@ The script automatically detects repository type:
 
 - **org**: `.github` repository (org-wide instructions)
 - **api**: Laravel API (has `artisan`, `composer.json`)
-- **frontend**: React frontend (has `package.json` with `vite`)
+- **frontend**: React frontend or Android wrapper (has `package.json` with `vite`)
+- **changelog**: Next.js changelog site (has `next.config.mjs`)
+- **website**: Astro landing page (has `astro.config.mjs`)
 - **contracts**: OpenAPI contracts (has `package.json` with `openapi` or `docs/openapi.yaml`)
 
 ## Adding New Scripts

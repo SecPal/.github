@@ -42,6 +42,16 @@ detect_repo_type() {
         return
     fi
 
+    if [ -f "next.config.mjs" ]; then
+        echo "changelog"
+        return
+    fi
+
+    if [ -f "astro.config.mjs" ]; then
+        echo "website"
+        return
+    fi
+
     if [ -f "package.json" ] && grep -q "vite" package.json 2>/dev/null; then
         echo "frontend"
         return
@@ -74,8 +84,13 @@ test_yaml_config_exists() {
 test_instructions_reuse() {
     if [ -f ".github/copilot-instructions.md.license" ] && grep -q "CC0-1.0" ".github/copilot-instructions.md.license"; then
         print_result "copilot-instructions.md has REUSE license" "PASS"
+        return
+    fi
+
+    if head -n 10 ".github/copilot-instructions.md" | grep -q "SPDX-License-Identifier:"; then
+        print_result "copilot-instructions.md has REUSE license" "PASS"
     else
-        print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing or wrong license file"
+        print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing inline SPDX header or wrong license file"
     fi
 }
 
@@ -121,7 +136,7 @@ test_no_pseudo_inheritance() {
     local search_targets=()
     # Pseudo-inheritance markers include explicit directives and common textual variants.
     # Keep this list centralized so it is easy to review and extend as conventions evolve.
-    local pseudo_inheritance_pattern='@?extends|inherits?|inheritance|base[_ -]?instructions?|parent[_ -]?instructions?'
+    local pseudo_inheritance_pattern='@?extends|inherit[[:space:]]+from|inherits[[:space:]]+from|auto[-[:space:]]*inherit|base[_ -]?instructions?[^[:alpha:]]*(apply|load|import)|parent[_ -]?instructions?[^[:alpha:]]*(apply|load|import)'
 
     if [ -f ".github/copilot-instructions.md" ]; then
         search_targets+=(".github/copilot-instructions.md")
@@ -197,6 +212,30 @@ test_critical_rules() {
     fi
 }
 
+test_ai_findings_guidance() {
+    local has_ai_findings=1
+    local has_proof_requirement=1
+    local has_ci_guardrail=1
+
+    if grep -qiE 'AI findings?|AI-generated' .github/copilot-instructions.md; then
+        has_ai_findings=0
+    fi
+
+    if grep -qiE 'failing test|reproducible defect|stated invariant|prove the defect|proof of the defect|violates it' .github/copilot-instructions.md; then
+        has_proof_requirement=0
+    fi
+
+    if grep -qiE 'green CI alone|CI alone|green checks alone' .github/copilot-instructions.md; then
+        has_ci_guardrail=0
+    fi
+
+    if [ "$has_ai_findings" -eq 0 ] && [ "$has_proof_requirement" -eq 0 ] && [ "$has_ci_guardrail" -eq 0 ]; then
+        print_result "instructions contain AI findings triage guidance" "PASS"
+    else
+        print_result "instructions contain AI findings triage guidance" "FAIL" "Missing AI-finding proof or CI guardrail language"
+    fi
+}
+
 test_instruction_frontmatter() {
     local file
     local found=0
@@ -240,6 +279,7 @@ main() {
     test_no_pseudo_inheritance
     test_runtime_model "$repo_type"
     test_critical_rules
+    test_ai_findings_guidance
     test_instruction_frontmatter
 
     echo ""

@@ -361,6 +361,13 @@ REPO_TYPE=api ./scripts/validate-copilot-instructions.sh
 4. Document in this file
 5. Update scripts/README.md
 
+Current instruction-content checks include runtime-model guidance, critical rules, and AI findings triage language so
+repo baselines keep requiring proof-of-defect review for AI-generated suggestions.
+
+The validator also accepts either inline SPDX headers or companion `.license` sidecars for `copilot-instructions.md`,
+and its pseudo-inheritance check is intentionally scoped to positive inheritance directives so repo-local "do not
+inherit" guidance does not trigger false positives.
+
 ### Updating Test Logic
 
 1. Modify test function

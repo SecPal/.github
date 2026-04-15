@@ -57,6 +57,13 @@ At minimum verify:
 - the local 4-pass review was completed, including DRY, KISS, YAGNI, SOLID, quality-first, and issue-management checks
 - no bypass was used
 
+## AI Findings Triage
+
+- Treat AI findings and AI-generated fix PRs as hints, not proof.
+- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant and why the current code violates it.
+- Green CI alone is not enough for AI-generated changes, especially test, lifecycle, shell, regex, or refactor diffs; review the semantic risk explicitly.
+- Reject AI-generated test or automation mutations that move executable code across scope boundaries or "simplify" filters without positive and negative evidence.
+
 ## Issue And PR Discipline
 
 - Every real out-of-scope finding becomes a GitHub issue immediately; no untracked follow-up work is allowed.
@@ -110,4 +117,5 @@ Treat `api.secpal.app` as a deprecated web host.
 - For GitHub workflows, set explicit permissions, set `timeout-minutes` on every job, pin external actions, and never expose secrets in logs.
 - Workflow templates for other repositories live in `workflow-templates/`.
   Reusable workflow definitions live in `.github/workflows/reusable-*.yml` and are invoked via `uses:`.
+- For governance scripts, prefer explicit positive and negative checks over broad regex simplification; treat shell changes as policy changes, not cosmetic refactors.
 - Keep changes repo-local, minimal, and aligned with the existing governance and automation patterns.
