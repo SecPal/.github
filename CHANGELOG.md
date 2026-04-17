@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-17 - Improve Test Output Clarity and Assertion Robustness
+
+**Changed:**
+
+- `tests/audit-closed-epics.sh`: replaced silent `grep -q` assertions with `if ! grep -q` blocks that print the output file and a descriptive message on failure, making test failures easier to diagnose
+- `tests/codeql-applicability.sh`: clarified both error messages to say "before continuing" instead of ambiguous phrasing referencing merging or enabling CodeQL
+- `tests/pull-request-template.sh`: replaced the single fragile literal-string match for the changelog checklist item with a loop over key phrases using `grep -Eiq`; switched the no-overstatement check to `grep -Eq` pattern matching
+- `tests/setup-project-board.sh`: added comprehensive assertions for `QUICK_REFERENCE.md` and `ROLLOUT_GUIDE.md` key phrases; added a behavioral coverage guard that requires `SETUP_PROJECT_BOARD_INTEGRATION_TESTED=1` when integration tests are absent
+- `tests/validate-copilot-instructions.sh`: refactored multi-line fixture strings to use heredoc variables; aligned the `missing_api_specific` fixture to include only one of the two required API patterns; corrected the `wrong_license` sidecar fixture from `MIT` to `Apache-2.0`; switched the android fixture invocation to use the `run_validator` helper
+- `docs/workflows/QUICK_REFERENCE.md`: added mentions of `optional GitHub Project Board mirror` and `status: discussion|BFD4F2|Needs decision before implementation` for consistency with the setup script
+- `docs/workflows/ROLLOUT_GUIDE.md`: same consistency additions as QUICK_REFERENCE.md
+
+---
+
 ## 2026-04-17 - Enforce Automatic Copilot AI Risk Validation Across Repositories
 
 **Changed:**

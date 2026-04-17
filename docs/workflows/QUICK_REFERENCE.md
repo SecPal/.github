@@ -3,7 +3,7 @@
 
 # Quick Reference: Project Automation
 
-Quick reference card for daily usage of the project automation workflow.
+Quick reference card for daily usage of the optional GitHub Project Board mirror for SecPal.
 
 Issues, milestones, and linked PRs remain the source of truth. The project board is an optional mirrored view.
 
@@ -115,6 +115,8 @@ Resolves #789
 | `enhancement`       | 💡 Ideas   | New features, improvements |
 | `core-feature`      | 📋 Planned | Core functionality         |
 | `priority: blocker` | 📥 Backlog | Blocking issues            |
+
+The setup script also creates: `status: discussion|BFD4F2|Needs decision before implementation`.
 
 ## 🔍 Check Status
 

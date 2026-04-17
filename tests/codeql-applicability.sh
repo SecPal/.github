@@ -23,12 +23,12 @@ fi
 
 if [ "$has_supported_files" -eq 0 ] && grep -q 'github/codeql-action/' "$workflow_path"; then
   echo "CodeQL workflow still invokes github/codeql-action even though this repository has no tracked JS/TS files." >&2
-  echo "Remove the CodeQL action usage or restore supported source files before keeping CodeQL enabled." >&2
+  echo "Remove the CodeQL action usage or restore supported source files before continuing." >&2
   exit 1
 fi
 
 if [ "$has_supported_files" -eq 1 ] && ! grep -q 'github/codeql-action/' "$workflow_path"; then
   echo "Tracked JS/TS files were found, but the CodeQL workflow no longer invokes github/codeql-action." >&2
-  echo "Restore a real CodeQL scan before merging supported source files into this repository." >&2
+  echo "Restore the CodeQL action in the workflow before continuing with these supported source files." >&2
   exit 1
 fi

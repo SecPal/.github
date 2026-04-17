@@ -32,5 +32,25 @@ assert_contains "$REPO_ROOT/scripts/setup-project-board.sh" "Issues, milestones,
 assert_contains "$REPO_ROOT/scripts/setup-project-board.sh" "status: discussion|BFD4F2|Needs decision before implementation"
 assert_not_contains "$REPO_ROOT/scripts/setup-project-board.sh" "Specified in feature-requirements.md"
 
+assert_contains "$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md" "optional GitHub Project Board mirror"
 assert_contains "$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md" "Issues, milestones, and linked PRs remain the source of truth."
+assert_contains "$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md" "status: discussion|BFD4F2|Needs decision before implementation"
+assert_contains "$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md" "The project board is an optional mirrored view"
+assert_not_contains "$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md" "Specified in feature-requirements.md"
+
+assert_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "optional GitHub Project Board mirror"
+assert_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "Issues, milestones, and linked PRs remain the source of truth."
+assert_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "status: discussion|BFD4F2|Needs decision before implementation"
 assert_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "The project board is an optional mirrored view"
+assert_not_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "Specified in feature-requirements.md"
+
+# Behavioral coverage guard:
+# This test must not be limited to static string checks. Add/maintain integration
+# scenarios that execute scripts/setup-project-board.sh with stubbed `gh` and
+# simulated interactive input (yes/no), and verify behavior for:
+#   - gh unavailable
+#   - existing labels/project artifacts
+#   - prompt decision branches
+# If integration coverage is intentionally disabled, set
+# SETUP_PROJECT_BOARD_INTEGRATION_TESTED=1 in the test environment.
+: "${SETUP_PROJECT_BOARD_INTEGRATION_TESTED:?Integration coverage missing for setup-project-board.sh (set SETUP_PROJECT_BOARD_INTEGRATION_TESTED=1 only when equivalent integration tests run).}"
