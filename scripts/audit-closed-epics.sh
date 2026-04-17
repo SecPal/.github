@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
       cat <<'EOF'
 Usage: bash scripts/audit-closed-epics.sh [--org ORG] [--repo REPO]...
 
-Audit closed Epic issues by checking checklist-linked child issues.
+Audit Epic issues for checklist drift by checking checklist-linked child issues.
 
 Options:
   --org ORG    GitHub organization or owner to inspect (default: SecPal)
@@ -44,12 +44,12 @@ if [ ${#repos[@]} -eq 0 ]; then
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-  echo "gh is required to audit closed epics." >&2
+  echo "gh is required to audit epic checklists." >&2
   exit 2
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required to audit closed epics." >&2
+  echo "python3 is required to audit epic checklists." >&2
   exit 2
 fi
 
@@ -94,7 +94,9 @@ def gh_json(*args):
 def search_epics(owner: str, repo: str):
     queries = [
         f"repo:{owner}/{repo} is:issue label:epic is:closed",
+        f"repo:{owner}/{repo} is:issue label:epic is:open",
         f"repo:{owner}/{repo} is:issue in:title epic is:closed",
+        f"repo:{owner}/{repo} is:issue in:title epic is:open",
     ]
     results = []
     for query in queries:
@@ -184,6 +186,7 @@ try:
         epic_repo = item["repository_url"].split("/repos/", 1)[1]
         epic_number = item["number"]
         epic_title = item["title"]
+        epic_state = item.get("state", "open")
         body = item.get("body") or ""
 
         for line in body.splitlines():
@@ -234,7 +237,7 @@ try:
                             "line": stripped,
                         }
                     )
-                elif not marked_checked and state != "closed":
+                elif epic_state == "closed" and not marked_checked and state != "closed":
                     findings.append(
                         {
                             "kind": "open-child",
@@ -248,7 +251,7 @@ try:
                     )
 
     if not findings:
-        print(f"No closed epic checklist issues found across {len(unique_epics)} epic(s).")
+        print(f"No epic checklist issues found across {len(unique_epics)} epic(s).")
         sys.exit(0)
 
     deduped_findings = []
@@ -266,7 +269,7 @@ try:
         seen_findings.add(key)
         deduped_findings.append(finding)
 
-    print(f"Closed epic checklist issues found: {len(deduped_findings)} across {len(unique_epics)} epic(s).")
+    print(f"Epic checklist issues found: {len(deduped_findings)} across {len(unique_epics)} epic(s).")
     for finding in deduped_findings:
         epic_prefix = f"{finding['epic_repo']}#{finding['epic_number']}"
         child_prefix = f"{finding['child_repo']}#{finding['child_number']}"

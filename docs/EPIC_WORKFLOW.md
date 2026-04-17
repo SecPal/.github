@@ -137,7 +137,9 @@ bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
 ```
 
 This catches stale checklist state, open child issues, and checked items that do
-not resolve to closed issues.
+not resolve to closed issues. It also catches open epics whose child issues are
+already closed but whose checklist was never updated, so closure-ready epics do
+not silently drift.
 
 ## CLA And Other External Services
 
