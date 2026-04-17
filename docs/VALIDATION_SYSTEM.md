@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -7,7 +7,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Overview
 
-The Validation System ensures that Copilot instructions and configuration files maintain quality and consistency across all SecPal repositories (.github, api, frontend, contracts).
+The validation system ensures that Copilot instructions maintain quality,
+consistency, and repository-specific AI-risk guidance across all SecPal
+repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
+`secpal.app`, and `changelog`.
 
 ## Architecture
 
@@ -18,10 +21,13 @@ The Validation System ensures that Copilot instructions and configuration files 
 ├── scripts/
 │   ├── validate-copilot-instructions.sh  # Main validation script
 │   └── README.md                          # Script documentation
+├── tests/
+│   └── validate-copilot-instructions.sh   # Validator regression coverage
 ├── .github/
 │   ├── copilot-instructions.md            # Markdown instructions (authoritative)
 │   └── workflows/
-│       └── validate-copilot-instructions.yml  # CI workflow
+│       ├── reusable-copilot-instructions.yml  # Shared CI workflow
+│       └── validate-copilot-instructions.yml  # .github repo caller workflow
 └── docs/
     └── VALIDATION_SYSTEM.md               # This document
 
@@ -33,36 +39,42 @@ The Validation System ensures that Copilot instructions and configuration files 
 
 **Location:** `scripts/validate-copilot-instructions.sh`
 
-**Purpose:** Automated testing of Copilot instructions quality
+**Purpose:** Automated testing of Copilot instructions quality and required AI-risk guidance
 
 **Features:**
 
-- Repository-aware (detects .github, api, frontend, contracts)
-- 8 comprehensive test cases
+- Repository-aware (detects `.github`, `api`, `frontend`, `contracts`, `android`, `secpal.app`, and `changelog`)
+- generic AI triage validation plus repository-specific known-risk checks
+- regression coverage for validator guardrails and repo detection
 - Color-coded output
 - Exit codes for CI integration
 - Optional dependency handling
 
 ### CI Workflow
 
-**Location:** `.github/workflows/validate-copilot-instructions.yml`
+**Locations:** `.github/workflows/reusable-copilot-instructions.yml` and `.github/workflows/validate-copilot-instructions.yml`
 
 **Triggers:**
 
-- Push to `main` (when instruction files change)
-- Pull requests (when instruction files change)
+- Push to `main` (org repo caller, when instruction files change)
+- Pull requests (org repo caller, when instruction files change)
 - Manual dispatch
+- Reusable workflow calls from sibling-repository `quality.yml` workflows
 
 **Steps:**
 
-1. Checkout repository
-2. Setup Node.js 22
-3. Install markdownlint-cli2
-4. Run YAML syntax validation via Ruby stdlib
-5. Run validation script
-6. Report summary
+1. Checkout the caller repository
+2. Checkout `SecPal/.github` when the caller is a sibling repository
+3. Setup Node.js 22 and install `markdownlint-cli2`
+4. Run `scripts/validate-copilot-instructions.sh`
+5. Fail the caller workflow when required guidance is missing
 
 ## Test Cases
+
+The validator enforces file presence, REUSE compliance, markdown quality,
+runtime-model guidance, generic AI-triage guardrails, repository-specific
+known-risk patterns, and required frontmatter for file-based instruction
+overlays.
 
 ### 1. File Existence
 
@@ -91,7 +103,7 @@ always skips.
 **Files Checked:**
 
 - `.github/copilot-instructions.md.license`
-- License identifier: `CC0-1.0`
+- Allowed license identifiers: `CC0-1.0` or `AGPL-3.0-or-later`
 
 **Failure Impact:** CRITICAL - REUSE compliance required
 

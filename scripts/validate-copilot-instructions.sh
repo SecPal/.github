@@ -37,6 +37,11 @@ print_result() {
 }
 
 detect_repo_type() {
+    if [ -n "${REPO_TYPE:-}" ]; then
+        echo "$REPO_TYPE"
+        return
+    fi
+
     if [ -f "artisan" ] || [ -f "composer.json" ]; then
         echo "api"
         return
@@ -44,6 +49,11 @@ detect_repo_type() {
 
     if [ -f "next.config.mjs" ]; then
         echo "changelog"
+        return
+    fi
+
+    if [ -f "capacitor.config.ts" ] || [ -d "android/app/src" ]; then
+        echo "android"
         return
     fi
 
@@ -83,6 +93,7 @@ test_yaml_config_exists() {
 
 test_instructions_reuse() {
     local spdx_license_marker='SPDX-License''-Identifier:'
+    local sidecar_license_pattern='SPDX-License''-Identifier:[[:space:]]+(CC0-1.0|AGPL-3.0-or-later)'
 
     if [ ! -f ".github/copilot-instructions.md" ]; then
         print_result "copilot-instructions.md has REUSE license" "FAIL" "Missing .github/copilot-instructions.md"
@@ -90,10 +101,10 @@ test_instructions_reuse() {
     fi
 
     if [ -f ".github/copilot-instructions.md.license" ]; then
-        if grep -q "CC0-1.0" ".github/copilot-instructions.md.license"; then
+        if grep -qE "$sidecar_license_pattern" ".github/copilot-instructions.md.license"; then
             print_result "copilot-instructions.md has REUSE license" "PASS"
         else
-            print_result "copilot-instructions.md has REUSE license" "FAIL" "Sidecar .license exists but does not declare CC0-1.0"
+            print_result "copilot-instructions.md has REUSE license" "FAIL" "Sidecar .license exists but does not declare an allowed license (CC0-1.0 or AGPL-3.0-or-later)"
         fi
         return
     fi
@@ -162,11 +173,16 @@ test_no_pseudo_inheritance() {
         return
     fi
 
-    if grep -RInEi "$pseudo_inheritance_pattern" "${search_targets[@]}" >/dev/null 2>&1; then
+    while IFS= read -r match; do
+        if printf '%s\n' "$match" | grep -qiE 'do not[^[:alpha:]]+.*(inherit|auto[-[:space:]]*inherit)|does not[^[:alpha:]]+.*(inherit|auto[-[:space:]]*inherit)|not[^[:alpha:]]+automatically[^[:alpha:]]+.*inherit'; then
+            continue
+        fi
+
         print_result "instructions avoid pseudo-inheritance markers" "FAIL" "Found pseudo-inheritance markers in active instructions"
-    else
-        print_result "instructions avoid pseudo-inheritance markers" "PASS"
-    fi
+        return
+    done < <(grep -RInEi "$pseudo_inheritance_pattern" "${search_targets[@]}" 2>/dev/null || true)
+
+    print_result "instructions avoid pseudo-inheritance markers" "PASS"
 }
 
 test_runtime_model() {
@@ -253,6 +269,67 @@ test_ai_findings_guidance() {
     fi
 }
 
+test_repo_specific_ai_risk_guidance() {
+    local repo_type="$1"
+    local instructions_file=".github/copilot-instructions.md"
+    local first_pattern=''
+    local second_pattern=''
+    local message=''
+
+    if [ ! -f "$instructions_file" ]; then
+        print_result "instructions contain repo-specific AI risk guidance" "FAIL" "Missing $instructions_file"
+        return
+    fi
+
+    case "$repo_type" in
+        api)
+            first_pattern='resource|serializer|presentation code|runs once per request'
+            second_pattern='mutable display name|stable key|stable identifier|tenant-scoped|tenant scoping|composite unique|unique constraint'
+            message='Missing API AI guardrails for resource purity or stable tenant-scoped identifiers'
+            ;;
+        frontend)
+            first_pattern='locale|language|tenant|user-derived|auth transition|session change'
+            second_pattern='memoization|dependency|stale|cache'
+            message='Missing frontend AI guardrails for stale locale or session-derived state'
+            ;;
+        contracts)
+            first_pattern='allowlist|regex|discovery pattern'
+            second_pattern='required field|enum|security scheme|positive and negative example|validation evidence'
+            message='Missing contracts AI guardrails for allowlist drift or unproven contract widening'
+            ;;
+        android)
+            first_pattern='listener-handle|listener handle|teardown|bridge'
+            second_pattern='WebView history|back behavior|back-navigation|managed-mode|owner-state'
+            message='Missing android AI guardrails for bridge teardown or managed/back-navigation behavior'
+            ;;
+        website)
+            first_pattern='static|client-only|route|build'
+            second_pattern='accessib|semantic'
+            message='Missing website AI guardrails for static rendering or accessibility regressions'
+            ;;
+        changelog)
+            first_pattern='MDX|markup|label|feed'
+            second_pattern='static build|build output|exported page|metadata'
+            message='Missing changelog AI guardrails for MDX or static export regressions'
+            ;;
+        org)
+            first_pattern='validator|reusable workflow|repo-specific guardrail'
+            second_pattern='positive and negative fixture|positive and negative evidence|regression test'
+            message='Missing org AI guardrails for validator or reusable workflow regressions'
+            ;;
+        *)
+            print_result "instructions contain repo-specific AI risk guidance" "PASS" "Skipped (no repo-specific pattern defined for $repo_type)"
+            return
+            ;;
+    esac
+
+    if grep -qiE "$first_pattern" "$instructions_file" && grep -qiE "$second_pattern" "$instructions_file"; then
+        print_result "instructions contain repo-specific AI risk guidance" "PASS"
+    else
+        print_result "instructions contain repo-specific AI risk guidance" "FAIL" "$message"
+    fi
+}
+
 test_instruction_frontmatter() {
     local file
     local found=0
@@ -297,6 +374,7 @@ main() {
     test_runtime_model "$repo_type"
     test_critical_rules
     test_ai_findings_guidance
+    test_repo_specific_ai_risk_guidance "$repo_type"
     test_instruction_frontmatter
 
     echo ""

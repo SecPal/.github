@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable - Validate Copilot Instructions
+
+on:
+  workflow_call:
+    inputs:
+      governance-ref:
+        description: "Ref of SecPal/.github to use when validating sibling repositories"
+        required: false
+        type: string
+        default: "main"
+      node-version:
+        description: "Node.js version used for markdownlint-cli2"
+        required: false
+        type: string
+        default: "22"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Copilot Instructions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v6
+
+      - name: Checkout governance repository
+        if: ${{ github.repository != 'SecPal/.github' }}
+        uses: actions/checkout@v6
+        with:
+          repository: SecPal/.github
+          ref: ${{ inputs.governance-ref }}
+          path: .secpal-governance
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install markdownlint-cli2
+        run: npm install -g markdownlint-cli2
+
+      - name: Select validator path
+        id: validator
+        run: |
+          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
+            echo "path=./scripts/validate-copilot-instructions.sh" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=./.secpal-governance/scripts/validate-copilot-instructions.sh" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run validation script
+        env:
+          VALIDATOR_PATH: ${{ steps.validator.outputs.path }}
+        run: "$VALIDATOR_PATH"

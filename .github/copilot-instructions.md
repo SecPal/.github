@@ -63,6 +63,7 @@ At minimum verify:
 - Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant and why the current code violates it.
 - Green CI alone is not enough for AI-generated changes, especially test, lifecycle, shell, regex, or refactor diffs; review the semantic risk explicitly.
 - Reject AI-generated test or automation mutations that move executable code across scope boundaries or "simplify" filters without positive and negative evidence.
+- Reject AI-generated governance cleanups that relax validator coverage, reusable workflow enforcement, or repo-specific guardrails without focused regression tests plus positive and negative fixtures.
 
 ## Issue And PR Discipline
 
