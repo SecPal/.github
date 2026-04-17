@@ -44,12 +44,12 @@ if [ ${#repos[@]} -eq 0 ]; then
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-    echo "gh is required to audit epic checklists." >&2
+  echo "gh is required to audit epic checklists." >&2
   exit 2
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required to audit epic checklists." >&2
+  echo "python3 is required to audit epic checklists." >&2
   exit 2
 fi
 
@@ -205,7 +205,6 @@ try:
                     findings.append(
                         {
                             "kind": "missing-child",
-                            "epic_state": epic_state,
                             "epic_repo": epic_repo,
                             "epic_number": epic_number,
                             "epic_title": epic_title,
@@ -218,7 +217,6 @@ try:
                     findings.append(
                         {
                             "kind": "checked-open-child",
-                            "epic_state": epic_state,
                             "epic_repo": epic_repo,
                             "epic_number": epic_number,
                             "epic_title": epic_title,
@@ -231,7 +229,6 @@ try:
                     findings.append(
                         {
                             "kind": "stale-unchecked-child",
-                            "epic_state": epic_state,
                             "epic_repo": epic_repo,
                             "epic_number": epic_number,
                             "epic_title": epic_title,
@@ -244,7 +241,6 @@ try:
                     findings.append(
                         {
                             "kind": "open-child",
-                            "epic_state": epic_state,
                             "epic_repo": epic_repo,
                             "epic_number": epic_number,
                             "epic_title": epic_title,
