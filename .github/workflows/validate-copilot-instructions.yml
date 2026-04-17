@@ -21,6 +21,9 @@ on:
       - "scripts/validate-copilot-instructions.sh"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate Copilot Instructions
