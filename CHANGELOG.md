@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-17 - Enforce Automatic Copilot AI Risk Validation Across Repositories
+
+**Changed:**
+
+- added `.github/.github/workflows/reusable-copilot-instructions.yml` so sibling repositories can run the central Copilot-instructions validator automatically from their `quality.yml` workflows
+- extended `scripts/validate-copilot-instructions.sh` to distinguish Android from generic frontend repos, enforce repository-specific known-risk AI guardrails, and ignore negative "do not inherit" wording instead of treating it as pseudo-inheritance
+- added a focused regression test plus local preflight enforcement for the validator so reusable-workflow and repo-specific AI-risk checks cannot silently regress
+- updated the validation-system documentation to describe the new reusable workflow and automatic multi-repository enforcement path
+
 ## 2026-04-15 - Align Project Board Helper Collateral With Issue-First Planning
 
 **Changed:**

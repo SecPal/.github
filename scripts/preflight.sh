@@ -134,6 +134,15 @@ if [ -f tests/setup-project-board.sh ]; then
   }
 fi
 
+if [ -f tests/validate-copilot-instructions.sh ]; then
+  bash tests/validate-copilot-instructions.sh || {
+    echo "" >&2
+    echo "❌ Copilot-instructions validator regression test failed!" >&2
+    echo "Fix scripts/validate-copilot-instructions.sh and reusable-copilot-instructions.yml before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
