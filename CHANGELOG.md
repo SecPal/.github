@@ -18,6 +18,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added a focused regression test plus local preflight enforcement for the validator so reusable-workflow and repo-specific AI-risk checks cannot silently regress
 - updated the validation-system documentation to describe the new reusable workflow and automatic multi-repository enforcement path
 
+## 2026-04-17 - Audit Closure-Ready Epic Checklist Drift
+
+**Changed:**
+
+- extended `scripts/audit-closed-epics.sh` so it now audits open epics too and flags stale unchecked child-issue entries when the linked work is already closed
+- strengthened `tests/audit-closed-epics.sh` with a regression case for open-but-complete epics whose checklist state drifted from the actual child-issue status
+- clarified `scripts/README.md` and `docs/EPIC_WORKFLOW.md` so the audit helper's broader checklist-drift coverage is documented
+
 ## 2026-04-15 - Align Project Board Helper Collateral With Issue-First Planning
 
 **Changed:**

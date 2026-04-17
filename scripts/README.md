@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -11,9 +11,9 @@ This directory contains utility scripts for SecPal development.
 
 ### `audit-closed-epics.sh`
 
-Audits closed Epic issues and reports checklist drift, such as child issues that
-are still open or already closed while the parent epic checklist remains
-unchecked.
+Audits Epic issues and reports checklist drift, such as closed child issues
+that remain unchecked in open or closed epics, or child issues that are still
+open even though the parent epic is already closed.
 
 **Usage:**
 
@@ -27,7 +27,7 @@ bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
 
 **What It Checks:**
 
-1. Searches for closed Epic issues by label and title
+1. Searches for open and closed Epic issues by label and title
 2. Parses checklist-linked child issues from each epic body
 3. Ignores PR references so merged PR numbers are not mistaken for issues
 4. Reports:
