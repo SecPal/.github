@@ -3,7 +3,7 @@
 
 # Rollout Guide: Project Automation Workflow
 
-Guide for deploying the project automation workflow to other repositories (api, frontend, contracts).
+Guide for deploying the optional GitHub Project Board mirror to other repositories (api, frontend, contracts).
 
 Issues, milestones, and linked PRs remain the source of truth. The project board is an optional mirrored view for cross-repository status.
 
@@ -94,6 +94,8 @@ gh label create "enhancement" --color "a2eeef" --description "New feature or req
 gh label create "core-feature" --color "0e8a16" --description "Core functionality - planned implementation"
 gh label create "priority: blocker" --color "d93f0b" --description "High priority issue blocking progress"
 ```
+
+The setup script also creates the discussion status label: `status: discussion|BFD4F2|Needs decision before implementation`.
 
 Or via GitHub UI:
 

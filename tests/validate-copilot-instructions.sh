@@ -85,8 +85,12 @@ run_validator() {
 valid_api_repo="$workspace/valid-api"
 mkdir -p "$valid_api_repo"
 touch "$valid_api_repo/composer.json"
-write_common_instruction_file "$valid_api_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
-- Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.'
+valid_api_extra_ai_lines="$(cat <<'EOF'
+- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
+- Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.
+EOF
+)"
+write_common_instruction_file "$valid_api_repo" "$valid_api_extra_ai_lines"
 
 valid_output="$workspace/valid-output.txt"
 (
@@ -134,7 +138,7 @@ grep -q 'instructions contain AI findings triage guidance' "$missing_generic_out
 missing_api_specific_repo="$workspace/missing-api-specific"
 mkdir -p "$missing_api_specific_repo"
 touch "$missing_api_specific_repo/composer.json"
-write_common_instruction_file "$missing_api_specific_repo" '- Reject AI-generated helper mutations that move executable code across Pest scope boundaries.'
+write_common_instruction_file "$missing_api_specific_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.'
 
 missing_api_specific_output="$workspace/missing-api-specific-output.txt"
 set +e
@@ -157,7 +161,7 @@ touch "$wrong_license_repo/composer.json"
 write_common_instruction_file "$wrong_license_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
 - Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.'
 cat >"$wrong_license_repo/.github/copilot-instructions.md.license" <<'EOF'
-SPDX-License-Identifier: MIT
+SPDX-License-Identifier: Apache-2.0
 EOF
 
 wrong_license_output="$workspace/wrong-license-output.txt"
@@ -185,7 +189,7 @@ android_output="$workspace/android-output.txt"
 set +e
 (
     cd "$android_repo"
-    PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" >"$android_output" 2>&1
+    run_validator android "$android_output"
 )
 android_exit=$?
 set -e

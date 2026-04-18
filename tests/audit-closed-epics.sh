@@ -163,10 +163,29 @@ if [ "$exit_code" -ne 1 ]; then
   exit 1
 fi
 
-grep -q 'SecPal/frontend#30 is closed but still unchecked' "$output_file"
-grep -q 'SecPal/.github#40 is still open' "$output_file"
-grep -q 'SecPal/contracts#50 is closed but still unchecked' "$output_file"
-grep -q 'SecPal/android#60 is closed but still unchecked' "$output_file"
+if ! grep -q 'SecPal/frontend#30 is closed but still unchecked' "$output_file"; then
+  cat "$output_file"
+  echo "Missing expected finding: SecPal/frontend#30 is closed but still unchecked" >&2
+  exit 1
+fi
+
+if ! grep -q 'SecPal/.github#40 is still open' "$output_file"; then
+  cat "$output_file"
+  echo "Missing expected finding: SecPal/.github#40 is still open" >&2
+  exit 1
+fi
+
+if ! grep -q 'SecPal/contracts#50 is closed but still unchecked' "$output_file"; then
+  cat "$output_file"
+  echo "Missing expected finding: SecPal/contracts#50 is closed but still unchecked" >&2
+  exit 1
+fi
+
+if ! grep -q 'SecPal/android#60 is closed but still unchecked' "$output_file"; then
+  cat "$output_file"
+  echo "Missing expected finding: SecPal/android#60 is closed but still unchecked" >&2
+  exit 1
+fi
 
 # SecPal/api#10 is a valid checked and closed checklist item and must not be reported.
 if grep -q 'SecPal/api#10' "$output_file"; then
