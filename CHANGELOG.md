@@ -21,7 +21,6 @@ Log of notable changes to SecPal organization defaults (newest first).
 - `docs/workflows/QUICK_REFERENCE.md`: added mentions of `optional GitHub Project Board mirror` and `status: discussion|BFD4F2|Needs decision before implementation` for consistency with the setup script
 - `docs/workflows/ROLLOUT_GUIDE.md`: same consistency additions as QUICK_REFERENCE.md
 
----
 
 ## 2026-04-17 - Enforce Automatic Copilot AI Risk Validation Across Repositories
 
