@@ -56,4 +56,3 @@ assert_not_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "Specified in f
 if [[ "${REQUIRE_SETUP_PROJECT_BOARD_INTEGRATION_TESTED:-0}" == "1" ]]; then
   : "${SETUP_PROJECT_BOARD_INTEGRATION_TESTED:?Integration coverage missing for setup-project-board.sh (set SETUP_PROJECT_BOARD_INTEGRATION_TESTED=1 only when equivalent integration tests run).}"
 fi
-fi
