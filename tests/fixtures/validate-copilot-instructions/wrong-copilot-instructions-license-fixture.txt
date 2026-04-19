@@ -1,0 +1,2 @@
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: Apache-2.0
