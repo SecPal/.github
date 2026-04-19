@@ -183,11 +183,7 @@ grep -q 'Sidecar .license exists but does not declare an allowed license' "$wron
 negative_inherit_repo="$workspace/negative-inherit"
 mkdir -p "$negative_inherit_repo"
 touch "$negative_inherit_repo/composer.json"
-negative_inherit_extra_ai_lines="$(cat <<'EOF'
-- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
-- Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.
-EOF
-)"
+negative_inherit_extra_ai_lines="$valid_api_extra_ai_lines"
 write_common_instruction_file "$negative_inherit_repo" "$negative_inherit_extra_ai_lines"
 cat >"$negative_inherit_repo/.github/instructions/negative.instructions.md" <<'EOF'
 ---
