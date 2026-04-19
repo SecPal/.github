@@ -9,7 +9,6 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-
 ## 2026-04-19 - Clarify Under-1.x Compatibility Removal Guidance
 
 **Changed:**
