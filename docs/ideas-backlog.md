@@ -7,11 +7,11 @@ SPDX-License-Identifier: CC0-1.0
 
 **Purpose:** This document captures ideas, concepts, and features that are **not yet prioritized** but may become relevant later. Think of this as a "parking lot" for thoughts that don't warrant immediate action but shouldn't be forgotten.
 
-**Status:** Living document - Add ideas freely, review quarterly
+**Status:** Living document - non-canonical parking only; promote items into issues before implementation
 
-**Last Updated:** 2026-04-15
+**Last Updated:** 2026-04-19
 
-> **Note:** This document is non-canonical idea parking only. Active planning lives in GitHub Issues and milestones. Historical detailed specifications remain in `feature-requirements.md`, which is archived for active planning.
+> **Note:** This document is non-canonical idea parking only. Active planning lives in GitHub Issues and milestones. `feature-requirements.md` remains historical background only and is not a planning destination. Any actionable idea from this file must be promoted into a repo-local issue, epic, or ADR before implementation starts.
 
 ---
 
@@ -548,8 +548,8 @@ Run Laravel with Swoole/RoadRunner for massive performance gains.
 
 **Related:**
 
-- Issue #...
-- ADR-...
+- Repo-local issue or epic once the idea becomes actionable
+- ADR if durable rationale matters beyond the implementation issue
 ```
 
 ---
@@ -650,7 +650,8 @@ According to §11b BewachV (German Security Services Act), security companies mu
 - Employee Management (Core Feature)
 - Qualifications System (Core Feature)
 - Legal Compliance (docs/legal-compliance.md)
-- Issue #... (to be created for detailed specification)
+- Historical implementation trail: SecPal/api#468, SecPal/api#469, SecPal/api#471
+- Open a new repo-local issue only if additional BWR scope appears beyond that delivered foundation
 
 **Technical Notes:**
 
@@ -665,7 +666,7 @@ According to §11b BewachV (German Security Services Act), security companies mu
 ### Idea: (Semi-)Automated Shift Planning with Employee Suggestions
 
 **Context:**
-Manual shift planning is time-consuming. Managers need support to find available employees who meet all requirements (qualifications, working time law, preferences). Current `feature-requirements.md` includes basic auto-scheduling, but advanced AI-driven suggestions are not yet specified.
+Manual shift planning is time-consuming. Managers need support to find available employees who meet all requirements (qualifications, working time law, preferences). Baseline shift-planning scope exists only as archived historical context today, so these advanced suggestions need a dedicated future issue or epic before they become active planning.
 
 **Concept:**
 
@@ -738,7 +739,7 @@ Manual shift planning is time-consuming. Managers need support to find available
 
 **When to revisit:**
 
-- After basic shift planning (feature-requirements.md) is implemented
+- After baseline shift-planning work is reintroduced through a dedicated issue or epic and implemented
 - When historical data is available for ML training
 - When managers report bottlenecks in manual planning
 
@@ -756,7 +757,7 @@ Manual shift planning is time-consuming. Managers need support to find available
 ### Idea: Shift Plan Distribution via Push Notifications & Email
 
 **Context:**
-Employees need timely notification when new shift plans are published. While basic email notifications are mentioned in `feature-requirements.md`, advanced distribution features are not yet specified.
+Employees need timely notification when new shift plans are published. Baseline notification behavior exists only in archived historical notes today, so advanced distribution features need dedicated issue scope before they become active planning.
 
 **Concept:**
 
@@ -1262,5 +1263,5 @@ Security companies must provide uniforms and equipment to employees. With multip
 - Move Event Sourcing idea → ADR-001 ✅ Done
 - Review this doc every 3 months
 - Create GitHub Issues for "Now" or "Soon" priorities
-- **NEW:** BWR-Integration → Move to feature-requirements.md (Soon)
+- **NEW:** BWR-Integration → reopen only through a dedicated repo-local issue if additional scope appears
 - **NEW:** Clothing Management → Evaluate with stakeholders (Phase 3+)

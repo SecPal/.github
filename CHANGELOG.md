@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-19 - Triage Archived Feature-Requirements Planning Drift
+
+**Changed:**
+
+- `docs/feature-requirements.md`: added an explicit archive-triage snapshot, defined the long-term end state as a slim historical archive, and linked the few still-relevant areas to their live issue or ADR trackers instead of leaving the archive implicitly actionable
+- `docs/ideas-backlog.md`: removed stale instructions that pointed contributors back to `feature-requirements.md` for active planning, replaced the BWR migration note with the existing API delivery trail, and clarified that future activation must happen through repo-local issues or epics
+
 ## 2026-04-19 - Clarify Under-1.x Compatibility Removal Guidance
 
 **Changed:**

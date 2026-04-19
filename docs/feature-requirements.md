@@ -9,9 +9,21 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Archived for active planning as of 2026-04-15. Do not add new planning content here. Active planning lives in GitHub Issues, milestones, and ADRs as defined in `docs/planning.md` and ADR-013.
 
-**Preserved For:** Historical context, legacy references, and extracting deferred follow-up issues into repository-local trackers.
+**Preserved For:** Historical context, legacy references, and extracting explicitly reactivated slices into repository-local issues or ADRs.
 
-**Last Updated:** 2026-04-15
+**Last Updated:** 2026-04-19
+
+## Archive Triage Snapshot
+
+This file's long-term end state is a slim historical archive. Keep it available for background and legacy rationale, but do not expand it as a planning destination again. If a future initiative needs material from this archive, extract only the relevant slice into a repo-local issue or ADR and treat the extracted tracker as the canonical source of truth.
+
+| Area                                                                                  | Archive status                                            | Active tracker or rationale                                                                                |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Access control, organizational structure, and qualification models                    | Historical archive                                        | Re-open only through issue-first planning when implementation is explicitly scheduled                      |
+| Employee lifecycle, onboarding, and BWR compliance                                    | Historical archive with prior delivery trail              | SecPal/api#468, SecPal/api#469, and SecPal/api#471 capture the earlier BWR and onboarding planning lineage |
+| Digital signatures and legally relevant acknowledgments                               | Historical archive with durable decision inputs elsewhere | ADR-001, ADR-002, and SecPal/.github#46 carry the live decision and legal-review path                      |
+| Work instructions                                                                     | Active implementation is tracked outside this archive     | SecPal/frontend#32 is the current implementation tracker                                                   |
+| Shift planning, client portal, mobile field use, OWKS, device controls, and contracts | Historical archive or long-horizon concept only           | Promote future work into dedicated issues or epics before implementation instead of reviving this document |
 
 ---
 
