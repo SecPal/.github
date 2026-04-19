@@ -162,6 +162,8 @@ mkdir -p "$wrong_license_repo"
 touch "$wrong_license_repo/composer.json"
 write_common_instruction_file "$wrong_license_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
 - Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.'
+# Keep an Apache-2.0 sidecar fixture here because this validator must reject
+# Apache-2.0 for .github/copilot-instructions.md.license.
 cp "$FIXTURES_DIR/wrong-copilot-instructions-license-fixture.txt" \
     "$wrong_license_repo/.github/copilot-instructions.md.license"
 

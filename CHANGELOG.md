@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-19 - Clarify Under-1.x Compatibility Removal Guidance
+
+**Changed:**
+
+- `.github/copilot-instructions.md`: clarified that even this non-versioned governance repository follows the broader SecPal under-`1.x` rule, so obsolete compatibility shims should be removed instead of preserved by default when they weaken policy clarity, correctness, or security
+- added a tiny tracked Apache-2.0 REUSE fixture under `tests/` so repo-wide REUSE validation and staged-file pre-commit validation agree on Apache license usage
+
 ## 2026-04-19 - Add Validator Regression Coverage For AI Triage And REUSE Edge Cases
 
 **Changed:**

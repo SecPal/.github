@@ -64,6 +64,11 @@ At minimum verify:
 - Green CI alone is not enough for AI-generated changes, especially test, lifecycle, shell, regex, or refactor diffs; review the semantic risk explicitly.
 - Reject AI-generated test or automation mutations that move executable code across scope boundaries or "simplify" filters without positive and negative evidence.
 - Reject AI-generated governance cleanups that relax validator coverage, reusable workflow enforcement, or repo-specific guardrails without focused regression tests plus positive and negative fixtures.
+- Reject AI-generated compatibility keep-alives that preserve obsolete
+  governance contracts, deprecated workflow inputs, or legacy automation shims
+  without a proven live caller. Because the SecPal project is still under
+  `1.x`, prefer removing unnecessary compatibility paths over carrying them
+  forward when they weaken security, correctness, or policy clarity.
 
 ## Issue And PR Discipline
 
@@ -114,6 +119,11 @@ Treat `api.secpal.app` as a deprecated web host.
 ## Repository Conventions
 
 - This repository is not versioned; keep its changelog chronological.
+- Even though this repository itself is not versioned, apply the broader
+  SecPal under-`1.x` rule: breaking governance changes are acceptable when
+  they remove insecure or obsolete compatibility layers. When taking that
+  route, update validation coverage and `CHANGELOG.md` in the same change set
+  instead of keeping a legacy path alive by default.
 - Hidden files and automation files are first-class source artifacts.
 - For GitHub workflows, set explicit permissions, set `timeout-minutes` on every job, pin external actions, and never expose secrets in logs.
 - Workflow templates for other repositories live in `workflow-templates/`.
