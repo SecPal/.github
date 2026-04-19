@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-19 - Add Validator Regression Coverage For AI Triage And REUSE Edge Cases
+
+**Changed:**
+
+- `tests/validate-copilot-instructions.sh`: added an explicit assertion that inline SPDX headers satisfy the Copilot-instructions REUSE check without a `.license` sidecar
+- `tests/validate-copilot-instructions.sh`: added a focused fixture proving repo-local negative wording like `Do not inherit from sibling repositories.` does not trigger the pseudo-inheritance validator
+
 ## 2026-04-17 - Improve Test Output Clarity and Assertion Robustness
 
 **Changed:**

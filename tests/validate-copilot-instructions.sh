@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FIXTURES_DIR="$REPO_ROOT/tests/fixtures/validate-copilot-instructions"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/validate-copilot-instructions.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
@@ -97,6 +98,7 @@ valid_output="$workspace/valid-output.txt"
     cd "$valid_api_repo"
     run_validator api "$valid_output"
 )
+grep -q 'copilot-instructions.md has REUSE license' "$valid_output"
 
 missing_generic_repo="$workspace/missing-generic"
 mkdir -p "$missing_generic_repo/.github"
@@ -160,9 +162,8 @@ mkdir -p "$wrong_license_repo"
 touch "$wrong_license_repo/composer.json"
 write_common_instruction_file "$wrong_license_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
 - Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.'
-cat >"$wrong_license_repo/.github/copilot-instructions.md.license" <<'EOF'
-SPDX-License-Identifier: Apache-2.0
-EOF
+cp "$FIXTURES_DIR/wrong-copilot-instructions-license-fixture.txt" \
+    "$wrong_license_repo/.github/copilot-instructions.md.license"
 
 wrong_license_output="$workspace/wrong-license-output.txt"
 set +e
@@ -178,6 +179,41 @@ if [ "$wrong_license_exit" -eq 0 ]; then
     exit 1
 fi
 grep -q 'Sidecar .license exists but does not declare an allowed license' "$wrong_license_output"
+
+negative_inherit_repo="$workspace/negative-inherit"
+mkdir -p "$negative_inherit_repo"
+touch "$negative_inherit_repo/composer.json"
+negative_inherit_extra_ai_lines="$(cat <<'EOF'
+- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
+- Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.
+EOF
+)"
+write_common_instruction_file "$negative_inherit_repo" "$negative_inherit_extra_ai_lines"
+cat >"$negative_inherit_repo/.github/instructions/negative.instructions.md" <<'EOF'
+---
+name: Negative Inherit Example
+applyTo: "**"
+---
+
+# Negative Inherit Example
+
+- Do not inherit from sibling repositories.
+EOF
+
+negative_inherit_output="$workspace/negative-inherit-output.txt"
+set +e
+(
+    cd "$negative_inherit_repo"
+    run_validator api "$negative_inherit_output"
+)
+negative_inherit_exit=$?
+set -e
+if [ "$negative_inherit_exit" -ne 0 ]; then
+    cat "$negative_inherit_output"
+    echo "validator falsely rejected negative do-not-inherit wording" >&2
+    exit 1
+fi
+grep -q 'instructions avoid pseudo-inheritance markers' "$negative_inherit_output"
 
 android_repo="$workspace/android-repo"
 mkdir -p "$android_repo"
