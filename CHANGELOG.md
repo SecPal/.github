@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-25 - Exclude Git Metadata From Local Markdownlint Preflight
+
+**Changed:**
+
+- `scripts/preflight.sh`: excluded `.git` from the local `markdownlint-cli2` glob set so Git ref and log metadata cannot fail Markdown validation for repository content
+- `tests/preflight-markdownlint-scope.sh`: added a focused regression test, wired into local preflight, that verifies the markdownlint invocation includes the `.git` exclusion
+
+---
+
 ## 2026-04-24 - Clarify Backlog Prerequisites And Improve Test Coverage
 
 **Changed:**

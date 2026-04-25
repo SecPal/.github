@@ -48,7 +48,7 @@ git fetch origin "$BASE" 2>/dev/null || true
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   npx --yes prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
-  npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' || FORMAT_EXIT=1
+  npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' '#.git' || FORMAT_EXIT=1
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.
 # Local preflight keeps this as guidance only because direct actionlint runs
@@ -130,6 +130,15 @@ if [ -f tests/setup-project-board.sh ]; then
     echo "" >&2
     echo "❌ Project board helper regression test failed!" >&2
     echo "Fix project board helper collateral before continuing." >&2
+    exit 1
+  }
+fi
+
+if [ -f tests/preflight-markdownlint-scope.sh ]; then
+  bash tests/preflight-markdownlint-scope.sh || {
+    echo "" >&2
+    echo "❌ Preflight markdownlint scope regression test failed!" >&2
+    echo "Exclude Git metadata from the local markdownlint scan before continuing." >&2
     exit 1
   }
 fi
