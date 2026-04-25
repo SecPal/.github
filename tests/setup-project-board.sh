@@ -58,13 +58,13 @@ assert_not_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "Specified in f
 
 run_setup_project_board_integration_tests() {
   local tmp_dir
-  tmp_dir="$(mktemp -d)"
+  tmp_dir="$(mktemp -d -t setup-project-board.XXXXXX)"
   trap 'rm -rf "$tmp_dir"' RETURN
 
   local stub_dir="$tmp_dir/bin"
   mkdir -p "$stub_dir"
 
-  # Scenario 1: gh unavailable
+  # Scenario 1: gh authentication fails (stub discoverable but exits non-zero)
   cat > "$stub_dir/gh" <<'EOF'
 #!/usr/bin/env bash
 echo "gh: command not available" >&2
