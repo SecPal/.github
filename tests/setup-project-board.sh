@@ -59,7 +59,7 @@ assert_not_contains "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md" "Specified in f
 run_setup_project_board_integration_tests() {
   local tmp_dir
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/setup-project-board.XXXXXX")"
-  trap 'rm -rf "$tmp_dir"' RETURN
+  trap 'rm -rf "$tmp_dir"' RETURN EXIT
 
   local stub_dir="$tmp_dir/bin"
   mkdir -p "$stub_dir"
