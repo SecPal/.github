@@ -189,7 +189,7 @@ Guards write incident descriptions in free text. NLP could extract structured da
 
 - After frontend includes rich text editor
 - When incident volume justifies automation
-- When affordable NLP APIs exist (GPT-4, Anthropic Claude)
+- When affordable advanced NLP services are available (for example, state-of-the-art LLM APIs as of 2026)
 
 **Cost:** API calls (€0.01-0.10 per incident?)
 
