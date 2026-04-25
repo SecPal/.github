@@ -143,6 +143,15 @@ if [ -f tests/preflight-markdownlint-scope.sh ]; then
   }
 fi
 
+if [ -f tests/mktemp-portability.sh ]; then
+  bash tests/mktemp-portability.sh || {
+    echo "" >&2
+    echo "❌ mktemp portability regression test failed!" >&2
+    echo "Restore portable mktemp template usage in the affected shell tests before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/validate-copilot-instructions.sh ]; then
   bash tests/validate-copilot-instructions.sh || {
     echo "" >&2
