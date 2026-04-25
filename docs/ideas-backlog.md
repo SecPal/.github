@@ -650,7 +650,7 @@ According to §11b BewachV (German Security Services Act), security companies mu
 - Employee Management (Core Feature)
 - Qualifications System (Core Feature)
 - Legal Compliance (docs/legal-compliance.md)
-- Historical implementation trail: SecPal/api#468, SecPal/api#469, SecPal/api#471
+- Historical implementation trail: SecPal/api#468, SecPal/api#469, SecPal/api#471 (delivered foundation included BWR-related data model groundwork, status tracking support, and compliance/reporting baseline needed for future integration scope)
 - Open a new repo-local issue only if additional BWR scope appears beyond that delivered foundation
 
 **Technical Notes:**
