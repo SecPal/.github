@@ -739,7 +739,7 @@ Manual shift planning is time-consuming. Managers need support to find available
 
 **When to revisit:**
 
-- After baseline shift-planning work is reintroduced through a dedicated issue or epic and implemented
+- After basic shift-planning functionality (manual shift assignment, schedule editing, and conflict checks) is scoped in a dedicated issue or epic and implemented
 - When historical data is available for ML training
 - When managers report bottlenecks in manual planning
 
