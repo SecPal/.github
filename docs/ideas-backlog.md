@@ -817,7 +817,7 @@ Employees need timely notification when new shift plans are published. Baseline 
 
 **When to revisit:**
 
-- After mobile app is launched (Phase 2)
+- After the mobile app is launched to production and used by at least one organization
 - When organizations report communication issues
 - When legal requirements demand proof of notification
 
