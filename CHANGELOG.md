@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-04-24 - Clarify Backlog Prerequisites And Improve Test Coverage
+
+**Changed:**
+
+- `docs/ideas-backlog.md`: replaced vague "affordable NLP APIs exist (GPT-4, Anthropic Claude)" with "affordable advanced NLP services are available (for example, state-of-the-art LLM APIs as of 2026)" to avoid quick-aging vendor references
+- `docs/ideas-backlog.md`: expanded BWR historical implementation trail note to summarise what those issues delivered (data model groundwork, status tracking support, and compliance/reporting baseline) so readers do not need to open three separate issues for context
+- `docs/ideas-backlog.md`: replaced the unclear "baseline shift-planning work is reintroduced" prerequisite with an explicit list of required functionality (manual shift assignment, schedule editing, and conflict checks)
+- `docs/ideas-backlog.md`: removed the undefined "Phase 2" phase reference from the mobile notification "When to revisit" condition in favour of a concrete observable milestone
+- `tests/setup-project-board.sh`: implemented actual integration test scenarios (gh unavailable, prompt-decline, prompt-accept) replacing the previous placeholder enforcement variable; the `REQUIRE_SETUP_PROJECT_BOARD_INTEGRATION_TESTED` guard now runs real tests instead of checking for an external marker variable
+- `tests/validate-copilot-instructions.sh`: updated the `mktemp` call to use the `-t` flag instead of an explicit `/tmp`-prefixed template for better portability and consistency with supported `mktemp` usage
+- `tests/validate-copilot-instructions.sh`: replaced fragile `set +e` / `set -e` pattern in `run_validator` with a safer `if/else` exit-code capture
+- `tests/validate-copilot-instructions.sh`: eliminated duplicated AI-lines literal in `wrong_license_repo` fixture by reusing the `$valid_api_extra_ai_lines` variable (DRY)
+
+---
+
 ## 2026-04-19 - Triage Archived Feature-Requirements Planning Drift
 
 **Changed:**
