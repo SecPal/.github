@@ -4,11 +4,12 @@
 
 set -euo pipefail
 
+SCRIPT_NAME="validate-copilot-instructions"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURES_DIR="$REPO_ROOT/tests/fixtures/validate-copilot-instructions"
 
-workspace="$(mktemp -d "${TMPDIR:-/tmp}/validate-copilot-instructions.XXXXXX")"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/${SCRIPT_NAME}.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p "$workspace/bin"
