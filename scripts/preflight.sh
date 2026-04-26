@@ -259,14 +259,16 @@ else
           # Pattern is valid (exit 0 or 1), check if it matches everything
           # Test against diverse filenames to detect overly broad patterns
           # Include various cases: lowercase, uppercase, numbers, special chars, hidden files
-          if echo "test-file.txt" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "another-file.js" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "random.md" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "README.md" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "package.json" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo ".hidden" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "File123.py" | grep -qE -- "$EXCLUDE_REGEX" && \
-             echo "UPPERCASE" | grep -qE -- "$EXCLUDE_REGEX"; then
+          match_count=$(printf '%s\n' \
+            "test-file.txt" \
+            "another-file.js" \
+            "random.md" \
+            "README.md" \
+            "package.json" \
+            ".hidden" \
+            "File123.py" \
+            "UPPERCASE" | grep -cE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
+          if [ "$match_count" -eq 8 ]; then
             echo "⚠️  WARNING: .preflight-exclude contains pattern that matches EVERYTHING (e.g., '.*')" >&2
             echo "This will exclude all files from PR size calculation!" >&2
           fi
