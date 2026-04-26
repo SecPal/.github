@@ -251,10 +251,13 @@ else
 
         # Validate regex and warn about dangerous patterns
         # grep exit codes: 0=match, 1=no match, 2=error (invalid regex)
-        set +e  # Temporarily disable exit-on-error to capture grep's exit code
-        echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null
-        GREP_EXIT=$?
-        set -e  # Re-enable exit-on-error
+        if echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null; then
+          GREP_EXIT=0
+        elif [ $? -eq 1 ]; then
+          GREP_EXIT=1
+        else
+          GREP_EXIT=2
+        fi
         if [ $GREP_EXIT -ne 2 ]; then
           # Pattern is valid (exit 0 or 1), check if it matches everything
           # Test against diverse filenames to detect overly broad patterns
