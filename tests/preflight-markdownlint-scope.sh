@@ -42,10 +42,10 @@ EOF
   git checkout --quiet -b test-branch
   git update-ref refs/remotes/origin/main HEAD
   git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
-  LOG_FILE="$log_file" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null 2>&1
+  LOG_FILE="$log_file" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null
 )
 
-if ! grep -F 'markdownlint-cli2' "$log_file" | grep -Fq '#.git'; then
+if ! grep -F 'markdownlint-cli2' "$log_file" | grep -Eq '(^|[[:space:]])#\.git($|[[:space:]])'; then
   echo "Expected preflight markdownlint invocation to exclude .git paths" >&2
   cat "$log_file" >&2
   exit 1
