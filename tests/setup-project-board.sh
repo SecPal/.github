@@ -67,7 +67,7 @@ run_setup_project_board_integration_tests() {
   # Scenario 1: gh authentication fails (stub discoverable but exits non-zero)
   cat > "$stub_dir/gh" <<'EOF'
 #!/usr/bin/env bash
-echo "gh: command not available" >&2
+echo "gh: command not found" >&2
 exit 127
 EOF
   chmod +x "$stub_dir/gh"
