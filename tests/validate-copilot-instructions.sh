@@ -74,15 +74,9 @@ run_validator() {
     local repo_type="$1"
     local output_file="$2"
 
-    local exit_code
-    if PATH="$workspace/bin:$PATH" REPO_TYPE="$repo_type" \
-        bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" >"$output_file" 2>&1; then
-        exit_code=0
-    else
-        exit_code=$?
-    fi
-
-    return "$exit_code"
+    PATH="$workspace/bin:$PATH" REPO_TYPE="$repo_type" \
+        bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" >"$output_file" 2>&1
+    return $?
 }
 
 valid_api_repo="$workspace/valid-api"
