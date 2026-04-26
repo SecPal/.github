@@ -16,7 +16,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - `tests/setup-project-board.sh`: replaced deprecated `mktemp -d -t ...` usage with the repository's existing full-template `${TMPDIR:-/tmp}/...XXXXXX` style
 - `tests/validate-copilot-instructions.sh`: same portable `mktemp` template-path cleanup as `tests/setup-project-board.sh`
 - `tests/mktemp-portability.sh`: added a focused regression test, wired into local preflight, so deprecated `mktemp -t` usage in these shell tests is caught before push
-- `CHANGELOG.md`: corrected the prior 2026-04-24 wording so it no longer claims the `mktemp -t` change improved portability
+- `CHANGELOG.md`: corrected the prior 2026-04-24 wording so it no longer claims the `mktemp -t` change improved portability, because `mktemp -t` is BSD-specific while the full template path `${TMPDIR:-/tmp}/...XXXXXX` works across GNU and BSD systems
 
 ---
 
