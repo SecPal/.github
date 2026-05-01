@@ -16,6 +16,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added `scripts/polyscope-rollout.py` as the versioned source of truth for SecPal Polyscope rollout state, including repo-local `polyscope.local.json` rendering, instruction-derived prompt/link sync into `~/.polyscope/polyscope.db`, and deterministic preview nginx config rendering
 - added `scripts/install-polyscope-rollout.sh` so the VPS can install a stable `~/.local/bin/polyscope-secpal-rollout.py` symlink plus a systemd user `polyscope-rollout-sync.service` and `polyscope-rollout-sync.path` hook that re-syncs Polyscope whenever tracked instruction files change
 - added `tests/polyscope-rollout.sh` and wired the new automation into the repository's normal shell-test/preflight path, covering local config generation, instruction-derived prompt content, repository-link sync, nginx rendering, and auto-sync unit installation
+- corrected the generated `api` Polyscope setup so Laravel clones no longer run nonexistent root-level `npm install` or `npm run build` steps, fixing issue-loading failures on the VPS when Polyscope initializes API workspaces
+- hardened `scripts/polyscope-rollout.py` with fail-fast validation for repo-local Polyscope commands, so future rollout drift now aborts immediately when a repo config references missing root manifests, lockfiles, npm scripts, or checked-in relative script paths
 
 ## 2026-05-01 - Remove Stale Admin Model ADR Drift
 

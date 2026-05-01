@@ -9,6 +9,7 @@ import copy
 import json
 import pathlib
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -35,8 +36,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     "test -d vendor || composer install",
-                    "test -d node_modules || npm install",
-                    "npm run build",
                 ],
                 "run": [
                     {"label": "Queue Worker", "command": "php artisan queue:listen --tries=1", "runMode": "replace"},
@@ -437,6 +436,125 @@ def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def prefix_first_line(prefix: str, text: str) -> str:
+    lines = text.splitlines()
+    if not lines:
+        return prefix
+
+    lines[0] = prefix + lines[0]
+    return "\n".join(lines)
+
+
+def render_pretty_json(value: Any, indent: int = 0) -> str:
+    current_indent = "  " * indent
+    next_indent = "  " * (indent + 1)
+
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+
+        items = list(value.items())
+        lines: list[str] = []
+        for index, (key, nested_value) in enumerate(items):
+            rendered_value = render_pretty_json(nested_value, indent + 1)
+            line = prefix_first_line(f"{next_indent}{json.dumps(key)}: ", rendered_value)
+            if index < len(items) - 1:
+                line += ","
+            lines.append(line)
+
+        return "{\n" + "\n".join(lines) + f"\n{current_indent}" + "}"
+
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+
+        rendered_items = [render_pretty_json(item, indent + 1) for item in value]
+        inline_candidate = "[" + ", ".join(rendered_items) + "]"
+        if all("\n" not in item for item in rendered_items) and len(current_indent) + len(inline_candidate) <= 80:
+            return inline_candidate
+
+        lines: list[str] = []
+        for index, rendered_item in enumerate(rendered_items):
+            line = prefix_first_line(next_indent, rendered_item)
+            if index < len(rendered_items) - 1:
+                line += ","
+            lines.append(line)
+
+        return "[\n" + "\n".join(lines) + f"\n{current_indent}" + "]"
+
+    return json.dumps(value)
+
+
+def load_package_scripts(repo_path: pathlib.Path) -> set[str]:
+    package_json_path = repo_path / "package.json"
+    if not package_json_path.exists():
+        return set()
+
+    package_data = json.loads(package_json_path.read_text())
+    scripts = package_data.get("scripts", {})
+    if not isinstance(scripts, dict):
+        return set()
+
+    return {str(script_name) for script_name in scripts}
+
+
+def validate_local_config_command(repo_name: str, repo_path: pathlib.Path, package_scripts: set[str], command: str) -> None:
+    package_json_path = repo_path / "package.json"
+    package_lock_path = repo_path / "package-lock.json"
+    composer_json_path = repo_path / "composer.json"
+    artisan_path = repo_path / "artisan"
+
+    if re.search(r"\bcomposer\s+install\b", command) and not composer_json_path.exists():
+        raise SystemExit(f"{repo_name} polyscope config references composer without a composer.json at the repo root")
+
+    if re.search(r"\bphp\s+artisan\b", command) and not artisan_path.exists():
+        raise SystemExit(f"{repo_name} polyscope config references artisan without an artisan file at the repo root")
+
+    references_npm = any(
+        re.search(pattern, command)
+        for pattern in (r"\bnpm\s+ci\b", r"\bnpm\s+install\b", r"\bnpm\s+run\b", r"\bnpx\b")
+    )
+    if references_npm and not package_json_path.exists():
+        raise SystemExit(f"{repo_name} polyscope config references npm without a package.json at the repo root")
+
+    if re.search(r"\bnpm\s+ci\b", command) and not package_lock_path.exists():
+        raise SystemExit(f"{repo_name} polyscope config references npm ci without a package-lock.json at the repo root")
+
+    for script_name in re.findall(r"\bnpm\s+run\s+([A-Za-z0-9:_-]+)\b", command):
+        if script_name not in package_scripts:
+            raise SystemExit(f"{repo_name} polyscope config references missing npm script '{script_name}'")
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError as error:
+        raise SystemExit(f"{repo_name} polyscope config command could not be parsed: {command}: {error}") from error
+
+    relative_path_token: str | None = None
+    if tokens:
+        if tokens[0].startswith("./"):
+            relative_path_token = tokens[0]
+        elif len(tokens) > 1 and tokens[0] in {"bash", "node", "php", "python", "python3"} and tokens[1].startswith("./"):
+            relative_path_token = tokens[1]
+
+    if relative_path_token is not None and not (repo_path / relative_path_token[2:]).exists():
+        raise SystemExit(f"{repo_name} polyscope config references missing relative path '{relative_path_token}'")
+
+
+def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
+    for repo_name, spec in repo_specs.items():
+        repo_path = pathlib.Path(spec["path"])
+        config = render_local_config(spec)
+        package_scripts = load_package_scripts(repo_path)
+
+        for command in config.get("scripts", {}).get("setup", []):
+            validate_local_config_command(repo_name, repo_path, package_scripts, command)
+
+        for item in config.get("scripts", {}).get("run", []):
+            command = item.get("command")
+            if isinstance(command, str):
+                validate_local_config_command(repo_name, repo_path, package_scripts, command)
+
+
 def ensure_exclude(repo_path: pathlib.Path) -> None:
     exclude_path = repo_path / ".git" / "info" / "exclude"
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
@@ -452,7 +570,7 @@ def write_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
     for spec in repo_specs.values():
         repo_path = pathlib.Path(spec["path"])
         config_path = repo_path / "polyscope.local.json"
-        config_path.write_text(json.dumps(render_local_config(spec), indent=2) + "\n")
+        config_path.write_text(render_pretty_json(render_local_config(spec)) + "\n")
         ensure_exclude(repo_path)
 
 
@@ -720,6 +838,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     repo_specs = build_repo_specs(args.workspace_root)
+
+    validate_repo_local_configs(repo_specs)
 
     if not args.skip_local_configs:
         write_local_configs(repo_specs)
