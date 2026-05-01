@@ -463,13 +463,22 @@ def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, 
         payload = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(api_base + path, data=payload, headers=headers, method=method)
-    with urllib.request.urlopen(request) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
 
 def load_repo_state(repo_state_file: pathlib.Path) -> dict[str, dict[str, Any]]:
     raw = json.loads(repo_state_file.read_text())
-    return {name: raw[name] for name in REPO_SETTINGS}
+    result: dict[str, dict[str, Any]] = {}
+    for name in REPO_SETTINGS:
+        if name not in raw:
+            raise SystemExit(f"repo-state file is missing entry for '{name}'; regenerate it by running without --repo-state-file")
+        entry = raw[name]
+        for field in ("id", "path"):
+            if field not in entry:
+                raise SystemExit(f"repo-state entry for '{name}' is missing required field '{field}'")
+        result[name] = entry
+    return result
 
 
 def ensure_repositories_registered(api_base: str, repo_specs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -496,6 +505,8 @@ def ensure_repositories_registered(api_base: str, repo_specs: dict[str, dict[str
 
 
 def backup_db(db_path: pathlib.Path) -> pathlib.Path:
+    if not db_path.exists():
+        raise SystemExit(f"Polyscope DB not found at {db_path}; start Polyscope at least once so the DB is created before running this script")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_path = db_path.parent / f"{db_path.name}.backup-{timestamp}"
     shutil.copy2(db_path, backup_path)

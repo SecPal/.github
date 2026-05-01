@@ -40,6 +40,14 @@ INSTALL_TARGET="$BIN_DIR/polyscope-secpal-rollout.py"
 SERVICE_UNIT="$UNIT_DIR/polyscope-rollout-sync.service"
 PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
 
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT; do
+    _val="${!_var_name}"
+    if [[ "$_val" == *$'\n'* ]]; then
+        echo "Error: $_var_name must not contain newlines" >&2
+        exit 1
+    fi
+done
+
 mkdir -p "$BIN_DIR" "$UNIT_DIR"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
 

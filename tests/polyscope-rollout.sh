@@ -4,13 +4,12 @@
 
 set -euo pipefail
 
-SCRIPT_NAME="polyscope-rollout"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 
-workspace="$(mktemp -d "${TMPDIR:-/tmp}/${SCRIPT_NAME}.XXXXXX")"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
 workspace_root="$workspace/SecPal"
