@@ -161,6 +161,15 @@ if [ -f tests/validate-copilot-instructions.sh ]; then
   }
 fi
 
+if [ -f tests/polyscope-rollout.sh ]; then
+  bash tests/polyscope-rollout.sh || {
+    echo "" >&2
+    echo "❌ Polyscope rollout regression test failed!" >&2
+    echo "Fix scripts/polyscope-rollout.py or scripts/install-polyscope-rollout.sh before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
