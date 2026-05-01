@@ -453,9 +453,9 @@ If a tenant has multiple root organizational units (e.g., acquired companies), a
 ```
 Tenant: "SecureGuard Services GmbH"
   ├─ Holding A (root, parent_id = null)
-    │  └─ Scoped User A (`manage` scope: Holding A only)
+  │  └─ Scoped User A (`manage` scope: Holding A only)
   └─ Holding B (root, parent_id = null)
-            └─ Scoped User B (`manage` scope: Holding B only)
+     └─ Scoped User B (`manage` scope: Holding B only)
 
 → User A cannot access Holding B data (separate root unit)
 → User B cannot access Holding A data (separate root unit)
