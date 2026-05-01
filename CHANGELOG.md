@@ -13,6 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Changed:**
 
+- updated the shared product and compliance docs so they no longer describe admin-labeled frontend surfaces, settings UIs, compliance-export routes, or training material after the neutral onboarding-review and Android provisioning route cleanup
 - updated ADR-005, ADR-008, ADR-009 references, and activity-log examples so `.github` architecture documents no longer describe an `Admin` role, an `admin` organizational scope level, or a `super-admin` model as part of SecPal's supported authorization design after the binding cleanup decision in `SecPal/.github#404`
 
 ## 2026-04-25 - Restore Portable mktemp Test Templates

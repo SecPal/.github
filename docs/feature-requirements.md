@@ -41,21 +41,22 @@ Security companies have different organizational structures and job titles:
 **Requirements:**
 
 1. **Predefined Roles (Templates):**
-   - System Administrator (full access)
-   - Company Manager (organization-wide access)
-   - Operations Manager (shift planning, reporting)
-   - Team Lead (shift supervision, limited admin)
-   - Security Guard (field operations only)
-   - Works Council / Betriebsrat (co-determination rights, audit access)
-   - Client (read-only, restricted)
 
-2. **Custom Roles:**
+- HR / Compliance Reviewer (broad personnel and compliance access)
+- Company Manager (organization-wide access)
+- Operations Manager (shift planning, reporting)
+- Team Lead (shift supervision, limited operational management)
+- Security Guard (field operations only)
+- Works Council / Betriebsrat (co-determination rights, audit access)
+- Client (read-only, restricted)
+
+1. **Custom Roles:**
    - ✅ Users can create custom roles
    - ✅ Define permissions per role (granular)
    - ✅ Rename roles to match company terminology
    - ✅ Inherit from templates (e.g., "custom role based on Team Lead")
 
-3. **Permission Granularity:**
+1. **Permission Granularity:**
 
    | Resource                | Create | Read | Update | Delete | Export |
    | ----------------------- | ------ | ---- | ------ | ------ | ------ |
@@ -67,7 +68,7 @@ Security companies have different organizational structures and job titles:
    | Reports                 | ✗      | ✓    | ✗      | ✗      | ✓      |
    | System Settings         | ✗      | ✓    | ✓      | ✗      | ✗      |
 
-4. **Scope-Based Permissions:**
+1. **Scope-Based Permissions:**
    - **Organization-wide:** Access all locations/clients
    - **Location-specific:** Only specific objects/sites
    - **Team-specific:** Only own team members
@@ -324,7 +325,7 @@ Schema::create('br_data_access_requests', function (Blueprint $table) {
     $table->enum('request_type', ['employee_file', 'shift_history', 'time_records']);
     $table->text('justification'); // "Prüfung Überstundenvergütung"
     $table->enum('status', ['pending', 'approved', 'rejected']);
-    $table->foreignUuid('approved_by')->nullable(); // Manager/Admin
+    $table->foreignUuid('approved_by')->nullable(); // Manager/authorized reviewer
     $table->timestamp('approved_at')->nullable();
     $table->timestamp('access_expires_at')->nullable(); // Temporary access
     $table->timestamps();
@@ -338,7 +339,7 @@ BR member requests access to employee file
   ↓
 Justification required: "Warum benötigt?"
   ↓
-Manager/Admin reviews request
+Manager/authorized reviewer reviews request
   ↓
 If approved: Temporary access granted (e.g., 7 days)
   ↓
@@ -1084,24 +1085,27 @@ For each automatic action, implementers MUST follow these error handling guideli
 1. **User account creation fails (e.g., email already exists, validation error):**
    - Log the error with full context (employee ID, error message).
    - Abort onboarding flow for this employee; do NOT proceed to send onboarding email.
-   - Notify HR/admin via dashboard alert or email.
-   - Status remains `pre_contract` until resolved manually.
 
-2. **Email sending fails (e.g., SMTP error, invalid email):**
+- Notify HR/operations staff via dashboard alert or email.
+- Status remains `pre_contract` until resolved manually.
+
+1. **Email sending fails (e.g., SMTP error, invalid email):**
    - Log the error with full context.
    - Queue a retry operation (max 3 attempts, exponential backoff).
-   - If all retries fail, notify HR/admin for manual intervention.
-   - Do NOT activate employee until onboarding email is successfully sent.
 
-3. **Role assignment fails (e.g., role doesn't exist):**
+- If all retries fail, notify HR/operations staff for manual intervention.
+- Do NOT activate employee until onboarding email is successfully sent.
+
+1. **Role assignment fails (e.g., role doesn't exist):**
    - Log the error and abort role assignment.
    - Do NOT activate employee account; status remains unchanged.
    - Notify system administrator to resolve missing role configuration.
 
-4. **Session deletion fails (e.g., database error):**
+1. **Session deletion fails (e.g., database error):**
    - Log the error and continue with other termination steps.
-   - Flag user for manual session/token cleanup in admin dashboard.
-   - Do NOT roll back termination; ensure user account is deactivated.
+
+- Flag user for manual session/token cleanup in the operations dashboard.
+- Do NOT roll back termination; ensure user account is deactivated.
 
 All errors MUST be logged with sufficient detail for troubleshooting. Critical onboarding failures (user creation, email sending, role assignment) block status transitions and require manual resolution. Non-critical failures (session deletion) do not block status changes but must be flagged for follow-up.
 
@@ -2979,7 +2983,7 @@ Shift reassigned
 
 **Technology:**
 
-- PWA (Progressive Web App) - Same as admin frontend
+- PWA (Progressive Web App) - Same as the authenticated operations frontend
 - Offline-first (ADR-003)
 - Responsive design (mobile-first)
 
@@ -3692,7 +3696,7 @@ internal_cost_centers
 ├── type (enum: productive, overhead, administrative)
 │   // productive: Revenue-generating (security services)
 │   // overhead: Support functions (Betriebsrat, training)
-│   // administrative: General admin, management
+│   // administrative: General operations, management
 │
 ├── organizational_unit_id (UUID, nullable, foreign key)
 │   // Which company division/branch owns this cost center
@@ -3752,7 +3756,7 @@ Use when analyzing profitability per major customer.
 ```
 Internal Cost Centers:
 ├── KST-REVENUE: All billable services
-└── KST-ADMIN: Administrative overhead
+└── KST-OPS: Operational overhead
 
 Simple 2-cost-center model for small operations.
 ```
@@ -4072,7 +4076,7 @@ Contract: "Ad-Hoc Services - Customer X"
 
 **Key Insight:** Different security companies need different features enabled.
 
-**Tenant Configuration (Future: Admin Settings UI):**
+**Tenant Configuration (Future: Tenant Settings UI):**
 
 ```php
 tenant_settings

@@ -434,7 +434,7 @@ Guards may have no internet in basements, remote areas.
 **Concept:**
 
 - Onboarding videos for new guards
-- Admin training videos
+- Operations training videos
 - Developer setup walkthroughs
 
 **When to revisit:**
