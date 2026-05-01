@@ -41,22 +41,21 @@ Security companies have different organizational structures and job titles:
 **Requirements:**
 
 1. **Predefined Roles (Templates):**
+   - HR / Compliance Reviewer (broad personnel and compliance access)
+   - Company Manager (organization-wide access)
+   - Operations Manager (shift planning, reporting)
+   - Team Lead (shift supervision, limited operational management)
+   - Security Guard (field operations only)
+   - Works Council / Betriebsrat (co-determination rights, audit access)
+   - Client (read-only, restricted)
 
-- HR / Compliance Reviewer (broad personnel and compliance access)
-- Company Manager (organization-wide access)
-- Operations Manager (shift planning, reporting)
-- Team Lead (shift supervision, limited operational management)
-- Security Guard (field operations only)
-- Works Council / Betriebsrat (co-determination rights, audit access)
-- Client (read-only, restricted)
-
-1. **Custom Roles:**
+2. **Custom Roles:**
    - ✅ Users can create custom roles
    - ✅ Define permissions per role (granular)
    - ✅ Rename roles to match company terminology
    - ✅ Inherit from templates (e.g., "custom role based on Team Lead")
 
-1. **Permission Granularity:**
+3. **Permission Granularity:**
 
    | Resource                | Create | Read | Update | Delete | Export |
    | ----------------------- | ------ | ---- | ------ | ------ | ------ |
@@ -68,7 +67,7 @@ Security companies have different organizational structures and job titles:
    | Reports                 | ✗      | ✓    | ✗      | ✗      | ✓      |
    | System Settings         | ✗      | ✓    | ✓      | ✗      | ✗      |
 
-1. **Scope-Based Permissions:**
+4. **Scope-Based Permissions:**
    - **Organization-wide:** Access all locations/clients
    - **Location-specific:** Only specific objects/sites
    - **Team-specific:** Only own team members
@@ -1085,27 +1084,24 @@ For each automatic action, implementers MUST follow these error handling guideli
 1. **User account creation fails (e.g., email already exists, validation error):**
    - Log the error with full context (employee ID, error message).
    - Abort onboarding flow for this employee; do NOT proceed to send onboarding email.
+   - Notify HR/operations staff via dashboard alert or email.
+   - Status remains `pre_contract` until resolved manually.
 
-- Notify HR/operations staff via dashboard alert or email.
-- Status remains `pre_contract` until resolved manually.
-
-1. **Email sending fails (e.g., SMTP error, invalid email):**
+2. **Email sending fails (e.g., SMTP error, invalid email):**
    - Log the error with full context.
    - Queue a retry operation (max 3 attempts, exponential backoff).
+   - If all retries fail, notify HR/operations staff for manual intervention.
+   - Do NOT activate employee until onboarding email is successfully sent.
 
-- If all retries fail, notify HR/operations staff for manual intervention.
-- Do NOT activate employee until onboarding email is successfully sent.
-
-1. **Role assignment fails (e.g., role doesn't exist):**
+3. **Role assignment fails (e.g., role doesn't exist):**
    - Log the error and abort role assignment.
    - Do NOT activate employee account; status remains unchanged.
    - Notify system administrator to resolve missing role configuration.
 
-1. **Session deletion fails (e.g., database error):**
+4. **Session deletion fails (e.g., database error):**
    - Log the error and continue with other termination steps.
-
-- Flag user for manual session/token cleanup in the operations dashboard.
-- Do NOT roll back termination; ensure user account is deactivated.
+   - Flag user for manual session/token cleanup in the operations dashboard.
+   - Do NOT roll back termination; ensure user account is deactivated.
 
 All errors MUST be logged with sufficient detail for troubleshooting. Critical onboarding failures (user creation, email sending, role assignment) block status transitions and require manual resolution. Non-critical failures (session deletion) do not block status changes but must be flagged for follow-up.
 
