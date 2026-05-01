@@ -8,6 +8,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
+PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
+
+if [[ ! -x "$PRETTIER_BIN" ]]; then
+    (cd "$REPO_ROOT" && npm ci)
+fi
+if [[ ! -x "$PRETTIER_BIN" ]]; then
+    echo "expected pinned Prettier at $PRETTIER_BIN after npm ci" >&2
+    exit 1
+fi
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
@@ -27,6 +36,124 @@ create_repo() {
     printf '%s\n' "$copilot_body" > "$repo_dir/.github/copilot-instructions.md"
     printf '%s\n' "$focus_body" > "$repo_dir/.github/instructions/$focus_filename"
     : > "$repo_dir/.git/info/exclude"
+}
+
+write_repo_runtime_files() {
+    python3 - <<'PY' "$workspace_root"
+import json
+import sys
+from pathlib import Path
+
+workspace_root = Path(sys.argv[1])
+
+(workspace_root / "api" / "composer.json").write_text("{}\n")
+(workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
+
+(workspace_root / ".github" / "scripts").mkdir(parents=True, exist_ok=True)
+(workspace_root / ".github" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
+
+package_scripts = {
+    "frontend": {
+        "build": "vite build",
+        "lint": "eslint .",
+        "typecheck": "tsc --noEmit",
+        "test:watch": "vitest",
+    },
+    "contracts": {
+        "validate": "redocly lint docs/openapi.yaml",
+        "lint": "redocly lint docs/openapi.yaml",
+        "format:check": "prettier --check '**/*.{md,yml,yaml,json}'",
+    },
+    "android": {
+        "lint": "eslint .",
+        "typecheck": "tsc --noEmit",
+        "test:run": "vitest run --bail=1",
+        "native:verify": "test -f android/settings.gradle",
+    },
+    "secpal.app": {
+        "build": "astro build",
+        "check": "astro check",
+        "lint": "eslint .",
+        "test": "node --test tests/**/*.mjs",
+    },
+    "changelog": {
+        "build": "next build",
+        "check": "tsc --noEmit",
+        "lint": "eslint .",
+        "csp:check": "node scripts/generate-csp.mjs --check",
+    },
+    ".github": {
+        "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
+    },
+}
+
+for repo_name, scripts in package_scripts.items():
+    repo_dir = workspace_root / repo_name
+    package_json = {
+        "name": repo_name.replace(".", "-"),
+        "private": True,
+        "scripts": scripts,
+    }
+    package_lock = {
+        "name": repo_name.replace(".", "-"),
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {},
+    }
+    (repo_dir / "package.json").write_text(json.dumps(package_json, indent=2) + "\n")
+    (repo_dir / "package-lock.json").write_text(json.dumps(package_lock, indent=2) + "\n")
+PY
+}
+
+assert_rollout_rejects_invalid_local_config() {
+    local source_script="$1"
+    local old_text="$2"
+    local new_text="$3"
+    local expected_error="$4"
+    local script_basename
+    local script_copy
+    local db_copy="$workspace/invalid-polyscope.db"
+    local nginx_copy="$workspace/invalid-preview.secpal.dev.conf"
+    local summary_copy="$workspace/invalid-summary.json"
+    local invalid_out
+    local invalid_err
+
+    script_basename="$(basename "$source_script" .py)"
+    script_copy="$workspace/${script_basename}-invalid.py"
+    invalid_out="${script_copy%.py}.stdout"
+    invalid_err="${script_copy%.py}.stderr"
+
+    cp "$source_script" "$script_copy"
+
+    python3 - <<'PY' "$script_copy" "$old_text" "$new_text"
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+old_text = sys.argv[2]
+new_text = sys.argv[3].encode("utf-8").decode("unicode_escape")
+contents = script_path.read_text()
+
+if old_text not in contents:
+    raise SystemExit(f"mutation marker not found: {old_text}")
+
+script_path.write_text(contents.replace(old_text, new_text, 1))
+PY
+
+cp "$db_path" "$db_copy"
+
+if python3 "$script_copy" \
+        --workspace-root "$workspace_root" \
+        --db-path "$db_copy" \
+        --repo-state-file "$repos_json" \
+        --nginx-output "$nginx_copy" \
+        --summary-output "$summary_copy" \
+        >"$invalid_out" 2>"$invalid_err"; then
+        echo "invalid Polyscope local_config mutation should have failed" >&2
+        exit 1
+    fi
+
+    grep -q "$expected_error" "$invalid_err"
 }
 
 common_header='<!--
@@ -296,6 +423,8 @@ applyTo: '.github/workflows/**/*.yml'
 - Pin external actions to a specific version.
 "
 
+write_repo_runtime_files
+
 db_path="$workspace/polyscope.db"
 repos_json="$workspace/repos.json"
 nginx_output="$workspace/preview.secpal.dev.conf"
@@ -346,8 +475,33 @@ grep -q 'api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
+if grep -q 'npm install' "$workspace_root/api/polyscope.local.json"; then
+    echo "api polyscope config must not run npm install" >&2
+    exit 1
+fi
+
+if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
+    echo "api polyscope config must not run npm build" >&2
+    exit 1
+fi
+
+if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
+    echo "api polyscope config must not reference node_modules" >&2
+    exit 1
+fi
+
 grep -q 'server_name ~^(?<repo>api|frontend|secpal-app|changelog)-' "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
+
+"$PRETTIER_BIN" --check \
+    "$workspace_root/api/polyscope.local.json" \
+    "$workspace_root/frontend/polyscope.local.json" \
+    "$workspace_root/contracts/polyscope.local.json" \
+    "$workspace_root/android/polyscope.local.json" \
+    "$workspace_root/secpal.app/polyscope.local.json" \
+    "$workspace_root/changelog/polyscope.local.json" \
+    "$workspace_root/.github/polyscope.local.json" \
+    >/dev/null
 
 python3 - <<'PY' "$db_path" "$summary_output"
 import json
@@ -381,6 +535,18 @@ assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['.github']['linked_repositories'] == []
 PY
 
+assert_rollout_rejects_invalid_local_config \
+    "$PYTHON_SCRIPT" \
+    '"test -d vendor || composer install",' \
+    '"test -d vendor || composer install",\n                    "test -d node_modules || npm ci",' \
+    "api polyscope config references npm without a package.json at the repo root"
+
+assert_rollout_rejects_invalid_local_config \
+    "$PYTHON_SCRIPT" \
+    '"command": "npm run copilot:review:scan"' \
+    '"command": "npm run missing:scan"' \
+    ".github polyscope config references missing npm script 'missing:scan'"
+
 fake_bin_dir="$workspace/fake-bin"
 fake_unit_dir="$workspace/fake-units"
 fake_systemctl_dir="$workspace/fake-systemctl"
@@ -394,18 +560,18 @@ exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
 
-HOME="$home_dir" \
-WORKSPACE_ROOT="$workspace_root" \
-SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-SYSTEMCTL_LOG="$fake_systemctl_log" \
-PATH="$fake_systemctl_dir:$PATH" \
-bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir"
+env HOME="$home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir"
 
 test -L "$fake_bin_dir/polyscope-secpal-rollout.py"
 test -x "$fake_bin_dir/polyscope-secpal-rollout.py"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
-grep -q '/.github/scripts/polyscope-rollout.py' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
