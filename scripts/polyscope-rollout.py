@@ -445,7 +445,7 @@ def prefix_first_line(prefix: str, text: str) -> str:
     return "\n".join(lines)
 
 
-def render_pretty_json(value: Any, indent: int = 0) -> str:
+def render_pretty_json(value: Any, indent: int = 0, first_line_prefix_len: int = 0) -> str:
     current_indent = "  " * indent
     next_indent = "  " * (indent + 1)
 
@@ -456,8 +456,9 @@ def render_pretty_json(value: Any, indent: int = 0) -> str:
         items = list(value.items())
         lines: list[str] = []
         for index, (key, nested_value) in enumerate(items):
-            rendered_value = render_pretty_json(nested_value, indent + 1)
-            line = prefix_first_line(f"{next_indent}{json.dumps(key)}: ", rendered_value)
+            key_prefix = f"{json.dumps(key)}: "
+            rendered_value = render_pretty_json(nested_value, indent + 1, len(key_prefix))
+            line = prefix_first_line(f"{next_indent}{key_prefix}", rendered_value)
             if index < len(items) - 1:
                 line += ","
             lines.append(line)
@@ -470,7 +471,7 @@ def render_pretty_json(value: Any, indent: int = 0) -> str:
 
         rendered_items = [render_pretty_json(item, indent + 1) for item in value]
         inline_candidate = "[" + ", ".join(rendered_items) + "]"
-        if all("\n" not in item for item in rendered_items) and len(current_indent) + len(inline_candidate) <= 80:
+        if all("\n" not in item for item in rendered_items) and len(current_indent) + first_line_prefix_len + len(inline_candidate) <= 80:
             return inline_candidate
 
         lines: list[str] = []
