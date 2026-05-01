@@ -60,7 +60,7 @@ Security service companies have diverse organizational structures:
 
 #### Part A: Internal Organizational Structures (Security Service Company)
 
-These scenarios show the **security service's own organizational structure** and how internal employees (Guards, Managers, Admins) access data based on their position in the hierarchy.
+These scenarios show the **security service's own organizational structure** and how internal employees (Guards, Managers, and explicitly scoped operators) access data based on their position in the hierarchy.
 
 **Scenario 1: Small Security Service (Flat Structure)**
 
@@ -73,8 +73,8 @@ organizational_units: [none - flat, all employees report directly]
 
 Internal Employees & RBAC:
 ├─ User: Inhaber Schmidt
-│  Role: Admin
-│  Scope: All customers/objects (no restrictions)
+│  Access: Explicit permissions + root `manage` scope
+│  Scope: All customers/objects within the assigned root unit
 │
 ├─ User: Einsatzleiter Müller
 │  Role: Manager
@@ -174,8 +174,8 @@ ProSec Holding (holding)
 └─ ProSec Süd GmbH (company)
    └─ Region Bayern
 
-Vorstand ProSec Holding (Admin)
-→ Sees EVERYTHING across all subsidiaries
+Vorstand ProSec Holding (explicit permissions + root `manage` scope)
+→ Sees everything across explicitly assigned subsidiaries
 ```
 
 #### Part B: Customer Organizational Structures (External Organizations)
@@ -1349,7 +1349,7 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
 
 - **ADR-005:** RBAC Design Decisions (role/permission foundation)
 - **ADR-008:** User-Based Tenant Resolution (tenant isolation)
-- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges ⭐️ **CRITICAL EXTENSION**
+- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control ⭐️ **CRITICAL EXTENSION**
 
 ### ADR-009 Integration: Organizational Autonomy & Security
 

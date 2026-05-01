@@ -221,7 +221,7 @@ $tenantId = $request->user()->currentAccessToken()->abilities['tenant_id'];
 - ❌ Token must be regenerated if user changes tenant
 - ❌ Denormalized data (tenant_id in two places)
 - ❌ Complex token management
-- ❌ Still requires User → Tenant relationship for admin operations
+- ❌ Still requires User → Tenant relationship for privileged provisioning operations
 
 **Why Rejected:**
 
@@ -435,34 +435,35 @@ This decision prioritizes **production readiness** and **simplicity** over featu
 
 - **ADR-005:** RBAC Design Decisions (role/permission system)
 - **ADR-007:** Organizational Structure Hierarchy (organizational scopes)
-- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges (organizational-level isolation)
+- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control (organizational-level isolation)
 
-### ADR-009 Integration: Multi-Tenant Super-Admin Context
+### ADR-009 Integration: Multi-Tenant Root-Scope Context
 
 While ADR-008 establishes **tenant-level isolation** (user → tenant relationship), ADR-009 adds **organizational-level isolation** within tenants:
 
 - **Tenant isolation:** User can only access data from their assigned tenant
 - **Organizational isolation:** User can only access data from their organizational scopes
 - **Inheritance blocking:** Child organizations can protect themselves from parent access
-- **Super-admin scope:** Restricted to root organizational units within tenant
+- **Root-unit scope:** Explicit `manage` / `write` / `read` scopes remain limited to the root organizational units they reference within a tenant
 
-**Multi-Tenant Super-Admin Scenario:**
+**Multi-Tenant Root-Scope Scenario:**
 
-If a tenant has multiple root organizational units (e.g., acquired companies), super-admin privileges are **specific to each root unit**:
+If a tenant has multiple root organizational units (e.g., acquired companies), a user with explicit permissions plus a root `manage` scope on one unit remains isolated from the others:
 
 ```
 Tenant: "SecureGuard Services GmbH"
   ├─ Holding A (root, parent_id = null)
-  │  └─ Super-Admin User A (scope: Holding A only)
+    │  └─ Scoped User A (`manage` scope: Holding A only)
   └─ Holding B (root, parent_id = null)
-      └─ Super-Admin User B (scope: Holding B only)
+            └─ Scoped User B (`manage` scope: Holding B only)
 
 → User A cannot access Holding B data (separate root unit)
 → User B cannot access Holding A data (separate root unit)
-→ Both are isolated at organizational level within same tenant
+→ Both still need explicit permissions for the actions they perform
+→ Both are isolated at organizational level within the same tenant
 ```
 
-For complete details, see **ADR-009: Permission Inheritance Blocking & Super-Admin Privileges**.
+For complete details, see **ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control**.
 
 ---
 
