@@ -547,18 +547,18 @@ exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
 
-HOME="$home_dir" \
-WORKSPACE_ROOT="$workspace_root" \
-SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-SYSTEMCTL_LOG="$fake_systemctl_log" \
-PATH="$fake_systemctl_dir:$PATH" \
-bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir"
+env HOME="$home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir"
 
 test -L "$fake_bin_dir/polyscope-secpal-rollout.py"
 test -x "$fake_bin_dir/polyscope-secpal-rollout.py"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
-grep -q '/.github/scripts/polyscope-rollout.py' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
