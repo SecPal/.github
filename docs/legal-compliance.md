@@ -224,7 +224,7 @@ class ArchiveOldShifts extends Command {
 
 **Implementation:**
 
-- Admin API endpoint: `GET /api/v1/admin/export/bewachu-compliance?from=2024-01-01&to=2024-12-31`
+- Compliance export endpoint: `POST /api/v1/employees/{employee}/bwr/export`
 - Returns ZIP with PDFs + OTS proofs + verification guide
 
 ---

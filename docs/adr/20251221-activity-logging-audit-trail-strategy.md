@@ -1033,7 +1033,7 @@ class ActivityLogController extends Controller
 - [ ] Create audit dashboard (frontend)
 - [ ] Add verification UI
 - [ ] Write user documentation
-- [ ] Write admin guide
+- [ ] Write operations guide
 - [ ] Write legal verification guide
 - [ ] Create deployment guide
 
