@@ -491,10 +491,15 @@ def load_package_scripts(repo_path: pathlib.Path) -> set[str]:
     if not package_json_path.exists():
         return set()
 
-    package_data = json.loads(package_json_path.read_text())
+    raw_text = package_json_path.read_text()
+    try:
+        package_data = json.loads(raw_text)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid package.json for rollout validation ({package_json_path}): {error}") from error
+
     scripts = package_data.get("scripts", {})
     if not isinstance(scripts, dict):
-        return set()
+        raise SystemExit(f"invalid package.json for rollout validation ({package_json_path}): scripts must be an object")
 
     return {str(script_name) for script_name in scripts}
 
@@ -537,8 +542,20 @@ def validate_local_config_command(repo_name: str, repo_path: pathlib.Path, packa
         elif len(tokens) > 1 and tokens[0] in {"bash", "node", "php", "python", "python3"} and tokens[1].startswith("./"):
             relative_path_token = tokens[1]
 
-    if relative_path_token is not None and not (repo_path / relative_path_token[2:]).exists():
-        raise SystemExit(f"{repo_name} polyscope config references missing relative path '{relative_path_token}'")
+    if relative_path_token is not None:
+        suffix = relative_path_token[2:]
+        if not suffix or suffix.startswith("/"):
+            raise SystemExit(f"{repo_name} polyscope config has invalid relative path '{relative_path_token}'")
+        candidate = (repo_path / suffix).resolve()
+        anchor = repo_path.resolve()
+        try:
+            candidate.relative_to(anchor)
+        except ValueError:
+            raise SystemExit(
+                f"{repo_name} polyscope config references relative path outside repo root: '{relative_path_token}'"
+            )
+        if not candidate.exists():
+            raise SystemExit(f"{repo_name} polyscope config references missing relative path '{relative_path_token}'")
 
 
 def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:

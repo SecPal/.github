@@ -19,6 +19,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - corrected the generated `api` Polyscope setup so Laravel clones no longer run nonexistent root-level `npm install` or `npm run build` steps, fixing issue-loading failures on the VPS when Polyscope initializes API workspaces
 - hardened `scripts/polyscope-rollout.py` with fail-fast validation for repo-local Polyscope commands, so future rollout drift now aborts immediately when a repo config references missing root manifests, lockfiles, npm scripts, or checked-in relative script paths
 - hardened `tests/polyscope-rollout.sh` so the fake `systemctl` stub receives `SYSTEMCTL_LOG` reliably and path assertions do not depend on the clone directory containing a `/.github/scripts/` segment (local Polyscope workspaces versus GitHub Actions checkouts)
+- pinned Prettier in this repository and run `tests/polyscope-rollout.sh` against `node_modules/.bin/prettier` so generated `polyscope.local.json` formatting checks do not use `npx` at test time; taught rollout validation to surface invalid `package.json` and to reject relative script paths that escape the repository root
 
 ## 2026-05-01 - Remove Stale Admin Model ADR Drift
 

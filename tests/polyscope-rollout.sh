@@ -8,6 +8,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
+PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
+
+if [[ ! -x "$PRETTIER_BIN" ]]; then
+    (cd "$REPO_ROOT" && npm ci)
+fi
+if [[ ! -x "$PRETTIER_BIN" ]]; then
+    echo "expected pinned Prettier at $PRETTIER_BIN after npm ci" >&2
+    exit 1
+fi
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
@@ -106,9 +115,13 @@ assert_rollout_rejects_invalid_local_config() {
     local db_copy="$workspace/invalid-polyscope.db"
     local nginx_copy="$workspace/invalid-preview.secpal.dev.conf"
     local summary_copy="$workspace/invalid-summary.json"
+    local invalid_out
+    local invalid_err
 
     script_basename="$(basename "$source_script" .py)"
     script_copy="$workspace/${script_basename}-invalid.py"
+    invalid_out="${script_copy%.py}.stdout"
+    invalid_err="${script_copy%.py}.stderr"
 
     cp "$source_script" "$script_copy"
 
@@ -135,12 +148,12 @@ if python3 "$script_copy" \
         --repo-state-file "$repos_json" \
         --nginx-output "$nginx_copy" \
         --summary-output "$summary_copy" \
-        >/tmp/polyscope-rollout-invalid.stdout 2>/tmp/polyscope-rollout-invalid.stderr; then
+        >"$invalid_out" 2>"$invalid_err"; then
         echo "invalid Polyscope local_config mutation should have failed" >&2
         exit 1
     fi
 
-    grep -q "$expected_error" /tmp/polyscope-rollout-invalid.stderr
+    grep -q "$expected_error" "$invalid_err"
 }
 
 common_header='<!--
@@ -480,7 +493,7 @@ fi
 grep -q 'server_name ~^(?<repo>api|frontend|secpal-app|changelog)-' "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 
-npx --yes prettier --check \
+"$PRETTIER_BIN" --check \
     "$workspace_root/api/polyscope.local.json" \
     "$workspace_root/frontend/polyscope.local.json" \
     "$workspace_root/contracts/polyscope.local.json" \
