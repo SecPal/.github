@@ -866,7 +866,7 @@ user_internal_organizational_scopes:
 - ✅ Clear separation: Permissions (what) vs. Scopes (where) vs. Levels (who)
 - ✅ Fine-grained control: Rank ranges
 - ✅ Flexible: Tenant defines own levels
-- ✅ No special "admin" concept
+- ✅ No obsolete privileged-scope concept
 
 ### Migration Strategy
 
@@ -918,12 +918,12 @@ UserInternalOrganizationalScope::where('access_level', 'admin')->each(function (
 
 ### Privilege Escalation Prevention
 
-**Scenario: Child Admin Attempts Parent Access**
+**Scenario: Child-Scoped Operator Attempts Parent Access**
 
 ```php
 // Attempted attack
 POST /employees
-Authorization: Bearer <child-admin-token>
+Authorization: Bearer <child-scoped-operator-token>
 // Query attempts to access parent org employees
 
 // Prevention
@@ -1255,7 +1255,7 @@ public function rules(): array
 
 **3. Simplified Architecture:**
 
-- ✅ No "admin" vs "super-admin" confusion
+- ✅ No obsolete admin-scope terminology
 - ✅ Clear permission model (Permissions + Scopes + Levels)
 - ✅ No "breaking glass" complexity
 

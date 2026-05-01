@@ -33,7 +33,7 @@ The SecPal RBAC system (Issue #5) required fundamental architectural decisions a
 
 **Context:**
 
-During RBAC design, we considered protecting predefined roles (Admin, Manager, Guard, Client, Works Council) from deletion or modification. Common patterns include:
+During RBAC design, we considered protecting predefined roles (Employee, Employee Read Only, HR, Manager, Guard, Client, Works Council) from deletion or modification. Common patterns include:
 
 - `is_system_role` boolean flag
 - `protected` boolean flag
@@ -52,7 +52,7 @@ public function destroy(Role $role)
         ]);
     }
 
-    $role->delete(); // Works for Admin, Manager, Custom, any role
+    $role->delete(); // Works for Manager, HR, custom, or any other role
 }
 ```
 
@@ -64,17 +64,23 @@ class RolesAndPermissionsSeeder extends Seeder
     public function run(): void
     {
         // Creates if not exists, skips if exists
-        $admin = Role::firstOrCreate(
-            ['name' => 'Admin', 'guard_name' => 'sanctum'],
-            ['description' => 'Full system access']
+        $manager = Role::firstOrCreate(
+            ['name' => 'Manager', 'guard_name' => 'sanctum'],
+            ['description' => 'Operational management within assigned scopes']
         );
 
         // Sync permissions only if role has none
-        if ($admin->permissions()->count() === 0) {
-            $admin->syncPermissions(['*']);
+        if ($manager->permissions()->count() === 0) {
+            $manager->syncPermissions([
+                'customers.read',
+                'customers.create',
+                'sites.read',
+                'employees.read',
+                'shifts.read',
+            ]);
         }
 
-        // Repeat for Manager, Guard, Client, Works Council
+        // Repeat for Employee, Employee Read Only, HR, Guard, Client, Works Council
     }
 }
 ```
@@ -375,13 +381,13 @@ public function handle()
 
 ### Leadership-Based Access Control (See ADR-009)
 
-This ADR establishes the foundation for role-based access control. **No role has default privileges** - all roles (including "Admin") are equal and access is controlled exclusively through:
+This ADR establishes the foundation for role-based access control. **No role has default privileges** and access is controlled exclusively through:
 
 1. **Permissions:** Spatie Laravel-Permission system (e.g., `employee.read`, `employee.update`)
 2. **Organizational Scopes:** Access to specific organizational units (ADR-007)
 3. **Leadership Level Filters:** Rank-based visibility control (ADR-009)
 
-**Note:** The "Admin" role is a regular role name without special meaning to the system. It typically receives broad permissions via the seeder, but can be modified, deleted, or renamed like any other role.
+**Note:** Predefined roles are just seeded permission bundles. They can be modified, deleted, or renamed like any other role, and none of them bypass the explicit permission-plus-scope model.
 
 ADR-009 extends this with:
 

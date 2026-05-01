@@ -18,7 +18,7 @@ SPDX-License-Identifier: CC0-1.0
 This ADR defines the architecture for flexible, unlimited-depth organizational hierarchies in SecPal. **Two independent hierarchical systems** are implemented:
 
 1. **Internal Structure** (`organizational_units`): Security service company hierarchy (Holding → Company → Region → Branch → Division)
-   - For **internal employees** (Guards, Managers, Admins)
+   - For **internal employees** (Guards, Managers, explicitly scoped operators)
    - Access control via `user_internal_organizational_scopes`
    - Fine-grained RBAC: From branch-wide access down to specific object areas
 
@@ -60,7 +60,7 @@ Security service companies have diverse organizational structures:
 
 #### Part A: Internal Organizational Structures (Security Service Company)
 
-These scenarios show the **security service's own organizational structure** and how internal employees (Guards, Managers, Admins) access data based on their position in the hierarchy.
+These scenarios show the **security service's own organizational structure** and how internal employees (Guards, Managers, and explicitly scoped operators) access data based on their position in the hierarchy.
 
 **Scenario 1: Small Security Service (Flat Structure)**
 
@@ -73,8 +73,8 @@ organizational_units: [none - flat, all employees report directly]
 
 Internal Employees & RBAC:
 ├─ User: Inhaber Schmidt
-│  Role: Admin
-│  Scope: All customers/objects (no restrictions)
+│  Access: Explicit permissions + root `manage` scope
+│  Scope: All customers/objects within the assigned root unit
 │
 ├─ User: Einsatzleiter Müller
 │  Role: Manager
@@ -174,8 +174,8 @@ ProSec Holding (holding)
 └─ ProSec Süd GmbH (company)
    └─ Region Bayern
 
-Vorstand ProSec Holding (Admin)
-→ Sees EVERYTHING across all subsidiaries
+Vorstand ProSec Holding (explicit permissions + root `manage` scope)
+→ Sees everything across explicitly assigned subsidiaries
 ```
 
 #### Part B: Customer Organizational Structures (External Organizations)
@@ -351,7 +351,7 @@ We will implement a **Closure Table Pattern** for organizational hierarchies com
 │  └─ ProSec Nord GmbH                                            │
 │     └─ Region Berlin-Brandenburg                                │
 │        └─ Niederlassung Berlin                                  │
-│           └─ [EMPLOYEES: Guards, Managers, Admins]              │
+│           └─ [EMPLOYEES: Guards, Managers, explicitly scoped operators] │
 │              ├─ User: Regional Manager Berlin                   │
 │              │  Role: Manager                                   │
 │              │  Scope: user_internal_organizational_scopes      │
@@ -411,7 +411,7 @@ SHARED RBAC INFRASTRUCTURE:
 
 #### 1. Internal Organizational Units (Security Service Company Structure)
 
-**Purpose:** Represents the **security service company's** internal structure (holding, branches, divisions, etc.). This is for **internal employees only** (guards, managers, admins).
+**Purpose:** Represents the **security service company's** internal structure (holding, branches, divisions, etc.). This is for **internal employees only** (guards, managers, explicitly scoped operators).
 
 **Core Table:**
 
@@ -775,7 +775,7 @@ if (!$user->hasPermissionTo('guard_book.read')) {
 
 **Key Difference:**
 
-- **Internal RBAC:** Guards, Managers, Admins → Access based on organizational_units
+- **Internal RBAC:** Guards, Managers, explicitly scoped operators → Access based on organizational_units
 - **Customer Access:** Client users → Access based on customer hierarchy + specific objects
 
 ```php
@@ -1055,7 +1055,7 @@ DB::transaction(function () use ($unit, $newParent) {
 
 1. **Internal Organizational Structure** (`organizational_units`)
    - Security service company hierarchy (Holding → Region → Branch)
-   - For **internal employees only** (Guards, Managers, Admins)
+   - For **internal employees only** (Guards, Managers, explicitly scoped operators)
    - Access control via `user_internal_organizational_scopes`
    - Full CRUD permissions within scope
 
@@ -1349,7 +1349,7 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
 
 - **ADR-005:** RBAC Design Decisions (role/permission foundation)
 - **ADR-008:** User-Based Tenant Resolution (tenant isolation)
-- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges ⭐️ **CRITICAL EXTENSION**
+- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control ⭐️ **CRITICAL EXTENSION**
 
 ### ADR-009 Integration: Organizational Autonomy & Security
 

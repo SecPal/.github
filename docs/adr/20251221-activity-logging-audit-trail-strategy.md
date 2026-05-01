@@ -432,7 +432,7 @@ activity('scope_changes')
     ->performedOn($user)
     ->withProperties([
         'organizational_unit' => 'Regional GmbH',
-        'access_level' => 'admin',
+        'access_level' => 'manage',
     ])
     ->log('scope_granted');
 
@@ -1149,16 +1149,16 @@ test('inheritance blocking prevents parent access', function () {
         ],
     ]);
 
-    $holdingAdmin = User::factory()->create();
-    $holdingAdmin->organizationalScopes()->create([
+    $holdingManager = User::factory()->create();
+    $holdingManager->organizationalScopes()->create([
         'organizational_unit_id' => $holding->id,
-        'access_level' => 'admin',
+        'access_level' => 'manage',
         'include_descendants' => true,
     ]);
 
     $log = Activity::create(['organizational_unit_id' => $regional->id, ...]);
 
-    actingAs($holdingAdmin)->get("/v1/activity-logs/{$log->id}")
+    actingAs($holdingManager)->get("/v1/activity-logs/{$log->id}")
         ->assertForbidden();
 });
 ```
@@ -1176,7 +1176,7 @@ test('cannot access other tenant logs', function () {
 
 test('cannot modify activity logs', function () {
     $log = Activity::create([...]);
-    $user = User::factory()->admin()->create();
+    $user = User::factory()->create();
 
     actingAs($user)->patch("/v1/activity-logs/{$log->id}", ['description' => 'HACKED'])
         ->assertMethodNotAllowed();
@@ -1208,7 +1208,7 @@ test('hash chain detects injection attacks', function () {
 - **ADR-005:** RBAC Design Decisions (role changes are logged)
 - **ADR-007:** Organizational Structure Hierarchy (scope-based log access)
 - **ADR-008:** User-Based Tenant Resolution (tenant isolation for logs)
-- **ADR-009:** Permission Inheritance Blocking & Super-Admin Privileges (emergency access is logged)
+- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control (emergency access is logged)
 
 ---
 
