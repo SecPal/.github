@@ -17,32 +17,26 @@ assert_contains() {
   fi
 }
 
-assert_not_contains() {
-  local path="$1"
-  local unexpected="$2"
-
-  if grep -Fq "$unexpected" "$path"; then
-    echo "Did not expect to find '$unexpected' in $path" >&2
+# Enforce "${TMPDIR:-/tmp}/<basename>.XXXXXX" for every tests/*.sh that uses mktemp
+# (slug matches the script basename so new tests are covered without editing this file).
+# The `mktemp -d -t <template>` pattern is not portable between GNU coreutils and BSD/macOS.
+shopt -s nullglob
+for path in "$REPO_ROOT"/tests/*.sh; do
+  base="${path##*/}"
+  if [ "$base" = "mktemp-portability.sh" ]; then
+    continue
+  fi
+  if ! grep -Fq 'mktemp' "$path"; then
+    continue
+  fi
+  if grep -Fq 'mktemp -d -t' "$path"; then
+    printf 'Non-portable mktemp -d -t usage in tests/%s; use explicit TMPDIR template paths ending in .XXXXXX (see tests/setup-hooks.sh).\n' "$base" >&2
     exit 1
   fi
-}
-
-# Enforce "${TMPDIR:-/tmp}/<name>.XXXXXX" templates across shell tests. The
-# `mktemp -d -t <template>` pattern is not portable between GNU coreutils and BSD/macOS.
-while IFS='|' read -r rel_path slug; do
-  [ -n "${rel_path:-}" ] || continue
-  path="$REPO_ROOT/$rel_path"
+  slug="${base%.sh}"
   # Match literal ${TMPDIR:-/tmp} in repository scripts (not shell expansion here).
   # shellcheck disable=SC2016
   expected='mktemp -d "${TMPDIR:-/tmp}/'"$slug"'.XXXXXX"'
-  forbidden='mktemp -d -t '"$slug"'.XXXXXX'
   assert_contains "$path" "$expected"
-  assert_not_contains "$path" "$forbidden"
-done <<'EOF'
-tests/setup-project-board.sh|setup-project-board
-tests/validate-copilot-instructions.sh|validate-copilot-instructions
-tests/audit-closed-epics.sh|audit-closed-epics
-tests/setup-hooks.sh|setup-hooks
-tests/preflight-markdownlint-scope.sh|preflight-markdownlint-scope
-tests/polyscope-rollout.sh|polyscope-rollout
-EOF
+done
+shopt -u nullglob
