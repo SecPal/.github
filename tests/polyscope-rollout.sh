@@ -604,7 +604,15 @@ fake_bin_dir="$workspace/fake-bin"
 fake_unit_dir="$workspace/fake-units"
 fake_systemctl_dir="$workspace/fake-systemctl"
 fake_systemctl_log="$workspace/systemctl.log"
+fake_server_bin="$workspace/fake-tools/polyscope-server"
 mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir"
+mkdir -p "$(dirname "$fake_server_bin")"
+
+cat >"$fake_server_bin" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$fake_server_bin"
 
 cat >"$fake_systemctl_dir/systemctl" <<'STUB'
 #!/usr/bin/env bash
@@ -618,13 +626,20 @@ env HOME="$home_dir" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
     PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir"
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
 
 test -L "$fake_bin_dir/polyscope-secpal-rollout.py"
 test -x "$fake_bin_dir/polyscope-secpal-rollout.py"
+grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$fake_unit_dir/polyscope-server.service"
+grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.service"
+grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
+grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
+grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'daemon-reload' "$fake_systemctl_log"
+grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"

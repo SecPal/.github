@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-02 - Supervise Polyscope Server Startup And Sync
+
+**Changed:**
+
+- updated `scripts/install-polyscope-rollout.sh` to install a real `polyscope-server.service` user unit that binds the local Polyscope API to `127.0.0.1:4321`, restarts on failure, and triggers the SecPal rollout sync after each successful server start so fresh workspace creation sees the current instructions, principles, prompts, links, and provisioning config
+- kept `polyscope-rollout-sync.service` as the instruction-change sync path, but made its generated unit explicitly order after `polyscope-server.service` and pass the local API base through to the rollout script so runtime prompt/config refreshes stay aligned with the supervised server endpoint
+- extended `tests/polyscope-rollout.sh` to cover the new server unit, startup refresh hook, localhost bind, rollout API base wiring, and systemd activation sequence for the supervised Polyscope runtime
+
 ## 2026-05-02 - Restore Generic Polyscope Preview Hosts
 
 **Changed:**
