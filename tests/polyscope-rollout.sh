@@ -35,6 +35,16 @@ create_repo() {
     mkdir -p "$repo_dir/.github/instructions" "$repo_dir/.git/info"
     printf '%s\n' "$copilot_body" > "$repo_dir/.github/copilot-instructions.md"
     printf '%s\n' "$focus_body" > "$repo_dir/.github/instructions/$focus_filename"
+    printf '%s\n' "---
+name: Org Shared Rules
+applyTo: '**'
+---
+
+# Org Shared Rules
+
+- Keep changes repo-local, minimal, and consistent with the repository stack.
+- Apply the SecPal domain policy and issue triage rules.
+" > "$repo_dir/.github/instructions/org-shared.instructions.md"
     : > "$repo_dir/.git/info/exclude"
 }
 
@@ -58,6 +68,8 @@ package_scripts = {
         "lint": "eslint .",
         "typecheck": "tsc --noEmit",
         "test:watch": "vitest",
+        "test:e2e:ci": "cross-env CI=true playwright test",
+        "test:e2e:staging": "cross-env PLAYWRIGHT_BASE_URL=https://app.secpal.dev playwright test",
     },
     "contracts": {
         "validate": "redocly lint docs/openapi.yaml",
@@ -471,9 +483,20 @@ python3 "$PYTHON_SCRIPT" \
     --summary-output "$summary_output" \
     > /dev/null
 
-grep -q 'api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -q 'https://{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
+grep -q 'org-shared.instructions.md' "$workspace_root/api/polyscope.local.json"
+grep -qF 'php artisan migrate:fresh --seed && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF "test@password.com" "$workspace_root/api/polyscope.local.json"
 grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
+grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
+grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"
+grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
+grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
+grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
+grep -qF "TEST_USER_EMAIL=test@password.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
+grep -q 'npm run test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
 if grep -q 'npm install' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not run npm install" >&2
@@ -490,8 +513,35 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-grep -q 'server_name ~^(?<repo>api|frontend|secpal-app|changelog)-' "$nginx_output"
+grep -q 'server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
+grep -qF "try_files \$uri @preview_router;" "$nginx_output"
+grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
+
+if grep -qF "try_files \$uri \$uri/ @preview_router;" "$nginx_output"; then
+    echo "preview nginx config must not treat a missing workspace docroot as a directory hit" >&2
+    exit 1
+fi
+
+if grep -qF '/home/secpal/.polyscope/empty' "$nginx_output"; then
+    echo "preview nginx config must not use a real empty directory as the missing-workspace docroot" >&2
+    exit 1
+fi
+
+api_if_line="$(grep -nF "if (-f \$api_public/index.php) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
+frontend_if_line="$(grep -nF "if (-f \$frontend_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
+secpal_app_if_line="$(grep -nF "if (-f \$secpal_app_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
+changelog_if_line="$(grep -nF "if (-f \$changelog_out/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
+
+test -n "$api_if_line"
+test -n "$frontend_if_line"
+test -n "$secpal_app_if_line"
+test -n "$changelog_if_line"
+
+if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line || secpal_app_if_line >= changelog_if_line )); then
+    echo "generic preview precedence must prefer changelog > secpal.app > frontend > api" >&2
+    exit 1
+fi
 
 "$PRETTIER_BIN" --check \
     "$workspace_root/api/polyscope.local.json" \
@@ -520,9 +570,11 @@ frontend_prompt = cur.execute('select pr_prompt from repositories where id = ?',
 links = cur.execute('select repo_id, linked_repo_id from repository_links order by repo_id, linked_repo_id').fetchall()
 
 assert 'api/.github/copilot-instructions.md' in api_prompt
+assert 'org-shared.instructions.md' in api_prompt
 assert 'php-laravel.instructions.md' in api_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
+assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
 assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
@@ -530,8 +582,9 @@ assert ('api12345', 'fe123456') in links
 assert ('sa123456', 'ch123456') in links
 
 summary = json.loads(summary_path.read_text())
-assert summary['repositories']['api']['preview_prefix'] == 'api'
+assert summary['repositories']['api']['preview_prefix'] is None
 assert summary['repositories']['contracts']['preview_prefix'] is None
+assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
 PY
 

@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-02 - Restore Generic Polyscope Preview Hosts
+
+**Changed:**
+
+- restored generic Polyscope preview URLs in generated repo-local `polyscope.local.json` files so workspaces resolve as `https://{{folder}}.preview.secpal.dev` again instead of requiring repo-prefixed hostnames
+- updated the rendered preview nginx config to accept both generic and legacy repo-prefixed hosts while keeping the newer `try_files /index.html =404` fallback so missing static outputs return a clean `404` instead of an internal rewrite loop
+- corrected the generated preview nginx missing-workspace fallback so it now points at a non-existent sentinel docroot and returns `404` instead of leaking into directory-index `403` responses
+- updated the Polyscope rollout prompt source so repository-specific prompts and task preambles also include each repo's shared `org-shared.instructions.md` overlay instead of only the repo baseline plus one focus instruction
+- changed the generated frontend Polyscope setup to build preview artifacts in `--mode preview` against the matching `https://api-${PWD##*/}.preview.secpal.dev` host, so each `frontend` workspace now talks to its linked API workspace instead of the shared `api.secpal.dev` host
+- added direct frontend Polyscope run entries for local preview smoke, workspace-preview smoke, workspace-preview authenticated Playwright, and `app.secpal.dev` staging, so browser-E2E flows are available from the workspace without retyping the commands
+- added an API Polyscope run that does `migrate:fresh --seed` and rewrites the seeded preview login to `test@password.com` / `password`, so the linked API workspace can be reset to a known E2E state before authenticated frontend preview runs
+- documented the reserved nginx prefix routing rule (`api-`, `frontend-`, `secpal-app-`, `changelog-`) for preview hosts so future contributors know those prefixes are reserved for legacy per-repo routing
+
 ## 2026-05-02 - Restore Markdown Prettier Compliance
 
 **Changed:**
