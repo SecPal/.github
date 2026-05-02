@@ -36,9 +36,10 @@ When you link an organization with CLA Assistant:
    - Save configuration
 
 4. **Allowlist Configuration**
-   - Add bot users to allowlist: `bot*`, `dependabot[bot]`, `dependabot-preview[bot]`, `copilot-swe-agent`
+   - Add bot users to allowlist: `bot*`, `dependabot[bot]`, `dependabot-preview[bot]`, `copilot-swe-agent`, `cursoragent`
    - This allows automated PRs without CLA signature
    - Copilot-created pull requests in SecPal currently appear as author `copilot-swe-agent`; keep that exact account in the allowlist alongside Dependabot
+   - Cursor agent-assisted commits can appear in CLA Assistant as `cursoragent`; keep that exact account in the allowlist as well so bot-assisted PRs do not block on `cla/check`
 
 ### How It Works
 
@@ -54,7 +55,7 @@ Changing the allowlist in documentation is not enough. Because CLA Assistant is 
 
 Use this checklist:
 
-1. Confirm the allowlist includes `dependabot[bot]`, `dependabot-preview[bot]`, and `copilot-swe-agent`
+1. Confirm the allowlist includes `dependabot[bot]`, `dependabot-preview[bot]`, `copilot-swe-agent`, and `cursoragent`
 2. Confirm the organization or repository link still points to the current SecPal CLA document
 3. Confirm the expected required status check is `cla/check`
 4. Verify a recent automated PR shows `cla/check` passing instead of blocking on signature
