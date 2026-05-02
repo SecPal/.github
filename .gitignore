@@ -49,3 +49,5 @@ yarn-error.log*
 
 # Preflight overrides (local only)
 .preflight-allow-large-pr
+
+.context
