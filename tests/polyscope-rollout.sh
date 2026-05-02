@@ -506,7 +506,7 @@ grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$
 grep -qF "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
 grep -q 'npm run test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
-if rg -n 'TEST_USER_EMAIL=test@password\.com' "$workspace_root/frontend/polyscope.local.json" >/dev/null; then
+if grep -q 'TEST_USER_EMAIL=test@password\.com' "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope preview commands must not use the obsolete test@password.com credential" >&2
     exit 1
 fi
@@ -797,7 +797,7 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"

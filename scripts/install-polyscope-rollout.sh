@@ -141,7 +141,7 @@ After=polyscope-rollout-sync.service
 [Service]
 Type=oneshot
 WorkingDirectory=$WORKSPACE_ROOT/.github
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-worktrees
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --skip-local-configs --skip-db-sync --provision-worktrees
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF
