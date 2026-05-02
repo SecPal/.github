@@ -12,6 +12,7 @@ UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 POLYSCOPE_SERVER_BIN="${POLYSCOPE_SERVER_BIN:-$(command -v polyscope-server || true)}"
 POLYSCOPE_API_BASE="${POLYSCOPE_API_BASE:-http://127.0.0.1:4321/api}"
+POLYSCOPE_CLONE_ROOT="${POLYSCOPE_CLONE_ROOT:-$HOME/.polyscope/clones}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,6 +47,8 @@ INSTALL_TARGET="$BIN_DIR/polyscope-secpal-rollout.py"
 SERVER_UNIT="$UNIT_DIR/polyscope-server.service"
 SERVICE_UNIT="$UNIT_DIR/polyscope-rollout-sync.service"
 PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
+PROVISION_SERVICE_UNIT="$UNIT_DIR/polyscope-worktree-provision.service"
+PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 if [[ -z "$POLYSCOPE_SERVER_BIN" ]]; then
@@ -58,7 +61,7 @@ if [[ ! -x "$POLYSCOPE_SERVER_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT POLYSCOPE_SERVER_BIN POLYSCOPE_API_BASE; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT POLYSCOPE_SERVER_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -128,12 +131,49 @@ PathChanged=$SOURCE_SCRIPT
 WantedBy=default.target
 EOF
 
+cat >"$PROVISION_SERVICE_UNIT" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Provision SecPal Polyscope worktrees automatically
+After=polyscope-rollout-sync.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=$WORKSPACE_ROOT/.github
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-worktrees
+EOF
+
+cat >"$PROVISION_PATH_UNIT" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Watch SecPal Polyscope worktree metadata and generated local config for automatic provisioning
+
+[Path]
+PathChanged=$HOME/.polyscope/polyscope.db
+PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/android/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/secpal.app/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/changelog/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/.github/polyscope.local.json
+
+[Install]
+WantedBy=default.target
+EOF
+
 "$SYSTEMCTL_BIN" --user daemon-reload
 "$SYSTEMCTL_BIN" --user enable --now polyscope-server.service
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
+"$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
+"$SYSTEMCTL_BIN" --user start polyscope-worktree-provision.service
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $SERVER_UNIT"
 echo "Installed $SERVICE_UNIT"
 echo "Installed $PATH_UNIT"
+echo "Installed $PROVISION_SERVICE_UNIT"
+echo "Installed $PROVISION_PATH_UNIT"

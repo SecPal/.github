@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import pathlib
 import re
@@ -18,6 +19,10 @@ import textwrap
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+
+
+POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
+PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 
 
 def build_api_preview_env_setup_command() -> str:
@@ -70,6 +75,66 @@ def build_api_preview_env_setup_command() -> str:
     return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
 
 
+def build_frontend_preview_env_setup_command() -> str:
+    script = textwrap.dedent(
+        """
+        from pathlib import Path
+        import os
+        import re
+
+        workspace = os.environ["POLYSCOPE_WORKSPACE"]
+        env_path = Path(".env.local")
+
+        text = env_path.read_text() if env_path.exists() else ""
+        pattern = re.compile(r"^VITE_API_URL=.*$", re.MULTILINE)
+        replacement = f"VITE_API_URL=https://api-{workspace}.preview.secpal.dev"
+        if pattern.search(text):
+            text = pattern.sub(replacement, text)
+        else:
+            if text and not text.endswith("\\n"):
+                text += "\\n"
+            text += replacement + "\\n"
+
+        env_path.write_text(text)
+        """
+    ).strip()
+
+    return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
+
+
+def build_api_preview_seed_command() -> str:
+    tinker_script = textwrap.dedent(
+        r"""
+        $canonical = \App\Models\User::where('email', 'test@example.com')->first();
+        $legacy = \App\Models\User::where('email', 'test@password.com')->first();
+
+        if ($canonical !== null) {
+            if ($legacy !== null && ! $legacy->is($canonical)) {
+                $legacy->delete();
+            }
+            $user = $canonical;
+        } elseif ($legacy !== null) {
+            $user = $legacy;
+        } else {
+            throw new \RuntimeException('Preview test user missing after seeding.');
+        }
+
+        $user->forceFill([
+            'email' => 'test@example.com',
+            'password' => bcrypt('password'),
+            'email_verified_at' => now(),
+        ])->save();
+        """
+    ).strip()
+
+    return (
+        "php artisan config:clear && "
+        "php artisan migrate --force && "
+        "php artisan db:seed --force && "
+        f"php artisan tinker --execute={shlex.quote(tinker_script)}"
+    )
+
+
 REPO_SETTINGS: dict[str, dict[str, Any]] = {
     "api": {
         "display_name": "SecPal/api",
@@ -90,13 +155,14 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 "setup": [
                     build_api_preview_env_setup_command(),
                     "test -d vendor || composer install",
+                    build_api_preview_seed_command(),
                 ],
                 "run": [
                     {"label": "Queue Worker", "command": "php artisan queue:listen --tries=1", "runMode": "replace"},
                     {"label": "Pail", "command": "php artisan pail --timeout=0", "runMode": "replace"},
                     {
                         "label": "Refresh Preview DB + E2E User",
-                        "command": "php artisan migrate:fresh --seed && php artisan tinker --execute=\"\\App\\Models\\User::where('email', 'test@example.com')->firstOrFail()->forceFill(['email' => 'test@password.com', 'password' => bcrypt('password'), 'email_verified_at' => now()])->save();\"",
+                        "command": "php artisan migrate:fresh --seed",
                         "runMode": "preserve",
                     },
                     {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
@@ -132,6 +198,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
             "scripts": {
                 "setup": [
+                    build_frontend_preview_env_setup_command(),
                     "test -d node_modules || npm ci",
                     "VITE_API_URL=https://api-${PWD##*/}.preview.secpal.dev npm run build -- --mode preview",
                 ],
@@ -157,7 +224,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     },
                     {
                         "label": "Playwright Workspace Preview Authenticated",
-                        "command": "TEST_USER_EMAIL=test@password.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev npx playwright test",
+                        "command": "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev npx playwright test",
                         "runMode": "preserve",
                     },
                     {
@@ -675,23 +742,125 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
                 validate_local_config_command(repo_name, repo_path, package_scripts, command)
 
 
-def ensure_exclude(repo_path: pathlib.Path) -> None:
-    exclude_path = repo_path / ".git" / "info" / "exclude"
+def resolve_git_dir(repo_path: pathlib.Path) -> pathlib.Path:
+    git_path = repo_path / ".git"
+    if git_path.is_dir():
+        return git_path
+    if git_path.is_file():
+        pointer = git_path.read_text().strip()
+        prefix = "gitdir: "
+        if not pointer.startswith(prefix):
+            raise SystemExit(f"invalid .git pointer in {repo_path}: {pointer}")
+        git_dir = pathlib.Path(pointer[len(prefix) :])
+        if not git_dir.is_absolute():
+            git_dir = (repo_path / git_dir).resolve()
+        return git_dir
+    return git_path
+
+
+def ensure_exclude(repo_path: pathlib.Path, entries: set[str] | None = None) -> None:
+    exclude_path = resolve_git_dir(repo_path) / "info" / "exclude"
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
     existing = exclude_path.read_text() if exclude_path.exists() else ""
-    if "polyscope.local.json" not in {line.strip() for line in existing.splitlines()}:
+    desired_entries = entries or {POLYSCOPE_LOCAL_CONFIG_NAME}
+    existing_entries = {line.strip() for line in existing.splitlines()}
+    missing_entries = [entry for entry in sorted(desired_entries) if entry not in existing_entries]
+    if missing_entries:
         with exclude_path.open("a") as handle:
             if existing and not existing.endswith("\n"):
                 handle.write("\n")
-            handle.write("polyscope.local.json\n")
+            for entry in missing_entries:
+                handle.write(f"{entry}\n")
 
 
 def write_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
     for spec in repo_specs.values():
         repo_path = pathlib.Path(spec["path"])
-        config_path = repo_path / "polyscope.local.json"
+        config_path = repo_path / POLYSCOPE_LOCAL_CONFIG_NAME
         config_path.write_text(render_pretty_json(render_local_config(spec)) + "\n")
         ensure_exclude(repo_path)
+
+
+def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str]:
+    return {
+        repo_name: render_pretty_json(render_local_config(spec)) + "\n"
+        for repo_name, spec in repo_specs.items()
+    }
+
+
+def build_setup_hash(config: dict[str, Any]) -> str:
+    setup_commands = config.get("scripts", {}).get("setup", [])
+    payload = json.dumps(setup_commands, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def load_provision_marker(marker_path: pathlib.Path) -> dict[str, Any] | None:
+    if not marker_path.exists():
+        return None
+
+    try:
+        marker = json.loads(marker_path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(marker, dict):
+        return None
+    return marker
+
+
+def run_setup_commands(worktree_path: pathlib.Path, commands: list[str]) -> None:
+    for command in commands:
+        subprocess.run(
+            ["bash", "-c", f"set -euo pipefail; {command}"],
+            cwd=worktree_path,
+            check=True,
+        )
+
+
+def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) -> None:
+    (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
+    ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
+
+
+def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]], clone_root: pathlib.Path) -> list[str]:
+    rendered_configs = render_local_configs(repo_specs)
+    provisioned_worktrees: list[str] = []
+
+    for repo_name, spec in repo_specs.items():
+        repo_clone_root = clone_root / repo_state[repo_name]["id"]
+        if not repo_clone_root.exists():
+            continue
+
+        local_config = render_local_config(spec)
+        setup_commands = local_config.get("scripts", {}).get("setup", [])
+        setup_hash = build_setup_hash(local_config)
+        config_text = rendered_configs[repo_name]
+
+        for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
+            sync_worktree_local_config(worktree_path, config_text)
+
+            marker_path = worktree_path / PROVISION_MARKER_FILENAME
+            marker = load_provision_marker(marker_path)
+            if marker is not None and marker.get("setup_hash") == setup_hash:
+                continue
+
+            if setup_commands:
+                print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
+                run_setup_commands(worktree_path, setup_commands)
+
+            marker_path.write_text(
+                json.dumps(
+                    {
+                        "repo": repo_name,
+                        "workspace": worktree_path.name,
+                        "setup_hash": setup_hash,
+                        "provisioned_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
 
 
 def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
@@ -939,10 +1108,17 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
     ).strip() + "\n"
 
 
-def build_summary(repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]], db_backup: pathlib.Path | None, nginx_output: pathlib.Path) -> dict[str, Any]:
+def build_summary(
+    repo_state: dict[str, dict[str, Any]],
+    repo_specs: dict[str, dict[str, Any]],
+    db_backup: pathlib.Path | None,
+    nginx_output: pathlib.Path,
+    provisioned_worktrees: list[str],
+) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "db_backup": str(db_backup) if db_backup is not None else None,
         "rendered_nginx_config": str(nginx_output),
+        "provisioned_worktrees": provisioned_worktrees,
         "repositories": {},
     }
     for repo_name, spec in repo_specs.items():
@@ -972,6 +1148,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "polyscope.db")
+    parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
     parser.add_argument("--polyscope-api-base", default="http://127.0.0.1:4321/api")
     parser.add_argument("--repo-state-file", type=pathlib.Path)
     parser.add_argument("--nginx-output", type=pathlib.Path, default=pathlib.Path.home() / "copilot-preview-secpal-dev.nginx.conf")
@@ -979,6 +1156,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-local-configs", action="store_true")
     parser.add_argument("--skip-db-sync", action="store_true")
     parser.add_argument("--install-nginx", action="store_true")
+    parser.add_argument("--provision-worktrees", action="store_true")
     return parser.parse_args()
 
 
@@ -1005,7 +1183,11 @@ def main() -> int:
     if args.install_nginx:
         install_nginx_config(args.nginx_output)
 
-    summary = build_summary(repo_state, repo_specs, db_backup, args.nginx_output)
+    provisioned_worktrees: list[str] = []
+    if args.provision_worktrees:
+        provisioned_worktrees = provision_worktrees(repo_state, repo_specs, args.clone_root)
+
+    summary = build_summary(repo_state, repo_specs, db_backup, args.nginx_output, provisioned_worktrees)
     if args.summary_output is not None:
         args.summary_output.write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))

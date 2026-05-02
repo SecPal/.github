@@ -493,18 +493,23 @@ grep -qF 'FRONTEND_URL' "$workspace_root/api/polyscope.local.json"
 grep -qF 'SANCTUM_STATEFUL_DOMAINS' "$workspace_root/api/polyscope.local.json"
 grep -qF 'CORS_ALLOWED_ORIGINS' "$workspace_root/api/polyscope.local.json"
 grep -qF 'frontend-{workspace}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
-grep -qF 'php artisan migrate:fresh --seed && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
-grep -qF "test@password.com" "$workspace_root/api/polyscope.local.json"
+grep -qF 'php artisan config:clear && php artisan migrate --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
 grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"
 grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
 grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "TEST_USER_EMAIL=test@password.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
+grep -qF "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
 grep -q 'npm run test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
+if rg -n 'TEST_USER_EMAIL=test@password\.com' "$workspace_root/frontend/polyscope.local.json" >/dev/null; then
+    echo "generated frontend Polyscope preview commands must not use the obsolete test@password.com credential" >&2
+    exit 1
+fi
 if grep -q 'npm install' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not run npm install" >&2
     exit 1
@@ -595,6 +600,98 @@ assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('or
 assert summary['repositories']['.github']['linked_repositories'] == []
 PY
 
+provision_log="$workspace/provision.log"
+fake_exec_dir="$workspace/fake-exec"
+api_clone="$home_dir/.polyscope/clones/api12345/auto-hawk"
+frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
+mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$frontend_clone/.git/info"
+
+cat >"$fake_exec_dir/composer" <<'STUB'
+#!/usr/bin/env bash
+printf 'composer:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+mkdir -p vendor
+STUB
+chmod +x "$fake_exec_dir/composer"
+
+cat >"$fake_exec_dir/php" <<'STUB'
+#!/usr/bin/env bash
+printf 'php:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+exit 0
+STUB
+chmod +x "$fake_exec_dir/php"
+
+cat >"$fake_exec_dir/npm" <<'STUB'
+#!/usr/bin/env bash
+printf 'npm:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+if [[ "$*" == *" ci"* || "$1" == "ci" ]]; then
+    mkdir -p node_modules
+fi
+if [[ "$*" == *"run build"* ]]; then
+    mkdir -p dist
+    printf '<!doctype html>\n' > dist/index.html
+fi
+exit 0
+STUB
+chmod +x "$fake_exec_dir/npm"
+
+cat >"$api_clone/.env" <<'EOF'
+APP_URL=https://api.secpal.dev
+FRONTEND_URL=https://app.secpal.dev
+SESSION_DOMAIN=.secpal.dev
+SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
+CORS_ALLOWED_ORIGINS=https://app.secpal.dev
+EOF
+
+cat >"$frontend_clone/.env.local" <<'EOF'
+VITE_API_URL=https://api.secpal.dev
+EOF
+
+env HOME="$home_dir" \
+    PATH="$fake_exec_dir:$PATH" \
+    PROVISION_LOG="$provision_log" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+grep -qF 'APP_URL=https://api-auto-hawk.preview.secpal.dev' "$api_clone/.env"
+grep -qF 'FRONTEND_URL=https://auto-hawk.preview.secpal.dev' "$api_clone/.env"
+grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
+grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
+grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
+cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
+cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
+grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
+grep -q '^.polyscope-secpal-provisioned.json$' "$api_clone/.git/info/exclude"
+test -f "$api_clone/.polyscope-secpal-provisioned.json"
+test -f "$frontend_clone/.polyscope-secpal-provisioned.json"
+grep -qF "composer:$api_clone:install" "$provision_log"
+grep -qF "php:$api_clone:artisan config:clear" "$provision_log"
+grep -qF "php:$api_clone:artisan migrate --force" "$provision_log"
+grep -qF "php:$api_clone:artisan db:seed --force" "$provision_log"
+grep -qF "php:$api_clone:artisan tinker --execute=" "$provision_log"
+grep -qF "npm:$frontend_clone:ci" "$provision_log"
+grep -qF "npm:$frontend_clone:run build -- --mode preview" "$provision_log"
+
+provision_log_lines_before="$(wc -l < "$provision_log")"
+env HOME="$home_dir" \
+    PATH="$fake_exec_dir:$PATH" \
+    PROVISION_LOG="$provision_log" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+test "$provision_log_lines_before" -eq "$(wc -l < "$provision_log")"
+
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
     '"test -d vendor || composer install",' \
@@ -646,7 +743,14 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscop
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
+grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
+grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
+grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
+grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"
