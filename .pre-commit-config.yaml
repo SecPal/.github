@@ -18,7 +18,7 @@ repos:
     rev: v4.0.0-alpha.8
     hooks:
       - id: prettier
-        types_or: [markdown, yaml, json]
+        types_or: [markdown, yaml, json, javascript]
         exclude: 'package-lock\.json|composer\.lock|yarn\.lock|pnpm-lock\.yaml'
 
   # Markdown linting

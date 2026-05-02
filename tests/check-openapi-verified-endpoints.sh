@@ -11,10 +11,10 @@ MJS="$ROOT/scripts/check-openapi-verified-endpoints.mjs"
 PASS_FIXTURE="$ROOT/tests/fixtures/openapi-verified-presence/pass-min.yaml"
 FAIL_FIXTURE="$ROOT/tests/fixtures/openapi-verified-presence/fail-missing.yaml"
 
-if node "$MJS" "$PASS_FIXTURE"; then
+if pass_output=$(node "$MJS" "$PASS_FIXTURE" 2>&1); then
   :
 else
-  echo "Expected pass fixture to succeed" >&2
+  echo "Expected pass fixture to succeed; got: $pass_output" >&2
   exit 1
 fi
 
