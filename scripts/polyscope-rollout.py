@@ -751,6 +751,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
     frontend_id = repo_state["frontend"]["id"]
     secpal_app_id = repo_state["secpal.app"]["id"]
     changelog_id = repo_state["changelog"]["id"]
+    # NOTE: workspace names starting with api-, frontend-, secpal-app-, or changelog- are
+    # reserved for legacy per-repo routing (e.g. api-WORKSPACE.preview.secpal.dev).
+    # Generic workspaces must not use those prefixes; the regex will treat them as legacy
+    # hosts and route them to the wrong backend.
     return textwrap.dedent(
         f"""
         server {{
@@ -768,7 +772,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 443 ssl;
             listen [::]:443 ssl;
-            server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
