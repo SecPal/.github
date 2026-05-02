@@ -4,7 +4,8 @@
 
 /**
  * Regression guard: fail if docs/openapi.yaml omits any verified API operation
- * (US-001 matrix + email verification resend + employee documents).
+ * (US-001 matrix + email verification resend + employee documents +
+ * qualification catalog + employee qualifications).
  *
  * Usage: node scripts/check-openapi-verified-endpoints.mjs <path-to-openapi.yaml>
  */

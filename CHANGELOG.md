@@ -17,7 +17,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - `tests/check-openapi-verified-endpoints.sh` — shell test that runs the guard against pass and fail fixtures, verifies exit codes and presence of the "Missing operations:" error message
 - `tests/fixtures/openapi-verified-presence/pass-min.yaml` and `fail-missing.yaml` — minimal OpenAPI fixtures for test isolation
 - `docs/contract-drift/US-001-evidence-matrix.md` and `docs/contract-drift/US-008-validation-and-draft-prs.md` — contract-drift evidence documentation
-- `scripts/preflight.sh` — wired the `check-openapi-verified-endpoints.sh` test into the standard preflight run
+- `package.json` — added `test` and `test:openapi-verified-presence` scripts plus `js-yaml` devDependency so the guard runs via `npm run test` (picked up by `npm run --if-present test` in the standard preflight Node install path)
 
 ## 2026-05-01 - Version Polyscope Cursor Sync And Auto-Refresh
 
