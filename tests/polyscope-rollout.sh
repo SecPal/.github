@@ -602,9 +602,11 @@ PY
 
 provision_log="$workspace/provision.log"
 fake_exec_dir="$workspace/fake-exec"
+service_path="$fake_exec_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 api_clone="$home_dir/.polyscope/clones/api12345/auto-hawk"
 frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
-mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$frontend_clone/.git/info"
+mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts"
+mkdir -p "$home_dir/.local/bin"
 
 cat >"$fake_exec_dir/composer" <<'STUB'
 #!/usr/bin/env bash
@@ -634,6 +636,19 @@ exit 0
 STUB
 chmod +x "$fake_exec_dir/npm"
 
+cat >"$home_dir/.local/bin/pre-commit" <<'STUB'
+#!/usr/bin/env bash
+printf 'pre-commit:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+mkdir -p .git/hooks
+cat > .git/hooks/pre-commit <<'HOOK'
+#!/usr/bin/env bash
+exit 0
+HOOK
+chmod +x .git/hooks/pre-commit
+exit 0
+STUB
+chmod +x "$home_dir/.local/bin/pre-commit"
+
 cat >"$api_clone/.env" <<'EOF'
 APP_URL=https://api.secpal.dev
 FRONTEND_URL=https://app.secpal.dev
@@ -642,12 +657,32 @@ SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
 CORS_ALLOWED_ORIGINS=https://app.secpal.dev
 EOF
 
+cat >"$api_clone/.pre-commit-config.yaml" <<'EOF'
+repos: []
+EOF
+
+cat >"$api_clone/scripts/preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$api_clone/scripts/preflight.sh"
+
 cat >"$frontend_clone/.env.local" <<'EOF'
 VITE_API_URL=https://api.secpal.dev
 EOF
 
+cat >"$frontend_clone/.pre-commit-config.yaml" <<'EOF'
+repos: []
+EOF
+
+cat >"$frontend_clone/scripts/preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$frontend_clone/scripts/preflight.sh"
+
 env HOME="$home_dir" \
-    PATH="$fake_exec_dir:$PATH" \
+    PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
@@ -667,6 +702,12 @@ cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.js
 cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
 grep -q '^.polyscope-secpal-provisioned.json$' "$api_clone/.git/info/exclude"
+test -x "$api_clone/.git/hooks/pre-commit"
+test -L "$api_clone/.git/hooks/pre-push"
+test "$(readlink "$api_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
+test -x "$frontend_clone/.git/hooks/pre-commit"
+test -L "$frontend_clone/.git/hooks/pre-push"
+test "$(readlink "$frontend_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
 test -f "$api_clone/.polyscope-secpal-provisioned.json"
 test -f "$frontend_clone/.polyscope-secpal-provisioned.json"
 grep -qF "composer:$api_clone:install" "$provision_log"
@@ -676,10 +717,12 @@ grep -qF "php:$api_clone:artisan db:seed --force" "$provision_log"
 grep -qF "php:$api_clone:artisan tinker --execute=" "$provision_log"
 grep -qF "npm:$frontend_clone:ci" "$provision_log"
 grep -qF "npm:$frontend_clone:run build -- --mode preview" "$provision_log"
+grep -qF "pre-commit:$api_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
+grep -qF "pre-commit:$frontend_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
 
 provision_log_lines_before="$(wc -l < "$provision_log")"
 env HOME="$home_dir" \
-    PATH="$fake_exec_dir:$PATH" \
+    PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \

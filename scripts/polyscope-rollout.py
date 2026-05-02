@@ -8,6 +8,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shlex
@@ -822,6 +823,63 @@ def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) ->
     ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
 
 
+def resolve_executable(command: str) -> str | None:
+    executable = shutil.which(command)
+    if executable is not None:
+        return executable
+
+    user_local_candidate = pathlib.Path.home() / ".local" / "bin" / command
+    if user_local_candidate.is_file() and os.access(user_local_candidate, os.X_OK):
+        return str(user_local_candidate)
+
+    return None
+
+
+def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
+    if not (worktree_path / ".pre-commit-config.yaml").exists():
+        return
+
+    hook_path = resolve_git_dir(worktree_path) / "hooks" / "pre-commit"
+    if hook_path.exists() or hook_path.is_symlink():
+        return
+
+    pre_commit = resolve_executable("pre-commit")
+    if pre_commit is None:
+        raise SystemExit(f"pre-commit is required to provision hooks for {worktree_path}")
+
+    subprocess.run(
+        [pre_commit, "install", "--install-hooks", "--hook-type", "pre-commit"],
+        cwd=worktree_path,
+        check=True,
+    )
+
+
+def ensure_pre_push_hook(worktree_path: pathlib.Path) -> None:
+    preflight_script = worktree_path / "scripts" / "preflight.sh"
+    if not preflight_script.exists():
+        return
+
+    hooks_dir = resolve_git_dir(worktree_path) / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    hook_path = hooks_dir / "pre-push"
+    target = pathlib.Path(os.path.relpath(preflight_script, hooks_dir))
+
+    if hook_path.is_symlink():
+        if pathlib.Path(os.readlink(hook_path)) == target:
+            return
+        hook_path.unlink()
+    elif hook_path.exists():
+        hook_path.replace(hook_path.with_name("pre-push.backup"))
+
+    hook_path.symlink_to(target)
+
+
+def ensure_worktree_hooks(worktree_path: pathlib.Path) -> None:
+    ensure_pre_commit_hook(worktree_path)
+    ensure_pre_push_hook(worktree_path)
+
+
 def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]], clone_root: pathlib.Path) -> list[str]:
     rendered_configs = render_local_configs(repo_specs)
     provisioned_worktrees: list[str] = []
@@ -838,6 +896,7 @@ def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
             sync_worktree_local_config(worktree_path, config_text)
+            ensure_worktree_hooks(worktree_path)
 
             marker_path = worktree_path / PROVISION_MARKER_FILENAME
             marker = load_provision_marker(marker_path)
