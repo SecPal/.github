@@ -177,20 +177,24 @@ UserInternalOrganizationalScope::create([
 ### Positive
 
 1. ✅ **Massive Code Reduction:**
+
    - Backend: -2536 lines (removed LeadershipLevel model, controller, policies, migrations, tests)
    - Frontend: -3211 lines (removed LeadershipLevel management UI)
    - **Total: -5747 lines removed** 🎉
 
 2. ✅ **Simpler Schema:**
+
    - Single integer field instead of foreign key relationship
    - No separate table to manage
    - Faster queries (no JOIN needed)
 
 3. ✅ **Easier Migrations:**
+
    - Pre-1.0 (0.x.x): Can use `migrate:fresh --seed`
    - Direct field updates instead of model synchronization
 
 4. ✅ **Consistent with Industry Standards:**
+
    - 1 = CEO (highest authority)
    - 2 = Branch Director
    - 3 = Area Manager
@@ -201,6 +205,7 @@ UserInternalOrganizationalScope::create([
    - 0 = Non-management (Guards)
 
 5. ✅ **Preserved Core Functionality:**
+
    - Hierarchical access control still works (ADR-009)
    - Organizational scopes unchanged
    - Permission inheritance blocking unchanged
@@ -214,11 +219,13 @@ UserInternalOrganizationalScope::create([
 ### Negative
 
 1. ⚠️ **No Custom Level Names:**
+
    - Cannot define tenant-specific names (e.g., "ML3 - Regional Manager")
    - Workaround: Use organizational unit structure instead
    - Impact: LOW (not required for MVP)
 
 2. ⚠️ **No Level Descriptions:**
+
    - Cannot add metadata (responsibilities, access rights, salary ranges)
    - Workaround: Document in organizational policies
    - Impact: LOW (nice-to-have feature)
@@ -478,6 +485,7 @@ it('requires dual scopes to view all employees', function () {
 ## Related Decisions
 
 - **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control
+
   - Status: **Partially Updated** (organizational scopes preserved, LeadershipLevel model removed)
   - Scope filtering logic unchanged (min/max viewable rank still works)
   - Dual scope pattern still required for full access

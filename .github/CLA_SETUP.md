@@ -23,15 +23,18 @@ When you link an organization with CLA Assistant:
 ### Initial Organization Configuration
 
 1. **Sign in to CLA Assistant**
+
    - Visit <https://cla-assistant.io/>
    - Sign in with your GitHub account (requires **owner** access to SecPal organization)
 
 2. **Link Organization**
+
    - Click "Link Organization" button
    - Grant CLA Assistant the required authorization scopes to create webhooks for the organization
    - Select `SecPal` organization
 
 3. **Configure CLA**
+
    - Link CLA document: `https://github.com/SecPal/.github/blob/main/CLA.md`
    - Save configuration
 

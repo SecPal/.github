@@ -69,10 +69,12 @@ The documentation action plan attached to this decision is:
 ## Alternatives Considered
 
 1. **GitHub Issues plus actively maintained Project Board as dual canonical sources**
+
    - Pro: strong visual planning workflow
    - Contra: creates two places where status can drift and increases maintenance cost
 
 2. **Project Board as primary planning source**
+
    - Pro: easy visual triage
    - Contra: weak auditability, poor durability for acceptance criteria, and unsuitable as a public roadmap source
 

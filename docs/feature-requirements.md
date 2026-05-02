@@ -41,6 +41,7 @@ Security companies have different organizational structures and job titles:
 **Requirements:**
 
 1. **Predefined Roles (Templates):**
+
    - HR / Compliance Reviewer (broad personnel and compliance access)
    - Company Manager (organization-wide access)
    - Operations Manager (shift planning, reporting)
@@ -50,6 +51,7 @@ Security companies have different organizational structures and job titles:
    - Client (read-only, restricted)
 
 2. **Custom Roles:**
+
    - ✅ Users can create custom roles
    - ✅ Define permissions per role (granular)
    - ✅ Rename roles to match company terminology
@@ -807,20 +809,24 @@ Acceptance Criteria:
 #### Organizational Structure Rules
 
 1. **No Artificial Depth Limits:**
+
    - System must support hierarchies from 1 level (flat) to 10+ levels (holding structures)
    - No hardcoded "maximum depth" constraint
 
 2. **Flexible Unit Types:**
+
    - Predefined types: Holding, Company, Region, Branch, Division
    - Support custom types (e.g., "Department", "Team")
    - Custom types must have same capabilities as predefined types
 
 3. **Single Tenant Isolation:**
+
    - Each security service company is isolated tenant
    - Cannot see or access other tenants' data
    - Organizational units are tenant-scoped
 
 4. **Hierarchical Access Inheritance:**
+
    - Access to parent organizational unit can include all descendants (configurable)
    - Regional Manager with "include descendants" sees all branches in region
    - Branch Manager with "exclude descendants" sees only own branch
@@ -833,18 +839,21 @@ Acceptance Criteria:
 #### Customer Hierarchy Rules
 
 1. **Independence from Internal Structure:**
+
    - Customer hierarchies are **completely separate** from internal organizational units
    - Customer users do NOT see which branch manages them
    - Internal employees see both structures (for management)
    - Link between customer and managing unit is internal-only metadata
 
 2. **Read-Only Customer Access:**
+
    - Customer users (Client role) have read-only access by default
    - Cannot create, update, or delete guard book entries
    - Cannot see internal employee data or organizational structure
    - Exception: Customer admins can manage their own customer users
 
 3. **Hierarchical Customer Access:**
+
    - Corporate customer user can access all descendant customers' objects
    - Regional customer user limited to own region
    - Local customer user limited to specific objects
@@ -859,11 +868,13 @@ Acceptance Criteria:
 #### Object Area Segmentation Rules
 
 1. **Optional Segmentation:**
+
    - Small objects: Single guard book for entire object (default)
    - Large objects: Multiple areas with separate guard books (optional)
    - Decision made per object based on operational needs
 
 2. **Area-Specific Guard Books:**
+
    - Each area can require separate guard book (configurable)
    - Guards assigned to area only access that area's guard book
    - Parent object must exist before areas can be created
@@ -877,12 +888,14 @@ Acceptance Criteria:
 #### Guard Book Report Rules
 
 1. **Event Stream Model:**
+
    - Guard books are continuous event streams (not closed physical books)
    - No manual "closing" of books at month-end
    - Reports generated on-demand for any time period
    - Historical events remain accessible indefinitely
 
 2. **Report Filters:**
+
    - Time period (start date/time, end date/time)
    - Event types (incident, patrol, maintenance, access control, alarm, note)
    - Severity (critical, high, medium, low)
@@ -948,6 +961,7 @@ SecPal uses the **Closure Table Pattern** for storing and querying hierarchical 
 **Two Independent Hierarchies:**
 
 1. **Internal Structure** (`organizational_units`):
+
    - Security service company hierarchy (Holding → Region → Branch)
    - For internal employees (Guards, Managers, Admins)
    - Access control via `user_internal_organizational_scopes`
@@ -987,17 +1001,20 @@ SecPal/api#228 - Epic: Flexible Organizational Structure & Multi-Level Hierarchi
 ### Future Enhancements
 
 1. **Geofencing (Post-MVP):**
+
    - GPS verification for guard check-ins at specific areas
    - Alerts when guard entries are created outside area boundaries
    - Requires legal review and works council approval
 
 2. **Advanced Reporting (Phase 2):**
+
    - Automated scheduled reports (daily, weekly, monthly)
    - Comparison reports (current vs. previous period)
    - Trend analysis (incident frequency over time)
    - Multi-area combined reports with area breakdown
 
 3. **Organizational Structure Versioning (Phase 2):**
+
    - Historical tracking of organizational changes
    - "Point-in-time" queries (what was the structure on date X?)
    - Audit trail for compliance
@@ -1082,18 +1099,21 @@ on Employee updated (status: active → terminated):
 For each automatic action, implementers MUST follow these error handling guidelines:
 
 1. **User account creation fails (e.g., email already exists, validation error):**
+
    - Log the error with full context (employee ID, error message).
    - Abort onboarding flow for this employee; do NOT proceed to send onboarding email.
    - Notify HR/operations staff via dashboard alert or email.
    - Status remains `pre_contract` until resolved manually.
 
 2. **Email sending fails (e.g., SMTP error, invalid email):**
+
    - Log the error with full context.
    - Queue a retry operation (max 3 attempts, exponential backoff).
    - If all retries fail, notify HR/operations staff for manual intervention.
    - Do NOT activate employee until onboarding email is successfully sent.
 
 3. **Role assignment fails (e.g., role doesn't exist):**
+
    - Log the error and abort role assignment.
    - Do NOT activate employee account; status remains unchanged.
    - Notify system administrator to resolve missing role configuration.
@@ -2999,6 +3019,7 @@ Guards must patrol routes and scan checkpoints to prove presence.
 **Technologies:**
 
 1. **NFC Tags** (**Primary - Recommended**)
+
    - NFC tags mounted at checkpoints (tamper-resistant housing)
    - Guard taps phone to scan
    - **Advantages:**
@@ -3011,6 +3032,7 @@ Guards must patrol routes and scan checkpoints to prove presence.
    - **Use Case:** Professional installations where reliability matters
 
 2. **QR Codes** (Cost-Effective Alternative)
+
    - Print QR codes, mount at checkpoints (laminated/weatherproof)
    - Guard scans with phone camera
    - **Advantages:**

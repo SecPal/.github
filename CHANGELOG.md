@@ -13,7 +13,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Changed:**
 
-- reformatted the pre-existing Markdown drift in `.github/CLA_SETUP.md`, `SECURITY.md`, `docs/adr/*.md`, `docs/audits/2026-03-31-adversarial-review-LOCAL-REVIEW.md`, `docs/development-principles.md`, `docs/feature-requirements.md`, `docs/ideas-backlog.md`, and `scripts/README.md` so repo-wide `./scripts/preflight.sh` no longer fails for unrelated topic branches on documentation-only Prettier issues
+- aligned the local pre-commit Prettier hook and this repository's code-quality workflow to the pinned repository Prettier `3.5.3`, so commit hooks, local `./scripts/preflight.sh`, and repo CI check the same formatter version instead of drifting between `pre-commit` mirror releases and npm-installed Prettier
+- reformatted the pre-existing Markdown drift in `CHANGELOG.md`, `.github/CLA_SETUP.md`, `SECURITY.md`, `docs/adr/*.md`, `docs/audits/2026-03-31-adversarial-review-LOCAL-REVIEW.md`, `docs/development-principles.md`, `docs/feature-requirements.md`, `docs/ideas-backlog.md`, and `scripts/README.md` so repo-wide `./scripts/preflight.sh` no longer fails for unrelated topic branches on documentation-only Prettier issues
 
 ## 2026-05-02 - Add OpenAPI Verified-Endpoint Presence Guard
 
@@ -561,6 +562,7 @@ are the reliable way to keep organization principles and repository-specific gui
 **Changed:**
 
 - **`.github/copilot-config.yaml`** - Extended AI source of truth with additional principles
+
   - Added `kiss`: Keep It Simple, Stupid principle
   - Added `yagni`: You Aren't Gonna Need It principle
   - Added `separation_of_concerns`: Controller → Service → Repository pattern
@@ -621,6 +623,7 @@ api/
 **Changed:**
 
 - **`.codecov.yml` configuration** - Adjusted to allow Dependabot PRs while maintaining coverage enforcement
+
   - Set `require_ci_to_pass: false` - Codecov won't wait for CI checks before reporting
   - Set `wait_for_ci: false` - Don't wait for all CI to complete
   - Kept `informational: false` - Coverage remains **REQUIRED** for normal developer PRs
@@ -666,6 +669,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 **Added:**
 
 - **Critical Rule #6: Issue Management Protocol** - ZERO TOLERANCE enforcement for immediate issue creation
+
   - MANDATORY: Create GitHub issue immediately when bug/issue found in old code that cannot be fixed now
   - MANDATORY: EPIC + sub-issues structure for ALL features requiring >1 PR (>600 lines, multi-module, >1 day work)
   - Top-level `issue_management` section in `copilot-config.yaml` (200+ lines) with complete protocol, workflows, examples
@@ -684,11 +688,13 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 **Changed:**
 
 - **Streamlined `review_automation` section** - Replaced 70-line `issue_management` subsection with concise cross-reference
+
   - Maintains DRY principle: Single authoritative source for issue management rules
   - Old section duplicated information now in top-level `issue_management` section
   - Reduced review_automation from 180 lines to ~115 lines
 
 - **Pre-Commit Checklist enhanced** - Added "Issue Creation Protocol" item (4 validation points)
+
   - "All discovered bugs/improvements have GitHub issues?"
   - "No 'TODO: fix later' comments without issue reference?"
   - "Complex features (>1 PR) have EPIC + sub-issues structure?"
@@ -712,6 +718,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 **Added:**
 
 - **SOLID Principles:** Added comprehensive SOLID principles to core development guidelines
+
   - Single Responsibility Principle (SRP): One class/function = one reason to change
   - Open/Closed Principle (OCP): Open for extension, closed for modification
   - Liskov Substitution Principle (LSP): Subtypes must be substitutable for base types
@@ -720,6 +727,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
   - Documentation added to both `.github/copilot-instructions.md` and `.github/copilot-config.yaml`
 
 - **English-Only Communication Rule:** Clarified language policy for GitHub communication
+
   - All issues, PRs, comments, and documentation MUST be in English
   - Ensures accessibility for international contributors
   - Exceptions: German legal documents (CLA, licenses) and user-facing i18n translations
@@ -734,6 +742,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 **Changed:**
 
 - **Pre-Commit Checklist (Markdown & YAML):** Updated with new validation items
+
   - Added SOLID Principles check to both markdown documentation and YAML source of truth
   - Added English Only communication check to both markdown and YAML
   - Added No Literal Quotes check to both markdown and YAML
@@ -741,6 +750,7 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
   - YAML `copilot-config.yaml:checklists.pre_commit` is the authoritative source
 
 - **Core Development Principles:** Restructured and expanded
+
   - DRY (Don't Repeat Yourself) now part of formal development principles
   - Quality Over Speed explicitly documented (removed from Critical Rules to avoid duplication)
   - All principles with validation guidance and examples

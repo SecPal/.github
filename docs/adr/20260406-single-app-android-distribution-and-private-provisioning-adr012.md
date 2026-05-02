@@ -76,10 +76,12 @@ Provisioning QR rules are:
 ## Alternatives Considered
 
 1. **Split Android distribution into multiple packages**
+
    - Pro: clearer separation between managed and unmanaged installs
    - Contra: breaks the single-product experience and complicates signing, updates, and support
 
 2. **Publish a public static provisioning QR code**
+
    - Pro: simpler first rollout
    - Contra: exposes provisioning data publicly and does not support audited, permission-gated enrollment
 

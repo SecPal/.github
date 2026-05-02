@@ -927,12 +927,14 @@ Managers need to send important information to all employees or specific groups 
 **Example Use Cases:**
 
 1. **Weather Emergency:**
+
    - "Due to heavy snowfall, Object B is closed today. Scheduled employees will be reassigned."
    - Target: All employees scheduled for Object B today
    - Urgent flag: Yes
    - Channels: Email + Push + SMS
 
 2. **Policy Update:**
+
    - "New GDPR training required for all employees. Deadline: 30.11.2025."
    - Target: All active employees
    - Acknowledgment required: Yes

@@ -73,23 +73,28 @@ Validates Copilot instructions and configuration files across all repositories.
 **Tests Performed:**
 
 1. **File Existence**
+
    - Checks for `copilot-instructions.md`
    - `copilot-config.yaml` check always skips (file removed 2026-04-11)
 
 2. **REUSE Compliance**
+
    - Validates `copilot-instructions.md.license` exists
    - `copilot-config.yaml.license` check always skips (file removed 2026-04-11)
    - Verifies CC0-1.0 license
 
 3. **Markdown Linting**
+
    - Runs markdownlint-cli2 on instructions
    - Suggests auto-fix command on failure
 
 4. **YAML Syntax**
+
    - Validates YAML syntax using yq
    - Skips if yq not installed
 
 5. **Inheritance Check**
+
    - Verifies `@EXTENDS` reference in repo-specific instructions
    - Skips for org-level instructions
 

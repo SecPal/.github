@@ -455,14 +455,17 @@ function updateCustomer(customer: Customer, data: UpdateData): Customer {
 **Rules:**
 
 1. **Always Validate Input**
+
    - Use DTOs/Form Requests/Zod schemas
    - Never trust user input
 
 2. **Never Log Sensitive Data**
+
    - ❌ Don't: `logger.info('Password:', password)`
    - ✅ Do: `logger.info('User authenticated', { userId })`
 
 3. **Encrypt at Rest**
+
    - Use encryption casts/transformers
    - Store sensitive data encrypted
 

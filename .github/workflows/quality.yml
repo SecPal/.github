@@ -65,11 +65,11 @@ jobs:
         with:
           node-version: "22.x"
 
-      - name: Install Prettier
-        run: npm install -g prettier
+      - name: Install Node dependencies
+        run: npm ci
 
       - name: Run Prettier Check
-        run: prettier --check '**/*.{md,yml,yaml,json}'
+        run: npx prettier --check '**/*.{md,yml,yaml,json}'
 
   markdown-lint:
     name: Lint Markdown Files
