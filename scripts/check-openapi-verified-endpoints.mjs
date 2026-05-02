@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 SecPal Contributors
-// SPDX-License-Identifier: CC0-1.0
+// SPDX-License-Identifier: MIT
 
 /**
  * Regression guard: fail if docs/openapi.yaml omits any verified API operation

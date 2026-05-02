@@ -41,6 +41,24 @@ bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
 - `1`: One or more checklist issues found
 - `2`: Usage or dependency error
 
+### `check-openapi-verified-endpoints.mjs`
+
+Regression guard that fails if `docs/openapi.yaml` in any SecPal repo omits an
+operation from the verified-endpoint allowlist. The allowlist is defined inside
+the script and reflects operations that have confirmed feature-test coverage.
+
+**Usage:**
+
+```bash
+node scripts/check-openapi-verified-endpoints.mjs <path-to-openapi.yaml>
+```
+
+**Exit Codes:**
+
+- `0`: All required operations are present
+- `1`: One or more required operations are missing
+- `2`: Usage or file-read error
+
 ### `validate-copilot-instructions.sh`
 
 Validates Copilot instructions and configuration files across all repositories.

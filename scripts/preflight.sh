@@ -170,6 +170,15 @@ if [ -f tests/polyscope-rollout.sh ]; then
   }
 fi
 
+if [ -f tests/check-openapi-verified-endpoints.sh ]; then
+  bash tests/check-openapi-verified-endpoints.sh || {
+    echo "" >&2
+    echo "❌ OpenAPI verified-endpoint presence guard test failed!" >&2
+    echo "Fix scripts/check-openapi-verified-endpoints.mjs or the test fixtures before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
