@@ -22,7 +22,7 @@ if fail_output=$(node "$MJS" "$FAIL_FIXTURE" 2>&1); then
   echo "Expected fail fixture to exit non-zero" >&2
   exit 1
 fi
-echo "$fail_output" | grep -q "Missing operations:" || {
+printf '%s\n' "$fail_output" | grep -q "Missing operations:" || {
   echo "Fail fixture output did not mention 'Missing operations:'; got: $fail_output" >&2
   exit 1
 }
