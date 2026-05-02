@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-02 - Auto-Provision Fresh Polyscope Worktrees
+
+**Changed:**
+
+- updated `scripts/polyscope-rollout.py` so fresh Polyscope clone directories are now auto-provisioned idempotently: clone-local `polyscope.local.json` files are synced into each workspace, preview API and frontend env files are rewritten for the current workspace, generated setup commands run once per setup-hash, and successful runs leave an ignored `.polyscope-secpal-provisioned.json` marker to prevent redundant rebuilds on later syncs
+- changed generated API setup from a manual preview-env rewrite plus Composer-only bootstrap to a fully automatic non-destructive preview bootstrap: `config:clear`, `migrate --force`, `db:seed --force`, and canonical `test@example.com` reconciliation now run as part of setup without relying on `migrate:fresh`, so fresh workspaces keep the standard preview login while becoming browser-auth ready without wiping the shared preview database
+- restored the generated preview-facing authenticated commands to the standard `test@example.com` / `password` login instead of the temporary `test@password.com` alias, keeping fresh Polyscope workspaces and existing SecPal test habits aligned
+- updated generated frontend setup so fresh workspaces also rewrite `.env.local` to the matching `api-<workspace>.preview.secpal.dev` origin before building preview assets, making the checked-out workspace itself reflect the preview target instead of only the ad-hoc build command
+- fresh Polyscope clone directories now also get their local Git quality gates installed during provisioning: `pre-commit` hooks are installed when a repo ships `.pre-commit-config.yaml`, and `pre-push` is linked to `scripts/preflight.sh` when the repo exposes a preflight script, so commits and pushes from inside Polyscope clones enforce the same local checks as the primary SecPal checkouts
+- extended `scripts/install-polyscope-rollout.sh` to install `polyscope-worktree-provision.service` and `polyscope-worktree-provision.path`, watching both generated repo-local `polyscope.local.json` files and Polyscope worktree metadata updates in `~/.polyscope/polyscope.db` so fresh workspace creation now triggers the automatic provisioning path instead of requiring manual setup commands afterward
+- extended `tests/polyscope-rollout.sh` to cover the new non-destructive API setup command, frontend env rewrite, clone-local config syncing, ignored provision marker, idempotent reruns, and the new systemd service/path units for automatic worktree provisioning
+
 ## 2026-05-02 - Provision Preview API Domains For Fresh Polyscope Workspaces
 
 **Changed:**
