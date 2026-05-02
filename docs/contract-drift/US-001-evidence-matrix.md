@@ -7,6 +7,8 @@ SPDX-License-Identifier: CC0-1.0
 
 This matrix was produced by pulling latest `main` in `SecPal/api`, `SecPal/frontend`, `SecPal/contracts`, and `SecPal/.github`, then comparing backend routes, the frontend HTTP client, and `SecPal/contracts` `docs/openapi.yaml`. No product code was changed for this story.
 
+**Note (US-007):** Later contract work added qualification catalog and employee-qualification assignment paths to `SecPal/contracts` `docs/openapi.yaml`. The tables below remain a **frozen US-001 snapshot** for reproducibility; OpenAPI coverage cells are superseded for those routes — use the current spec and backend for authoritative behavior.
+
 ## Snapshot (reproducibility)
 
 | Repository  | `main` at time of check (short SHA) |
@@ -72,5 +74,5 @@ This matrix was produced by pulling latest `main` in `SecPal/api`, `SecPal/front
 
 ## Summary for contract work
 
-1. **Known missing OpenAPI paths:** entire qualification catalog CRUD and employee-qualification assignment CRUD surfaces are absent from the published spec — this is confirmed against latest `contracts` `main`.
+1. **OpenAPI paths (historical vs current):** At the time of US-001, qualification and employee-qualification CRUD were absent from `docs/openapi.yaml`. Those paths are now documented in the contracts repo; use the live spec for coverage.
 2. **Additional drift to qualify when documenting or aligning clients:** qualification field names (`requires_renewal` vs `requires_certificate`, etc.), attach/update date field (`obtained_date` vs `issued_date`), optional `is_mandatory` list filter, `custom` category, assignment `status` values, and response shape vs frontend types.
