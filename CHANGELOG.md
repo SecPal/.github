@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-02 - Restore Markdown Prettier Compliance
+
+**Changed:**
+
+- reformatted the pre-existing Markdown drift in `.github/CLA_SETUP.md`, `SECURITY.md`, `docs/adr/*.md`, `docs/audits/2026-03-31-adversarial-review-LOCAL-REVIEW.md`, `docs/development-principles.md`, `docs/feature-requirements.md`, `docs/ideas-backlog.md`, and `scripts/README.md` so repo-wide `./scripts/preflight.sh` no longer fails for unrelated topic branches on documentation-only Prettier issues
+
 ## 2026-05-02 - Add OpenAPI Verified-Endpoint Presence Guard
 
 **Added:**
