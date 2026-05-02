@@ -27,10 +27,22 @@ assert_not_contains() {
   fi
 }
 
-# shellcheck disable=SC2016
-assert_contains "$REPO_ROOT/tests/setup-project-board.sh" 'mktemp -d "${TMPDIR:-/tmp}/setup-project-board.XXXXXX"'
-assert_not_contains "$REPO_ROOT/tests/setup-project-board.sh" 'mktemp -d -t setup-project-board.XXXXXX'
-
-# shellcheck disable=SC2016
-assert_contains "$REPO_ROOT/tests/validate-copilot-instructions.sh" 'mktemp -d "${TMPDIR:-/tmp}/validate-copilot-instructions.XXXXXX"'
-assert_not_contains "$REPO_ROOT/tests/validate-copilot-instructions.sh" 'mktemp -d -t validate-copilot-instructions.XXXXXX'
+# Enforce "${TMPDIR:-/tmp}/<name>.XXXXXX" templates across shell tests. The
+# `mktemp -d -t <template>` pattern is not portable between GNU coreutils and BSD/macOS.
+while IFS='|' read -r rel_path slug; do
+  [ -n "${rel_path:-}" ] || continue
+  path="$REPO_ROOT/$rel_path"
+  # Match literal ${TMPDIR:-/tmp} in repository scripts (not shell expansion here).
+  # shellcheck disable=SC2016
+  expected='mktemp -d "${TMPDIR:-/tmp}/'"$slug"'.XXXXXX"'
+  forbidden='mktemp -d -t '"$slug"'.XXXXXX'
+  assert_contains "$path" "$expected"
+  assert_not_contains "$path" "$forbidden"
+done <<'EOF'
+tests/setup-project-board.sh|setup-project-board
+tests/validate-copilot-instructions.sh|validate-copilot-instructions
+tests/audit-closed-epics.sh|audit-closed-epics
+tests/setup-hooks.sh|setup-hooks
+tests/preflight-markdownlint-scope.sh|preflight-markdownlint-scope
+tests/polyscope-rollout.sh|polyscope-rollout
+EOF
