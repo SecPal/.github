@@ -303,7 +303,12 @@ npx @stoplight/spectral-cli lint docs/openapi.yaml
 
 # Validate structure
 npx @redocly/cli lint docs/openapi.yaml
+
+# Verified-endpoint presence guard (SecPal/contracts — wired into `npm run lint` / `npm run validate`)
+node scripts/check-openapi-verified-endpoints.mjs docs/openapi.yaml
 ```
+
+The presence guard fails if any verified route from the US-001 drift matrix (email verification resend, employee documents, qualification catalog, nested employee qualifications, employee-qualification items) is removed from `docs/openapi.yaml`. **SecPal/contracts** runs `scripts/check-openapi-verified-endpoints.mjs` as part of `npm run lint` (and therefore `npm run validate`). **SecPal/.github** keeps the same script plus fixture-based regression tests under `tests/fixtures/openapi-verified-presence/` and `tests/check-openapi-verified-endpoints.sh`.
 
 ### Spectral Rulesets
 
