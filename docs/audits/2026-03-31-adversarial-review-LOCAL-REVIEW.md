@@ -58,17 +58,20 @@
 ### Security-Sensitive Patterns Reviewed
 
 1. **Cryptographic weaknesses** (finding #1, #2):
+
    - Merkle tree second-preimage attack documented with full explanation
    - Fix provided with domain separation prefixes
    - ✅ Correctly identifies breaking change needed before release
 
 2. **Race conditions** (findings #4, #5, #10, #12, #13):
+
    - TOCTOU in onboarding token completion documented
    - Employee status transition race confirmed
    - Cache deletion race in frontend identified
    - ✅ All include timing scenarios and probability assessment
 
 3. **Data exposure** (finding #6):
+
    - Sensitive employee fields (tax ID, SSN, documents) over-exposed
    - ✅ Correctly identifies least-privilege violation
    - ✅ Permission-based fix suggested

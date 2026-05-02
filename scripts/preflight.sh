@@ -47,7 +47,7 @@ git fetch origin "$BASE" 2>/dev/null || true
 # 0) Formatting & Compliance
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
-  npx --yes prettier --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
+  npx --yes prettier@3.5.3 --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
   npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' '#.git' || FORMAT_EXIT=1
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.

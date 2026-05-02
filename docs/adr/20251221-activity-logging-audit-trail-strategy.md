@@ -48,6 +48,7 @@ SecPal requires a **legally compliant, tamper-proof audit trail** for all user a
 #### Business Requirements
 
 1. **Comprehensive Logging:**
+
    - All CRUD operations on critical data (employees, contracts, salaries)
    - Authentication events (login, logout, failed attempts)
    - Permission changes (role assignments, scope modifications)
@@ -55,16 +56,19 @@ SecPal requires a **legally compliant, tamper-proof audit trail** for all user a
    - Data exports and reports
 
 2. **Organizational Scope Isolation:**
+
    - Regional subsidiaries see only their logs
    - Parent organizations cannot access blocked subsidiary logs
    - Respects inheritance blocking (ADR-009)
 
 3. **Tamper-Proof Evidence:**
+
    - Detect any modification or deletion of log entries
    - Cryptographically verifiable integrity
    - Legally admissible in court proceedings
 
 4. **Performance:**
+
    - Logging must not impact application performance
    - Fast queries for audit dashboards
    - Efficient storage for millions of logs
