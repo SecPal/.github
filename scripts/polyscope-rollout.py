@@ -25,14 +25,17 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "display_name": "SecPal/api",
         "base_branch": "main",
         "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [".github/instructions/php-laravel.instructions.md"],
-        "preview_prefix": "api",
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/php-laravel.instructions.md",
+        ],
+        "preview_prefix": None,
         "review_focus": "Laravel 13, Pest 4, Request -> Controller -> Service -> Repository -> Model, Sanctum session versus bearer-token flows, and encrypted data handling via *_plain/*_idx without direct *_enc reads.",
         "link_names": ["frontend", "contracts", "android"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://api-{{folder}}.preview.secpal.dev"},
+            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
             "scripts": {
                 "setup": [
                     "test -d vendor || composer install",
@@ -40,6 +43,11 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 "run": [
                     {"label": "Queue Worker", "command": "php artisan queue:listen --tries=1", "runMode": "replace"},
                     {"label": "Pail", "command": "php artisan pail --timeout=0", "runMode": "replace"},
+                    {
+                        "label": "Refresh Preview DB + E2E User",
+                        "command": "php artisan migrate:fresh --seed && php artisan tinker --execute=\"\\App\\Models\\User::where('email', 'test@example.com')->firstOrFail()->forceFill(['email' => 'test@password.com', 'password' => bcrypt('password'), 'email_verified_at' => now()])->save();\"",
+                        "runMode": "preserve",
+                    },
                     {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
                     {"label": "Pint (dirty)", "command": "vendor/bin/pint --dirty", "runMode": "preserve"},
                 ],
@@ -60,21 +68,52 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "display_name": "SecPal/frontend",
         "base_branch": "main",
         "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [".github/instructions/react-typescript.instructions.md"],
-        "preview_prefix": "frontend",
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/react-typescript.instructions.md",
+        ],
+        "preview_prefix": None,
         "review_focus": "React, Vite, strict TypeScript, generated API types, Testing Library/MSW boundaries, auth-storage discipline, and transport failure handling.",
         "link_names": ["api", "contracts", "android"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://frontend-{{folder}}.preview.secpal.dev"},
+            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
             "scripts": {
-                "setup": ["test -d node_modules || npm ci", "npm run build"],
+                "setup": [
+                    "test -d node_modules || npm ci",
+                    "VITE_API_URL=https://api-${PWD##*/}.preview.secpal.dev npm run build -- --mode preview",
+                ],
                 "run": [
-                    {"label": "Build Watch", "command": "npx vite build --watch", "autostart": True, "runMode": "replace"},
+                    {
+                        "label": "Build Watch",
+                        "command": "VITE_API_URL=https://api-${PWD##*/}.preview.secpal.dev npx vite build --watch --mode preview",
+                        "autostart": True,
+                        "runMode": "replace",
+                    },
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
                     {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
                     {"label": "Vitest", "command": "npm run test:watch", "runMode": "replace"},
+                    {
+                        "label": "Playwright Local Preview Smoke",
+                        "command": "npm run test:e2e:ci",
+                        "runMode": "preserve",
+                    },
+                    {
+                        "label": "Playwright Workspace Preview Smoke",
+                        "command": "CI=true PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_SKIP_GLOBAL_LOGIN=1 npx playwright test tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome",
+                        "runMode": "preserve",
+                    },
+                    {
+                        "label": "Playwright Workspace Preview Authenticated",
+                        "command": "TEST_USER_EMAIL=test@password.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev npx playwright test",
+                        "runMode": "preserve",
+                    },
+                    {
+                        "label": "Playwright Live Staging",
+                        "command": "npm run test:e2e:staging",
+                        "runMode": "preserve",
+                    },
                 ],
             },
             "tasks": [
@@ -93,7 +132,10 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "display_name": "SecPal/contracts",
         "base_branch": "main",
         "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [".github/instructions/openapi.instructions.md"],
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/openapi.instructions.md",
+        ],
         "preview_prefix": None,
         "review_focus": "OpenAPI 3.1 as contract-first source of truth, reusable $ref schemas, consistent security schemes, complete response coverage, and Redocly validation.",
         "link_names": ["api", "frontend"],
@@ -124,7 +166,10 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "display_name": "SecPal/android",
         "base_branch": "main",
         "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [".github/instructions/react-capacitor.instructions.md"],
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/react-capacitor.instructions.md",
+        ],
         "preview_prefix": None,
         "review_focus": "React plus Capacitor bridge boundaries, managed-mode and device-owner semantics, listener cleanup through remove(), and strict TypeScript around native interop.",
         "link_names": ["api", "frontend"],
@@ -156,14 +201,17 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "display_name": "SecPal/secpal.app",
         "base_branch": "main",
         "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [".github/instructions/astro-static.instructions.md"],
-        "preview_prefix": "secpal-app",
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/astro-static.instructions.md",
+        ],
+        "preview_prefix": None,
         "review_focus": "Astro static rendering, minimal client-side JavaScript, semantic HTML, accessible landmarks, and strict TypeScript on the public site.",
         "link_names": ["changelog"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://secpal-app-{{folder}}.preview.secpal.dev"},
+            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
             "scripts": {
                 "setup": ["test -d node_modules || npm ci", "npm run build"],
                 "run": [
@@ -188,14 +236,17 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "display_name": "SecPal/changelog",
         "base_branch": "main",
         "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [".github/instructions/nextjs-changelog.instructions.md"],
-        "preview_prefix": "changelog",
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/nextjs-changelog.instructions.md",
+        ],
+        "preview_prefix": None,
         "review_focus": "Next.js static-style changelog output, MDX content rules, Commit template conventions, CSP/feed safety, and no server-side runtime dependencies.",
         "link_names": ["secpal.app"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://changelog-{{folder}}.preview.secpal.dev"},
+            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
             "scripts": {
                 "setup": ["test -d node_modules || npm ci", "npm run build"],
                 "run": [
@@ -705,7 +756,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 80;
             listen [::]:80;
-            server_name ~^(?<repo>api|frontend|secpal-app|changelog)-(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             location /.well-known/acme-challenge/ {{
                 root /var/www/certbot;
@@ -717,7 +768,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 443 ssl;
             listen [::]:443 ssl;
-            server_name ~^(?<repo>api|frontend|secpal-app|changelog)-(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
@@ -738,24 +789,47 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             set $secpal_app_dist $secpal_app_root/dist;
             set $changelog_root /home/secpal/.polyscope/clones/{changelog_id}/$workspace;
             set $changelog_out $changelog_root/out;
-            set $preview_docroot /home/secpal/.polyscope/empty;
+            set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $route_mode static;
 
-            if ($repo = api) {{
+            if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;
                 set $route_mode api;
             }}
 
-            if ($repo = frontend) {{
+            if (-f $frontend_dist/index.html) {{
                 set $preview_docroot $frontend_dist;
+                set $route_mode static;
             }}
 
-            if ($repo = secpal-app) {{
+            if (-f $secpal_app_dist/index.html) {{
                 set $preview_docroot $secpal_app_dist;
+                set $route_mode static;
+            }}
+
+            if (-f $changelog_out/index.html) {{
+                set $preview_docroot $changelog_out;
+                set $route_mode static;
             }}
 
             if ($repo = changelog) {{
                 set $preview_docroot $changelog_out;
+                set $route_mode static;
+            }}
+
+            if ($repo = secpal-app) {{
+                set $preview_docroot $secpal_app_dist;
+                set $route_mode static;
+            }}
+
+            if ($repo = frontend) {{
+                set $preview_docroot $frontend_dist;
+                set $route_mode static;
+            }}
+
+            if ($repo = api) {{
+                set $preview_docroot $api_public;
+                set $route_mode api;
             }}
 
             root $preview_docroot;
@@ -779,7 +853,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             }}
 
             location / {{
-                try_files $uri $uri/ @preview_router;
+                try_files $uri @preview_router;
             }}
 
             location @preview_router {{
