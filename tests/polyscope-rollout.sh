@@ -681,6 +681,7 @@ exit 0
 EOF
 chmod +x "$frontend_clone/scripts/preflight.sh"
 
+provision_summary_json="$workspace/provision-summary.json"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -688,10 +689,19 @@ env HOME="$home_dir" \
     --workspace-root "$workspace_root" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
+    --summary-output "$provision_summary_json" \
     --skip-local-configs \
     --skip-db-sync \
     --provision-worktrees \
     > /dev/null
+
+python3 - "$provision_summary_json" <<'PY'
+import json, sys
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
+assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
+PY
 
 grep -qF 'APP_URL=https://api-auto-hawk.preview.secpal.dev' "$api_clone/.env"
 grep -qF 'FRONTEND_URL=https://auto-hawk.preview.secpal.dev' "$api_clone/.env"

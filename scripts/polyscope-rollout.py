@@ -921,6 +921,8 @@ def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[
             )
             provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
 
+    return provisioned_worktrees
+
 
 def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
     payload = None
