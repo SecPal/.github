@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-02 - Provision Preview API Domains For Fresh Polyscope Workspaces
+
+**Changed:**
+
+- updated `scripts/polyscope-rollout.py` so generated `api/polyscope.local.json` setup now rewrites `APP_URL`, `FRONTEND_URL`, `SESSION_DOMAIN`, `SANCTUM_STATEFUL_DOMAINS`, and `CORS_ALLOWED_ORIGINS` for the current workspace before preview provisioning continues, allowing fresh `frontend-<workspace>.preview.secpal.dev` and generic `<workspace>.preview.secpal.dev` frontends to complete browser-session auth against `api-<workspace>.preview.secpal.dev`
+- extended `tests/polyscope-rollout.sh` to require the new preview API environment provisioning command in the generated API Polyscope config so fresh workspace auth does not silently regress back to the live-domain-only defaults
+
 ## 2026-05-02 - Supervise Polyscope Server Startup And Sync
 
 **Changed:**

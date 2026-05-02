@@ -20,6 +20,56 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def build_api_preview_env_setup_command() -> str:
+    script = textwrap.dedent(
+        """
+        from pathlib import Path
+        import os
+        import re
+
+        workspace = os.environ["POLYSCOPE_WORKSPACE"]
+        env_path = Path(".env")
+        if not env_path.exists():
+            raise SystemExit(".env not found; copy the preview environment into place before running Polyscope setup.")
+
+        values = {
+            "APP_URL": f"https://api-{workspace}.preview.secpal.dev",
+            "FRONTEND_URL": f"https://{workspace}.preview.secpal.dev",
+            "SESSION_DOMAIN": ".secpal.dev",
+            "SANCTUM_STATEFUL_DOMAINS": ",".join(
+                (
+                    f"frontend-{workspace}.preview.secpal.dev",
+                    f"{workspace}.preview.secpal.dev",
+                    "app.secpal.dev",
+                )
+            ),
+            "CORS_ALLOWED_ORIGINS": ",".join(
+                (
+                    f"https://frontend-{workspace}.preview.secpal.dev",
+                    f"https://{workspace}.preview.secpal.dev",
+                    "https://app.secpal.dev",
+                )
+            ),
+        }
+
+        text = env_path.read_text()
+        for key, value in values.items():
+            pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+            replacement = f"{key}={value}"
+            if pattern.search(text):
+                text = pattern.sub(replacement, text)
+            else:
+                if text and not text.endswith("\\n"):
+                    text += "\\n"
+                text += replacement + "\\n"
+
+        env_path.write_text(text)
+        """
+    ).strip()
+
+    return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
+
+
 REPO_SETTINGS: dict[str, dict[str, Any]] = {
     "api": {
         "display_name": "SecPal/api",
@@ -38,6 +88,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
             "scripts": {
                 "setup": [
+                    build_api_preview_env_setup_command(),
                     "test -d vendor || composer install",
                 ],
                 "run": [
