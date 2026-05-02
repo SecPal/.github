@@ -19,6 +19,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 - `docs/contract-drift/US-001-evidence-matrix.md` and `docs/contract-drift/US-008-validation-and-draft-prs.md` — contract-drift evidence documentation
 - `package.json` — added `test` and `test:openapi-verified-presence` scripts plus `js-yaml` devDependency so the guard runs via `npm run test` (picked up by `npm run --if-present test` in the standard preflight Node install path)
 
+## 2026-05-01 - Document Cursor agent CLA Allowlist Exception
+
+**Changed:**
+
+- documented that Cursor agent-assisted commits can appear in CLA Assistant as `cursoragent` and must be allowlisted alongside `copilot-swe-agent` and the existing Dependabot bot exceptions so `cla/check` does not block bot-assisted pull requests
+
 ## 2026-05-01 - Version Polyscope Cursor Sync And Auto-Refresh
 
 **Changed:**
