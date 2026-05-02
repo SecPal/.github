@@ -67,6 +67,10 @@ for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT POLYSCOPE_SERVER_BIN POLYSCOPE_API
         echo "Error: $_var_name must not contain newlines" >&2
         exit 1
     fi
+    if [[ "$_val" =~ [[:space:]] ]]; then
+        echo "Error: $_var_name must not contain whitespace" >&2
+        exit 1
+    fi
 done
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR"

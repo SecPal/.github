@@ -711,7 +711,7 @@ grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clon
 cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
 cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
-grep -q '^.polyscope-secpal-provisioned.json$' "$api_clone/.git/info/exclude"
+grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
 test -x "$api_clone/.git/hooks/pre-commit"
 test -L "$api_clone/.git/hooks/pre-push"
 test "$(readlink "$api_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
