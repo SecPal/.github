@@ -163,12 +163,11 @@ The script automatically detects repository type:
 
 When adding new scripts:
 
-1. Include SPDX headers in script file
-2. Create `.license` file for REUSE compliance
-3. Make scripts executable: `chmod +x scripts/your-script.sh`
-4. Document usage in this README
-5. Add CI workflow if appropriate
-6. Test across all 4 repositories
+1. Include SPDX headers — either inline in the file or via a `.license` sidecar (both are valid for REUSE compliance)
+2. Make scripts executable: `chmod +x scripts/your-script.sh`
+3. Document usage in this README
+4. Add CI workflow if appropriate
+5. Test across all 4 repositories
 
 ## License
 
