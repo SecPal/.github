@@ -17,7 +17,9 @@ if [ ! -f "$workflow_path" ]; then
 fi
 
 has_supported_files=0
-if git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs' | grep -q .; then
+# Exclude scripts/: Node tooling (e.g. OpenAPI presence checks) is not application surface — CodeQL does not apply.
+tracked_sources="$(git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs' | grep -v '^scripts/' || true)"
+if echo "$tracked_sources" | grep -q .; then
   has_supported_files=1
 fi
 

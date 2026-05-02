@@ -13,23 +13,24 @@ This note records validation commands, repository SHAs, live smoke checks, E2E c
 
 **After US-002–US-007 (this cleanup):**
 
-| Area | Change |
-| ---- | ------ |
-| OpenAPI | Verified-endpoint presence guard (16 operations); full paths/schemas for verification resend, employee documents, qualification catalog, employee qualifications (nested + pivot). |
-| API repo | Feature tests extended (`AuthTest` resend/throttle, `QualificationControllerTest` resource shape); RBAC README/architecture docs corrected (18 ops, no fictitious `/roles/{id}/permissions`). |
-| Contracts repo | README reflects real coverage; stubs replaced with request/response schemas aligned to Laravel. |
-| **Additional drift still present (document for client work):** Frontend `qualificationApi` / types may still use names like `requires_certificate`, `issued_date`, or `pending` status where the API uses `requires_renewal`, `obtained_date`, and `valid` \| `expiring_soon` \| `expired` — see US-001 matrix “Related drift” rows. OpenAPI and backend tests are authoritative; SPA alignment is **out of scope** for these contract-doc stories unless explicitly scheduled. |
+| Area           | Change                                                                                                                                                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAPI        | Verified-endpoint presence guard (16 operations); full paths/schemas for verification resend, employee documents, qualification catalog, employee qualifications (nested + pivot).            |
+| API repo       | Feature tests extended (`AuthTest` resend/throttle, `QualificationControllerTest` resource shape); RBAC README/architecture docs corrected (18 ops, no fictitious `/roles/{id}/permissions`). |
+| Contracts repo | README reflects real coverage; stubs replaced with request/response schemas aligned to Laravel.                                                                                               |
+
+**Additional drift still present (document for client work):** Frontend `qualificationApi` / types may still use names like `requires_certificate`, `issued_date`, or `pending` status where the API uses `requires_renewal`, `obtained_date`, and `valid`, `expiring_soon`, or `expired` — see US-001 matrix “Related drift” rows. OpenAPI and backend tests are authoritative; SPA alignment is **out of scope** for these contract-doc stories unless explicitly scheduled.
 
 ## Repository HEAD (validation run)
 
 Recorded at US-008 validation time (local clones):
 
-| Repository | Commit (full) | Branch |
-| ---------- | --------------- | ------ |
-| `SecPal/.github` | Tip of [`feat/us-001-reconfirm-drift`](https://github.com/SecPal/.github/pull/412) (see PR head at merge time) | `feat/us-001-reconfirm-drift` |
-| `SecPal/api` | `37d8cb93b4abe94e59ca4f065f27f39f3ff37236` | `main` (ahead of `origin/main`) |
-| `SecPal/contracts` | `c8116ffb2d589a0b61034bb65fd92e11bf98e5b0` | `main` (ahead of `origin/main`) |
-| `SecPal/frontend` | `beee49b1eb34b6203ece2d32524074d392877341` | `main` (tracking `origin/main`) |
+| Repository         | Commit (full)                                                                                                  | Branch                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `SecPal/.github`   | Tip of [`feat/us-001-reconfirm-drift`](https://github.com/SecPal/.github/pull/412) (see PR head at merge time) | `feat/us-001-reconfirm-drift`   |
+| `SecPal/api`       | `37d8cb93b4abe94e59ca4f065f27f39f3ff37236`                                                                     | `main` (ahead of `origin/main`) |
+| `SecPal/contracts` | `c8116ffb2d589a0b61034bb65fd92e11bf98e5b0`                                                                     | `main` (ahead of `origin/main`) |
+| `SecPal/frontend`  | `beee49b1eb34b6203ece2d32524074d392877341`                                                                     | `main` (tracking `origin/main`) |
 
 Re-run `git rev-parse HEAD` before copying SHAs into a PR description if validation is repeated later.
 
@@ -89,11 +90,11 @@ npm run test:openapi-verified-presence
 
 Unauthenticated smoke checks (TLS + routing + Laravel JSON envelope) were executed from the validation environment:
 
-| Request | HTTP | Notes |
-| ------- | ---- | ----- |
-| `GET /v1/qualifications` | 401 | Body `{"message":"Unauthenticated."}` — matches message-only unauthenticated JSON. |
-| `GET /v1/employees/{uuid}/documents` | 401 | Same envelope (route reached). |
-| `POST /v1/auth/email/verification-notification` | 401 | Same envelope. |
+| Request                                         | HTTP | Notes                                                                              |
+| ----------------------------------------------- | ---- | ---------------------------------------------------------------------------------- |
+| `GET /v1/qualifications`                        | 401  | Body `{"message":"Unauthenticated."}` — matches message-only unauthenticated JSON. |
+| `GET /v1/employees/{uuid}/documents`            | 401  | Same envelope (route reached).                                                     |
+| `POST /v1/auth/email/verification-notification` | 401  | Same envelope.                                                                     |
 
 **Blockers for full flow verification:** End-to-end verification of resend throttle (429), multipart upload, and qualification CRUD requires authenticated tenant context (tokens, CSRF/session as applicable), test users, and organization scope — not available in this agent environment. The checks above confirm the deployed API serves the documented routes and auth gate.
 
@@ -122,11 +123,11 @@ No local commits on `main` relative to `origin` in the validated clone — **no 
 
 ## Created draft PRs (US-008)
 
-| Repository | Draft PR |
-| ---------- | -------- |
-| `SecPal/api` | https://github.com/SecPal/api/pull/1005 |
-| `SecPal/contracts` | https://github.com/SecPal/contracts/pull/232 |
-| `SecPal/.github` | https://github.com/SecPal/.github/pull/412 |
+| Repository         | Draft PR                                                |
+| ------------------ | ------------------------------------------------------- |
+| `SecPal/api`       | [PR #1005](https://github.com/SecPal/api/pull/1005)     |
+| `SecPal/contracts` | [PR #232](https://github.com/SecPal/contracts/pull/232) |
+| `SecPal/.github`   | [PR #412](https://github.com/SecPal/.github/pull/412)   |
 
 ---
 
