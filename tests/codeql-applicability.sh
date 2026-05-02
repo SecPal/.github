@@ -17,18 +17,20 @@ if [ ! -f "$workflow_path" ]; then
 fi
 
 has_supported_files=0
-if git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs' | grep -q .; then
+# Exclude scripts/: Node tooling (e.g. OpenAPI presence checks) is not application surface — CodeQL does not apply.
+codeql_sources="$(git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs' | grep -v '^scripts/' || true)"
+if echo "$codeql_sources" | grep -q .; then
   has_supported_files=1
 fi
 
 if [ "$has_supported_files" -eq 0 ] && grep -q 'github/codeql-action/' "$workflow_path"; then
-  echo "CodeQL workflow still invokes github/codeql-action even though this repository has no tracked JS/TS files." >&2
+  echo "CodeQL workflow still invokes github/codeql-action even though this repository has no CodeQL-applicable JS/TS sources outside scripts/." >&2
   echo "Remove the CodeQL action usage or restore supported source files before continuing." >&2
   exit 1
 fi
 
 if [ "$has_supported_files" -eq 1 ] && ! grep -q 'github/codeql-action/' "$workflow_path"; then
-  echo "Tracked JS/TS files were found, but the CodeQL workflow no longer invokes github/codeql-action." >&2
+  echo "CodeQL-applicable JS/TS sources outside scripts/ were found, but the CodeQL workflow no longer invokes github/codeql-action." >&2
   echo "Restore the CodeQL action in the workflow before continuing with these supported source files." >&2
   exit 1
 fi

@@ -4,6 +4,8 @@
   "description": "SecPal organization-wide documentation and settings",
   "private": true,
   "scripts": {
+    "test": "npm run test:openapi-verified-presence",
+    "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh",
     "copilot:review:threads": "./scripts/copilot-review-tool.sh threads",
     "copilot:review:lessons": "./scripts/copilot-review-tool.sh lessons",
     "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
@@ -22,6 +24,7 @@
   "author": "SecPal Contributors",
   "license": "CC0-1.0",
   "devDependencies": {
+    "js-yaml": "^4.1.0",
     "prettier": "3.5.3"
   }
 }

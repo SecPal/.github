@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+openapi: 3.1.0
+info:
+  title: Fixture
+  version: "0"
+paths:
+  /auth/email/verification-notification:
+    post:
+      responses:
+        "204":
+          description: stub
+  /employees/{employee}/documents:
+    get:
+      responses:
+        "200":
+          description: stub
+    post:
+      responses:
+        "201":
+          description: stub
+  /employees/{employee}/documents/{document}:
+    get:
+      responses:
+        "200":
+          description: stub
+    delete:
+      responses:
+        "204":
+          description: stub
+  /employees/{employee}/documents/{document}/download:
+    get:
+      responses:
+        "200":
+          description: stub
+  /qualifications:
+    get:
+      responses:
+        "200":
+          description: stub
+    post:
+      responses:
+        "201":
+          description: stub
+  /qualifications/{qualification}:
+    get:
+      responses:
+        "200":
+          description: stub
+    patch:
+      responses:
+        "200":
+          description: stub
+    delete:
+      responses:
+        "204":
+          description: stub
+  /employees/{employee}/qualifications:
+    get:
+      responses:
+        "200":
+          description: stub
+    post:
+      responses:
+        "201":
+          description: stub
+  /employee-qualifications/{employeeQualification}:
+    get:
+      responses:
+        "200":
+          description: stub
+    patch:
+      responses:
+        "200":
+          description: stub
+    delete:
+      responses:
+        "204":
+          description: stub
