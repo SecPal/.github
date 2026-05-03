@@ -878,7 +878,8 @@ chmod +x "$fake_guard_expose_bin"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_guard_expose_real"
 chmod +x "$fake_guard_expose_real"
 install_real_guard_exit=0
-env WORKSPACE_ROOT="$workspace_root" \
+env HOME="$home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
     POLYSCOPE_EXPOSE_BIN="$fake_guard_expose_bin" \
