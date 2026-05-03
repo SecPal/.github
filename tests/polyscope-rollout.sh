@@ -857,6 +857,44 @@ test -L "$fake_polyscope_bin_dir/expose-linux-x64"
 test -x "$fake_polyscope_bin_dir/expose-linux-x64"
 test -x "$fake_polyscope_bin_dir/expose-linux-x64.real"
 test "$(readlink "$fake_polyscope_bin_dir/expose-linux-x64")" = "$fake_bin_dir/polyscope-expose-wrapper.sh"
+
+# Re-running the installer when .real already exists must exit non-zero (guard against clobbering)
+install_real_guard_exit=0
+env WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null \
+    || install_real_guard_exit=$?
+if [[ "$install_real_guard_exit" -eq 0 ]]; then
+    echo "installer must refuse to overwrite existing .real binary" >&2
+    exit 1
+fi
+
+# installer must refuse to overwrite an existing .real binary
+# Simulate: expose-linux-x64 is a regular file AND .real already holds a previous real binary
+fake_guard_dir="$workspace/guard-test"
+mkdir -p "$fake_guard_dir"
+fake_guard_expose_bin="$fake_guard_dir/expose-linux-x64"
+fake_guard_expose_real="$fake_guard_dir/expose-linux-x64.real"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_guard_expose_bin"
+chmod +x "$fake_guard_expose_bin"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_guard_expose_real"
+chmod +x "$fake_guard_expose_real"
+install_real_guard_exit=0
+env WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    POLYSCOPE_EXPOSE_BIN="$fake_guard_expose_bin" \
+    POLYSCOPE_EXPOSE_REAL_BIN="$fake_guard_expose_real" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null \
+    || install_real_guard_exit=$?
+if [[ "$install_real_guard_exit" -eq 0 ]]; then
+    echo "installer guard: must refuse to overwrite existing .real binary" >&2
+    exit 1
+fi
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$fake_unit_dir/polyscope-server.service"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.service"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
@@ -907,6 +945,15 @@ env FAKE_GIT_REAL_LOG="$fake_git_real_log" \
     "$fake_polyscope_git_dir/git" -C /tmp/example commit -S -m already-signed >/dev/null
 
 grep -q '^-C /tmp/example commit -S -m already-signed$' "$fake_git_real_log"
+
+# --no-gpg-sign must be rejected by the git wrapper
+no_gpg_sign_exit=0
+env POLYSCOPE_REAL_GIT_BIN="$fake_real_git_bin" \
+    "$fake_polyscope_git_dir/git" commit --no-gpg-sign -m bypass 2>/dev/null || no_gpg_sign_exit=$?
+if [[ "$no_gpg_sign_exit" -eq 0 ]]; then
+    echo "git wrapper must reject --no-gpg-sign for commit" >&2
+    exit 1
+fi
 
 preview_wrapper_out="$workspace/expose-wrapper-preview.out"
 env HOME="$home_dir" \

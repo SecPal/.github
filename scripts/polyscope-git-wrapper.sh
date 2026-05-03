@@ -9,12 +9,21 @@ REAL_GIT_BIN="${POLYSCOPE_REAL_GIT_BIN:-/usr/bin/git}"
 has_commit_signing_flag() {
 	for arg in "$@"; do
 		case "$arg" in
-			-S|--gpg-sign|--gpg-sign=*|--no-gpg-sign)
+			-S|--gpg-sign|--gpg-sign=*)
 				return 0
 				;;
 		esac
 	done
 
+	return 1
+}
+
+has_no_gpg_sign_flag() {
+	for arg in "$@"; do
+		if [[ "$arg" == "--no-gpg-sign" ]]; then
+			return 0
+		fi
+	done
 	return 1
 }
 
@@ -64,6 +73,10 @@ done
 
 if [[ "$subcommand" == "commit" ]]; then
 	commit_args=("${argv[@]:subcommand_index + 1}")
+	if has_no_gpg_sign_flag "${commit_args[@]}"; then
+		echo "Error: --no-gpg-sign is not allowed in Polyscope-managed git commits." >&2
+		exit 1
+	fi
 	if ! has_commit_signing_flag "${commit_args[@]}"; then
 		exec "$REAL_GIT_BIN" "${prefix[@]}" commit -S "${commit_args[@]}"
 	fi

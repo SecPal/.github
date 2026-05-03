@@ -104,6 +104,11 @@ ln -sfn "$WRAPPER_SOURCE" "$EXPOSE_WRAPPER_TARGET"
 ln -sfn "$GIT_WRAPPER_SOURCE" "$GIT_WRAPPER_TARGET"
 
 if [[ -e "$POLYSCOPE_EXPOSE_BIN" && ! -L "$POLYSCOPE_EXPOSE_BIN" ]]; then
+    if [[ -e "$POLYSCOPE_EXPOSE_REAL_BIN" ]]; then
+        echo "Error: $POLYSCOPE_EXPOSE_REAL_BIN already exists; will not overwrite it." >&2
+        echo "Remove or rename $POLYSCOPE_EXPOSE_REAL_BIN manually before re-running the installer." >&2
+        exit 1
+    fi
     mv -f "$POLYSCOPE_EXPOSE_BIN" "$POLYSCOPE_EXPOSE_REAL_BIN"
 fi
 
