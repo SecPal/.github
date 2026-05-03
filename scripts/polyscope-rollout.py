@@ -1069,8 +1069,7 @@ def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str
     }
 
 
-def build_setup_hash(config: dict[str, Any]) -> str:
-    setup_commands = config.get("scripts", {}).get("setup", [])
+def build_setup_hash(setup_commands: list[str]) -> str:
     payload = json.dumps(setup_commands, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -1178,21 +1177,21 @@ def provision_worktrees(
         setup_commands = local_config.get("scripts", {}).get("setup", [])
         if repo_name == "api":
             setup_commands = setup_commands[1:]
-        setup_hash = build_setup_hash(local_config)
+        setup_hash = build_setup_hash(setup_commands)
         config_text = rendered_configs[repo_name]
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
             sync_worktree_local_config(worktree_path, config_text)
             ensure_worktree_hooks(worktree_path)
 
-            if repo_name == "api":
-                if not ensure_api_worktree_ready(worktree_path, spec["path"]):
-                    continue
-
             marker_path = worktree_path / PROVISION_MARKER_FILENAME
             marker = load_provision_marker(marker_path)
             if marker is not None and marker.get("setup_hash") == setup_hash:
                 continue
+
+            if repo_name == "api":
+                if not ensure_api_worktree_ready(worktree_path, spec["path"]):
+                    continue
 
             if setup_commands:
                 print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
