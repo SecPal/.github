@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-03 - Isolate Polyscope Preview Storage Per API Workspace
+
+**Changed:**
+
+- updated `scripts/polyscope-rollout.py` so API worktree preparation now isolates PostgreSQL preview storage per workspace: when the role can create databases it provisions a deterministic preview database, and when it cannot it falls back to a deterministic preview schema wired through `DB_URL?search_path=...`; in both cases the original shared base database is persisted in `POLYSCOPE_BASE_DB_DATABASE`, so a fresh `frontend-<workspace>.preview.secpal.dev` no longer shares mutable API data with other preview workspaces by default
+- taught the worktree provisioner to prune orphaned API preview storage targets when the matching Polyscope workspace directory disappears, dropping stale preview databases or schemas as appropriate so repeated provisioning stays idempotent without accumulating abandoned preview state on the host
+- changed the generated API `polyscope.local.json` setup to call the shared rollout helper directly for worktree preparation, so manual Polyscope setup and automatic `--provision-worktrees` runs use the same database-isolation path instead of drifting between inline env rewrites and background provisioning behavior
+- extended `tests/polyscope-rollout.sh` to prove both workspace-specific preview-database provisioning and schema fallback, tracked base-database metadata, cleanup of removed workspaces, and idempotent reruns after cleanup
+
 ## 2026-05-02 - Return Direct Preview URLs From Polyscope Share
 
 **Changed:**

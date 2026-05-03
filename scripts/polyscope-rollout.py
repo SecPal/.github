@@ -17,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
@@ -24,6 +25,13 @@ from typing import Any
 
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
+ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
+PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
+PREVIEW_SCHEMA_ENV_KEY = "POLYSCOPE_PREVIEW_SCHEMA"
+PREVIEW_STORAGE_MODE_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_MODE"
+POSTGRES_PREVIEW_DATABASE_SEPARATOR = "__preview__"
+POSTGRES_IDENTIFIER_MAX_LENGTH = 63
+ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z0-9_]+)=(.*)$")
 
 
 def build_preview_url_template(preview_prefix: str | None) -> str:
@@ -32,54 +40,317 @@ def build_preview_url_template(preview_prefix: str | None) -> str:
     return "https://{{folder}}.preview.secpal.dev"
 
 
-def build_api_preview_env_setup_command() -> str:
-    script = textwrap.dedent(
-        """
-        from pathlib import Path
-        import os
-        import re
+def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
+    rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
+    source_repo = shlex.quote(str(source_repo_path))
+    return (
+        f"python3 {rollout_script} --prepare-api-worktree \"$PWD\" "
+        f"--source-repo-path {source_repo}"
+    )
 
-        workspace = os.environ["POLYSCOPE_WORKSPACE"]
-        env_path = Path(".env")
-        if not env_path.exists():
-            raise SystemExit(".env not found; copy the preview environment into place before running Polyscope setup.")
 
-        values = {
-            "APP_URL": f"https://api-{workspace}.preview.secpal.dev",
-            "FRONTEND_URL": f"https://frontend-{workspace}.preview.secpal.dev",
-            "SESSION_DOMAIN": ".secpal.dev",
-            "SANCTUM_STATEFUL_DOMAINS": ",".join(
-                (
-                    f"frontend-{workspace}.preview.secpal.dev",
-                    f"{workspace}.preview.secpal.dev",
-                    "app.secpal.dev",
-                )
-            ),
-            "CORS_ALLOWED_ORIGINS": ",".join(
-                (
-                    f"https://frontend-{workspace}.preview.secpal.dev",
-                    f"https://{workspace}.preview.secpal.dev",
-                    "https://app.secpal.dev",
-                )
-            ),
-        }
+def decode_env_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
+        return value[1:-1]
+    return value
 
-        text = env_path.read_text()
-        for key, value in values.items():
-            pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
-            replacement = f"{key}={value}"
-            if pattern.search(text):
-                text = pattern.sub(replacement, text)
-            else:
-                if text and not text.endswith("\\n"):
-                    text += "\\n"
-                text += replacement + "\\n"
 
-        env_path.write_text(text)
-        """
-    ).strip()
+def load_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in env_path.read_text().splitlines():
+        match = ENV_ASSIGNMENT_PATTERN.match(line.strip())
+        if match is None:
+            continue
+        values[match.group(1)] = decode_env_value(match.group(2))
+    return values
 
-    return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
+
+def upsert_env_assignments(text: str, updates: dict[str, str]) -> str:
+    for key, value in updates.items():
+        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+        replacement = f"{key}={value}"
+        if pattern.search(text):
+            text = pattern.sub(replacement, text)
+            continue
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += replacement + "\n"
+    return text
+
+
+def sanitize_postgres_identifier_component(value: str, fallback: str) -> str:
+    sanitized = re.sub(r"[^a-z0-9_]+", "_", value.lower()).strip("_")
+    return sanitized or fallback
+
+
+def shorten_postgres_identifier_component(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 9:
+        return value[:limit]
+    digest = hashlib.sha1(value.encode()).hexdigest()[:8]
+    head = value[: limit - len(digest) - 1].rstrip("_") or value[: limit - len(digest) - 1]
+    if not head:
+        head = value[:1]
+    return f"{head}_{digest}"
+
+
+def build_preview_database_prefix(base_database: str) -> str:
+    base_component = sanitize_postgres_identifier_component(base_database, "app")
+    available = POSTGRES_IDENTIFIER_MAX_LENGTH - len(POSTGRES_PREVIEW_DATABASE_SEPARATOR) - 16
+    return shorten_postgres_identifier_component(base_component, max(1, available)) + POSTGRES_PREVIEW_DATABASE_SEPARATOR
+
+
+def build_preview_database_name(base_database: str, workspace: str) -> str:
+    prefix = build_preview_database_prefix(base_database)
+    workspace_component = sanitize_postgres_identifier_component(workspace, "workspace")
+    available = POSTGRES_IDENTIFIER_MAX_LENGTH - len(prefix)
+    workspace_component = shorten_postgres_identifier_component(workspace_component, max(1, available))
+    return prefix + workspace_component
+
+
+def resolve_base_database_name(env_values: dict[str, str], workspace: str) -> str | None:
+    explicit_base = env_values.get(PREVIEW_DATABASE_BASE_ENV_KEY)
+    if explicit_base:
+        return explicit_base
+
+    current_database = env_values.get("DB_DATABASE")
+    if not current_database:
+        return None
+
+    preview_suffix = POSTGRES_PREVIEW_DATABASE_SEPARATOR + sanitize_postgres_identifier_component(workspace, "workspace")
+    if current_database.endswith(preview_suffix):
+        candidate = current_database[: -len(preview_suffix)]
+        if candidate:
+            return candidate
+
+    return current_database
+
+
+def build_postgres_command_env(env_values: dict[str, str]) -> dict[str, str]:
+    command_env = os.environ.copy()
+    for source_key, target_key in {
+        "DB_HOST": "PGHOST",
+        "DB_PORT": "PGPORT",
+        "DB_USERNAME": "PGUSER",
+        "DB_PASSWORD": "PGPASSWORD",
+    }.items():
+        if source_key in env_values:
+            command_env[target_key] = env_values[source_key]
+    return command_env
+
+
+def run_postgres_command(env_values: dict[str, str], database_name: str, sql: str) -> str:
+    try:
+        result = subprocess.run(
+            ["psql", "-v", "ON_ERROR_STOP=1", "-d", database_name, "-Atqc", sql],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=build_postgres_command_env(env_values),
+        )
+    except FileNotFoundError as error:
+        raise SystemExit("psql is required to manage Polyscope preview databases") from error
+    except subprocess.CalledProcessError as error:
+        stderr = error.stderr.strip() or error.stdout.strip() or str(error)
+        raise SystemExit(f"failed to manage Polyscope preview database via psql: {stderr}") from error
+
+    return result.stdout.strip()
+
+
+def postgres_role_can_create_databases(env_values: dict[str, str], base_database: str) -> bool:
+    result = run_postgres_command(
+        env_values,
+        base_database,
+        "SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user",
+    )
+    return result.lower() in {"1", "t", "true", "yes", "on"}
+
+
+def ensure_postgres_preview_database(env_values: dict[str, str], base_database: str, preview_database: str) -> None:
+    exists = run_postgres_command(
+        env_values,
+        base_database,
+        f"SELECT 1 FROM pg_database WHERE datname = '{preview_database}'",
+    )
+    if exists == "1":
+        return
+
+    run_postgres_command(env_values, base_database, f'CREATE DATABASE "{preview_database}"')
+
+
+def list_postgres_preview_databases(env_values: dict[str, str], base_database: str) -> list[str]:
+    prefix = build_preview_database_prefix(base_database)
+    output = run_postgres_command(
+        env_values,
+        base_database,
+        f"SELECT datname FROM pg_database WHERE datname LIKE '{prefix}%' ORDER BY datname",
+    )
+    return [line for line in output.splitlines() if line]
+
+
+def drop_postgres_preview_database(env_values: dict[str, str], base_database: str, preview_database: str) -> None:
+    run_postgres_command(
+        env_values,
+        base_database,
+        f'DROP DATABASE IF EXISTS "{preview_database}" WITH (FORCE)',
+    )
+
+
+def list_postgres_preview_schemas(env_values: dict[str, str], base_database: str) -> list[str]:
+    prefix = build_preview_database_prefix(base_database)
+    output = run_postgres_command(
+        env_values,
+        base_database,
+        f"SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE '{prefix}%' ORDER BY schema_name",
+    )
+    return [line for line in output.splitlines() if line]
+
+
+def ensure_postgres_preview_schema(env_values: dict[str, str], base_database: str, preview_schema: str) -> None:
+    run_postgres_command(env_values, base_database, f'CREATE SCHEMA IF NOT EXISTS "{preview_schema}"')
+
+
+def drop_postgres_preview_schema(env_values: dict[str, str], base_database: str, preview_schema: str) -> None:
+    run_postgres_command(env_values, base_database, f'DROP SCHEMA IF EXISTS "{preview_schema}" CASCADE')
+
+
+def build_postgres_url(env_values: dict[str, str], database_name: str, search_path: str | None = None) -> str:
+    username = env_values.get("DB_USERNAME", "")
+    password = env_values.get("DB_PASSWORD", "")
+    host = env_values.get("DB_HOST", "")
+    port = env_values.get("DB_PORT", "")
+
+    authority = ""
+    if username:
+        authority = urllib.parse.quote(username, safe="")
+        if password:
+            authority += ":" + urllib.parse.quote(password, safe="")
+        authority += "@"
+    authority += host
+    if port:
+        authority += f":{port}"
+
+    query = ""
+    if search_path is not None:
+        query = urllib.parse.urlencode({"search_path": search_path})
+
+    return urllib.parse.urlunsplit(
+        (
+            "postgresql",
+            authority,
+            "/" + urllib.parse.quote(database_name, safe=""),
+            query,
+            "",
+        )
+    )
+
+
+def build_api_preview_env_updates(workspace: str) -> dict[str, str]:
+    return {
+        "APP_URL": f"https://api-{workspace}.preview.secpal.dev",
+        "FRONTEND_URL": f"https://frontend-{workspace}.preview.secpal.dev",
+        "SESSION_DOMAIN": ".secpal.dev",
+        "SANCTUM_STATEFUL_DOMAINS": ",".join(
+            (
+                f"frontend-{workspace}.preview.secpal.dev",
+                f"{workspace}.preview.secpal.dev",
+                "app.secpal.dev",
+            )
+        ),
+        "CORS_ALLOWED_ORIGINS": ",".join(
+            (
+                f"https://frontend-{workspace}.preview.secpal.dev",
+                f"https://{workspace}.preview.secpal.dev",
+                "https://app.secpal.dev",
+            )
+        ),
+    }
+
+
+def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pathlib.Path) -> bool:
+    env_path = worktree_path / ".env"
+    if not env_path.exists():
+        source_env_path = source_repo_path / ".env"
+        if not source_env_path.exists():
+            print(
+                f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
+                f".env missing and source preview env not found at {source_env_path}"
+            )
+            return False
+        shutil.copy2(source_env_path, env_path)
+
+    env_values = load_env_assignments(env_path)
+    workspace = worktree_path.name
+    updated_values = build_api_preview_env_updates(workspace)
+
+    if env_values.get("DB_CONNECTION", "").lower() == "pgsql":
+        base_database = resolve_base_database_name(env_values, workspace)
+        if not base_database:
+            raise SystemExit(f"api worktree {worktree_path} is missing DB_DATABASE in .env")
+        preview_target = build_preview_database_name(base_database, workspace)
+        if postgres_role_can_create_databases(env_values, base_database):
+            ensure_postgres_preview_database(env_values, base_database, preview_target)
+            updated_values["DB_DATABASE"] = preview_target
+            updated_values["DB_URL"] = ""
+            updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "database"
+            updated_values[PREVIEW_SCHEMA_ENV_KEY] = ""
+        else:
+            ensure_postgres_preview_schema(env_values, base_database, preview_target)
+            updated_values["DB_DATABASE"] = base_database
+            updated_values["DB_URL"] = build_postgres_url(env_values, base_database, preview_target)
+            updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "schema"
+            updated_values[PREVIEW_SCHEMA_ENV_KEY] = preview_target
+        updated_values[PREVIEW_DATABASE_BASE_ENV_KEY] = base_database
+
+    env_path.write_text(upsert_env_assignments(env_path.read_text(), updated_values))
+    return True
+
+
+def cleanup_removed_api_preview_databases(
+    repo_state: dict[str, dict[str, Any]],
+    repo_specs: dict[str, dict[str, Any]],
+    clone_root: pathlib.Path,
+) -> list[str]:
+    api_clone_root = clone_root / repo_state["api"]["id"]
+    if not api_clone_root.exists():
+        return []
+
+    source_env_path = pathlib.Path(repo_specs["api"]["path"]) / ".env"
+    if not source_env_path.exists():
+        return []
+
+    env_values = load_env_assignments(source_env_path)
+    if env_values.get("DB_CONNECTION", "").lower() != "pgsql":
+        return []
+
+    base_database = resolve_base_database_name(env_values, "source")
+    if not base_database:
+        return []
+
+    active_targets = {
+        build_preview_database_name(base_database, worktree_path.name)
+        for worktree_path in api_clone_root.iterdir()
+        if worktree_path.is_dir()
+    }
+
+    cleaned_databases: list[str] = []
+    if postgres_role_can_create_databases(env_values, base_database):
+        for preview_database in list_postgres_preview_databases(env_values, base_database):
+            if preview_database in active_targets:
+                continue
+            drop_postgres_preview_database(env_values, base_database, preview_database)
+            cleaned_databases.append(preview_database)
+        return cleaned_databases
+
+    for preview_schema in list_postgres_preview_schemas(env_values, base_database):
+        if preview_schema in active_targets:
+            continue
+        drop_postgres_preview_schema(env_values, base_database, preview_schema)
+        cleaned_databases.append(preview_schema)
+
+    return cleaned_databases
 
 
 def build_frontend_preview_env_setup_command() -> str:
@@ -160,7 +431,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "preview": {"url": build_preview_url_template("api")},
             "scripts": {
                 "setup": [
-                    build_api_preview_env_setup_command(),
                     "test -d vendor || composer install",
                     build_api_preview_seed_command(),
                 ],
@@ -524,6 +794,8 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         spec["path"] = repo_path
         spec["copilot_instructions"] = repo_path / settings["copilot_instructions"]
         spec["focus_instruction_paths"] = [repo_path / path for path in settings["focus_instruction_paths"]]
+        if repo_name == "api":
+            spec["local_config"]["scripts"]["setup"].insert(0, build_api_preview_env_setup_command(repo_path))
         repo_specs[repo_name] = spec
     return repo_specs
 
@@ -826,23 +1098,6 @@ def run_setup_commands(worktree_path: pathlib.Path, commands: list[str]) -> None
         )
 
 
-def ensure_api_preview_env(worktree_path: pathlib.Path, source_repo_path: pathlib.Path) -> bool:
-    env_path = worktree_path / ".env"
-    if env_path.exists():
-        return True
-
-    source_env_path = source_repo_path / ".env"
-    if source_env_path.exists():
-        shutil.copy2(source_env_path, env_path)
-        return True
-
-    print(
-        f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
-        f".env missing and source preview env not found at {source_env_path}"
-    )
-    return False
-
-
 def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) -> None:
     (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
     ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
@@ -905,9 +1160,14 @@ def ensure_worktree_hooks(worktree_path: pathlib.Path) -> None:
     ensure_pre_push_hook(worktree_path)
 
 
-def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]], clone_root: pathlib.Path) -> list[str]:
+def provision_worktrees(
+    repo_state: dict[str, dict[str, Any]],
+    repo_specs: dict[str, dict[str, Any]],
+    clone_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
     rendered_configs = render_local_configs(repo_specs)
     provisioned_worktrees: list[str] = []
+    cleaned_preview_databases = cleanup_removed_api_preview_databases(repo_state, repo_specs, clone_root)
 
     for repo_name, spec in repo_specs.items():
         repo_clone_root = clone_root / repo_state[repo_name]["id"]
@@ -916,6 +1176,8 @@ def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[
 
         local_config = render_local_config(spec)
         setup_commands = local_config.get("scripts", {}).get("setup", [])
+        if repo_name == "api":
+            setup_commands = setup_commands[1:]
         setup_hash = build_setup_hash(local_config)
         config_text = rendered_configs[repo_name]
 
@@ -923,8 +1185,9 @@ def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[
             sync_worktree_local_config(worktree_path, config_text)
             ensure_worktree_hooks(worktree_path)
 
-            if repo_name == "api" and not ensure_api_preview_env(worktree_path, spec["path"]):
-                continue
+            if repo_name == "api":
+                if not ensure_api_worktree_ready(worktree_path, spec["path"]):
+                    continue
 
             marker_path = worktree_path / PROVISION_MARKER_FILENAME
             marker = load_provision_marker(marker_path)
@@ -949,7 +1212,7 @@ def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[
             )
             provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
 
-    return provisioned_worktrees
+    return provisioned_worktrees, cleaned_preview_databases
 
 
 def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
@@ -1203,11 +1466,13 @@ def build_summary(
     db_backup: pathlib.Path | None,
     nginx_output: pathlib.Path,
     provisioned_worktrees: list[str],
+    cleaned_preview_databases: list[str],
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "db_backup": str(db_backup) if db_backup is not None else None,
         "rendered_nginx_config": str(nginx_output),
         "provisioned_worktrees": provisioned_worktrees,
+        "cleaned_preview_databases": cleaned_preview_databases,
         "repositories": {},
     }
     for repo_name, spec in repo_specs.items():
@@ -1235,6 +1500,8 @@ def install_nginx_config(nginx_output: pathlib.Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
+    parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
+    parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "polyscope.db")
     parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
@@ -1251,6 +1518,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    if args.prepare_api_worktree is not None:
+        if args.source_repo_path is None:
+            raise SystemExit("--source-repo-path is required with --prepare-api-worktree")
+        return 0 if ensure_api_worktree_ready(args.prepare_api_worktree, args.source_repo_path) else 1
+
     repo_specs = build_repo_specs(args.workspace_root)
 
     validate_repo_local_configs(repo_specs)
@@ -1273,10 +1546,18 @@ def main() -> int:
         install_nginx_config(args.nginx_output)
 
     provisioned_worktrees: list[str] = []
+    cleaned_preview_databases: list[str] = []
     if args.provision_worktrees:
-        provisioned_worktrees = provision_worktrees(repo_state, repo_specs, args.clone_root)
+        provisioned_worktrees, cleaned_preview_databases = provision_worktrees(repo_state, repo_specs, args.clone_root)
 
-    summary = build_summary(repo_state, repo_specs, db_backup, args.nginx_output, provisioned_worktrees)
+    summary = build_summary(
+        repo_state,
+        repo_specs,
+        db_backup,
+        args.nginx_output,
+        provisioned_worktrees,
+        cleaned_preview_databases,
+    )
     if args.summary_output is not None:
         args.summary_output.write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
