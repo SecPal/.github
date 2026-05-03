@@ -162,23 +162,8 @@ for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE INSTALL_TARGET; do
     fi
 done
 
-# Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
-for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE INSTALL_TARGET; do
-    _val="${!_var_name}"
-    if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
-        echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
-        exit 1
-    fi
-done
-
 server_scope="$(resolve_server_scope)"
 system_server_fragment_path="$(detect_system_server_fragment_path)"
-
-if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]]; then
-    echo "Error: --polyscope-server-scope system was requested but no system $POLYSCOPE_SYSTEM_SERVER_UNIT unit was found." >&2
-    echo "Hint: use --polyscope-server-scope user to install the user-managed server unit instead." >&2
-    exit 1
-fi
 
 if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]]; then
     echo "Error: --polyscope-server-scope system was requested but no system $POLYSCOPE_SYSTEM_SERVER_UNIT unit was found." >&2
