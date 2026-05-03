@@ -858,19 +858,14 @@ test -x "$fake_polyscope_bin_dir/expose-linux-x64"
 test -x "$fake_polyscope_bin_dir/expose-linux-x64.real"
 test "$(readlink "$fake_polyscope_bin_dir/expose-linux-x64")" = "$fake_bin_dir/polyscope-expose-wrapper.sh"
 
-# Re-running the installer when .real already exists must exit non-zero (guard against clobbering)
-install_real_guard_exit=0
-env WORKSPACE_ROOT="$workspace_root" \
+# Re-running the installer after the expose binary has been wrapped must stay idempotent.
+env HOME="$home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
     FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null \
-    || install_real_guard_exit=$?
-if [[ "$install_real_guard_exit" -eq 0 ]]; then
-    echo "installer must refuse to overwrite existing .real binary" >&2
-    exit 1
-fi
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
 
 # installer must refuse to overwrite an existing .real binary
 # Simulate: expose-linux-x64 is a regular file AND .real already holds a previous real binary
