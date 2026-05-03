@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-02 - Return Direct Preview URLs From Polyscope Share
+
+**Changed:**
+
+- added `scripts/polyscope-expose-wrapper.sh` and taught `scripts/install-polyscope-rollout.sh` to install it as the live `~/.polyscope/bin/expose-linux-x64` entrypoint with `expose-linux-x64.real` kept as the fallback binary, so Polyscope `tunnel.start` now returns the existing `https://*.preview.secpal.dev` URL directly for SecPal preview hosts instead of handing browser-share links off to the unreliable free `sharedwithexpose.com` edge
+- restored repo-prefixed canonical preview hosts in generated Polyscope config for preview-capable repositories (`api-`, `frontend-`, `secpal-app-`, `changelog-`), and aligned the API preview `FRONTEND_URL` rewrite with `frontend-<workspace>.preview.secpal.dev`, so shared/opened preview URLs now keep the repository type in front of the workspace name instead of collapsing back to the generic host alias
+- taught `scripts/polyscope-rollout.py` to heal API worktrees missing `.env` by copying the source preview environment from the primary `api` checkout before applying workspace-specific rewrites, and to skip cleanly with a journal-visible message if no source preview env exists, so stale clones no longer fail `polyscope-worktree-provision.service`
+- added `scripts/polyscope-git-wrapper.sh` and wired the Polyscope systemd units to a dedicated PATH layer plus explicit `SSH_AUTH_SOCK`, so Polyscope-driven `git commit` calls now force `-S` through the configured SSH signing key instead of depending on the agent's internal commit path honoring repo config
+- kept non-SecPal or non-preview Expose calls on the original binary path, so the share override stays narrowly scoped to the already-public SecPal preview domain rather than replacing Expose globally
+- extended `tests/polyscope-rollout.sh` to cover API env healing for stale worktrees, git-wrapper installation and signed-commit enforcement, preview-domain short-circuiting, and fallback execution for non-preview hosts
+
 ## 2026-05-02 - Auto-Provision Fresh Polyscope Worktrees
 
 **Changed:**
