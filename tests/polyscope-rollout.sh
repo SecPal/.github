@@ -486,13 +486,7 @@ python3 "$PYTHON_SCRIPT" \
 grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'org-shared.instructions.md' "$workspace_root/api/polyscope.local.json"
-grep -qF 'POLYSCOPE_WORKSPACE' "$workspace_root/api/polyscope.local.json"
-grep -qF 'python3 -c' "$workspace_root/api/polyscope.local.json"
-grep -qF 'APP_URL' "$workspace_root/api/polyscope.local.json"
-grep -qF 'FRONTEND_URL' "$workspace_root/api/polyscope.local.json"
-grep -qF 'SANCTUM_STATEFUL_DOMAINS' "$workspace_root/api/polyscope.local.json"
-grep -qF 'CORS_ALLOWED_ORIGINS' "$workspace_root/api/polyscope.local.json"
-grep -qF 'frontend-{workspace}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan config:clear && php artisan migrate --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
 grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
@@ -608,12 +602,22 @@ assert summary['repositories']['.github']['linked_repositories'] == []
 PY
 
 provision_log="$workspace/provision.log"
+fake_psql_log="$workspace/psql.log"
+fake_pg_state="$workspace/postgres-state.json"
 fake_exec_dir="$workspace/fake-exec"
 service_path="$fake_exec_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 api_clone="$home_dir/.polyscope/clones/api12345/auto-hawk"
 frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
 mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts"
 mkdir -p "$home_dir/.local/bin"
+
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(json.dumps({"databases": ["secpal"], "schemas": [], "rolcreatedb": True}))
+PY
 
 cat >"$fake_exec_dir/composer" <<'STUB'
 #!/usr/bin/env bash
@@ -643,6 +647,79 @@ exit 0
 STUB
 chmod +x "$fake_exec_dir/npm"
 
+cat >"$fake_exec_dir/psql" <<'STUB'
+#!/usr/bin/env python3
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+log_path = Path(os.environ["FAKE_PSQL_LOG"])
+state_path = Path(os.environ["FAKE_PSQL_STATE"])
+
+state = {"databases": [], "schemas": [], "rolcreatedb": True}
+if state_path.exists():
+    state = json.loads(state_path.read_text())
+
+args = sys.argv[1:]
+sql = ""
+if "-Atqc" in args:
+    sql = args[args.index("-Atqc") + 1]
+elif "-c" in args:
+    sql = args[args.index("-c") + 1]
+
+with log_path.open("a") as handle:
+    handle.write(f"psql:{os.getcwd()}:{sql}\n")
+
+databases = state.get("databases", [])
+schemas = state.get("schemas", [])
+role_match = re.search(r"SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user", sql)
+exists_match = re.search(r"SELECT 1 FROM pg_database WHERE datname = '([^']+)'", sql)
+list_match = re.search(r"SELECT datname FROM pg_database WHERE datname LIKE '([^']+)'", sql)
+create_match = re.search(r'CREATE DATABASE "([^"]+)"', sql)
+drop_match = re.search(r'DROP DATABASE IF EXISTS "([^"]+)"(?: WITH \(FORCE\))?', sql)
+schema_list_match = re.search(r"SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE '([^']+)'", sql)
+create_schema_match = re.search(r'CREATE SCHEMA IF NOT EXISTS "([^"]+)"', sql)
+drop_schema_match = re.search(r'DROP SCHEMA IF EXISTS "([^"]+)" CASCADE', sql)
+
+if role_match:
+    sys.stdout.write("t\n" if state.get("rolcreatedb", False) else "f\n")
+elif exists_match:
+    database_name = exists_match.group(1)
+    if database_name in databases:
+        sys.stdout.write("1\n")
+elif list_match:
+    prefix = list_match.group(1).replace("%", "")
+    matches = sorted(database_name for database_name in databases if database_name.startswith(prefix))
+    if matches:
+        sys.stdout.write("\n".join(matches) + "\n")
+elif schema_list_match:
+    prefix = schema_list_match.group(1).replace("%", "")
+    matches = sorted(schema_name for schema_name in schemas if schema_name.startswith(prefix))
+    if matches:
+        sys.stdout.write("\n".join(matches) + "\n")
+elif create_match:
+    database_name = create_match.group(1)
+    if database_name not in databases:
+        databases.append(database_name)
+elif drop_match:
+    database_name = drop_match.group(1)
+    databases = [entry for entry in databases if entry != database_name]
+elif create_schema_match:
+    schema_name = create_schema_match.group(1)
+    if schema_name not in schemas:
+        schemas.append(schema_name)
+elif drop_schema_match:
+    schema_name = drop_schema_match.group(1)
+    schemas = [entry for entry in schemas if entry != schema_name]
+
+state["databases"] = sorted(databases)
+state["schemas"] = sorted(schemas)
+state_path.write_text(json.dumps(state))
+STUB
+chmod +x "$fake_exec_dir/psql"
+
 cat >"$home_dir/.local/bin/pre-commit" <<'STUB'
 #!/usr/bin/env bash
 printf 'pre-commit:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
@@ -659,6 +736,12 @@ chmod +x "$home_dir/.local/bin/pre-commit"
 cat >"$workspace_root/api/.env" <<'EOF'
 APP_URL=https://api.secpal.dev
 FRONTEND_URL=https://app.secpal.dev
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=secpal
+DB_USERNAME=secpal
+DB_PASSWORD=
 SESSION_DOMAIN=.secpal.dev
 SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
 CORS_ALLOWED_ORIGINS=https://app.secpal.dev
@@ -694,6 +777,8 @@ provision_summary_json="$workspace/provision-summary.json"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --repo-state-file "$repos_json" \
@@ -708,12 +793,17 @@ python3 - "$provision_summary_json" <<'PY'
 import json, sys
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
+assert cleaned == [], f"expected no cleaned preview databases on first provisioning run, got {cleaned}"
 PY
 
 grep -qF 'APP_URL=https://api-auto-hawk.preview.secpal.dev' "$api_clone/.env"
 grep -qF 'FRONTEND_URL=https://frontend-auto-hawk.preview.secpal.dev' "$api_clone/.env"
+grep -qF 'DB_CONNECTION=pgsql' "$api_clone/.env"
+grep -qF 'DB_DATABASE=secpal__preview__auto_hawk' "$api_clone/.env"
+grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$api_clone/.env"
 grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
 grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
@@ -738,6 +828,17 @@ grep -qF "npm:$frontend_clone:ci" "$provision_log"
 grep -qF "npm:$frontend_clone:run build -- --mode preview" "$provision_log"
 grep -qF "pre-commit:$api_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
 grep -qF "pre-commit:$frontend_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
+grep -qF "SELECT 1 FROM pg_database WHERE datname = 'secpal__preview__auto_hawk'" "$fake_psql_log"
+grep -qF 'CREATE DATABASE "secpal__preview__auto_hawk"' "$fake_psql_log"
+
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+assert 'secpal' in state['databases']
+assert 'secpal__preview__auto_hawk' in state['databases']
+PY
 
 stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
 mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
@@ -756,6 +857,8 @@ stale_provision_summary_json="$workspace/stale-provision-summary.json"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --repo-state-file "$repos_json" \
@@ -770,27 +873,220 @@ python3 - "$stale_provision_summary_json" <<'PY'
 import json, sys
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:stale-otter' in provisioned, f"expected api:stale-otter in provisioned_worktrees, got {provisioned}"
+assert cleaned == [], f"expected no cleaned preview databases while stale-otter still exists, got {cleaned}"
 PY
 
 grep -qF 'APP_URL=https://api-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
 grep -qF 'FRONTEND_URL=https://frontend-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
+grep -qF 'DB_DATABASE=secpal__preview__stale_otter' "$stale_api_clone/.env"
+grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$stale_api_clone/.env"
 test -f "$stale_api_clone/.polyscope-secpal-provisioned.json"
+grep -qF 'CREATE DATABASE "secpal__preview__stale_otter"' "$fake_psql_log"
 
-provision_log_lines_before="$(wc -l < "$provision_log")"
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+assert 'secpal__preview__stale_otter' in state['databases']
+PY
+
+rm -rf "$stale_api_clone"
+
+# Inject a stale schema alongside the stale database to verify that in database mode
+# (rolcreatedb=true) the cleanup also prunes orphaned schemas from a previous schema-mode run.
+python3 - "$fake_pg_state" <<'PY'
+import json, sys
+state = json.loads(open(sys.argv[1]).read())
+state.setdefault("schemas", []).append("secpal__preview__legacy_schema_otter")
+open(sys.argv[1], "w").write(json.dumps(state))
+PY
+
+cleanup_summary_json="$workspace/cleanup-summary.json"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
+    --summary-output "$cleanup_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$cleanup_summary_json" "$fake_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+
+assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
+assert 'secpal__preview__stale_otter' in cleaned, f"expected stale db in cleaned, got {cleaned}"
+assert 'secpal__preview__legacy_schema_otter' in cleaned, f"expected stale schema in cleaned even in database mode, got {cleaned}"
+assert 'secpal__preview__auto_hawk' in state['databases']
+assert 'secpal__preview__stale_otter' not in state['databases']
+assert 'secpal__preview__legacy_schema_otter' not in state.get('schemas', [])
+PY
+
+grep -qF 'SELECT datname FROM pg_database WHERE datname LIKE '"'"'secpal__preview__%'"'" "$fake_psql_log"
+grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__stale_otter" WITH (FORCE)' "$fake_psql_log"
+
+provision_log_lines_before="$(wc -l < "$provision_log")"
+idempotent_summary_json="$workspace/idempotent-summary.json"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$idempotent_summary_json" \
     --skip-local-configs \
     --skip-db-sync \
     --provision-worktrees \
     > /dev/null
 
 test "$provision_log_lines_before" -eq "$(wc -l < "$provision_log")"
+
+python3 - "$idempotent_summary_json" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
+assert summary.get('cleaned_preview_storage_targets', []) == [], summary.get('cleaned_preview_storage_targets', [])
+PY
+
+schema_home_dir="$workspace/schema-home"
+schema_api_clone="$schema_home_dir/.polyscope/clones/api12345/schema-badger"
+schema_frontend_clone="$schema_home_dir/.polyscope/clones/fe123456/schema-badger"
+schema_pg_state="$workspace/postgres-schema-state.json"
+schema_summary_json="$workspace/schema-summary.json"
+schema_cleanup_summary_json="$workspace/schema-cleanup-summary.json"
+
+mkdir -p "$schema_home_dir/.local/bin" "$schema_api_clone/.git/info" "$schema_api_clone/.git/hooks" "$schema_api_clone/scripts" "$schema_frontend_clone/.git/info" "$schema_frontend_clone/.git/hooks" "$schema_frontend_clone/scripts"
+cp "$home_dir/.local/bin/pre-commit" "$schema_home_dir/.local/bin/pre-commit"
+
+python3 - <<'PY' "$schema_pg_state"
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(json.dumps({"databases": ["secpal"], "schemas": [], "rolcreatedb": False}))
+PY
+
+cp "$workspace_root/api/.env" "$schema_api_clone/.env"
+
+cat >"$schema_api_clone/.pre-commit-config.yaml" <<'EOF'
+repos: []
+EOF
+
+cat >"$schema_api_clone/scripts/preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$schema_api_clone/scripts/preflight.sh"
+
+cat >"$schema_frontend_clone/.env.local" <<'EOF'
+VITE_API_URL=https://api.secpal.dev
+EOF
+
+cat >"$schema_frontend_clone/.pre-commit-config.yaml" <<'EOF'
+repos: []
+EOF
+
+cat >"$schema_frontend_clone/scripts/preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$schema_frontend_clone/scripts/preflight.sh"
+
+env HOME="$schema_home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$schema_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$schema_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$schema_summary_json" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
+assert 'api:schema-badger' in provisioned, provisioned
+assert 'frontend:schema-badger' in provisioned, provisioned
+assert cleaned == [], cleaned
+PY
+
+grep -qF 'DB_DATABASE=secpal' "$schema_api_clone/.env"
+grep -qF 'DB_URL=postgresql://secpal@127.0.0.1:5432/secpal?search_path=secpal__preview__schema_badger' "$schema_api_clone/.env"
+grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$schema_api_clone/.env"
+grep -qF 'POLYSCOPE_PREVIEW_STORAGE_MODE=schema' "$schema_api_clone/.env"
+grep -qF 'POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__schema_badger' "$schema_api_clone/.env"
+grep -qF 'VITE_API_URL=https://api-schema-badger.preview.secpal.dev' "$schema_frontend_clone/.env.local"
+grep -qF 'SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user' "$fake_psql_log"
+grep -qF 'CREATE SCHEMA IF NOT EXISTS "secpal__preview__schema_badger"' "$fake_psql_log"
+
+python3 - <<'PY' "$schema_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+assert state['databases'] == ['secpal'], state['databases']
+assert 'secpal__preview__schema_badger' in state['schemas'], state['schemas']
+PY
+
+rm -rf "$schema_api_clone" "$schema_frontend_clone"
+
+env HOME="$schema_home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$schema_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$schema_cleanup_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$schema_cleanup_summary_json" "$schema_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+
+assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
+assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__schema_badger'], summary.get('cleaned_preview_storage_targets', [])
+assert 'secpal__preview__schema_badger' not in state['schemas'], state['schemas']
+PY
+
+grep -qF 'SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE '"'"'secpal__preview__%'"'" "$fake_psql_log"
+grep -qF 'DROP SCHEMA IF EXISTS "secpal__preview__schema_badger" CASCADE' "$fake_psql_log"
 
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
