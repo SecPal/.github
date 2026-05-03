@@ -24,7 +24,6 @@ POLYSCOPE_GIT_WRAPPER_BIN="${POLYSCOPE_GIT_WRAPPER_BIN:-$POLYSCOPE_GIT_BIN_DIR/g
 POLYSCOPE_SERVER_SCOPE="${POLYSCOPE_SERVER_SCOPE:-auto}"
 POLYSCOPE_SYSTEM_SERVER_UNIT="${POLYSCOPE_SYSTEM_SERVER_UNIT:-polyscope-server.service}"
 POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/systemd/system/$POLYSCOPE_SYSTEM_SERVER_UNIT.d}"
-POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK="${POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK:-/run/user/$(id -u)/openssh_agent}"
 SERVICE_PATH="${POLYSCOPE_SERVICE_PATH:-}"
 SUDO_BIN="${SUDO_BIN:-sudo}"
 
@@ -142,7 +141,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK SERVICE_PATH SUDO_BIN; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -154,8 +153,38 @@ for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE 
     fi
 done
 
+# Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE INSTALL_TARGET; do
+    _val="${!_var_name}"
+    if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
+        echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
+        exit 1
+    fi
+done
+
+# Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE INSTALL_TARGET; do
+    _val="${!_var_name}"
+    if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
+        echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
+        exit 1
+    fi
+done
+
 server_scope="$(resolve_server_scope)"
 system_server_fragment_path="$(detect_system_server_fragment_path)"
+
+if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]]; then
+    echo "Error: --polyscope-server-scope system was requested but no system $POLYSCOPE_SYSTEM_SERVER_UNIT unit was found." >&2
+    echo "Hint: use --polyscope-server-scope user to install the user-managed server unit instead." >&2
+    exit 1
+fi
+
+if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]]; then
+    echo "Error: --polyscope-server-scope system was requested but no system $POLYSCOPE_SYSTEM_SERVER_UNIT unit was found." >&2
+    echo "Hint: use --polyscope-server-scope user to install the user-managed server unit instead." >&2
+    exit 1
+fi
 
 if [[ "$server_scope" == "system" ]] && ! can_run_privileged_commands; then
     echo "Error: detected existing system $POLYSCOPE_SYSTEM_SERVER_UNIT at ${system_server_fragment_path:-<unknown>}, but non-interactive sudo or root access is unavailable." >&2
@@ -225,7 +254,7 @@ ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
 Environment=PATH=$SERVICE_PATH
-Environment=SSH_AUTH_SOCK=$POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK
+Environment=SSH_AUTH_SOCK=/run/user/%U/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 EOF
 

@@ -1271,7 +1271,7 @@ test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q "Environment=PATH=$system_polyscope_git_dir:$system_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q "Environment=SSH_AUTH_SOCK=/run/user/$(id -u)/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=SSH_AUTH_SOCK=/run/user/%U/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
@@ -1315,6 +1315,66 @@ grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
 grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"
+
+# installer must refuse when system scope is detected but sudo is unavailable
+no_sudo_home_dir="$workspace/no-sudo-home"
+no_sudo_bin_dir="$workspace/no-sudo-bin"
+no_sudo_unit_dir="$workspace/no-sudo-units"
+no_sudo_polyscope_bin_dir="$no_sudo_home_dir/.polyscope/bin"
+no_sudo_polyscope_git_dir="$no_sudo_home_dir/.local/lib/polyscope/bin"
+no_sudo_sudo_dir="$workspace/no-sudo-fake-sudo"
+no_sudo_systemctl_log="$workspace/no-sudo-systemctl.log"
+no_sudo_fragment_dir="$workspace/no-sudo-fragments"
+no_sudo_fragment_path="$no_sudo_fragment_dir/polyscope-server.service"
+mkdir -p "$no_sudo_bin_dir" "$no_sudo_unit_dir" "$no_sudo_polyscope_bin_dir" "$no_sudo_polyscope_git_dir" "$no_sudo_sudo_dir" "$no_sudo_fragment_dir"
+printf '[Unit]\nDescription=Polyscope Server\n' > "$no_sudo_fragment_path"
+
+cat >"$no_sudo_polyscope_bin_dir/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$no_sudo_polyscope_bin_dir/expose-linux-x64"
+
+cat >"$no_sudo_sudo_dir/sudo" <<'STUB'
+#!/usr/bin/env bash
+# Simulate unavailable non-interactive sudo
+if [[ "${1:-}" == "-n" ]]; then
+    echo "sudo: a password is required" >&2
+    exit 1
+fi
+exec "$@"
+STUB
+chmod +x "$no_sudo_sudo_dir/sudo"
+
+no_sudo_exit=0
+env HOME="$no_sudo_home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$no_sudo_systemctl_log" \
+    SUDO_BIN="$no_sudo_sudo_dir/sudo" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$no_sudo_fragment_path" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$no_sudo_bin_dir" --unit-dir "$no_sudo_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null || no_sudo_exit=$?
+if [[ "$no_sudo_exit" -eq 0 ]]; then
+    echo "installer must refuse when system scope detected but sudo is unavailable" >&2
+    exit 1
+fi
+test ! -e "$no_sudo_unit_dir/polyscope-server.service"
+
+# installer must also refuse when --polyscope-server-scope system is forced but no unit exists
+no_unit_exit=0
+env HOME="$no_sudo_home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$no_sudo_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$no_sudo_bin_dir" --unit-dir "$no_sudo_unit_dir" --polyscope-server-bin "$fake_server_bin" --polyscope-server-scope system 2>/dev/null || no_unit_exit=$?
+if [[ "$no_unit_exit" -eq 0 ]]; then
+    echo "installer must refuse when --polyscope-server-scope system but no system unit exists" >&2
+    exit 1
+fi
+test ! -e "$no_sudo_unit_dir/polyscope-server.service"
 
 fake_real_git_bin="$workspace/fake-tools/git-real"
 cat >"$fake_real_git_bin" <<'STUB'
