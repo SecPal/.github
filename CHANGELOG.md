@@ -18,6 +18,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 - changed the generated API `polyscope.local.json` setup to call the shared rollout helper directly for worktree preparation, so manual Polyscope setup and automatic `--provision-worktrees` runs use the same database-isolation path instead of drifting between inline env rewrites and background provisioning behavior
 - extended `tests/polyscope-rollout.sh` to prove both workspace-specific preview-database provisioning and schema fallback, tracked base-database metadata, cleanup of removed workspaces, and idempotent reruns after cleanup
 
+## 2026-05-03 - Respect System-Managed Polyscope Server Installs
+
+**Changed:**
+
+- hardened `scripts/install-polyscope-rollout.sh` to auto-detect an existing system-managed `polyscope-server.service` and install a SecPal runtime drop-in there instead of blindly creating a competing user `polyscope-server.service`, so repeated rollout installs no longer reintroduce port-4321 restart loops on hosts where Polyscope already runs as a system service
+- kept the user-managed rollout sync and worktree-provision path units, but decoupled them from the user server unit when the system service is authoritative, so prompt sync and fresh-workspace provisioning still run immediately after install without reviving the conflicting user server path
+- made Expose wrapper installation idempotent when `expose-linux-x64.real` already exists and the live `expose-linux-x64` path has been restored to the original binary contents, so re-running the installer repairs the wrapper instead of aborting on a stale-but-safe backup state
+- extended `tests/polyscope-rollout.sh` to cover both the repaired Expose rewrap path and the auto-detected system-service install path, including generated drop-in content and the absence of a competing user Polyscope server unit
+
 ## 2026-05-02 - Return Direct Preview URLs From Polyscope Share
 
 **Changed:**

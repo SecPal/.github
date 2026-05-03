@@ -1104,12 +1104,13 @@ fake_bin_dir="$workspace/fake-bin"
 fake_unit_dir="$workspace/fake-units"
 fake_systemctl_dir="$workspace/fake-systemctl"
 fake_systemctl_log="$workspace/systemctl.log"
+fake_sudo_dir="$workspace/fake-sudo"
 fake_server_bin="$workspace/fake-tools/polyscope-server"
 fake_expose_real_log="$workspace/expose-real.log"
 fake_git_real_log="$workspace/git-real.log"
 fake_polyscope_bin_dir="$home_dir/.polyscope/bin"
 fake_polyscope_git_dir="$home_dir/.local/lib/polyscope/bin"
-mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
+mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_sudo_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
 mkdir -p "$(dirname "$fake_server_bin")"
 
 cat >"$fake_server_bin" <<'STUB'
@@ -1128,9 +1129,38 @@ chmod +x "$fake_polyscope_bin_dir/expose-linux-x64"
 cat >"$fake_systemctl_dir/systemctl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
+user_scope=0
+if [[ "${1:-}" == "--user" ]]; then
+    user_scope=1
+    shift
+fi
+
+if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "FragmentPath" && "${4:-}" == "--value" && "${5:-}" == "polyscope-server.service" ]]; then
+    if [[ "$user_scope" -eq 1 ]]; then
+        printf '%s\n' "${FAKE_USER_POLYSCOPE_SERVER_FRAGMENT:-}"
+    else
+        printf '%s\n' "${FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT:-}"
+    fi
+fi
 exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
+
+cat >"$fake_sudo_dir/sudo" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SUDO_LOG"
+
+if [[ "${1:-}" == "-n" ]]; then
+    shift
+fi
+
+if [[ "${1:-}" == "true" ]]; then
+    exit 0
+fi
+
+exec "$@"
+STUB
+chmod +x "$fake_sudo_dir/sudo"
 
 env HOME="$home_dir" \
     WORKSPACE_ROOT="$workspace_root" \
@@ -1163,6 +1193,22 @@ env HOME="$home_dir" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
 
+# If the wrapped Expose path is replaced with the original real binary while .real already exists,
+# the installer must still repair it idempotently instead of failing.
+rm -f "$fake_polyscope_bin_dir/expose-linux-x64"
+cp "$fake_polyscope_bin_dir/expose-linux-x64.real" "$fake_polyscope_bin_dir/expose-linux-x64"
+
+env HOME="$home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
+
+test -L "$fake_polyscope_bin_dir/expose-linux-x64"
+test "$(readlink "$fake_polyscope_bin_dir/expose-linux-x64")" = "$fake_bin_dir/polyscope-expose-wrapper.sh"
+
 # installer must refuse to overwrite an existing .real binary
 # Simulate: expose-linux-x64 is a regular file AND .real already holds a previous real binary
 fake_guard_dir="$workspace/guard-test"
@@ -1171,7 +1217,7 @@ fake_guard_expose_bin="$fake_guard_dir/expose-linux-x64"
 fake_guard_expose_real="$fake_guard_dir/expose-linux-x64.real"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_guard_expose_bin"
 chmod +x "$fake_guard_expose_bin"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_guard_expose_real"
+printf '#!/usr/bin/env bash\nexit 7\n' >"$fake_guard_expose_real"
 chmod +x "$fake_guard_expose_real"
 install_real_guard_exit=0
 env HOME="$home_dir" \
@@ -1187,6 +1233,58 @@ if [[ "$install_real_guard_exit" -eq 0 ]]; then
     echo "installer guard: must refuse to overwrite existing .real binary" >&2
     exit 1
 fi
+
+system_home_dir="$workspace/system-home"
+system_bin_dir="$workspace/system-bin"
+system_user_unit_dir="$workspace/system-user-units"
+system_dropin_dir="$workspace/system-service-units/polyscope-server.service.d"
+system_polyscope_bin_dir="$system_home_dir/.polyscope/bin"
+system_polyscope_git_dir="$system_home_dir/.local/lib/polyscope/bin"
+system_systemctl_log="$workspace/system-systemctl.log"
+system_sudo_log="$workspace/system-sudo.log"
+system_fragment_dir="$workspace/system-fragments"
+system_fragment_path="$system_fragment_dir/polyscope-server.service"
+mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir"
+printf '[Unit]\nDescription=Polyscope Server\n' > "$system_fragment_path"
+
+cat >"$system_polyscope_bin_dir/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_EXPOSE_REAL_LOG"
+exit 0
+STUB
+chmod +x "$system_polyscope_bin_dir/expose-linux-x64"
+
+env HOME="$system_home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$system_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$system_sudo_log" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
+    POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$system_dropin_dir" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$system_bin_dir" --unit-dir "$system_user_unit_dir" --polyscope-server-bin "$fake_server_bin"
+
+test ! -e "$system_user_unit_dir/polyscope-server.service"
+test -f "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=PATH=$system_polyscope_git_dir:$system_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=SSH_AUTH_SOCK=/run/user/$(id -u)/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
+grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
+grep -q '^daemon-reload$' "$system_systemctl_log"
+grep -q '^enable --now polyscope-server.service$' "$system_systemctl_log"
+grep -q '^restart polyscope-server.service$' "$system_systemctl_log"
+grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log"
+grep -q '^--user daemon-reload$' "$system_systemctl_log"
+grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
+grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
+grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
+grep -q '^--user start polyscope-worktree-provision.service$' "$system_systemctl_log"
+
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$fake_unit_dir/polyscope-server.service"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.service"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"

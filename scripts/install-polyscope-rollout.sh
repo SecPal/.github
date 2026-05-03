@@ -21,7 +21,12 @@ POLYSCOPE_EXPOSE_BIN="${POLYSCOPE_EXPOSE_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x
 POLYSCOPE_EXPOSE_REAL_BIN="${POLYSCOPE_EXPOSE_REAL_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64.real}"
 POLYSCOPE_GIT_BIN_DIR="${POLYSCOPE_GIT_BIN_DIR:-$HOME/.local/lib/polyscope/bin}"
 POLYSCOPE_GIT_WRAPPER_BIN="${POLYSCOPE_GIT_WRAPPER_BIN:-$POLYSCOPE_GIT_BIN_DIR/git}"
+POLYSCOPE_SERVER_SCOPE="${POLYSCOPE_SERVER_SCOPE:-auto}"
+POLYSCOPE_SYSTEM_SERVER_UNIT="${POLYSCOPE_SYSTEM_SERVER_UNIT:-polyscope-server.service}"
+POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/systemd/system/$POLYSCOPE_SYSTEM_SERVER_UNIT.d}"
+POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK="${POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK:-/run/user/$(id -u)/openssh_agent}"
 SERVICE_PATH="${POLYSCOPE_SERVICE_PATH:-}"
+SUDO_BIN="${SUDO_BIN:-sudo}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             POLYSCOPE_SERVER_BIN="$2"
             shift 2
             ;;
+        --polyscope-server-scope)
+            POLYSCOPE_SERVER_SCOPE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -66,6 +75,53 @@ PROVISION_SERVICE_UNIT="$UNIT_DIR/polyscope-worktree-provision.service"
 PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
+detect_system_server_fragment_path() {
+    "$SYSTEMCTL_BIN" show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
+}
+
+detect_user_server_fragment_path() {
+    "$SYSTEMCTL_BIN" --user show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
+}
+
+resolve_server_scope() {
+    case "$POLYSCOPE_SERVER_SCOPE" in
+        auto)
+            local system_fragment user_fragment
+            system_fragment="$(detect_system_server_fragment_path)"
+            user_fragment="$(detect_user_server_fragment_path)"
+            if [[ -n "$system_fragment" && "$system_fragment" != "$user_fragment" ]]; then
+                printf 'system\n'
+            else
+                printf 'user\n'
+            fi
+            ;;
+        user|system)
+            printf '%s\n' "$POLYSCOPE_SERVER_SCOPE"
+            ;;
+        *)
+            echo "Error: POLYSCOPE_SERVER_SCOPE must be one of: auto, user, system" >&2
+            exit 1
+            ;;
+    esac
+}
+
+can_run_privileged_commands() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        return 0
+    fi
+
+    "$SUDO_BIN" -n true >/dev/null 2>&1
+}
+
+run_privileged() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+        return
+    fi
+
+    "$SUDO_BIN" -n "$@"
+}
+
 if [[ -z "$POLYSCOPE_SERVER_BIN" ]]; then
     echo "Error: polyscope-server binary not found. Pass --polyscope-server-bin or ensure it is in PATH." >&2
     exit 1
@@ -86,7 +142,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN SERVICE_PATH; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK SERVICE_PATH SUDO_BIN; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -98,6 +154,15 @@ for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE 
     fi
 done
 
+server_scope="$(resolve_server_scope)"
+system_server_fragment_path="$(detect_system_server_fragment_path)"
+
+if [[ "$server_scope" == "system" ]] && ! can_run_privileged_commands; then
+    echo "Error: detected existing system $POLYSCOPE_SYSTEM_SERVER_UNIT at ${system_server_fragment_path:-<unknown>}, but non-interactive sudo or root access is unavailable." >&2
+    echo "Refusing to create a competing user polyscope-server.service on port 4321." >&2
+    exit 1
+fi
+
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
 ln -sfn "$WRAPPER_SOURCE" "$EXPOSE_WRAPPER_TARGET"
@@ -105,16 +170,25 @@ ln -sfn "$GIT_WRAPPER_SOURCE" "$GIT_WRAPPER_TARGET"
 
 if [[ -e "$POLYSCOPE_EXPOSE_BIN" && ! -L "$POLYSCOPE_EXPOSE_BIN" ]]; then
     if [[ -e "$POLYSCOPE_EXPOSE_REAL_BIN" ]]; then
-        echo "Error: $POLYSCOPE_EXPOSE_REAL_BIN already exists; will not overwrite it." >&2
-        echo "Remove or rename $POLYSCOPE_EXPOSE_REAL_BIN manually before re-running the installer." >&2
-        exit 1
+        if cmp -s "$POLYSCOPE_EXPOSE_BIN" "$POLYSCOPE_EXPOSE_REAL_BIN"; then
+            rm -f "$POLYSCOPE_EXPOSE_BIN"
+        else
+            echo "Error: $POLYSCOPE_EXPOSE_REAL_BIN already exists; will not overwrite it." >&2
+            echo "Remove or rename $POLYSCOPE_EXPOSE_REAL_BIN manually before re-running the installer." >&2
+            exit 1
+        fi
+    else
+        mv -f "$POLYSCOPE_EXPOSE_BIN" "$POLYSCOPE_EXPOSE_REAL_BIN"
     fi
-    mv -f "$POLYSCOPE_EXPOSE_BIN" "$POLYSCOPE_EXPOSE_REAL_BIN"
 fi
 
 ln -sfn "$EXPOSE_WRAPPER_TARGET" "$POLYSCOPE_EXPOSE_BIN"
 ln -sfn "$GIT_WRAPPER_TARGET" "$POLYSCOPE_GIT_WRAPPER_BIN"
 
+rollout_sync_after='After=polyscope-server.service'
+installed_server_target="$SERVER_UNIT"
+
+if [[ "$server_scope" == "user" ]]; then
 cat >"$SERVER_UNIT" <<EOF
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
@@ -136,13 +210,36 @@ RestartSec=5s
 [Install]
 WantedBy=default.target
 EOF
+else
+    rm -f "$SERVER_UNIT"
+    rollout_sync_after='After=network-online.target'
+    installed_server_target="$POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR/zz-secpal-runtime.conf"
+
+    system_dropin_tmp="$(mktemp)"
+    cat >"$system_dropin_tmp" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Service]
+ExecStart=
+ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
+ExecStartPost=
+ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
+Environment=PATH=$SERVICE_PATH
+Environment=SSH_AUTH_SOCK=$POLYSCOPE_SYSTEM_SERVICE_SSH_AUTH_SOCK
+Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
+EOF
+
+    run_privileged install -d -m 0755 "$POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR"
+    run_privileged install -m 0644 "$system_dropin_tmp" "$installed_server_target"
+    rm -f "$system_dropin_tmp"
+fi
 
 cat >"$SERVICE_UNIT" <<EOF
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 [Unit]
 Description=Sync Polyscope prompts and preview config for SecPal
-After=polyscope-server.service
+$rollout_sync_after
 
 [Service]
 Type=oneshot
@@ -217,8 +314,17 @@ WantedBy=default.target
 EOF
 
 "$SYSTEMCTL_BIN" --user daemon-reload
-"$SYSTEMCTL_BIN" --user enable --now polyscope-server.service
-"$SYSTEMCTL_BIN" --user restart polyscope-server.service
+
+if [[ "$server_scope" == "user" ]]; then
+    "$SYSTEMCTL_BIN" --user enable --now polyscope-server.service
+    "$SYSTEMCTL_BIN" --user restart polyscope-server.service
+else
+    run_privileged "$SYSTEMCTL_BIN" daemon-reload
+    run_privileged "$SYSTEMCTL_BIN" enable --now "$POLYSCOPE_SYSTEM_SERVER_UNIT"
+    run_privileged "$SYSTEMCTL_BIN" restart "$POLYSCOPE_SYSTEM_SERVER_UNIT"
+    "$SYSTEMCTL_BIN" --user disable --now polyscope-server.service >/dev/null 2>&1 || true
+fi
+
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
@@ -229,7 +335,7 @@ echo "Installed $EXPOSE_WRAPPER_TARGET"
 echo "Installed $GIT_WRAPPER_TARGET"
 echo "Installed expose wrapper at $POLYSCOPE_EXPOSE_BIN"
 echo "Installed git wrapper at $POLYSCOPE_GIT_WRAPPER_BIN"
-echo "Installed $SERVER_UNIT"
+echo "Installed $installed_server_target"
 echo "Installed $SERVICE_UNIT"
 echo "Installed $PATH_UNIT"
 echo "Installed $PROVISION_SERVICE_UNIT"
