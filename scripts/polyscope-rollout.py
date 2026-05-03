@@ -342,7 +342,6 @@ def cleanup_removed_api_preview_databases(
                 continue
             drop_postgres_preview_database(env_values, base_database, preview_database)
             cleaned_databases.append(preview_database)
-        return cleaned_databases
 
     for preview_schema in list_postgres_preview_schemas(env_values, base_database):
         if preview_schema in active_targets:
@@ -1166,7 +1165,7 @@ def provision_worktrees(
 ) -> tuple[list[str], list[str]]:
     rendered_configs = render_local_configs(repo_specs)
     provisioned_worktrees: list[str] = []
-    cleaned_preview_databases = cleanup_removed_api_preview_databases(repo_state, repo_specs, clone_root)
+    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(repo_state, repo_specs, clone_root)
 
     for repo_name, spec in repo_specs.items():
         repo_clone_root = clone_root / repo_state[repo_name]["id"]
@@ -1211,7 +1210,7 @@ def provision_worktrees(
             )
             provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
 
-    return provisioned_worktrees, cleaned_preview_databases
+    return provisioned_worktrees, cleaned_preview_storage_targets
 
 
 def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
@@ -1465,13 +1464,13 @@ def build_summary(
     db_backup: pathlib.Path | None,
     nginx_output: pathlib.Path,
     provisioned_worktrees: list[str],
-    cleaned_preview_databases: list[str],
+    cleaned_preview_storage_targets: list[str],
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "db_backup": str(db_backup) if db_backup is not None else None,
         "rendered_nginx_config": str(nginx_output),
         "provisioned_worktrees": provisioned_worktrees,
-        "cleaned_preview_databases": cleaned_preview_databases,
+        "cleaned_preview_storage_targets": cleaned_preview_storage_targets,
         "repositories": {},
     }
     for repo_name, spec in repo_specs.items():
@@ -1545,9 +1544,9 @@ def main() -> int:
         install_nginx_config(args.nginx_output)
 
     provisioned_worktrees: list[str] = []
-    cleaned_preview_databases: list[str] = []
+    cleaned_preview_storage_targets: list[str] = []
     if args.provision_worktrees:
-        provisioned_worktrees, cleaned_preview_databases = provision_worktrees(repo_state, repo_specs, args.clone_root)
+        provisioned_worktrees, cleaned_preview_storage_targets = provision_worktrees(repo_state, repo_specs, args.clone_root)
 
     summary = build_summary(
         repo_state,
@@ -1555,7 +1554,7 @@ def main() -> int:
         db_backup,
         args.nginx_output,
         provisioned_worktrees,
-        cleaned_preview_databases,
+        cleaned_preview_storage_targets,
     )
     if args.summary_output is not None:
         args.summary_output.write_text(json.dumps(summary, indent=2) + "\n")

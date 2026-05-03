@@ -793,7 +793,7 @@ python3 - "$provision_summary_json" <<'PY'
 import json, sys
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_databases', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert cleaned == [], f"expected no cleaned preview databases on first provisioning run, got {cleaned}"
@@ -873,7 +873,7 @@ python3 - "$stale_provision_summary_json" <<'PY'
 import json, sys
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_databases', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:stale-otter' in provisioned, f"expected api:stale-otter in provisioned_worktrees, got {provisioned}"
 assert cleaned == [], f"expected no cleaned preview databases while stale-otter still exists, got {cleaned}"
 PY
@@ -894,6 +894,15 @@ assert 'secpal__preview__stale_otter' in state['databases']
 PY
 
 rm -rf "$stale_api_clone"
+
+# Inject a stale schema alongside the stale database to verify that in database mode
+# (rolcreatedb=true) the cleanup also prunes orphaned schemas from a previous schema-mode run.
+python3 - "$fake_pg_state" <<'PY'
+import json, sys
+state = json.loads(open(sys.argv[1]).read())
+state.setdefault("schemas", []).append("secpal__preview__legacy_schema_otter")
+open(sys.argv[1], "w").write(json.dumps(state))
+PY
 
 cleanup_summary_json="$workspace/cleanup-summary.json"
 env HOME="$home_dir" \
@@ -919,9 +928,12 @@ summary = json.loads(open(sys.argv[1]).read())
 state = json.loads(open(sys.argv[2]).read())
 
 assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-assert summary.get('cleaned_preview_databases', []) == ['secpal__preview__stale_otter'], summary.get('cleaned_preview_databases', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
+assert 'secpal__preview__stale_otter' in cleaned, f"expected stale db in cleaned, got {cleaned}"
+assert 'secpal__preview__legacy_schema_otter' in cleaned, f"expected stale schema in cleaned even in database mode, got {cleaned}"
 assert 'secpal__preview__auto_hawk' in state['databases']
 assert 'secpal__preview__stale_otter' not in state['databases']
+assert 'secpal__preview__legacy_schema_otter' not in state.get('schemas', [])
 PY
 
 grep -qF 'SELECT datname FROM pg_database WHERE datname LIKE '"'"'secpal__preview__%'"'" "$fake_psql_log"
@@ -952,7 +964,7 @@ import sys
 
 summary = json.loads(open(sys.argv[1]).read())
 assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-assert summary.get('cleaned_preview_databases', []) == [], summary.get('cleaned_preview_databases', [])
+assert summary.get('cleaned_preview_storage_targets', []) == [], summary.get('cleaned_preview_storage_targets', [])
 PY
 
 schema_home_dir="$workspace/schema-home"
@@ -1020,7 +1032,7 @@ import sys
 
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_databases', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:schema-badger' in provisioned, provisioned
 assert 'frontend:schema-badger' in provisioned, provisioned
 assert cleaned == [], cleaned
@@ -1069,7 +1081,7 @@ summary = json.loads(open(sys.argv[1]).read())
 state = json.loads(open(sys.argv[2]).read())
 
 assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-assert summary.get('cleaned_preview_databases', []) == ['secpal__preview__schema_badger'], summary.get('cleaned_preview_databases', [])
+assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__schema_badger'], summary.get('cleaned_preview_storage_targets', [])
 assert 'secpal__preview__schema_badger' not in state['schemas'], state['schemas']
 PY
 
