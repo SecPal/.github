@@ -483,7 +483,7 @@ python3 "$PYTHON_SCRIPT" \
     --summary-output "$summary_output" \
     > /dev/null
 
-grep -q 'https://{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'org-shared.instructions.md' "$workspace_root/api/polyscope.local.json"
 grep -qF 'POLYSCOPE_WORKSPACE' "$workspace_root/api/polyscope.local.json"
@@ -495,7 +495,11 @@ grep -qF 'CORS_ALLOWED_ORIGINS' "$workspace_root/api/polyscope.local.json"
 grep -qF 'frontend-{workspace}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan config:clear && php artisan migrate --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
 grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
+grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
 grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
+grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"
@@ -594,7 +598,10 @@ assert ('api12345', 'fe123456') in links
 assert ('sa123456', 'ch123456') in links
 
 summary = json.loads(summary_path.read_text())
-assert summary['repositories']['api']['preview_prefix'] is None
+assert summary['repositories']['api']['preview_prefix'] == 'api'
+assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
+assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
+assert summary['repositories']['changelog']['preview_prefix'] == 'changelog'
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
@@ -649,13 +656,15 @@ exit 0
 STUB
 chmod +x "$home_dir/.local/bin/pre-commit"
 
-cat >"$api_clone/.env" <<'EOF'
+cat >"$workspace_root/api/.env" <<'EOF'
 APP_URL=https://api.secpal.dev
 FRONTEND_URL=https://app.secpal.dev
 SESSION_DOMAIN=.secpal.dev
 SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
 CORS_ALLOWED_ORIGINS=https://app.secpal.dev
 EOF
+
+cp "$workspace_root/api/.env" "$api_clone/.env"
 
 cat >"$api_clone/.pre-commit-config.yaml" <<'EOF'
 repos: []
@@ -704,7 +713,7 @@ assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in pro
 PY
 
 grep -qF 'APP_URL=https://api-auto-hawk.preview.secpal.dev' "$api_clone/.env"
-grep -qF 'FRONTEND_URL=https://auto-hawk.preview.secpal.dev' "$api_clone/.env"
+grep -qF 'FRONTEND_URL=https://frontend-auto-hawk.preview.secpal.dev' "$api_clone/.env"
 grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
 grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
@@ -729,6 +738,44 @@ grep -qF "npm:$frontend_clone:ci" "$provision_log"
 grep -qF "npm:$frontend_clone:run build -- --mode preview" "$provision_log"
 grep -qF "pre-commit:$api_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
 grep -qF "pre-commit:$frontend_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
+
+stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
+mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
+
+cat >"$stale_api_clone/.pre-commit-config.yaml" <<'EOF'
+repos: []
+EOF
+
+cat >"$stale_api_clone/scripts/preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$stale_api_clone/scripts/preflight.sh"
+
+stale_provision_summary_json="$workspace/stale-provision-summary.json"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$stale_provision_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$stale_provision_summary_json" <<'PY'
+import json, sys
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+assert 'api:stale-otter' in provisioned, f"expected api:stale-otter in provisioned_worktrees, got {provisioned}"
+PY
+
+grep -qF 'APP_URL=https://api-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
+grep -qF 'FRONTEND_URL=https://frontend-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
+test -f "$stale_api_clone/.polyscope-secpal-provisioned.json"
 
 provision_log_lines_before="$(wc -l < "$provision_log")"
 env HOME="$home_dir" \
@@ -762,7 +809,11 @@ fake_unit_dir="$workspace/fake-units"
 fake_systemctl_dir="$workspace/fake-systemctl"
 fake_systemctl_log="$workspace/systemctl.log"
 fake_server_bin="$workspace/fake-tools/polyscope-server"
-mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir"
+fake_expose_real_log="$workspace/expose-real.log"
+fake_git_real_log="$workspace/git-real.log"
+fake_polyscope_bin_dir="$home_dir/.polyscope/bin"
+fake_polyscope_git_dir="$home_dir/.local/lib/polyscope/bin"
+mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
 mkdir -p "$(dirname "$fake_server_bin")"
 
 cat >"$fake_server_bin" <<'STUB'
@@ -770,6 +821,13 @@ cat >"$fake_server_bin" <<'STUB'
 exit 0
 STUB
 chmod +x "$fake_server_bin"
+
+cat >"$fake_polyscope_bin_dir/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_EXPOSE_REAL_LOG"
+exit 0
+STUB
+chmod +x "$fake_polyscope_bin_dir/expose-linux-x64"
 
 cat >"$fake_systemctl_dir/systemctl" <<'STUB'
 #!/usr/bin/env bash
@@ -782,28 +840,89 @@ env HOME="$home_dir" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
 
 test -L "$fake_bin_dir/polyscope-secpal-rollout.py"
 test -x "$fake_bin_dir/polyscope-secpal-rollout.py"
+test -L "$fake_bin_dir/polyscope-expose-wrapper.sh"
+test -x "$fake_bin_dir/polyscope-expose-wrapper.sh"
+test -L "$fake_bin_dir/polyscope-git-wrapper.sh"
+test -x "$fake_bin_dir/polyscope-git-wrapper.sh"
+test -L "$fake_polyscope_git_dir/git"
+test -x "$fake_polyscope_git_dir/git"
+test "$(readlink "$fake_polyscope_git_dir/git")" = "$fake_bin_dir/polyscope-git-wrapper.sh"
+test -L "$fake_polyscope_bin_dir/expose-linux-x64"
+test -x "$fake_polyscope_bin_dir/expose-linux-x64"
+test -x "$fake_polyscope_bin_dir/expose-linux-x64.real"
+test "$(readlink "$fake_polyscope_bin_dir/expose-linux-x64")" = "$fake_bin_dir/polyscope-expose-wrapper.sh"
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$fake_unit_dir/polyscope-server.service"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.service"
+grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
+grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
+grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
+grep -q 'restart polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
 grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"
+
+fake_real_git_bin="$workspace/fake-tools/git-real"
+cat >"$fake_real_git_bin" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_GIT_REAL_LOG"
+exit 0
+STUB
+chmod +x "$fake_real_git_bin"
+
+env FAKE_GIT_REAL_LOG="$fake_git_real_log" \
+    POLYSCOPE_REAL_GIT_BIN="$fake_real_git_bin" \
+    "$fake_polyscope_git_dir/git" -C /tmp/example commit -m preview-fix >/dev/null
+
+grep -q '^-C /tmp/example commit -S -m preview-fix$' "$fake_git_real_log"
+
+env FAKE_GIT_REAL_LOG="$fake_git_real_log" \
+    POLYSCOPE_REAL_GIT_BIN="$fake_real_git_bin" \
+    "$fake_polyscope_git_dir/git" -C /tmp/example commit -S -m already-signed >/dev/null
+
+grep -q '^-C /tmp/example commit -S -m already-signed$' "$fake_git_real_log"
+
+preview_wrapper_out="$workspace/expose-wrapper-preview.out"
+env HOME="$home_dir" \
+    POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://frontend-auto-hawk.preview.secpal.dev:443 >"$preview_wrapper_out"
+
+grep -q 'Shared site              https://frontend-auto-hawk.preview.secpal.dev:443' "$preview_wrapper_out"
+grep -q 'Public URL               https://frontend-auto-hawk.preview.secpal.dev' "$preview_wrapper_out"
+
+if [[ -s "$fake_expose_real_log" ]]; then
+    echo "preview-domain Expose wrapper must not invoke the real Expose binary" >&2
+    exit 1
+fi
+
+env HOME="$home_dir" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://example.com:443 >/dev/null
+
+grep -q 'share https://example.com:443' "$fake_expose_real_log"

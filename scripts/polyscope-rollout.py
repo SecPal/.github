@@ -26,6 +26,12 @@ POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 
 
+def build_preview_url_template(preview_prefix: str | None) -> str:
+    if preview_prefix:
+        return f"https://{preview_prefix}-{{{{folder}}}}.preview.secpal.dev"
+    return "https://{{folder}}.preview.secpal.dev"
+
+
 def build_api_preview_env_setup_command() -> str:
     script = textwrap.dedent(
         """
@@ -40,7 +46,7 @@ def build_api_preview_env_setup_command() -> str:
 
         values = {
             "APP_URL": f"https://api-{workspace}.preview.secpal.dev",
-            "FRONTEND_URL": f"https://{workspace}.preview.secpal.dev",
+            "FRONTEND_URL": f"https://frontend-{workspace}.preview.secpal.dev",
             "SESSION_DOMAIN": ".secpal.dev",
             "SANCTUM_STATEFUL_DOMAINS": ",".join(
                 (
@@ -145,13 +151,13 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             ".github/instructions/org-shared.instructions.md",
             ".github/instructions/php-laravel.instructions.md",
         ],
-        "preview_prefix": None,
+        "preview_prefix": "api",
         "review_focus": "Laravel 13, Pest 4, Request -> Controller -> Service -> Repository -> Model, Sanctum session versus bearer-token flows, and encrypted data handling via *_plain/*_idx without direct *_enc reads.",
         "link_names": ["frontend", "contracts", "android"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
+            "preview": {"url": build_preview_url_template("api")},
             "scripts": {
                 "setup": [
                     build_api_preview_env_setup_command(),
@@ -161,8 +167,10 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 "run": [
                     {"label": "Queue Worker", "command": "php artisan queue:listen --tries=1", "runMode": "replace"},
                     {"label": "Pail", "command": "php artisan pail --timeout=0", "runMode": "replace"},
+                    # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
+                    # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.
                     {
-                        "label": "Refresh Preview DB + E2E User",
+                        "label": "Preview Only: Refresh DB + E2E User",
                         "command": "php artisan migrate:fresh --seed",
                         "runMode": "preserve",
                     },
@@ -190,13 +198,13 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             ".github/instructions/org-shared.instructions.md",
             ".github/instructions/react-typescript.instructions.md",
         ],
-        "preview_prefix": None,
+        "preview_prefix": "frontend",
         "review_focus": "React, Vite, strict TypeScript, generated API types, Testing Library/MSW boundaries, auth-storage discipline, and transport failure handling.",
         "link_names": ["api", "contracts", "android"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
+            "preview": {"url": build_preview_url_template("frontend")},
             "scripts": {
                 "setup": [
                     build_frontend_preview_env_setup_command(),
@@ -324,13 +332,13 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             ".github/instructions/org-shared.instructions.md",
             ".github/instructions/astro-static.instructions.md",
         ],
-        "preview_prefix": None,
+        "preview_prefix": "secpal-app",
         "review_focus": "Astro static rendering, minimal client-side JavaScript, semantic HTML, accessible landmarks, and strict TypeScript on the public site.",
         "link_names": ["changelog"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
+            "preview": {"url": build_preview_url_template("secpal-app")},
             "scripts": {
                 "setup": ["test -d node_modules || npm ci", "npm run build"],
                 "run": [
@@ -359,13 +367,13 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             ".github/instructions/org-shared.instructions.md",
             ".github/instructions/nextjs-changelog.instructions.md",
         ],
-        "preview_prefix": None,
+        "preview_prefix": "changelog",
         "review_focus": "Next.js static-style changelog output, MDX content rules, Commit template conventions, CSP/feed safety, and no server-side runtime dependencies.",
         "link_names": ["secpal.app"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
-            "preview": {"url": "https://{{folder}}.preview.secpal.dev"},
+            "preview": {"url": build_preview_url_template("changelog")},
             "scripts": {
                 "setup": ["test -d node_modules || npm ci", "npm run build"],
                 "run": [
@@ -818,6 +826,23 @@ def run_setup_commands(worktree_path: pathlib.Path, commands: list[str]) -> None
         )
 
 
+def ensure_api_preview_env(worktree_path: pathlib.Path, source_repo_path: pathlib.Path) -> bool:
+    env_path = worktree_path / ".env"
+    if env_path.exists():
+        return True
+
+    source_env_path = source_repo_path / ".env"
+    if source_env_path.exists():
+        shutil.copy2(source_env_path, env_path)
+        return True
+
+    print(
+        f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
+        f".env missing and source preview env not found at {source_env_path}"
+    )
+    return False
+
+
 def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) -> None:
     (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
     ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
@@ -897,6 +922,9 @@ def provision_worktrees(repo_state: dict[str, dict[str, Any]], repo_specs: dict[
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
             sync_worktree_local_config(worktree_path, config_text)
             ensure_worktree_hooks(worktree_path)
+
+            if repo_name == "api" and not ensure_api_preview_env(worktree_path, spec["path"]):
+                continue
 
             marker_path = worktree_path / PROVISION_MARKER_FILENAME
             marker = load_provision_marker(marker_path)
