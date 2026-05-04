@@ -152,6 +152,15 @@ if [ -f tests/mktemp-portability.sh ]; then
   }
 fi
 
+if [ -f tests/prettier-version-alignment.sh ]; then
+  bash tests/prettier-version-alignment.sh || {
+    echo "" >&2
+    echo "❌ Prettier version alignment regression test failed!" >&2
+    echo "Keep package.json, .pre-commit-config.yaml, and scripts/preflight.sh aligned on the same prettier version; .github/workflows/quality.yml must keep using npm ci + npx prettier --check with no separate prettier@X.Y.Z pin." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/validate-copilot-instructions.sh ]; then
   bash tests/validate-copilot-instructions.sh || {
     echo "" >&2
