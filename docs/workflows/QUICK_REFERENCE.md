@@ -102,6 +102,13 @@ Resolves #789
 - [ ] Unit tests added
 - [ ] Manual testing done
 
+## TDD / Validate-First Evidence
+
+- Failing proof before implementation: `<command or reproduced defect>`
+- Passing proof after implementation: `<command or validation that now passes>`
+- Validate-first exception reference: `N/A unless the repository instructions explicitly allow validate-first`
+- No executable change reason: `N/A unless this PR is docs/content/template-only`
+
 ## Checklist
 
 - [ ] Code follows style guide
