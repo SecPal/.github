@@ -140,3 +140,20 @@ if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an expli
   echo "Validator did not explain the placeholder evidence failure." >&2
   exit 1
 fi
+
+template_default_body="$(sed \
+  -e 's/REPLACE_WITH_FAILING_PROOF/N\/A/' \
+  -e 's/REPLACE_WITH_PASSING_PROOF/N\/A/' \
+  "$TEMPLATE"
+)"
+
+if PR_BODY="$template_default_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-template-default.log 2>&1; then
+  echo "Validator unexpectedly accepted the template default no-executable-change placeholder." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' /tmp/pull-request-evidence-template-default.log; then
+  cat /tmp/pull-request-evidence-template-default.log >&2
+  echo "Validator did not explain the template default placeholder failure." >&2
+  exit 1
+fi
