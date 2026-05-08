@@ -116,7 +116,7 @@ then
 fi
 
 if [ -n "$python_command" ]; then
-  parser_fallback_bin="$(mktemp -d)"
+  parser_fallback_bin="$(mktemp -d "${TMPDIR:-/tmp}/pull-request-commit-signatures.XXXXXX")"
   ln -s "$(command -v "$python_command")" "$parser_fallback_bin/$python_command"
   ln -s "$(command -v mktemp)" "$parser_fallback_bin/mktemp"
   ln -s "$(command -v rm)" "$parser_fallback_bin/rm"
@@ -131,7 +131,7 @@ if [ -n "$python_command" ]; then
   rm -rf "$parser_fallback_bin"
 fi
 
-parserless_bin="$(mktemp -d)"
+parserless_bin="$(mktemp -d "${TMPDIR:-/tmp}/pull-request-commit-signatures.XXXXXX")"
 ln -s "$(command -v mktemp)" "$parserless_bin/mktemp"
 ln -s "$(command -v rm)" "$parserless_bin/rm"
 

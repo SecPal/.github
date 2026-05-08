@@ -16,6 +16,7 @@
 
 ## Description
 
+<!-- GitHub-facing communication in pull request titles and bodies must be in English. -->
 <!-- Describe what this PR accomplishes -->
 
 ## Related Issues

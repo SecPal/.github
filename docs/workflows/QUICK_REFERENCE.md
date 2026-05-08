@@ -110,8 +110,11 @@ Resolves #789
 
 ## 🔐 Policy Enforcement
 
-- Signed commit verification is enforced by CI.
+- PR titles and author-written PR bodies must be in English.
+- CI blocks obvious German PR title/body markers.
+- Comments and review text remain reviewer-enforced for now.
 - English-only GitHub communication remains reviewer-enforced for now.
+- Signed commit verification is enforced by CI.
 
 ## 🏷️ Label Reference
 
