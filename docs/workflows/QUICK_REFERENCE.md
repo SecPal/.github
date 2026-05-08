@@ -108,6 +108,11 @@ Resolves #789
 - [ ] Documentation updated
 ```
 
+## 🔐 Policy Enforcement
+
+- Signed commit verification is enforced by CI.
+- English-only GitHub communication remains reviewer-enforced for now.
+
 ## 🏷️ Label Reference
 
 | Label               | Status     | Use Case                   |
