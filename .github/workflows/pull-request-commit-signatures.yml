@@ -5,7 +5,7 @@
 name: Pull Request Commit Signatures
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -37,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_COMMITS_FILE: ${{ runner.temp }}/pull-request-commits.json
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" > "$PR_COMMITS_FILE"
+        run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" > "$PR_COMMITS_FILE"
 
       - name: Validate pull request commit signatures
         env:

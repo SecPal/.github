@@ -49,6 +49,8 @@ if (!Array.isArray(commits)) {
   process.exit(1);
 }
 
+commits = commits.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
+
 if (commits.length === 0) {
   console.error('No commits found in pull request payload.');
   process.exit(1);
