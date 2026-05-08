@@ -10,6 +10,13 @@ VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-english.sh"
 WORKFLOW="$REPO_ROOT/.github/workflows/pull-request-english.yml"
 TEMPLATE="$REPO_ROOT/.github/pull_request_template.md"
 QUICK_REFERENCE="$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pull-request-english.XXXXXX")"
+
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT
 
 if [ ! -f "$VALIDATOR" ]; then
   echo "Expected validator script was not found: $VALIDATOR" >&2
@@ -28,6 +35,16 @@ fi
 
 if [ ! -f "$QUICK_REFERENCE" ]; then
   echo "Expected quick reference doc was not found: $QUICK_REFERENCE" >&2
+  exit 1
+fi
+
+if [ "$(sed -n '1p' "$WORKFLOW")" != '# SPDX-FileCopyrightText: 2026 SecPal' ]; then
+  echo "Workflow must start with the SPDX copyright header." >&2
+  exit 1
+fi
+
+if grep -Eq '/tmp/pull-request-english-(positive|negative)\.log' "$0"; then
+  echo "Test must use per-run mktemp log files instead of fixed /tmp paths." >&2
   exit 1
 fi
 
@@ -92,8 +109,11 @@ Made with [Cursor](https://cursor.com)
 EOF
 )"
 
-if ! PR_TITLE="$english_title" PR_BODY="$english_body" bash "$VALIDATOR" >/tmp/pull-request-english-positive.log 2>&1; then
-  cat /tmp/pull-request-english-positive.log >&2
+positive_log="$TMP_DIR/positive.log"
+negative_log="$TMP_DIR/negative.log"
+
+if ! PR_TITLE="$english_title" PR_BODY="$english_body" bash "$VALIDATOR" >"$positive_log" 2>&1; then
+  cat "$positive_log" >&2
   echo "Validator rejected an English PR title/body that only contains German markers inside an ignored generated summary block." >&2
   exit 1
 fi
@@ -108,19 +128,19 @@ german_body="$(cat <<'EOF'
 EOF
 )"
 
-if PR_TITLE="$german_title" PR_BODY="$german_body" bash "$VALIDATOR" >/tmp/pull-request-english-negative.log 2>&1; then
+if PR_TITLE="$german_title" PR_BODY="$german_body" bash "$VALIDATOR" >"$negative_log" 2>&1; then
   echo "Validator unexpectedly accepted an obviously German pull request title/body." >&2
   exit 1
 fi
 
-if ! grep -Fq 'PR title/body must be in English.' /tmp/pull-request-english-negative.log; then
-  cat /tmp/pull-request-english-negative.log >&2
+if ! grep -Fq 'PR title/body must be in English.' "$negative_log"; then
+  cat "$negative_log" >&2
   echo "Validator did not explain the non-English failure." >&2
   exit 1
 fi
 
-if ! grep -Fq 'einladung' /tmp/pull-request-english-negative.log; then
-  cat /tmp/pull-request-english-negative.log >&2
+if ! grep -Fq 'einladung' "$negative_log"; then
+  cat "$negative_log" >&2
   echo "Validator did not report the detected German markers." >&2
   exit 1
 fi
