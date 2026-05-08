@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-08 - Enforce Signed PR Commits In .github
+
+**Changed:**
+
+- added `scripts/validate-pull-request-commit-signatures.sh`, `tests/pull-request-commit-signatures.sh`, and `.github/workflows/pull-request-commit-signatures.yml` so `.github` pull requests now fail when any branch commit is not GitHub-verified as signed
+- wired the new signed-commit regression test into `scripts/preflight.sh` so local governance checks catch validator or workflow drift before push time
+- documented in `docs/workflows/QUICK_REFERENCE.md` that signed commit verification is now CI-enforced while English-only GitHub communication remains reviewer-enforced until a narrower, low-noise lint strategy is proven
+
 ## 2026-05-03 - Isolate Polyscope Preview Storage Per API Workspace
 
 **Changed:**

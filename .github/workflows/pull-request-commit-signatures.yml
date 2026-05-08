@@ -1,0 +1,45 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Pull Request Commit Signatures
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate Signed PR Commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Fetch pull request commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_COMMITS_FILE: ${{ runner.temp }}/pull-request-commits.json
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" > "$PR_COMMITS_FILE"
+
+      - name: Validate pull request commit signatures
+        env:
+          PR_COMMITS_FILE: ${{ runner.temp }}/pull-request-commits.json
+        run: bash scripts/validate-pull-request-commit-signatures.sh
