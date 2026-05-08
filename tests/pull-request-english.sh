@@ -41,6 +41,16 @@ if ! grep -Fq 'scripts/validate-pull-request-english.sh' "$WORKFLOW"; then
   exit 1
 fi
 
+if ! grep -Fq 'pull_request_target:' "$WORKFLOW"; then
+  echo "Workflow must run from the base branch context so PRs cannot self-bypass the validator." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'github.event.pull_request.base.sha' "$WORKFLOW"; then
+  echo "Workflow must check out the base revision before running the validator." >&2
+  exit 1
+fi
+
 if ! grep -Fq 'github.event.pull_request.title' "$WORKFLOW"; then
   echo "Workflow does not pass the pull request title into the validator." >&2
   exit 1
