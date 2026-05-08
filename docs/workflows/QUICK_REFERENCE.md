@@ -106,8 +106,11 @@ Resolves #789
 
 - Failing proof before implementation: `<command or reproduced defect>`
 - Passing proof after implementation: `<command or validation that now passes>`
-- Validate-first exception reference: `N/A unless the repository instructions explicitly allow validate-first`
-- No executable change reason: `N/A unless this PR is docs/content/template-only`
+- Validate-first exception reference: `N/A`
+- No executable change reason: `N/A`
+
+Use the validate-first exception only when the repository instructions explicitly allow validate-first.
+Use the no-executable-change reason only for docs/content/template-only PRs.
 
 ## Checklist
 
@@ -215,71 +218,3 @@ Enhancement → 💡 Ideas
            ↓ (start draft PR)
          🚧 In Progress
            ↓ (mark ready)
-         👀 In Review
-           ↓ (merge)
-         ✅ Done
-
-High Priority → 📥 Backlog → 📋 Planned → ...
-
-Reopen → 💬 Discussion
-Close (not planned) → 🚫 Won't Do
-```
-
-## 🎯 Single Maintainer Flow
-
-When working alone:
-
-```bash
-# 1. Create issue
-gh issue create --label "core-feature" --title "..."
-
-# 2. Start work (draft PR)
-gh pr create --draft --body "Closes #123"
-# → Issue: 🚧 In Progress
-
-# 3. Self-review ready
-gh pr ready <PR>
-# → Issue: 👀 In Review
-
-# 4. Copilot found issues?
-gh pr ready --undo <PR>
-# → Issue: 🚧 In Progress (signals: "fixing issues")
-
-# 5. Fixed and ready
-gh pr ready <PR>
-# → Issue: 👀 In Review
-
-# 6. Merge
-gh pr merge <PR> --squash
-# → Issue: ✅ Done (auto-closed)
-```
-
-## 📱 Shortcuts
-
-```bash
-# Create enhancement issue
-alias gh-idea='gh issue create --label "enhancement"'
-
-# Create core feature issue
-alias gh-feature='gh issue create --label "core-feature"'
-
-# Create blocker issue
-alias gh-blocker='gh issue create --label "priority: blocker"'
-
-# Create draft PR
-alias gh-draft='gh pr create --draft'
-
-# Mark PR ready
-alias gh-ready='gh pr ready'
-
-# Convert to draft
-alias gh-wip='gh pr ready --undo'
-```
-
-Add to your `.zshrc` or `.bashrc`.
-
-## 🔗 Quick Links
-
-- [Full Documentation](./PROJECT_AUTOMATION.md)
-- [Rollout Guide](./ROLLOUT_GUIDE.md)
-- [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1)

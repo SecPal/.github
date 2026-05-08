@@ -52,8 +52,8 @@ Use the no-executable-change reason only for docs/content/template-only PRs.
 
 - Failing proof before implementation: REPLACE_WITH_FAILING_PROOF
 - Passing proof after implementation: REPLACE_WITH_PASSING_PROOF
-- Validate-first exception reference: N/A (only if the repository instructions explicitly allow validate-first; cite the instruction and the failing/passing check)
-- No executable change reason: REPLACE_WITH_NO_EXECUTABLE_CHANGE_REASON
+- Validate-first exception reference: N/A
+- No executable change reason: N/A
 
 ## Checklist
 

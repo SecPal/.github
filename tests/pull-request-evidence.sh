@@ -45,6 +45,16 @@ if ! grep -Fq 'github.event.pull_request.body' "$WORKFLOW"; then
   exit 1
 fi
 
+if ! grep -Fq 'pull_request_target:' "$WORKFLOW"; then
+  echo "Workflow must run from the base branch context so PRs cannot self-bypass the validator." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'github.event.pull_request.base.sha' "$WORKFLOW"; then
+  echo "Workflow must check out the base revision before running the validator." >&2
+  exit 1
+fi
+
 if ! grep -Fq 'edited' "$WORKFLOW"; then
   echo "Workflow must rerun when the pull request body is edited." >&2
   exit 1
@@ -141,19 +151,27 @@ if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an expli
   exit 1
 fi
 
-template_default_body="$(sed \
-  -e 's/REPLACE_WITH_FAILING_PROOF/N\/A/' \
-  -e 's/REPLACE_WITH_PASSING_PROOF/N\/A/' \
-  "$TEMPLATE"
+template_default_body="$(cat <<'EOF'
+## Description
+
+Still using the instructional defaults.
+
+## TDD / Validate-First Evidence
+
+- Failing proof before implementation: N/A unless the repository instructions explicitly allow validate-first
+- Passing proof after implementation: N/A
+- Validate-first exception reference: N/A unless the repository instructions explicitly allow validate-first
+- No executable change reason: N/A (use this only when no executable behavior or validation changed)
+EOF
 )"
 
-if PR_BODY="$template_default_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-template-default.log 2>&1; then
-  echo "Validator unexpectedly accepted the template default no-executable-change placeholder." >&2
+if PR_BODY="$template_default_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-defaults.log 2>&1; then
+  echo "Validator unexpectedly accepted instructional default text as real evidence." >&2
   exit 1
 fi
 
-if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' /tmp/pull-request-evidence-template-default.log; then
-  cat /tmp/pull-request-evidence-template-default.log >&2
-  echo "Validator did not explain the template default placeholder failure." >&2
+if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' /tmp/pull-request-evidence-defaults.log; then
+  cat /tmp/pull-request-evidence-defaults.log >&2
+  echo "Validator did not explain why instructional default text is invalid evidence." >&2
   exit 1
 fi

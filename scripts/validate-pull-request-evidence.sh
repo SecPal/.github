@@ -31,7 +31,7 @@ normalize_value() {
 
   value="$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
   if [[ "$value" == \`*\` ]]; then
-    value="${value#\`}"
+    value="${value#\`}" 
     value="${value%\`}"
   fi
   printf '%s' "$value"
@@ -44,13 +44,13 @@ is_empty_or_na() {
     return 0
   fi
 
-  printf '%s\n' "$value" | grep -qiE '^(n/?a|none|not applicable)$'
+  printf '%s\n' "$value" | grep -qiE '^(n/?a([[:space:][:punct:]].*)?|none|not applicable)$'
 }
 
 is_placeholder() {
   local value="$1"
 
-  printf '%s\n' "$value" | grep -qE '^REPLACE_WITH_(FAILING_PROOF|PASSING_PROOF|VALIDATE_FIRST_REFERENCE|NO_EXECUTABLE_CHANGE_REASON)$'
+  printf '%s\n' "$value" | grep -qE 'REPLACE_WITH_(FAILING_PROOF|PASSING_PROOF|VALIDATE_FIRST_REFERENCE|NO_EXECUTABLE_CHANGE_REASON)'
 }
 
 main() {

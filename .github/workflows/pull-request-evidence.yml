@@ -5,7 +5,7 @@
 name: Pull Request Evidence
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Validate pull request evidence section
         env:
