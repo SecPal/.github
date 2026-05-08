@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-08 - Block Obvious German PR Titles And Bodies In .github
+
+**Changed:**
+
+- added `scripts/validate-pull-request-english.sh`, `tests/pull-request-english.sh`, and `.github/workflows/pull-request-english.yml` so `.github` pull requests now fail when their title or author-written body contains obvious German markers instead of English GitHub-facing communication
+- wired the new language regression test into `scripts/preflight.sh` so local governance checks catch PR-language guardrail drift before push time
+- updated `.github/pull_request_template.md` and `docs/workflows/QUICK_REFERENCE.md` to tell authors that PR titles and author-written bodies must be in English, while comments and review text remain reviewer-enforced until a narrower follow-up strategy is proven
+
 ## 2026-05-03 - Isolate Polyscope Preview Storage Per API Workspace
 
 **Changed:**

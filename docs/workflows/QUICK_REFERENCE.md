@@ -108,6 +108,12 @@ Resolves #789
 - [ ] Documentation updated
 ```
 
+## 🔐 Policy Enforcement
+
+- PR titles and author-written PR bodies must be in English.
+- CI blocks obvious German PR title/body markers.
+- Comments and review text remain reviewer-enforced for now.
+
 ## 🏷️ Label Reference
 
 | Label               | Status     | Use Case                   |
