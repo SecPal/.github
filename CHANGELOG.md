@@ -17,6 +17,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 - updated `.github/pull_request_template.md` and `docs/workflows/QUICK_REFERENCE.md` with a dedicated `TDD / Validate-First Evidence` section that keeps validate-first exceptions tied to repository instructions instead of leaving them implicit
 - wired the new regression test into `scripts/preflight.sh` so local governance checks catch PR-evidence drift before a branch is pushed
 
+## 2026-05-08 - Block Obvious German PR Titles And Bodies In .github
+
+**Changed:**
+
+- added `scripts/validate-pull-request-english.sh`, `tests/pull-request-english.sh`, and `.github/workflows/pull-request-english.yml` so `.github` pull requests now fail when their title or author-written body contains obvious German markers instead of English GitHub-facing communication
+- wired the new language regression test into `scripts/preflight.sh` so local governance checks catch PR-language guardrail drift before push time
+- updated `.github/pull_request_template.md` and `docs/workflows/QUICK_REFERENCE.md` to tell authors that PR titles and author-written bodies must be in English, while comments and review text remain reviewer-enforced until a narrower follow-up strategy is proven
+
+## 2026-05-08 - Enforce Signed PR Commits In .github
+
+**Changed:**
+
+- added `scripts/validate-pull-request-commit-signatures.sh`, `tests/pull-request-commit-signatures.sh`, and `.github/workflows/pull-request-commit-signatures.yml` so `.github` pull requests now fail when any branch commit is not GitHub-verified as signed
+- wired the new signed-commit regression test into `scripts/preflight.sh` so local governance checks catch validator or workflow drift before push time
+- hardened the signed-commit regression test to use portable `mktemp -d "${TMPDIR:-/tmp}/pull-request-commit-signatures.XXXXXX"` temp directories, so current `.github` branches and local preflight stay valid on stricter `mktemp` implementations too
+- documented in `docs/workflows/QUICK_REFERENCE.md` that signed commit verification is now CI-enforced while English-only GitHub communication remains reviewer-enforced until a narrower, low-noise lint strategy is proven
+
 ## 2026-05-03 - Isolate Polyscope Preview Storage Per API Workspace
 
 **Changed:**
