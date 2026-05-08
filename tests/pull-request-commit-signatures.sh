@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-commit-signatures.sh"
 WORKFLOW="$REPO_ROOT/.github/workflows/pull-request-commit-signatures.yml"
 QUICK_REFERENCE="$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md"
+SHELL_BIN="${BASH:-$(command -v bash)}"
 
 if [ ! -f "$VALIDATOR" ]; then
   echo "Expected validator script was not found: $VALIDATOR" >&2
@@ -27,6 +28,16 @@ fi
 
 if ! grep -Fq 'scripts/validate-pull-request-commit-signatures.sh' "$WORKFLOW"; then
   echo "Workflow does not invoke the pull-request commit signature validator script." >&2
+  exit 1
+fi
+
+if grep -Fq 'XXXXXX.json' "$VALIDATOR"; then
+  echo "Validator uses a BSD-incompatible mktemp template with a suffix after the X placeholder." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'pull-request-commits.json.XXXXXX' "$VALIDATOR"; then
+  echo "Validator must use a portable mktemp template whose X placeholder is at the end." >&2
   exit 1
 fi
 
@@ -91,6 +102,53 @@ if ! PR_COMMITS_JSON="$verified_payload" bash "$VALIDATOR" >/tmp/pull-request-co
   echo "Validator rejected a pull request payload whose commits were verified." >&2
   exit 1
 fi
+
+python_command=''
+
+if command -v python3 >/dev/null 2>&1; then
+  python_command='python3'
+elif command -v python >/dev/null 2>&1 && python - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info.major == 3 else 1)
+PY
+then
+  python_command='python'
+fi
+
+if [ -n "$python_command" ]; then
+  parser_fallback_bin="$(mktemp -d)"
+  ln -s "$(command -v "$python_command")" "$parser_fallback_bin/$python_command"
+  ln -s "$(command -v mktemp)" "$parser_fallback_bin/mktemp"
+  ln -s "$(command -v rm)" "$parser_fallback_bin/rm"
+
+  if ! PATH="$parser_fallback_bin" PR_COMMITS_JSON="$verified_payload" "$SHELL_BIN" "$VALIDATOR" >/tmp/pull-request-commit-signatures-python-fallback.log 2>&1; then
+    cat /tmp/pull-request-commit-signatures-python-fallback.log >&2
+    echo "Validator rejected a verified payload when only the Python fallback parser was available." >&2
+    rm -rf "$parser_fallback_bin"
+    exit 1
+  fi
+
+  rm -rf "$parser_fallback_bin"
+fi
+
+parserless_bin="$(mktemp -d)"
+ln -s "$(command -v mktemp)" "$parserless_bin/mktemp"
+ln -s "$(command -v rm)" "$parserless_bin/rm"
+
+if PATH="$parserless_bin" PR_COMMITS_JSON="$verified_payload" "$SHELL_BIN" "$VALIDATOR" >/tmp/pull-request-commit-signatures-parserless.log 2>&1; then
+  echo "Validator unexpectedly succeeded without Node.js or Python 3 available." >&2
+  rm -rf "$parserless_bin"
+  exit 1
+fi
+
+if ! grep -Fq 'Node.js or Python 3 is required to validate pull request commit signatures.' /tmp/pull-request-commit-signatures-parserless.log; then
+  cat /tmp/pull-request-commit-signatures-parserless.log >&2
+  echo "Validator did not explain the missing parser runtime failure." >&2
+  rm -rf "$parserless_bin"
+  exit 1
+fi
+
+rm -rf "$parserless_bin"
 
 unsigned_payload="$(cat <<'EOF'
 [
