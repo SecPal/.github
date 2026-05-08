@@ -16,7 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [ -z "$payload_file" ] && [ -n "${PR_COMMITS_JSON:-}" ]; then
-  temporary_payload="$(mktemp "${TMPDIR:-/tmp}/pull-request-commits.XXXXXX.json")"
+  temporary_payload="$(mktemp "${TMPDIR:-/tmp}/pull-request-commits.XXXXXX")"
   printf '%s' "$PR_COMMITS_JSON" > "$temporary_payload"
   payload_file="$temporary_payload"
 fi
