@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Document Signed-Commit Deadlock Remediation For Legacy PR Branches
+
+**Changed:**
+
+- updated `docs/workflows/QUICK_REFERENCE.md` with the supported replacement-PR flow when signed-commit enforcement blocks a legacy branch with unsigned history
+- documented that the policy-safe path is to supersede the blocked PR from a fresh signed branch instead of force-pushing or bypassing branch protection
+
 ## 2026-05-08 - Require PR Evidence For TDD Or Explicit Non-Executable Changes
 
 **Changed:**
