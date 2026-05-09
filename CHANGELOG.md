@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Fix Repo-Type Misdetection in Copilot Instructions Validator
+
+**Fixed:**
+
+- `scripts/validate-copilot-instructions.sh`: `detect_repo_type()` now checks
+  for `workflow-templates/` directory before the openapi-in-package.json check,
+  so the `.github` org repository is correctly identified as `org` instead of
+  `contracts`; the misdetection caused the repo-specific AI risk guidance check
+  to fail whenever `.github/copilot-instructions.md` was touched in a PR
+
+---
+
 ## 2026-05-09 - Strip AI Agent Attribution From Commits and PRs
 
 **Added:**
