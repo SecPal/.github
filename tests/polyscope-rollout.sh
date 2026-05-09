@@ -117,6 +117,26 @@ for repo_name, scripts in package_scripts.items():
 PY
 }
 
+seed_api_worktree_files() {
+    local worktree_dir="$1"
+
+    mkdir -p "$worktree_dir/.github"
+    printf '# test clone\n' > "$worktree_dir/.github/copilot-instructions.md"
+    printf '{}\n' > "$worktree_dir/composer.json"
+    printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
+    chmod +x "$worktree_dir/artisan"
+}
+
+seed_node_worktree_files() {
+    local worktree_dir="$1"
+    local package_name="$2"
+
+    mkdir -p "$worktree_dir/.github"
+    printf '# test clone\n' > "$worktree_dir/.github/copilot-instructions.md"
+    printf '{\n  "name": "%s",\n  "private": true,\n  "scripts": {\n    "build": "vite build"\n  }\n}\n' "$package_name" > "$worktree_dir/package.json"
+    printf '{\n  "name": "%s",\n  "lockfileVersion": 3,\n  "requires": true,\n  "packages": {}\n}\n' "$package_name" > "$worktree_dir/package-lock.json"
+}
+
 assert_rollout_rejects_invalid_local_config() {
     local source_script="$1"
     local old_text="$2"
@@ -607,8 +627,12 @@ fake_pg_state="$workspace/postgres-state.json"
 fake_exec_dir="$workspace/fake-exec"
 service_path="$fake_exec_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 api_clone="$home_dir/.polyscope/clones/api12345/auto-hawk"
+broken_api_clone="$home_dir/.polyscope/clones/api12345/fix"
+garbled_git_api_clone="$home_dir/.polyscope/clones/api12345/chore"
 frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
-mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts"
+broken_frontend_clone="$home_dir/.polyscope/clones/fe123456/feat"
+mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone"
+printf 'not-a-git-pointer\n' > "$garbled_git_api_clone/.git"
 mkdir -p "$home_dir/.local/bin"
 
 python3 - <<'PY' "$fake_pg_state"
@@ -747,7 +771,11 @@ SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
 CORS_ALLOWED_ORIGINS=https://app.secpal.dev
 EOF
 
+seed_api_worktree_files "$api_clone"
+seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
+
 cp "$workspace_root/api/.env" "$api_clone/.env"
+: > "$broken_api_clone/.env"
 
 cat >"$api_clone/.pre-commit-config.yaml" <<'EOF'
 repos: []
@@ -796,6 +824,9 @@ provisioned = summary.get('provisioned_worktrees', [])
 cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
+assert 'api:fix' not in provisioned, f"did not expect api:fix in provisioned_worktrees, got {provisioned}"
+assert 'api:chore' not in provisioned, f"did not expect api:chore in provisioned_worktrees, got {provisioned}"
+assert 'frontend:feat' not in provisioned, f"did not expect frontend:feat in provisioned_worktrees, got {provisioned}"
 assert cleaned == [], f"expected no cleaned preview databases on first provisioning run, got {cleaned}"
 PY
 
@@ -819,6 +850,12 @@ test -L "$frontend_clone/.git/hooks/pre-push"
 test "$(readlink "$frontend_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
 test -f "$api_clone/.polyscope-secpal-provisioned.json"
 test -f "$frontend_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$broken_api_clone/polyscope.local.json"
+test ! -f "$broken_api_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$garbled_git_api_clone/polyscope.local.json"
+test ! -f "$garbled_git_api_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$broken_frontend_clone/polyscope.local.json"
+test ! -f "$broken_frontend_clone/.polyscope-secpal-provisioned.json"
 grep -qF "composer:$api_clone:install" "$provision_log"
 grep -qF "php:$api_clone:artisan config:clear" "$provision_log"
 grep -qF "php:$api_clone:artisan migrate --force" "$provision_log"
@@ -831,6 +868,21 @@ grep -qF "pre-commit:$frontend_clone:install --install-hooks --hook-type pre-com
 grep -qF "SELECT 1 FROM pg_database WHERE datname = 'secpal__preview__auto_hawk'" "$fake_psql_log"
 grep -qF 'CREATE DATABASE "secpal__preview__auto_hawk"' "$fake_psql_log"
 
+if grep -qF "$broken_api_clone" "$provision_log"; then
+    echo "provisioning must skip invalid api stub directories" >&2
+    exit 1
+fi
+
+if grep -qF "$garbled_git_api_clone" "$provision_log"; then
+    echo "provisioning must skip api worktrees with garbled .git files" >&2
+    exit 1
+fi
+
+if grep -qF "$broken_frontend_clone" "$provision_log"; then
+    echo "provisioning must skip invalid frontend stub directories" >&2
+    exit 1
+fi
+
 python3 - <<'PY' "$fake_pg_state"
 import json
 import sys
@@ -840,8 +892,48 @@ assert 'secpal' in state['databases']
 assert 'secpal__preview__auto_hawk' in state['databases']
 PY
 
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+state['databases'].append('secpal__preview__fix')
+open(sys.argv[1], 'w').write(json.dumps(state))
+PY
+
+invalid_dir_cleanup_summary_json="$workspace/invalid-dir-cleanup-summary.json"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$invalid_dir_cleanup_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$invalid_dir_cleanup_summary_json" "$fake_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+
+assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
+assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__fix'], summary.get('cleaned_preview_storage_targets', [])
+assert 'secpal__preview__fix' not in state['databases'], state['databases']
+PY
+
+grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__fix" WITH (FORCE)' "$fake_psql_log"
+
 stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
 mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
+seed_api_worktree_files "$stale_api_clone"
 
 cat >"$stale_api_clone/.pre-commit-config.yaml" <<'EOF'
 repos: []
@@ -976,6 +1068,8 @@ schema_cleanup_summary_json="$workspace/schema-cleanup-summary.json"
 
 mkdir -p "$schema_home_dir/.local/bin" "$schema_api_clone/.git/info" "$schema_api_clone/.git/hooks" "$schema_api_clone/scripts" "$schema_frontend_clone/.git/info" "$schema_frontend_clone/.git/hooks" "$schema_frontend_clone/scripts"
 cp "$home_dir/.local/bin/pre-commit" "$schema_home_dir/.local/bin/pre-commit"
+seed_api_worktree_files "$schema_api_clone"
+seed_node_worktree_files "$schema_frontend_clone" "frontend-schema-badger"
 
 python3 - <<'PY' "$schema_pg_state"
 import json
