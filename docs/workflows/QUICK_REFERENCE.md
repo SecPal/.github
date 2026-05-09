@@ -126,6 +126,31 @@ Use the no-executable-change reason only for docs/content/template-only PRs.
 - English-only GitHub communication remains reviewer-enforced for now.
 - Signed commit verification is enforced by CI.
 
+### Signed-Commit Deadlock Remediation
+
+If a legacy PR branch already contains an unsigned historical commit, do not force-push and do not bypass branch protection.
+
+Use a replacement PR from a fresh signed branch instead:
+
+1. Switch to an up-to-date `main` and create a new topic branch.
+2. Re-apply the intended changes onto that fresh branch with signed commits only.
+3. Push the fresh branch and open a replacement draft PR.
+4. Mark the blocked PR as superseded by the replacement PR instead of trying to revive the unsigned branch history.
+5. Continue review and thread resolution on the replacement PR.
+
+Minimal CLI flow:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git switch -c replacement/topic
+git cherry-pick -x -S <signed-or-recreated-commit>
+git push -u origin replacement/topic
+gh pr create --draft
+```
+
+If the old branch contains mixed signed and unsigned history, re-commit the intended change on the fresh branch instead of merging the blocked branch forward.
+
 ## 🏷️ Label Reference
 
 | Label               | Status     | Use Case                   |
