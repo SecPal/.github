@@ -383,6 +383,127 @@ def build_frontend_preview_env_setup_command() -> str:
     return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
 
 
+def build_frontend_preview_build_watch_command() -> str:
+    script = textwrap.dedent(
+        """
+        import hashlib
+        import os
+        import subprocess
+        import sys
+        import time
+        from pathlib import Path
+
+        api_url = f"https://api-{Path.cwd().name}.preview.secpal.dev"
+        watch_directories = [Path("src"), Path("public"), Path("config")]
+        watch_files = [
+            Path("index.html"),
+            Path("package.json"),
+            Path("package-lock.json"),
+            Path("tsconfig.json"),
+            Path("vite.config.ts"),
+            Path("lingui.config.cjs"),
+            Path("linguiVitePluginInterop.ts"),
+            Path(".env.local"),
+            Path(".env.preview.local"),
+            Path(".env.production.local"),
+        ]
+        watch_suffixes = {
+            ".css",
+            ".html",
+            ".ico",
+            ".js",
+            ".json",
+            ".mjs",
+            ".png",
+            ".po",
+            ".svg",
+            ".ts",
+            ".tsx",
+            ".webmanifest",
+        }
+
+        def iter_watch_paths():
+            seen = set()
+
+            for path in watch_files:
+                if not path.exists():
+                    continue
+
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+
+                if resolved in seen:
+                    continue
+
+                seen.add(resolved)
+                yield path
+
+            for directory in watch_directories:
+                if not directory.exists():
+                    continue
+
+                for path in sorted(directory.rglob("*")):
+                    if not path.is_file() or path.suffix not in watch_suffixes:
+                        continue
+
+                    try:
+                        resolved = path.resolve()
+                    except OSError:
+                        continue
+
+                    if resolved in seen:
+                        continue
+
+                    seen.add(resolved)
+                    yield path
+
+        def snapshot() -> str:
+            state = []
+
+            for path in iter_watch_paths():
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+
+                state.append(f"{path.as_posix()}:{stat.st_mtime_ns}:{stat.st_size}")
+
+            return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
+
+        def run_build() -> int:
+            env = os.environ.copy()
+            env["VITE_API_URL"] = api_url
+
+            return subprocess.run(
+                ["npm", "run", "build", "--", "--mode", "preview"],
+                check=False,
+                env=env,
+            ).returncode
+
+        print("Watching frontend preview sources for changes...", flush=True)
+        previous_snapshot = None
+
+        while True:
+            current_snapshot = snapshot()
+            if current_snapshot != previous_snapshot:
+                previous_snapshot = current_snapshot
+                exit_code = run_build()
+                if exit_code != 0:
+                    print(
+                        f"Preview rebuild failed with exit code {exit_code}; waiting for the next change before retrying.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+
+            time.sleep(1)
+        """
+    ).strip()
+
+    return f"python3 -c {shlex.quote(script)}"
+
+
 def build_api_preview_seed_command() -> str:
     tinker_script = textwrap.dedent(
         r"""
@@ -487,7 +608,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 "run": [
                     {
                         "label": "Build Watch",
-                        "command": "VITE_API_URL=https://api-${PWD##*/}.preview.secpal.dev npx vite build --watch --mode preview",
+                        "command": build_frontend_preview_build_watch_command(),
                         "autostart": True,
                         "runMode": "replace",
                     },
