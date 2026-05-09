@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-08 - Require PR Evidence For TDD Or Explicit Non-Executable Changes
+
+**Changed:**
+
+- added `scripts/validate-pull-request-evidence.sh`, `tests/pull-request-evidence.sh`, and `.github/workflows/pull-request-evidence.yml` so `.github` pull requests now fail fast when the body omits concrete fail-first evidence or an explicit no-executable-change reason
+- updated `.github/pull_request_template.md` and `docs/workflows/QUICK_REFERENCE.md` with a dedicated `TDD / Validate-First Evidence` section that keeps validate-first exceptions tied to repository instructions instead of leaving them implicit
+- wired the new regression test into `scripts/preflight.sh` so local governance checks catch PR-evidence drift before a branch is pushed
+
 ## 2026-05-08 - Block Obvious German PR Titles And Bodies In .github
 
 **Changed:**
