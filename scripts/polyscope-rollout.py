@@ -329,10 +329,13 @@ def cleanup_removed_api_preview_databases(
     if not base_database:
         return []
 
+    api_spec = repo_specs["api"]
+    api_validation_commands = render_local_config(api_spec).get("scripts", {}).get("setup", [])
     active_targets = {
         build_preview_database_name(base_database, worktree_path.name)
         for worktree_path in api_clone_root.iterdir()
         if worktree_path.is_dir()
+        if is_provisionable_worktree("api", api_spec, worktree_path, api_validation_commands, log_skip_reason=False)
     }
 
     cleaned_databases: list[str] = []
@@ -1022,6 +1025,37 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
                 validate_local_config_command(repo_name, repo_path, package_scripts, command)
 
 
+def is_provisionable_worktree(
+    repo_name: str,
+    spec: dict[str, Any],
+    worktree_path: pathlib.Path,
+    validation_commands: list[str],
+    *,
+    log_skip_reason: bool = True,
+) -> bool:
+    def skip(reason: str) -> bool:
+        if log_skip_reason:
+            print(f"Skipping {repo_name} worktree {worktree_path.name} at {worktree_path}: {reason}")
+        return False
+
+    if not (worktree_path / ".git").exists():
+        return skip("missing .git")
+
+    copilot_instructions_path = worktree_path / str(spec["copilot_instructions"])
+    if not copilot_instructions_path.is_file():
+        missing_path = copilot_instructions_path.relative_to(worktree_path)
+        return skip(f"missing required repo file {missing_path}")
+
+    package_scripts = load_package_scripts(worktree_path)
+    try:
+        for command in validation_commands:
+            validate_local_config_command(repo_name, worktree_path, package_scripts, command)
+    except SystemExit as error:
+        return skip(str(error))
+
+    return True
+
+
 def resolve_git_dir(repo_path: pathlib.Path) -> pathlib.Path:
     git_path = repo_path / ".git"
     if git_path.is_dir():
@@ -1173,13 +1207,17 @@ def provision_worktrees(
             continue
 
         local_config = render_local_config(spec)
-        setup_commands = local_config.get("scripts", {}).get("setup", [])
+        validation_commands = local_config.get("scripts", {}).get("setup", [])
+        setup_commands = validation_commands
         if repo_name == "api":
             setup_commands = setup_commands[1:]
         setup_hash = build_setup_hash(setup_commands)
         config_text = rendered_configs[repo_name]
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
+            if not is_provisionable_worktree(repo_name, spec, worktree_path, validation_commands):
+                continue
+
             sync_worktree_local_config(worktree_path, config_text)
             ensure_worktree_hooks(worktree_path)
 

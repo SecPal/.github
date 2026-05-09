@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Skip Invalid Polyscope Stub Directories During Provisioning
+
+**Changed:**
+
+- hardened `scripts/polyscope-rollout.py` so automatic worktree provisioning now skips clone-root stub directories that are missing the real repo structure required for provisioning instead of trying to sync local config, install hooks, or run setup commands inside them
+- taught API preview-storage cleanup to ignore those invalid stub directories too, so orphaned preview databases are no longer kept alive just because a broken `fix` or `feat` directory exists under the clone root
+- extended `tests/polyscope-rollout.sh` to prove valid worktrees still provision normally when invalid stub directories are present, and to verify stale preview databases for those invalid stubs are cleaned on the next provisioning pass
+
 ## 2026-05-09 - Align ADR-010 Retention Terminology With Current Backend Model
 
 **Changed:**
