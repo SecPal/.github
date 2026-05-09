@@ -557,14 +557,12 @@ class BuildMerkleTreeBatch implements ShouldQueue
             ]);
         }
 
-        // Submit Merkle Root to OpenTimestamp for batches that require anchoring
-        if ($this->shouldAnchorBatch($logs)) {
-            dispatch(new SubmitMerkleRootToOpenTimestamp(
-                $tenantId,
-                $batchId,
-                $tree['root']
-            ));
-        }
+        // Submit Merkle Root to OpenTimestamp for every batch
+        dispatch(new SubmitMerkleRootToOpenTimestamp(
+            $tenantId,
+            $batchId,
+            $tree['root']
+        ));
     }
 
     protected function buildTree(Collection $logs): array
