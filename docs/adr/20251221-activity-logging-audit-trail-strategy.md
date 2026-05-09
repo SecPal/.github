@@ -204,9 +204,6 @@ Schema::table('activity_log', function (Blueprint $table) {
     $table->text('orphaned_reason')->nullable();
     $table->timestamp('orphaned_at')->nullable();
 
-    // 🗑️ Soft Delete Support
-    $table->softDeletes();
-
     // 📇 Performance Indexes
     $table->index(['tenant_id', 'created_at']);
     $table->index(['organizational_unit_id', 'created_at']);
@@ -223,12 +220,11 @@ Schema::table('activity_log', function (Blueprint $table) {
 namespace App\Models;
 
 use Spatie\Activitylog\Models\Activity as BaseActivity;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 
 class Activity extends BaseActivity
 {
-    use SoftDeletes, HasUuids;
+    use HasUuids;
 
     protected $fillable = [
         ...parent::$fillable,
@@ -387,9 +383,15 @@ class Activity extends BaseActivity
     }
 
     // Get retention years
-    protected static function getRetentionYearsForLogType(string $logName): int
+    public static function getRetentionYearsForLogType(string $logName): int
     {
         return static::$retentionYears[$logName] ?? 3;
+    }
+
+    // Get all retention years
+    public static function getAllRetentionYears(): array
+    {
+        return static::$retentionYears;
     }
 
     // Relationships
@@ -450,7 +452,7 @@ activity('hr_access')
     ])
     ->log('accessed_sensitive_data');
 
-activity('emergency_access')
+activity('sensitive_access')
     ->causedBy(auth()->user())
     ->performedOn($employee)
     ->withProperties([
@@ -460,16 +462,6 @@ activity('emergency_access')
         'expires_at' => now()->addHours(2),
     ])
     ->log('breaking_glass_activated');
-
-activity('contract_change')
-    ->causedBy(auth()->user())
-    ->performedOn($contract)
-    ->withProperties([
-        'old' => ['end_date' => '2025-12-31'],
-        'new' => ['end_date' => '2026-06-30'],
-        'reason' => 'Contract extension approved',
-    ])
-    ->log('contract_extended');
 
 activity('works_council_access')
     ->causedBy(auth()->user())
