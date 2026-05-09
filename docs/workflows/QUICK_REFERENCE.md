@@ -146,7 +146,8 @@ git pull --ff-only origin main
 git switch -c replacement/topic
 git cherry-pick -x -S <signed-or-recreated-commit>
 git push -u origin replacement/topic
-gh pr create --draft
+printf '%s\n' '## Description' '' 'Replacement PR for blocked unsigned history.' '' '## Related Pull Requests' '' 'Supersedes PR #123' > /tmp/replacement-pr-body.md
+gh pr create --draft --title "replacement title" --body-file /tmp/replacement-pr-body.md
 ```
 
 If the old branch contains mixed signed and unsigned history, re-commit the intended change on the fresh branch instead of merging the blocked branch forward.
