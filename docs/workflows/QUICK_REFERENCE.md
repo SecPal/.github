@@ -104,8 +104,8 @@ Resolves #789
 
 ## TDD / Validate-First Evidence
 
-- Failing proof before implementation: `<command or reproduced defect>`
-- Passing proof after implementation: `<command or validation that now passes>`
+- Failing proof before implementation: `REPLACE_WITH_FAILING_PROOF`
+- Passing proof after implementation: `REPLACE_WITH_PASSING_PROOF`
 - Validate-first exception reference: `N/A`
 - No executable change reason: `N/A`
 

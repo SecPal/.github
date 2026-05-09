@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-evidence.sh"
 TEMPLATE="$REPO_ROOT/.github/pull_request_template.md"
 WORKFLOW="$REPO_ROOT/.github/workflows/pull-request-evidence.yml"
+QUICK_REFERENCE="$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pull-request-evidence.XXXXXX")"
 
 cleanup() {
@@ -32,6 +33,11 @@ if [ ! -f "$TEMPLATE" ]; then
   exit 1
 fi
 
+if [ ! -f "$QUICK_REFERENCE" ]; then
+  echo "Expected quick reference doc was not found: $QUICK_REFERENCE" >&2
+  exit 1
+fi
+
 if ! grep -Fq '## TDD / Validate-First Evidence' "$TEMPLATE"; then
   echo "PR template is missing the TDD / Validate-First Evidence section." >&2
   exit 1
@@ -39,6 +45,16 @@ fi
 
 if ! grep -Fq 'only if the repository instructions explicitly allow validate-first' "$TEMPLATE"; then
   echo "PR template must keep validate-first exceptions explicitly tied to repository instructions." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'REPLACE_WITH_FAILING_PROOF' "$QUICK_REFERENCE"; then
+  echo "Quick reference must use the same explicit evidence placeholders as the PR template." >&2
+  exit 1
+fi
+
+if grep -Fq '<command or reproduced defect>' "$QUICK_REFERENCE"; then
+  echo "Quick reference must not keep angle-bracket placeholder defaults that could be mistaken for concrete evidence." >&2
   exit 1
 fi
 
@@ -90,6 +106,7 @@ docs_log="$TMP_DIR/docs.log"
 missing_log="$TMP_DIR/missing.log"
 placeholder_log="$TMP_DIR/placeholder.log"
 defaults_log="$TMP_DIR/defaults.log"
+quick_reference_log="$TMP_DIR/quick-reference.log"
 
 if ! PR_BODY="$positive_body" bash "$VALIDATOR" >"$positive_log" 2>&1; then
   cat "$positive_log" >&2
@@ -186,5 +203,30 @@ fi
 if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' "$defaults_log"; then
   cat "$defaults_log" >&2
   echo "Validator did not explain why instructional default text is invalid evidence." >&2
+  exit 1
+fi
+
+quick_reference_default_body="$(cat <<'EOF'
+## Description
+
+Still using the quick reference defaults.
+
+## TDD / Validate-First Evidence
+
+- Failing proof before implementation: <command or reproduced defect>
+- Passing proof after implementation: <command or validation that now passes>
+- Validate-first exception reference: N/A
+- No executable change reason: N/A
+EOF
+)"
+
+if PR_BODY="$quick_reference_default_body" bash "$VALIDATOR" >"$quick_reference_log" 2>&1; then
+  echo "Validator unexpectedly accepted quick-reference placeholder evidence." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' "$quick_reference_log"; then
+  cat "$quick_reference_log" >&2
+  echo "Validator did not explain why quick-reference placeholder text is invalid evidence." >&2
   exit 1
 fi
