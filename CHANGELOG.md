@@ -13,7 +13,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- replaced the frontend Polyscope preview `Build Watch` command with a stable full-rebuild watcher that reruns `npm run build -- --mode preview` after source changes instead of relying on `vite build --watch --mode preview`, which could stop permanently after repeated locale or UI edits with `vite:css-post` / unknown-file failures
+- replaced the frontend Polyscope preview `Build Watch` command with a stable full-rebuild watcher
+  that reruns `npm run build -- --mode preview` after source changes instead of relying on
+  `vite build --watch --mode preview`, which could stop permanently after repeated locale or UI
+  edits with `vite:css-post` / unknown-file failures
 
 ## 2026-05-09 - Pin Preview Frontend Local Env Overrides To Workspace API Hosts
 

@@ -429,7 +429,11 @@ def build_frontend_preview_build_watch_command() -> str:
                 if not path.exists():
                     continue
 
-                resolved = path.resolve()
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+
                 if resolved in seen:
                     continue
 
@@ -444,7 +448,11 @@ def build_frontend_preview_build_watch_command() -> str:
                     if not path.is_file() or path.suffix not in watch_suffixes:
                         continue
 
-                    resolved = path.resolve()
+                    try:
+                        resolved = path.resolve()
+                    except OSError:
+                        continue
+
                     if resolved in seen:
                         continue
 
@@ -455,7 +463,11 @@ def build_frontend_preview_build_watch_command() -> str:
             state = []
 
             for path in iter_watch_paths():
-                stat = path.stat()
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+
                 state.append(f"{path.as_posix()}:{stat.st_mtime_ns}:{stat.st_size}")
 
             return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
