@@ -1190,9 +1190,31 @@ def ensure_pre_push_hook(worktree_path: pathlib.Path) -> None:
     hook_path.symlink_to(target)
 
 
+def ensure_commit_msg_hook(worktree_path: pathlib.Path) -> None:
+    strip_script = pathlib.Path(__file__).parent / "strip-ai-trailers.sh"
+    if not strip_script.exists():
+        return
+
+    hooks_dir = resolve_git_dir(worktree_path) / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    hook_path = hooks_dir / "commit-msg"
+    target = pathlib.Path(os.path.relpath(strip_script, hooks_dir))
+
+    if hook_path.is_symlink():
+        if pathlib.Path(os.readlink(hook_path)) == target:
+            return
+        hook_path.unlink()
+    elif hook_path.exists():
+        hook_path.replace(hook_path.with_name("commit-msg.backup"))
+
+    hook_path.symlink_to(target)
+
+
 def ensure_worktree_hooks(worktree_path: pathlib.Path) -> None:
     ensure_pre_commit_hook(worktree_path)
     ensure_pre_push_hook(worktree_path)
+    ensure_commit_msg_hook(worktree_path)
 
 
 def provision_worktrees(

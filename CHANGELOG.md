@@ -9,6 +9,26 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Strip AI Agent Attribution From Commits and PRs
+
+**Added:**
+
+- added `scripts/strip-ai-trailers.sh`, a `commit-msg` hook that removes
+  `Co-authored-by:` trailers injected by AI coding agents (Cursor, GitHub
+  Copilot) while preserving human co-author and dependabot trailers
+- Polyscope provisioning now installs the `commit-msg` hook as a symlink in
+  every managed worktree alongside the existing pre-commit and pre-push hooks
+- `setup-hooks.sh` installs the `commit-msg` hook in all SecPal repositories
+  as part of the local development environment setup
+
+**Changed:**
+
+- disabled `attributeCommitsToAgent` and `attributePRsToAgent` in the Cursor
+  CLI configuration so AI-generated attribution trailers are not added at the
+  source
+- hardened the no-AI-attribution policy in `.github/copilot-instructions.md`
+  with an explicit rule and a reference to the enforcement hook
+
 ## 2026-05-09 - Skip Invalid Polyscope Stub Directories During Provisioning
 
 **Changed:**

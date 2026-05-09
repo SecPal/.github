@@ -27,6 +27,9 @@ Other repositories must keep their own self-contained runtime instructions.
 - Keep `SPDX-FileCopyrightText` years current in edited files or companion `.license` sidecars.
 - Never reply to Copilot review comments with GitHub comment tools. Fix the code, push, and resolve threads
   using the approved non-comment workflow (`docs/copilot-review-automation.md` or `scripts/copilot-review-tool.sh`).
+- Do not add AI agent attribution to commits, pull requests, issues, or any GitHub-facing content. This includes
+  `Co-authored-by:` trailers for Cursor, Copilot, or any other AI tool. The `commit-msg` hook in
+  `scripts/strip-ai-trailers.sh` enforces this automatically; keep it installed in every managed worktree.
 - After every merge, immediately return the local repo to a ready state:
   switch to `main`, pull with fast-forward only, delete the merged topic
   branch, prune remotes, refresh dependencies where applicable as the
