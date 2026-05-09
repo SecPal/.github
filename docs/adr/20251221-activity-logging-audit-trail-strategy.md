@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal Contributors
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -91,35 +91,43 @@ SecPal requires a **legally compliant, tamper-proof audit trail** for all user a
 
 ## Decision
 
-We will implement a **3-Tier Hybrid Logging Architecture** using:
+We will implement a **retention-driven audit logging architecture** using:
 
 1. **Spatie Laravel Activity Log** as foundation (battle-tested, mature)
 2. **Custom extensions** for scoping, integrity, and retention
 3. **Hash Chain + Merkle Tree + OpenTimestamp** for tamper-proof evidence
+4. **Legal retention windows per `log_name`** as the source of truth for archival and deletion
 
 ### Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Tier 1: Standard Activity Logs (1 year retention)          │
-│ - CRUD operations (non-sensitive)                           │
-│ - Hash Chain for tamper detection                           │
-│ - Soft delete → hard delete after 2 years                   │
+│ Shared forensic controls for all retained activity logs    │
+│ - Hash chain for sequential integrity                      │
+│ - Merkle batching for verifiable proofs                    │
+│ - Hash-only archive at retention expiry                    │
+│ - Orphaned-genesis markers after predecessor deletion      │
 └─────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ Tier 2: Security-Critical Logs (3 years retention)         │
-│ - Authentication, RBAC changes, scope modifications        │
-│ - Hash Chain + Merkle Tree (hourly batching)               │
-│ - Archive (hash only) after 3 years → delete after 5 years │
+│ 3-year retention window                                    │
+│ - BewachV operational and security categories              │
+│ - e.g. employee, authentication, RBAC, HR, guard book      │
+│ - deletion eligible from the next calendar year            │
 └─────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ Tier 3: Legal-Critical Logs (7-10 years retention)         │
-│ - HR access, breaking glass, contracts, guard book events  │
-│ - Hash Chain + Merkle Tree + OpenTimestamp                 │
-│ - Permanent retention (no automatic deletion)               │
-│ - Bitcoin-anchored proof (legally admissible)               │
+│ 8-year retention window                                    │
+│ - HGB/AO evidence categories                               │
+│ - e.g. invoices, payments, contract_change                 │
+│ - archive hashes, then hard delete the source row          │
+└─────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 10-year retention window                                   │
+│ - annual closing and equivalent year-end evidence          │
+│ - longest legal retention bucket                           │
+│ - same archive and orphaned-genesis flow as other windows  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,9 +204,6 @@ Schema::table('activity_log', function (Blueprint $table) {
     $table->text('orphaned_reason')->nullable();
     $table->timestamp('orphaned_at')->nullable();
 
-    // 🗑️ Soft Delete Support
-    $table->softDeletes();
-
     // 📇 Performance Indexes
     $table->index(['tenant_id', 'created_at']);
     $table->index(['organizational_unit_id', 'created_at']);
@@ -215,12 +220,11 @@ Schema::table('activity_log', function (Blueprint $table) {
 namespace App\Models;
 
 use Spatie\Activitylog\Models\Activity as BaseActivity;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 
 class Activity extends BaseActivity
 {
-    use SoftDeletes, HasUuids;
+    use HasUuids;
 
     protected $fillable = [
         ...parent::$fillable,
@@ -250,25 +254,31 @@ class Activity extends BaseActivity
         'is_orphaned_genesis' => 'boolean',
     ];
 
-    // Security Level Configuration
-    protected static array $securityLevels = [
-        // Level 1: Standard (1 year retention, soft delete)
-        'default' => 1,
-        'employee_changes' => 1,
-        'shift_management' => 1,
-
-        // Level 2: Security-Critical (3 years, archive)
-        'security' => 2,
-        'authentication' => 2,
-        'rbac_changes' => 2,
-        'scope_changes' => 2,
-
-        // Level 3: Legal-Critical (7-10 years, permanent)
+    // Retention configuration (legal compliance)
+    protected static array $retentionYears = [
+        // 3 years: BewachV §21 Abs. 4 operational/security categories
+        'default' => 3,
+        'employee_changes' => 3,
+        'shift_management' => 3,
+        'guard_book' => 3,
+        'security' => 3,
+        'authentication' => 3,
+        'rbac_changes' => 3,
+        'scope_changes' => 3,
+        'customer_changes' => 3,
+        'site_management' => 3,
         'hr_access' => 3,
-        'emergency_access' => 3,
-        'contract_change' => 3,
         'works_council_access' => 3,
+        'sensitive_access' => 3,
         'guard_book_event' => 3,
+
+        // 8 years: HGB §257 / AO §147 evidence categories
+        'invoice_generated' => 8,
+        'payment_processed' => 8,
+        'contract_change' => 8,
+
+        // 10 years: annual closing / year-end evidence
+        'annual_closing' => 10,
     ];
 
     protected static function booted()
@@ -289,11 +299,8 @@ class Activity extends BaseActivity
             // 3. Build Hash Chain (all logs, real-time)
             $activity->buildHashChain();
 
-            // 4. Schedule Merkle Tree building (Level 2+3)
-            $level = static::getSecurityLevel($activity->log_name);
-            if ($level >= 2) {
-                dispatch(new BuildMerkleTreeBatch($activity))->onQueue('merkle');
-            }
+            // 4. Schedule Merkle Tree building for batched forensic verification
+            dispatch(new BuildMerkleTreeBatch($activity))->onQueue('merkle');
         });
     }
 
@@ -337,14 +344,7 @@ class Activity extends BaseActivity
             ->first();
 
         if (!$previous) {
-            // Check soft deleted logs
-            $previous = static::withTrashed()
-                ->where('event_hash', $this->previous_hash)
-                ->first();
-        }
-
-        if (!$previous) {
-            // Check archive
+            // Check archive after retention cleanup
             $previous = ActivityArchive::where('event_hash', $this->previous_hash)->first();
         }
 
@@ -382,10 +382,16 @@ class Activity extends BaseActivity
         return $proof->verify($this->merkle_root);
     }
 
-    // Get security level
-    protected static function getSecurityLevel(string $logName): int
+    // Get retention years
+    public static function getRetentionYearsForLogType(string $logName): int
     {
-        return static::$securityLevels[$logName] ?? 1;
+        return static::$retentionYears[$logName] ?? 3;
+    }
+
+    // Get all retention years
+    public static function getAllRetentionYears(): array
+    {
+        return static::$retentionYears;
     }
 
     // Relationships
@@ -396,30 +402,27 @@ class Activity extends BaseActivity
 }
 ```
 
-### 3. Security Levels Configuration
+### 3. Retention Period Configuration
 
-**Level Matrix:**
+Current backend retention is keyed by legal duration per `log_name`, not by separate security levels. The `Activity` model is the source of truth, and operational tooling should use helpers such as `getRetentionYearsForLogType()` or `getAllRetentionYears()` when presenting the mapping.
 
-| Level | Log Types         | Retention  | Hash Chain | Merkle Tree | OpenTimestamp | Deletion Strategy                          |
-| ----- | ----------------- | ---------- | ---------- | ----------- | ------------- | ------------------------------------------ |
-| **1** | Standard Activity | 1 year     | ✅         | ❌          | ❌            | Soft delete → Hard delete after 2 years    |
-| **2** | Security-Critical | 3 years    | ✅         | ✅ (hourly) | ❌            | Archive (hash only) → Delete after 5 years |
-| **3** | Legal-Critical    | 7-10 years | ✅         | ✅ (daily)  | ✅            | Permanent (no deletion)                    |
+**Retention Matrix:**
 
-**Use Cases per Level:**
+| Retention    | Legal Basis             | Example Log Types                                                            | Archival / Deletion Flow                                                |
+| ------------ | ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **3 years**  | BewachV §21 Abs. 4      | `default`, `employee_changes`, `authentication`, `rbac_changes`, `hr_access` | archive minimal forensic fields, mark orphaned genesis, hard delete row |
+| **8 years**  | HGB §257 / AO §147      | `invoice_generated`, `payment_processed`, `contract_change`                  | same archive + hard delete flow after the calendar-year cutoff          |
+| **10 years** | HGB/AO year-end records | `annual_closing`                                                             | same archive + hard delete flow with the longest legal retention        |
+
+**Use Cases per Retention Window:**
 
 ```php
-// Level 1: Standard Activity Logs
+// 3-year retention categories
 activity('employee_changes')
     ->performedOn($employee)
     ->withProperties(['old' => ['name' => 'Old'], 'new' => ['name' => 'New']])
     ->log('updated');
 
-activity('shift_management')
-    ->performedOn($shift)
-    ->log('shift_assigned');
-
-// Level 2: Security-Critical Logs
 activity('authentication')
     ->causedBy($user)
     ->withProperties(['ip' => $request->ip(), 'success' => false])
@@ -440,7 +443,6 @@ activity('scope_changes')
     ])
     ->log('scope_granted');
 
-// Level 3: Legal-Critical Logs
 activity('hr_access')
     ->causedBy(auth()->user())
     ->performedOn($employee)
@@ -450,7 +452,7 @@ activity('hr_access')
     ])
     ->log('accessed_sensitive_data');
 
-activity('emergency_access')
+activity('sensitive_access')
     ->causedBy(auth()->user())
     ->performedOn($employee)
     ->withProperties([
@@ -461,6 +463,16 @@ activity('emergency_access')
     ])
     ->log('breaking_glass_activated');
 
+activity('works_council_access')
+    ->causedBy(auth()->user())
+    ->performedOn($employee)
+    ->withProperties([
+        'accessed_resource' => 'shift_plan',
+        'reason' => 'Works council review - BetrVG §99',
+    ])
+    ->log('br_accessed_data');
+
+// 8-year retention categories
 activity('contract_change')
     ->causedBy(auth()->user())
     ->performedOn($contract)
@@ -471,14 +483,17 @@ activity('contract_change')
     ])
     ->log('contract_extended');
 
-activity('works_council_access')
+activity('invoice_generated')
     ->causedBy(auth()->user())
-    ->performedOn($employee)
-    ->withProperties([
-        'accessed_resource' => 'shift_plan',
-        'reason' => 'Works council review - BetrVG §99',
-    ])
-    ->log('br_accessed_data');
+    ->performedOn($invoice)
+    ->withProperties(['invoice_number' => 'INV-2026-0001'])
+    ->log('invoice_created');
+
+// 10-year retention categories
+activity('annual_closing')
+    ->causedBy(auth()->user())
+    ->withProperties(['financial_year' => 2025])
+    ->log('year_end_closed');
 ```
 
 ### 4. Merkle Tree Building
@@ -499,12 +514,8 @@ class BuildMerkleTreeBatch implements ShouldQueue
 
     public function handle(): void
     {
-        // Find tenants with unbatched logs (Level 2+3)
+        // Find tenants with unbatched logs
         $tenants = Activity::whereNull('merkle_root')
-            ->whereIn('log_name', array_keys(array_filter(
-                Activity::$securityLevels,
-                fn($level) => $level >= 2
-            )))
             ->distinct('tenant_id')
             ->pluck('tenant_id');
 
@@ -515,10 +526,9 @@ class BuildMerkleTreeBatch implements ShouldQueue
 
     protected function buildTreeForTenant(int $tenantId): void
     {
-        // Get unbatched logs (Level 2+3, created in batch period)
+        // Get unbatched logs created in the batch period
         $logs = Activity::where('tenant_id', $tenantId)
             ->whereNull('merkle_root')
-            ->whereIn('log_name', [/* Level 2+3 log names */])
             ->orderBy('created_at')
             ->get();
 
@@ -539,18 +549,12 @@ class BuildMerkleTreeBatch implements ShouldQueue
             ]);
         }
 
-        // Submit Merkle Root to OpenTimestamp (Level 3 only)
-        $hasLevel3 = $logs->contains(fn($log) =>
-            Activity::getSecurityLevel($log->log_name) === 3
-        );
-
-        if ($hasLevel3) {
-            dispatch(new SubmitMerkleRootToOpenTimestamp(
-                $tenantId,
-                $batchId,
-                $tree['root']
-            ));
-        }
+        // Submit Merkle Root to OpenTimestamp for every batch
+        dispatch(new SubmitMerkleRootToOpenTimestamp(
+            $tenantId,
+            $batchId,
+            $tree['root']
+        ));
     }
 
     protected function buildTree(Collection $logs): array
@@ -633,64 +637,44 @@ class ApplyRetentionPolicies extends Command
 
     public function handle(): int
     {
-        $this->info('Applying retention policies...');
+        $this->info('Applying calendar-year retention policies...');
 
-        // Level 1: Soft delete after 1 year
-        $this->handleLevel1Retention();
+        // 3-year BewachV categories
+        $this->archiveExpiredLogsForYears(3, [
+            'default',
+            'employee_changes',
+            'shift_management',
+            'guard_book',
+            'security',
+            'authentication',
+            'rbac_changes',
+            'scope_changes',
+            'customer_changes',
+            'site_management',
+            'hr_access',
+            'works_council_access',
+            'sensitive_access',
+            'guard_book_event',
+        ]);
 
-        // Level 1: Hard delete soft-deleted after 2 years total
-        $this->handleLevel1HardDelete();
+        // 8-year HGB/AO evidence categories
+        $this->archiveExpiredLogsForYears(8, [
+            'invoice_generated',
+            'payment_processed',
+            'contract_change',
+        ]);
 
-        // Level 2: Archive after 3 years
-        $this->handleLevel2Archiving();
-
-        // Level 2: Delete archived after 5 years total
-        $this->handleLevel2Deletion();
-
-        // Level 3: No automatic deletion (permanent retention)
+        // 10-year annual closing categories
+        $this->archiveExpiredLogsForYears(10, ['annual_closing']);
 
         $this->info('Retention policies applied successfully.');
         return 0;
     }
 
-    protected function handleLevel1Retention(): void
+    protected function archiveExpiredLogsForYears(int $years, array $logNames): void
     {
-        $count = Activity::whereIn('log_name', ['default', 'employee_changes', 'shift_management'])
-            ->where('created_at', '<', now()->subYear())
-            ->whereNull('deleted_at')
-            ->each(fn($log) => $log->delete()) // Soft delete
-            ->count();
-
-        $this->info("Level 1: Soft deleted {$count} logs older than 1 year.");
-    }
-
-    protected function handleLevel1HardDelete(): void
-    {
-        $count = Activity::onlyTrashed()
-            ->where('deleted_at', '<', now()->subYear())
-            ->each(function ($log) {
-                // Mark next log as orphaned genesis if needed
-                $nextLog = Activity::where('previous_hash', $log->event_hash)->first();
-                if ($nextLog) {
-                    $nextLog->update([
-                        'previous_hash' => null,
-                        'is_orphaned_genesis' => true,
-                        'orphaned_reason' => 'Predecessor deleted (retention policy)',
-                        'orphaned_at' => now(),
-                    ]);
-                }
-
-                $log->forceDelete();
-            })
-            ->count();
-
-        $this->info("Level 1: Hard deleted {$count} soft-deleted logs older than 2 years total.");
-    }
-
-    protected function handleLevel2Archiving(): void
-    {
-        $logs = Activity::whereIn('log_name', ['security', 'authentication', 'rbac_changes'])
-            ->where('created_at', '<', now()->subYears(3))
+        $logs = Activity::whereIn('log_name', $logNames)
+            ->where('created_at', '<', $this->calendarYearCutoff($years))
             ->get();
 
         foreach ($logs as $log) {
@@ -705,18 +689,11 @@ class ApplyRetentionPolicies extends Command
                 'merkle_batch_id' => $log->merkle_batch_id,
             ]);
 
+            $this->markSuccessorAsOrphanedGenesis($log);
             $log->forceDelete();
         }
 
-        $this->info("Level 2: Archived {$logs->count()} logs older than 3 years.");
-    }
-
-    protected function handleLevel2Deletion(): void
-    {
-        $count = ActivityArchive::where('created_at', '<', now()->subYears(5))
-            ->delete();
-
-        $this->info("Level 2: Deleted {$count} archived logs older than 5 years total.");
+        $this->info("Archived {$logs->count()} logs after {$years}-year retention.");
     }
 }
 ```
@@ -882,20 +859,19 @@ class ActivityLogController extends Controller
 **Mitigation:**
 
 - Comprehensive documentation
-- Clear configuration via `$securityLevels` array
+- Clear configuration via the `$retentionYears` mapping
 - Automated via scheduled commands
 
 ❌ **Storage:**
 
 - Hash chain + Merkle proof adds ~100 bytes per log
-- OpenTimestamp proof adds ~5 KB (Level 3 only)
-- Archive table required for Level 2
+- OpenTimestamp proof adds extra forensic storage for anchored batches
+- Archive table required for post-retention verification
 
 **Mitigation:**
 
-- Soft delete reduces immediate storage impact
 - Archive stores only hashes (minimal)
-- Level 3 retention justified by legal requirements
+- The longest retention windows remain justified by legal requirements
 
 ❌ **Breaking Changes:**
 
@@ -936,7 +912,7 @@ class ActivityLogController extends Controller
 **Risk 3: Merkle Tree Batching Delay**
 
 **Probability:** Certain (by design)
-**Impact:** Low (Level 2+3 verification delayed until batch)
+**Impact:** Low (Merkle/OpenTimestamp verification delayed until batch jobs complete)
 
 **Mitigation:**
 
@@ -956,7 +932,7 @@ class ActivityLogController extends Controller
 - [ ] Publish and customize config
 - [ ] Create migration for table extensions
 - [ ] Implement custom Activity model
-- [ ] Configure security levels matrix
+- [ ] Configure retention-years mapping per log category
 - [ ] Write unit tests for hash chain
 
 **Deliverables:**
@@ -978,7 +954,7 @@ class ActivityLogController extends Controller
 **Deliverables:**
 
 - Merkle tree batching working
-- Level 2+3 logs get Merkle proofs
+- Batched logs get Merkle proofs
 - Tests passing
 
 ### Phase 3: OpenTimestamp Integration (Week 3)
@@ -993,7 +969,7 @@ class ActivityLogController extends Controller
 
 **Deliverables:**
 
-- Level 3 logs get OTS proofs
+- Anchored batches get OTS proofs
 - Bitcoin anchoring functional
 - Tests passing
 
@@ -1003,7 +979,7 @@ class ActivityLogController extends Controller
 
 - [ ] Create ActivityArchive model + migration
 - [ ] Implement ApplyRetentionPolicies command
-- [ ] Add soft delete support
+- [ ] Implement archive + hard delete flow with calendar-year cutoffs
 - [ ] Add orphaned genesis handling
 - [ ] Schedule daily retention job
 - [ ] Write retention tests
@@ -1082,20 +1058,20 @@ test('merkle proof verifies correctly', function () {
     );
 });
 
-test('soft delete maintains chain integrity', function () {
+test('archived predecessor maintains chain integrity', function () {
     $log1 = Activity::create([...]);
     $log2 = Activity::create([...]);
 
-    $log1->delete(); // Soft delete
+    $log1->archiveAndDelete();
 
     expect($log2->verifyChain())->toBeTrue();
 });
 
-test('orphaned genesis after hard delete', function () {
+test('orphaned genesis after retention delete', function () {
     $log1 = Activity::create([...]);
     $log2 = Activity::create([...]);
 
-    $log1->deleteAndRechain();
+    $log1->archiveAndRechain();
 
     expect($log2->fresh()->previous_hash)->toBeNull();
     expect($log2->fresh()->is_orphaned_genesis)->toBeTrue();
@@ -1208,7 +1184,7 @@ test('hash chain detects injection attacks', function () {
 
 ## Related ADRs
 
-- **ADR-002:** OpenTimestamp for Audit Trail (integrates with Level 3 logs)
+- **ADR-002:** OpenTimestamp for Audit Trail (integrates with anchored audit-log batches)
 - **ADR-005:** RBAC Design Decisions (role changes are logged)
 - **ADR-007:** Organizational Structure Hierarchy (scope-based log access)
 - **ADR-008:** User-Based Tenant Resolution (tenant isolation for logs)
