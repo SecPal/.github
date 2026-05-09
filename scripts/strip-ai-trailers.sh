@@ -30,13 +30,19 @@ AI_PATTERN='Co-[Aa]uthored-[Bb]y:[[:space:]]*(Cursor[^<]*<cursoragent@cursor\.co
 
 # Write the filtered content back to the file in-place.
 # Use a temp file to avoid clobbering the original on sed failure.
-tmp_file="$(mktemp)"
-trap 'rm -f "$tmp_file"' EXIT
+tmp_file="$(mktemp "${TMPDIR:-/tmp}/strip-ai-trailers.XXXXXX")"
+trap 'rm -f "$tmp_file" "${tmp_file}.2"' EXIT
 
 sed -E "/$AI_PATTERN/d" "$COMMIT_MSG_FILE" > "$tmp_file"
 
-# Collapse multiple consecutive blank lines at the end of the message
-# that may be left behind after stripping trailers.
-awk 'NF || prev_nf { print; prev_nf = NF }' "$tmp_file" > "${tmp_file}.2" && mv "${tmp_file}.2" "$tmp_file"
+# Trim only trailing blank lines left behind after stripping trailers.
+# Buffer all lines, then print up to and including the last non-blank line.
+# This preserves intentional blank lines within the commit message body.
+awk '{ lines[NR] = $0 }
+END {
+    last = NR
+    while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+    for (i = 1; i <= last; i++) print lines[i]
+}' "$tmp_file" > "${tmp_file}.2" && mv "${tmp_file}.2" "$tmp_file"
 
 mv "$tmp_file" "$COMMIT_MSG_FILE"

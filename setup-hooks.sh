@@ -67,9 +67,11 @@ for repo in "${REPOS[@]}"; do
 
         # Setup commit-msg hook (strips AI attribution trailers)
         STRIP_SCRIPT="$WORKSPACE_ROOT/.github/scripts/strip-ai-trailers.sh"
-        HOOK_PATH=".git/hooks/commit-msg"
         if [ -f "$STRIP_SCRIPT" ]; then
-                RELATIVE_TARGET="$(python3 -c "import os; print(os.path.relpath('$STRIP_SCRIPT', '$(pwd)/.git/hooks'))")"
+                HOOKS_DIR="$(git rev-parse --git-path hooks)"
+                HOOK_PATH="$HOOKS_DIR/commit-msg"
+                RELATIVE_TARGET="$(python3 -c "import os; print(os.path.relpath('$STRIP_SCRIPT', '$HOOKS_DIR'))")"
+                mkdir -p "$HOOKS_DIR"
                 if [ -L "$HOOK_PATH" ]; then
                         CURRENT_TARGET="$(readlink "$HOOK_PATH")"
                         if [ "$CURRENT_TARGET" != "$RELATIVE_TARGET" ]; then
@@ -79,7 +81,6 @@ for repo in "${REPOS[@]}"; do
                         mv "$HOOK_PATH" "${HOOK_PATH}.backup"
                         ln -sf "$RELATIVE_TARGET" "$HOOK_PATH"
                 else
-                        mkdir -p "$(dirname "$HOOK_PATH")"
                         ln -sf "$RELATIVE_TARGET" "$HOOK_PATH"
                 fi
                 echo "  ✓ Commit-msg hook (AI trailer stripping) installed"

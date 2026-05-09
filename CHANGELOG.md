@@ -9,15 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-05-09 - Fix Repo-Type Misdetection in Copilot Instructions Validator
+## 2026-05-09 - Fix AI-Trailer Hook Robustness and Validator Misdetection
 
 **Fixed:**
 
+- `scripts/strip-ai-trailers.sh`: use `mktemp "${TMPDIR:-/tmp}/strip-ai-trailers.XXXXXX"` for portability
+  on BSD/macOS; replace the awk that collapsed all consecutive blank lines with a
+  trailing-only blank-line trimmer that preserves intentional blank lines in the commit body
+- `setup-hooks.sh`: resolve the hooks directory via `git rev-parse --git-path hooks`
+  instead of hardcoding `.git/hooks`, so the `commit-msg` hook installs correctly in
+  Git worktrees where `.git` is a `gitdir:` pointer file rather than a directory
 - `scripts/validate-copilot-instructions.sh`: `detect_repo_type()` now checks
   for `workflow-templates/` directory before the openapi-in-package.json check,
   so the `.github` org repository is correctly identified as `org` instead of
-  `contracts`; the misdetection caused the repo-specific AI risk guidance check
-  to fail whenever `.github/copilot-instructions.md` was touched in a PR
+  `contracts`
 
 ---
 
