@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Pin Preview Frontend Local Env Overrides To Workspace API Hosts
+
+**Changed:**
+
+- hardened `scripts/polyscope-rollout.py` so frontend preview provisioning now rewrites `.env.local`, `.env.preview.local`, and `.env.production.local` inside preview worktrees to the workspace-specific preview API host instead of leaving later builds free to fall back to `api.secpal.dev`
+- extended `tests/polyscope-rollout.sh` to prove frontend preview provisioning overwrites live-targeted preview and production local Vite API overrides with the current workspace preview API host
+
 ## 2026-05-09 - Fix AI-Trailer Hook Robustness and Validator Misdetection
 
 **Fixed:**

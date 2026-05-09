@@ -791,6 +791,14 @@ cat >"$frontend_clone/.env.local" <<'EOF'
 VITE_API_URL=https://api.secpal.dev
 EOF
 
+cat >"$frontend_clone/.env.preview.local" <<'EOF'
+VITE_API_URL=https://api.secpal.dev
+EOF
+
+cat >"$frontend_clone/.env.production.local" <<'EOF'
+VITE_API_URL=https://api.secpal.dev
+EOF
+
 cat >"$frontend_clone/.pre-commit-config.yaml" <<'EOF'
 repos: []
 EOF
@@ -838,6 +846,8 @@ grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$api_clone/.env"
 grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
 grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
+grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.preview.local"
+grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.production.local"
 cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
 cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"

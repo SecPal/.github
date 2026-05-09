@@ -363,19 +363,20 @@ def build_frontend_preview_env_setup_command() -> str:
         import re
 
         workspace = os.environ["POLYSCOPE_WORKSPACE"]
-        env_path = Path(".env.local")
-
-        text = env_path.read_text() if env_path.exists() else ""
         pattern = re.compile(r"^VITE_API_URL=.*$", re.MULTILINE)
         replacement = f"VITE_API_URL=https://api-{workspace}.preview.secpal.dev"
-        if pattern.search(text):
-            text = pattern.sub(replacement, text)
-        else:
-            if text and not text.endswith("\\n"):
-                text += "\\n"
-            text += replacement + "\\n"
 
-        env_path.write_text(text)
+        for env_name in (".env.local", ".env.preview.local", ".env.production.local"):
+            env_path = Path(env_name)
+            text = env_path.read_text() if env_path.exists() else ""
+            if pattern.search(text):
+                text = pattern.sub(replacement, text)
+            else:
+                if text and not text.endswith("\\n"):
+                    text += "\\n"
+                text += replacement + "\\n"
+
+            env_path.write_text(text)
         """
     ).strip()
 
