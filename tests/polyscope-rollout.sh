@@ -516,7 +516,11 @@ grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secp
 grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
-grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/frontend/polyscope.local.json"
+if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"; then
+    echo "generated frontend Polyscope config must not rely on Vite watch mode for preview rebuilds" >&2
+    exit 1
+fi
 grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
 grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
