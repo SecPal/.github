@@ -9,6 +9,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-evidence.sh"
 TEMPLATE="$REPO_ROOT/.github/pull_request_template.md"
 WORKFLOW="$REPO_ROOT/.github/workflows/pull-request-evidence.yml"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pull-request-evidence.XXXXXX")"
+
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT
 
 if [ ! -f "$VALIDATOR" ]; then
   echo "Expected validator script was not found: $VALIDATOR" >&2
@@ -78,8 +85,14 @@ Refs #426
 EOF
 )"
 
-if ! PR_BODY="$positive_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-positive.log 2>&1; then
-  cat /tmp/pull-request-evidence-positive.log >&2
+positive_log="$TMP_DIR/positive.log"
+docs_log="$TMP_DIR/docs.log"
+missing_log="$TMP_DIR/missing.log"
+placeholder_log="$TMP_DIR/placeholder.log"
+defaults_log="$TMP_DIR/defaults.log"
+
+if ! PR_BODY="$positive_body" bash "$VALIDATOR" >"$positive_log" 2>&1; then
+  cat "$positive_log" >&2
   echo "Validator rejected a PR body with concrete failing and passing evidence." >&2
   exit 1
 fi
@@ -102,8 +115,8 @@ Refs #426
 EOF
 )"
 
-if ! PR_BODY="$docs_only_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-docs.log 2>&1; then
-  cat /tmp/pull-request-evidence-docs.log >&2
+if ! PR_BODY="$docs_only_body" bash "$VALIDATOR" >"$docs_log" 2>&1; then
+  cat "$docs_log" >&2
   echo "Validator rejected a documentation-only PR body with an explicit no-executable-change reason." >&2
   exit 1
 fi
@@ -115,13 +128,13 @@ Missing the required evidence section.
 EOF
 )"
 
-if PR_BODY="$missing_section_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-missing.log 2>&1; then
+if PR_BODY="$missing_section_body" bash "$VALIDATOR" >"$missing_log" 2>&1; then
   echo "Validator unexpectedly accepted a PR body without the evidence section." >&2
   exit 1
 fi
 
-if ! grep -Fq 'TDD / Validate-First Evidence section is required.' /tmp/pull-request-evidence-missing.log; then
-  cat /tmp/pull-request-evidence-missing.log >&2
+if ! grep -Fq 'TDD / Validate-First Evidence section is required.' "$missing_log"; then
+  cat "$missing_log" >&2
   echo "Validator did not explain the missing evidence section failure." >&2
   exit 1
 fi
@@ -140,13 +153,13 @@ Still using placeholders.
 EOF
 )"
 
-if PR_BODY="$placeholder_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-placeholder.log 2>&1; then
+if PR_BODY="$placeholder_body" bash "$VALIDATOR" >"$placeholder_log" 2>&1; then
   echo "Validator unexpectedly accepted placeholder evidence." >&2
   exit 1
 fi
 
-if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' /tmp/pull-request-evidence-placeholder.log; then
-  cat /tmp/pull-request-evidence-placeholder.log >&2
+if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' "$placeholder_log"; then
+  cat "$placeholder_log" >&2
   echo "Validator did not explain the placeholder evidence failure." >&2
   exit 1
 fi
@@ -165,13 +178,13 @@ Still using the instructional defaults.
 EOF
 )"
 
-if PR_BODY="$template_default_body" bash "$VALIDATOR" >/tmp/pull-request-evidence-defaults.log 2>&1; then
+if PR_BODY="$template_default_body" bash "$VALIDATOR" >"$defaults_log" 2>&1; then
   echo "Validator unexpectedly accepted instructional default text as real evidence." >&2
   exit 1
 fi
 
-if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' /tmp/pull-request-evidence-defaults.log; then
-  cat /tmp/pull-request-evidence-defaults.log >&2
+if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' "$defaults_log"; then
+  cat "$defaults_log" >&2
   echo "Validator did not explain why instructional default text is invalid evidence." >&2
   exit 1
 fi
