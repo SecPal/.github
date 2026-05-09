@@ -102,6 +102,16 @@ Resolves #789
 - [ ] Unit tests added
 - [ ] Manual testing done
 
+## TDD / Validate-First Evidence
+
+- Failing proof before implementation: `REPLACE_WITH_FAILING_PROOF`
+- Passing proof after implementation: `REPLACE_WITH_PASSING_PROOF`
+- Validate-first exception reference: `N/A`
+- No executable change reason: `N/A`
+
+Use the validate-first exception only when the repository instructions explicitly allow validate-first.
+Use the no-executable-change reason only for docs/content/template-only PRs.
+
 ## Checklist
 
 - [ ] Code follows style guide

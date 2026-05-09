@@ -125,6 +125,15 @@ if [ -f tests/pull-request-template.sh ]; then
   }
 fi
 
+if [ -f tests/pull-request-evidence.sh ]; then
+  bash tests/pull-request-evidence.sh || {
+    echo "" >&2
+    echo "❌ Pull request evidence regression test failed!" >&2
+    echo "Restore the PR evidence template section, validator script, and workflow wiring before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/pull-request-english.sh ]; then
   bash tests/pull-request-english.sh || {
     echo "" >&2
