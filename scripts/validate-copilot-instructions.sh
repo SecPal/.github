@@ -67,6 +67,11 @@ detect_repo_type() {
         return
     fi
 
+    if [ -d "workflow-templates" ]; then
+        echo "org"
+        return
+    fi
+
     if [ -f "docs/openapi.yaml" ] || { [ -f "package.json" ] && grep -q "openapi" package.json 2>/dev/null; }; then
         echo "contracts"
         return

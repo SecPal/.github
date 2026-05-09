@@ -845,9 +845,13 @@ grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
 test -x "$api_clone/.git/hooks/pre-commit"
 test -L "$api_clone/.git/hooks/pre-push"
 test "$(readlink "$api_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
+test -L "$api_clone/.git/hooks/commit-msg"
+readlink "$api_clone/.git/hooks/commit-msg" | grep -qF 'strip-ai-trailers.sh'
 test -x "$frontend_clone/.git/hooks/pre-commit"
 test -L "$frontend_clone/.git/hooks/pre-push"
 test "$(readlink "$frontend_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
+test -L "$frontend_clone/.git/hooks/commit-msg"
+readlink "$frontend_clone/.git/hooks/commit-msg" | grep -qF 'strip-ai-trailers.sh'
 test -f "$api_clone/.polyscope-secpal-provisioned.json"
 test -f "$frontend_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$broken_api_clone/polyscope.local.json"

@@ -9,6 +9,43 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Fix AI-Trailer Hook Robustness and Validator Misdetection
+
+**Fixed:**
+
+- `scripts/strip-ai-trailers.sh`: use `mktemp "${TMPDIR:-/tmp}/strip-ai-trailers.XXXXXX"` for portability
+  on BSD/macOS; replace the awk that collapsed all consecutive blank lines with a
+  trailing-only blank-line trimmer that preserves intentional blank lines in the commit body
+- `setup-hooks.sh`: resolve the hooks directory via `git rev-parse --git-path hooks`
+  instead of hardcoding `.git/hooks`, so the `commit-msg` hook installs correctly in
+  Git worktrees where `.git` is a `gitdir:` pointer file rather than a directory
+- `scripts/validate-copilot-instructions.sh`: `detect_repo_type()` now checks
+  for `workflow-templates/` directory before the openapi-in-package.json check,
+  so the `.github` org repository is correctly identified as `org` instead of
+  `contracts`
+
+---
+
+## 2026-05-09 - Strip AI Agent Attribution From Commits and PRs
+
+**Added:**
+
+- added `scripts/strip-ai-trailers.sh`, a `commit-msg` hook that removes
+  `Co-authored-by:` trailers injected by AI coding agents (Cursor, GitHub
+  Copilot) while preserving human co-author and dependabot trailers
+- Polyscope provisioning now installs the `commit-msg` hook as a symlink in
+  every managed worktree alongside the existing pre-commit and pre-push hooks
+- `setup-hooks.sh` installs the `commit-msg` hook in all SecPal repositories
+  as part of the local development environment setup
+
+**Changed:**
+
+- disabled `attributeCommitsToAgent` and `attributePRsToAgent` in the Cursor
+  CLI configuration so AI-generated attribution trailers are not added at the
+  source
+- hardened the no-AI-attribution policy in `.github/copilot-instructions.md`
+  with an explicit rule and a reference to the enforcement hook
+
 ## 2026-05-09 - Skip Invalid Polyscope Stub Directories During Provisioning
 
 **Changed:**
