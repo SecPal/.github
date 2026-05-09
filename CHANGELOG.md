@@ -16,6 +16,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 - updated `docs/adr/20251221-activity-logging-audit-trail-strategy.md` to describe legal retention windows per `log_name` instead of the superseded security-level matrix
 - aligned ADR-010 archival examples with the current calendar-year cutoff, hash-only archive, and orphaned-genesis retention flow documented in the backend runtime
 
+## 2026-05-09 - Document Signed-Commit Deadlock Remediation For Legacy PR Branches
+
+**Changed:**
+
+- updated `docs/workflows/QUICK_REFERENCE.md` with the supported replacement-PR flow when signed-commit enforcement blocks a legacy branch with unsigned history
+- documented that the policy-safe path is to supersede the blocked PR from a fresh signed branch instead of force-pushing or bypassing branch protection
+
 ## 2026-05-08 - Require PR Evidence For TDD Or Explicit Non-Executable Changes
 
 **Changed:**
