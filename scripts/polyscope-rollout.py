@@ -335,7 +335,7 @@ def cleanup_removed_api_preview_databases(
         build_preview_database_name(base_database, worktree_path.name)
         for worktree_path in api_clone_root.iterdir()
         if worktree_path.is_dir()
-        if is_provisionable_worktree("api", api_spec, worktree_path, api_validation_commands, log_skip_reason=False)
+        if is_provisionable_worktree("api", worktree_path, api_validation_commands, log_skip_reason=False)
     }
 
     cleaned_databases: list[str] = []
@@ -1027,7 +1027,6 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
 
 def is_provisionable_worktree(
     repo_name: str,
-    spec: dict[str, Any],
     worktree_path: pathlib.Path,
     validation_commands: list[str],
     *,
@@ -1038,13 +1037,17 @@ def is_provisionable_worktree(
             print(f"Skipping {repo_name} worktree {worktree_path.name} at {worktree_path}: {reason}")
         return False
 
-    if not (worktree_path / ".git").exists():
-        return skip("missing .git")
+    try:
+        git_dir = resolve_git_dir(worktree_path)
+        if not git_dir.is_dir():
+            return skip("missing .git")
+    except SystemExit:
+        return skip("invalid .git pointer")
 
-    copilot_instructions_path = worktree_path / str(spec["copilot_instructions"])
+    copilot_instructions_rel = REPO_SETTINGS[repo_name]["copilot_instructions"]
+    copilot_instructions_path = worktree_path / copilot_instructions_rel
     if not copilot_instructions_path.is_file():
-        missing_path = copilot_instructions_path.relative_to(worktree_path)
-        return skip(f"missing required repo file {missing_path}")
+        return skip(f"missing required repo file {copilot_instructions_rel}")
 
     package_scripts = load_package_scripts(worktree_path)
     try:
@@ -1215,7 +1218,7 @@ def provision_worktrees(
         config_text = rendered_configs[repo_name]
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
-            if not is_provisionable_worktree(repo_name, spec, worktree_path, validation_commands):
+            if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
                 continue
 
             sync_worktree_local_config(worktree_path, config_text)

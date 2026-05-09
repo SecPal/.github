@@ -628,9 +628,11 @@ fake_exec_dir="$workspace/fake-exec"
 service_path="$fake_exec_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 api_clone="$home_dir/.polyscope/clones/api12345/auto-hawk"
 broken_api_clone="$home_dir/.polyscope/clones/api12345/fix"
+garbled_git_api_clone="$home_dir/.polyscope/clones/api12345/chore"
 frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
 broken_frontend_clone="$home_dir/.polyscope/clones/fe123456/feat"
-mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone"
+mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone"
+printf 'not-a-git-pointer\n' > "$garbled_git_api_clone/.git"
 mkdir -p "$home_dir/.local/bin"
 
 python3 - <<'PY' "$fake_pg_state"
@@ -823,6 +825,7 @@ cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'api:fix' not in provisioned, f"did not expect api:fix in provisioned_worktrees, got {provisioned}"
+assert 'api:chore' not in provisioned, f"did not expect api:chore in provisioned_worktrees, got {provisioned}"
 assert 'frontend:feat' not in provisioned, f"did not expect frontend:feat in provisioned_worktrees, got {provisioned}"
 assert cleaned == [], f"expected no cleaned preview databases on first provisioning run, got {cleaned}"
 PY
@@ -849,6 +852,8 @@ test -f "$api_clone/.polyscope-secpal-provisioned.json"
 test -f "$frontend_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$broken_api_clone/polyscope.local.json"
 test ! -f "$broken_api_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$garbled_git_api_clone/polyscope.local.json"
+test ! -f "$garbled_git_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$broken_frontend_clone/polyscope.local.json"
 test ! -f "$broken_frontend_clone/.polyscope-secpal-provisioned.json"
 grep -qF "composer:$api_clone:install" "$provision_log"
@@ -865,6 +870,11 @@ grep -qF 'CREATE DATABASE "secpal__preview__auto_hawk"' "$fake_psql_log"
 
 if grep -qF "$broken_api_clone" "$provision_log"; then
     echo "provisioning must skip invalid api stub directories" >&2
+    exit 1
+fi
+
+if grep -qF "$garbled_git_api_clone" "$provision_log"; then
+    echo "provisioning must skip api worktrees with garbled .git files" >&2
     exit 1
 fi
 
