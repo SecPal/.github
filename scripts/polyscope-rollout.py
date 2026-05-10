@@ -504,7 +504,7 @@ def build_frontend_preview_build_watch_command() -> str:
     return f"python3 -c {shlex.quote(script)}"
 
 
-def build_api_preview_seed_command() -> str:
+def build_api_preview_seed_command(migration_command: str = "php artisan migrate --force") -> str:
     tinker_script = textwrap.dedent(
         r"""
         $canonical = \App\Models\User::where('email', 'test@example.com')->first();
@@ -531,7 +531,7 @@ def build_api_preview_seed_command() -> str:
 
     return (
         "php artisan config:clear && "
-        "php artisan migrate --force && "
+        f"{migration_command} && "
         "php artisan db:seed --force && "
         f"php artisan tinker --execute={shlex.quote(tinker_script)}"
     )
@@ -559,13 +559,13 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     build_api_preview_seed_command(),
                 ],
                 "run": [
-                    {"label": "Queue Worker", "command": "php artisan queue:listen --tries=1", "runMode": "replace"},
+                    {"label": "Queue Worker", "command": "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600", "runMode": "replace"},
                     {"label": "Pail", "command": "php artisan pail --timeout=0", "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
                     # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.
                     {
                         "label": "Preview Only: Refresh DB + E2E User",
-                        "command": "php artisan migrate:fresh --seed",
+                        "command": build_api_preview_seed_command("php artisan migrate:fresh --force"),
                         "runMode": "preserve",
                     },
                     {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},

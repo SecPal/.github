@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-09 - Harden API Preview Runtime Recovery
+
+**Changed:**
+
+- updated `scripts/polyscope-rollout.py` so generated API preview `Queue Worker` commands now run
+  `php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600`
+  instead of `queue:listen`, keeping default mail jobs and forensics jobs on one explicit worker path that
+  can satisfy the readiness heartbeat checks consistently across preview workspaces
+- updated the generated API preview `Preview Only: Refresh DB + E2E User` command to rerun the same
+  hardened `config:clear`, migration, `db:seed`, and canonical `test@example.com` normalization flow as
+  initial setup instead of relying on raw `migrate:fresh --seed`, so missing tenant keys and the standard
+  preview login are restored together after preview DB resets
+- extended `tests/polyscope-rollout.sh` to prove API preview configs emit the combined `queue:work`
+  command, reject the old `queue:listen` worker, and use the hardened reseed flow for preview DB refreshes
+
 ## 2026-05-09 - Replace Fragile Frontend Preview Watch Builds With Full Rebuild Watcher
 
 **Fixed:**

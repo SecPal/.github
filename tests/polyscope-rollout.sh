@@ -508,8 +508,18 @@ grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polys
 grep -q 'org-shared.instructions.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan config:clear && php artisan migrate --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
+if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
+    echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
+    exit 1
+fi
 grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
+grep -qF 'php artisan migrate:fresh --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api/polyscope.local.json"; then
+    echo "preview API refresh command must use the hardened reseed flow and not raw migrate:fresh --seed" >&2
+    exit 1
+fi
 grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
