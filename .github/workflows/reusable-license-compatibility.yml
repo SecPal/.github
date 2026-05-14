@@ -12,6 +12,9 @@ on:
         type: string
         default: "3.x"
 
+permissions:
+  contents: read
+
 jobs:
   license-check:
     name: Check License Compatibility
@@ -63,6 +66,7 @@ jobs:
             "CC0-1.0"
             "ISC"
             "OFL-1.1"
+            "ODbL-1.0"   # Open Database License: accepted for bundled geo-data, reference datasets, and similar data-only artifacts (e.g. OpenPLZ); appropriate file-level usage is a code-review concern — this check only verifies AGPL compatibility
             "LicenseRef-TailwindPlus"
           )
 
