@@ -18,6 +18,11 @@ Log of notable changes to SecPal organization defaults (newest first).
   passes the centralized compatibility job; scope is documented inline and does not endorse ODbL as the
   default license for application source
 - set `permissions: contents: read` on the reusable workflow (least privilege for `workflow_call`)
+- clarified the ODbL-1.0 inline comment to truthfully state that the check verifies AGPL compatibility only
+  and that file-level usage appropriateness is a code-review concern, resolving the mismatch flagged by
+  Copilot review (comment previously implied path-aware enforcement that CI did not implement)
+- added `tests/license-compatibility.sh` with positive and negative regression fixtures for the allowlist,
+  wired into `scripts/preflight.sh` so future edits to the compatible-licenses array are caught locally
 - tracked as [#449](https://github.com/SecPal/.github/issues/449)
 
 ---

@@ -206,6 +206,15 @@ if [ -f tests/polyscope-rollout.sh ]; then
   }
 fi
 
+if [ -f tests/license-compatibility.sh ]; then
+  bash tests/license-compatibility.sh || {
+    echo "" >&2
+    echo "❌ License-compatibility allowlist regression test failed!" >&2
+    echo "Restore the ODbL-1.0 entry or fix the incompatible-license check in .github/workflows/reusable-license-compatibility.yml before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then
