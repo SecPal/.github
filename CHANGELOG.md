@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-14 - Allow ODbL-1.0 in Reusable License Compatibility
+
+**Changed:**
+
+- allowed `ODbL-1.0` in `reusable-license-compatibility.yml` so `reuse spdx` output that includes the Open
+  Database License (bundled upstream license texts, SPDX on data or fixture files, and related metadata)
+  passes the centralized compatibility job; scope is documented inline and does not endorse ODbL as the
+  default license for application source
+- set `permissions: contents: read` on the reusable workflow (least privilege for `workflow_call`)
+- tracked as [#449](https://github.com/SecPal/.github/issues/449)
+
+---
+
 ## 2026-05-09 - Harden API Preview Runtime Recovery
 
 **Changed:**
