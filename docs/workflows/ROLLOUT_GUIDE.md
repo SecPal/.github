@@ -146,11 +146,14 @@ git add test.txt
 git commit -m "test: Automation"
 git push -u origin test-automation
 
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/test-pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
+printf 'Closes #%s\n' "$ISSUE" > "$tmpfile"
 gh pr create \
   --repo SecPal/api \
   --draft \
   --title "WIP: Test automation" \
-  --body "Closes #$ISSUE"
+  --body-file "$tmpfile"
 ```
 
 **Verify:**

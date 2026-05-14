@@ -98,7 +98,10 @@ gh issue create --label "core-feature" --title "..."
 gh issue create --label "priority: blocker" --title "..."
 
 # Draft PR workflow (recommended)
-gh pr create --draft --body "Closes #123"  # → In Progress
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
+printf '%s\n' "Closes #123" > "$tmpfile"
+gh pr create --draft --body-file "$tmpfile"  # → In Progress
 gh pr ready <PR>                            # → In Review
 gh pr ready --undo <PR>                     # → In Progress (changes needed)
 gh pr merge <PR> --squash                   # → Done (auto-closes issue)
