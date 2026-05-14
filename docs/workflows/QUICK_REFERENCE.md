@@ -48,9 +48,12 @@ gh issue create \
 
 ```bash
 # 1. Create draft PR (→ In Progress)
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
+printf '%s\n' "Closes #123" > "$tmpfile"
 gh pr create --draft \
   --title "WIP: Feature X" \
-  --body "Closes #123"
+  --body-file "$tmpfile"
 
 # 2. Mark ready (→ In Review)
 gh pr ready 456
@@ -147,9 +150,9 @@ git switch -c replacement/topic
 git cherry-pick -x -S <commit-from-blocked-branch>
 git push -u origin replacement/topic
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/replacement-pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
 printf '%s\n' '## Description' '' 'Replacement PR for blocked unsigned history.' '' '## Related Pull Requests' '' 'Supersedes PR #123' > "$tmpfile"
 gh pr create --draft --title "replacement title" --body-file "$tmpfile"
-rm -f "$tmpfile"
 ```
 
 If the old branch contains mixed signed and unsigned history, re-commit the intended change on the fresh branch instead of merging the blocked branch forward.
@@ -273,7 +276,10 @@ When working alone:
 gh issue create --label "core-feature" --title "..."
 
 # 2. Start work (draft PR)
-gh pr create --draft --body "Closes #123"
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
+printf '%s\n' "Closes #123" > "$tmpfile"
+gh pr create --draft --body-file "$tmpfile"
 # → Issue: 🚧 In Progress
 
 # 3. Self-review ready
@@ -305,7 +311,7 @@ alias gh-feature='gh issue create --label "core-feature"'
 # Create blocker issue
 alias gh-blocker='gh issue create --label "priority: blocker"'
 
-# Create draft PR
+# Create draft PR (interactive; opens editor for body — not for scripted PR creation)
 alias gh-draft='gh pr create --draft'
 
 # Mark PR ready

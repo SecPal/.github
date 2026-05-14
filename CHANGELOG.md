@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-14 - Harden `gh pr create` examples with tmpfile trap
+
+**Changed:**
+
+- replaced bare `rm -f "$tmpfile"` after `gh pr create` with `trap 'rm -f "$tmpfile"' EXIT`
+  in the workflow documentation snippets (`README.md`, `docs/workflows/PROJECT_AUTOMATION.md`,
+  `docs/workflows/QUICK_REFERENCE.md` including the signed-commit remediation block,
+  `docs/workflows/ROLLOUT_GUIDE.md`) so the temp file is cleaned up even when the command
+  fails or the shell is interrupted
+- switched inline `--body` on `gh pr create` to `--body-file` for programmatic examples,
+  matching Issue And PR Discipline in `.github/copilot-instructions.md`
+- tracked as [#441](https://github.com/SecPal/.github/issues/441)
+
+---
+
 ## 2026-05-14 - Allow ODbL-1.0 in Reusable License Compatibility
 
 **Changed:**

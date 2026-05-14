@@ -98,9 +98,12 @@ For incremental development and self-review:
 
 ```bash
 # 1. Start work - create draft PR
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
+printf '%s\n' "Closes #123" > "$tmpfile"
 gh pr create --draft \
   --title "WIP: Implement feature X" \
-  --body "Closes #123"
+  --body-file "$tmpfile"
 # → Issue #123 status: 🚧 In Progress
 
 # 2. Ready for review (or Copilot review)
