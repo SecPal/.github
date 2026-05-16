@@ -597,7 +597,7 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope
 grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
-grep -qF '"command": "npm test && ./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
+grep -qF '"command": "npm run test && ./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 
 if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
