@@ -1447,12 +1447,16 @@ def ensure_repositories_registered(api_base: str, repo_specs: dict[str, dict[str
 
 
 def backup_db(db_path: pathlib.Path) -> pathlib.Path:
-    if not db_path.exists():
-        raise SystemExit(f"Polyscope DB not found at {db_path}; start Polyscope at least once so the DB is created before running this script")
+    ensure_polyscope_db_exists(db_path)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_path = db_path.parent / f"{db_path.name}.backup-{timestamp}"
     shutil.copy2(db_path, backup_path)
     return backup_path
+
+
+def ensure_polyscope_db_exists(db_path: pathlib.Path) -> None:
+    if not db_path.exists():
+        raise SystemExit(f"Polyscope DB not found at {db_path}; start Polyscope at least once so the DB is created before running this script")
 
 
 def build_desired_repository_metadata(
@@ -1504,6 +1508,7 @@ def sync_repository_metadata(
 ) -> pathlib.Path | None:
     managed_repo_ids = [repo_state[name]["id"] for name in REPO_SETTINGS]
     desired_links, desired_prompts = build_desired_repository_metadata(repo_state, repo_specs)
+    ensure_polyscope_db_exists(db_path)
 
     conn = sqlite3.connect(db_path)
     current_links, current_prompts = read_current_repository_metadata(conn, managed_repo_ids)
