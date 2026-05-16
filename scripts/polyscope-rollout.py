@@ -1530,7 +1530,7 @@ def sync_repository_metadata(
                 (repo_id, repo_state[linked_name]["id"]),
             )
 
-        prompts = build_prompt_bundle(spec)
+        prompt_values = desired_prompts[repo_id]
         cur.execute(
             """
             update repositories
@@ -1541,14 +1541,7 @@ def sync_repository_metadata(
                 merge_and_push_prompt = ?
             where id = ?
             """,
-            (
-                prompts["review_prompt"],
-                prompts["pr_prompt"],
-                prompts["draft_pr_prompt"],
-                prompts["merge_prompt"],
-                prompts["merge_and_push_prompt"],
-                repo_id,
-            ),
+            (*prompt_values, repo_id),
         )
 
     conn.commit()
