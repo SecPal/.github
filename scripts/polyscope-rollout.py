@@ -1404,9 +1404,6 @@ def provision_worktrees(
                 if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
                     continue
 
-            if repo_name == "api" and preview_storage_target is None:
-                continue
-
             if setup_commands:
                 print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
                 run_setup_commands(worktree_path, setup_commands)
