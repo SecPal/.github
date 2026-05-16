@@ -297,6 +297,12 @@ cat >"$PROVISION_SERVICE_UNIT" <<EOF
 [Unit]
 Description=Provision SecPal Polyscope worktrees automatically
 After=polyscope-rollout-sync.service
+# Bound the self-trigger feedback loop: DB sync writes to polyscope.db which is
+# watched by the paired path unit; without a burst cap this can re-trigger the
+# service until systemd rate-limits the unit.  Three starts per five minutes is
+# enough to handle normal provisioning while preventing runaway activation.
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -304,7 +310,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --skip-local-configs --skip-db-sync --provision-worktrees
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --skip-local-configs --provision-worktrees
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF
