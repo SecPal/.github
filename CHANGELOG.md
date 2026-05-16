@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-16 - Add Polyscope Run Controls For Checks And Findings
+
+**Changed:**
+
+- updated `scripts/polyscope-rollout.py` so generated `polyscope.local.json` files now expose repo-specific `All Checks` run actions across the SecPal workspace instead of requiring developers to remember the underlying validation commands manually
+- surfaced `Preflight` as a run action wherever a repository ships `scripts/preflight.sh`, making the existing preflight entrypoint available on demand from Polyscope instead of only through hooks or manual shell use
+- added a standard `Fix current findings` Polyscope task that tells the agent to run the current repo's checks, fix repo-local findings, rerun validations, and stop instead of widening the branch into unrelated multi-topic cleanup
+- extended `tests/polyscope-rollout.sh` so the rollout generator must keep emitting those run actions and the fix-findings task for every supported repository
+- tracked as [#457](https://github.com/SecPal/.github/issues/457)
+
+---
+
 ## 2026-05-16 - Reprovision Drifted Polyscope API Preview Targets
 
 **Fixed:**
