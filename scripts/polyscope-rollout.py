@@ -561,6 +561,72 @@ def build_api_preview_seed_command(migration_command: str = "php artisan migrate
     )
 
 
+def build_repo_all_checks_command(repo_name: str) -> str | None:
+    commands = {
+        "api": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress",
+        "frontend": "npm run lint && npm run typecheck && npm run test:run:all && npm run build",
+        "contracts": "npm run validate && npm run lint && npm run format:check",
+        "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
+        "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
+        "changelog": "npm run check && npm run lint && npm run csp:check && npm run build",
+        ".github": "npm test && ./scripts/preflight.sh",
+    }
+    return commands.get(repo_name)
+
+
+def ensure_run_action(
+    actions: list[dict[str, Any]],
+    *,
+    label: str,
+    command: str,
+    run_mode: str = "preserve",
+    autostart: bool | None = None,
+) -> list[dict[str, Any]]:
+    if any(item.get("label") == label for item in actions):
+        return actions
+
+    action: dict[str, Any] = {"label": label, "command": command, "runMode": run_mode}
+    if autostart is not None:
+        action["autostart"] = autostart
+
+    return [action, *actions]
+
+
+def ensure_task(tasks: list[dict[str, str]], *, label: str, prompt: str) -> list[dict[str, str]]:
+    if any(item.get("label") == label for item in tasks):
+        return tasks
+    return [{"label": label, "prompt": prompt}, *tasks]
+
+
+def enrich_local_config(repo_name: str, spec: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    scripts = config.setdefault("scripts", {})
+    run_actions = [dict(item) for item in scripts.get("run", [])]
+
+    all_checks_command = build_repo_all_checks_command(repo_name)
+    if all_checks_command is not None:
+        run_actions = ensure_run_action(run_actions, label="All Checks", command=all_checks_command)
+
+    preflight_script = pathlib.Path(spec["path"]) / "scripts" / "preflight.sh"
+    if preflight_script.is_file():
+        run_actions = ensure_run_action(run_actions, label="Preflight", command="./scripts/preflight.sh")
+
+    scripts["run"] = run_actions
+
+    tasks = [dict(item) for item in config.get("tasks", [])]
+    tasks = ensure_task(
+        tasks,
+        label="Fix current findings",
+        prompt=(
+            "Run the generated validation actions for this repo, including All Checks and Preflight when available. "
+            "Fix the current findings in this repo only, rerun the touched validations until they are clean, and keep the branch scoped to one issue. "
+            "If the findings expand into unrelated topics or require broader cleanup, stop and track them instead of widening the change."
+        ),
+    )
+    config["tasks"] = tasks
+
+    return config
+
+
 REPO_SETTINGS: dict[str, dict[str, Any]] = {
     "api": {
         "display_name": "SecPal/api",
@@ -1028,6 +1094,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
 
 def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
     config = copy.deepcopy(spec["local_config"])
+    config = enrich_local_config(spec["path"].name, spec, config)
     preamble = collapse_spaces(f"Apply the current SecPal instructions from {instruction_reference(spec)} before taking action.")
     for task in config.get("tasks", []):
         task["prompt"] = collapse_spaces(f"{preamble} {task['prompt']}")

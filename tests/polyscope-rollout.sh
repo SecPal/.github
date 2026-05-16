@@ -72,6 +72,8 @@ workspace_root = Path(sys.argv[1])
 
 (workspace_root / "api" / "composer.json").write_text("{}\n")
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
+(workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
+(workspace_root / "api" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
 
 (workspace_root / ".github" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / ".github" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
@@ -80,7 +82,10 @@ package_scripts = {
     "frontend": {
         "build": "vite build",
         "lint": "eslint .",
+        "preflight": "./scripts/preflight.sh",
         "typecheck": "tsc --noEmit",
+        "test:run": "vitest run",
+        "test:run:all": "vitest run --coverage",
         "test:watch": "vitest",
         "test:e2e:ci": "cross-env CI=true playwright test",
         "test:e2e:staging": "cross-env PLAYWRIGHT_BASE_URL=https://app.secpal.dev playwright test",
@@ -107,14 +112,19 @@ package_scripts = {
         "check": "tsc --noEmit",
         "lint": "eslint .",
         "csp:check": "node scripts/generate-csp.mjs --check",
+        "preflight": "./scripts/preflight.sh",
     },
     ".github": {
         "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
+        "test": "npm run test:openapi-verified-presence",
+        "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh",
     },
 }
 
 for repo_name, scripts in package_scripts.items():
     repo_dir = workspace_root / repo_name
+    (repo_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
     package_json = {
         "name": repo_name.replace(".", "-"),
         "private": True,
@@ -531,6 +541,11 @@ fi
 grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan migrate:fresh --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF '"label": "All Checks"' "$workspace_root/api/polyscope.local.json"
+grep -qF '"command": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress"' "$workspace_root/api/polyscope.local.json"
+grep -qF '"label": "Preflight"' "$workspace_root/api/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/api/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/api/polyscope.local.json"
 if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API refresh command must use the hardened reseed flow and not raw migrate:fresh --seed" >&2
     exit 1
@@ -542,6 +557,9 @@ grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/chang
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/frontend/polyscope.local.json"
 if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope config must not rely on Vite watch mode for preview rebuilds" >&2
     exit 1
@@ -566,6 +584,21 @@ if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not run npm build" >&2
     exit 1
 fi
+
+grep -qF '"command": "npm run validate && npm run lint && npm run format:check"' "$workspace_root/contracts/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/contracts/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/contracts/polyscope.local.json"
+grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify"' "$workspace_root/android/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/android/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.local.json"
+grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF '"command": "npm test && ./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 
 if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not reference node_modules" >&2
