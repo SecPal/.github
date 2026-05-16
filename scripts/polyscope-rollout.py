@@ -269,7 +269,24 @@ def build_api_preview_env_updates(workspace: str) -> dict[str, str]:
     }
 
 
-def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pathlib.Path) -> bool:
+def build_api_preview_storage_target(env_values: dict[str, str]) -> str | None:
+    storage_mode = env_values.get(PREVIEW_STORAGE_MODE_ENV_KEY, "").strip().lower()
+
+    if storage_mode == "database":
+        preview_database = env_values.get("DB_DATABASE", "").strip()
+        if preview_database:
+            return f"database:{preview_database}"
+
+    if storage_mode == "schema":
+        base_database = env_values.get(PREVIEW_DATABASE_BASE_ENV_KEY, env_values.get("DB_DATABASE", "")).strip()
+        preview_schema = env_values.get(PREVIEW_SCHEMA_ENV_KEY, "").strip()
+        if base_database and preview_schema:
+            return f"schema:{base_database}:{preview_schema}"
+
+    return None
+
+
+def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pathlib.Path) -> tuple[bool, str | None]:
     env_path = worktree_path / ".env"
     if not env_path.exists():
         source_env_path = source_repo_path / ".env"
@@ -278,9 +295,10 @@ def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pat
                 f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
                 f".env missing and source preview env not found at {source_env_path}"
             )
-            return False
+            return False, None
         shutil.copy2(source_env_path, env_path)
 
+    env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
     workspace = worktree_path.name
     updated_values = build_api_preview_env_updates(workspace)
@@ -304,8 +322,14 @@ def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pat
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = preview_target
         updated_values[PREVIEW_DATABASE_BASE_ENV_KEY] = base_database
 
-    env_path.write_text(upsert_env_assignments(env_path.read_text(), updated_values))
-    return True
+    updated_env_text = upsert_env_assignments(env_text, updated_values)
+    if updated_env_text != env_text:
+        env_path.write_text(updated_env_text)
+
+    final_env_values = env_values.copy()
+    final_env_values.update(updated_values)
+
+    return True, build_api_preview_storage_target(final_env_values)
 
 
 def cleanup_removed_api_preview_databases(
@@ -1368,31 +1392,35 @@ def provision_worktrees(
             sync_worktree_local_config(worktree_path, config_text)
             ensure_worktree_hooks(worktree_path)
 
+            preview_storage_target: str | None = None
+            if repo_name == "api":
+                ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"])
+                if not ready:
+                    continue
+
             marker_path = worktree_path / PROVISION_MARKER_FILENAME
             marker = load_provision_marker(marker_path)
             if marker is not None and marker.get("setup_hash") == setup_hash:
-                continue
-
-            if repo_name == "api":
-                if not ensure_api_worktree_ready(worktree_path, spec["path"]):
+                if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
                     continue
+
+            if repo_name == "api" and preview_storage_target is None:
+                continue
 
             if setup_commands:
                 print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
                 run_setup_commands(worktree_path, setup_commands)
 
-            marker_path.write_text(
-                json.dumps(
-                    {
-                        "repo": repo_name,
-                        "workspace": worktree_path.name,
-                        "setup_hash": setup_hash,
-                        "provisioned_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    indent=2,
-                )
-                + "\n"
-            )
+            marker_payload: dict[str, Any] = {
+                "repo": repo_name,
+                "workspace": worktree_path.name,
+                "setup_hash": setup_hash,
+                "provisioned_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if repo_name == "api" and preview_storage_target is not None:
+                marker_payload["preview_storage_target"] = preview_storage_target
+
+            marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
             provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
 
     return provisioned_worktrees, cleaned_preview_storage_targets
@@ -1758,7 +1786,8 @@ def main() -> int:
     if args.prepare_api_worktree is not None:
         if args.source_repo_path is None:
             raise SystemExit("--source-repo-path is required with --prepare-api-worktree")
-        return 0 if ensure_api_worktree_ready(args.prepare_api_worktree, args.source_repo_path) else 1
+        ready, _preview_storage_target = ensure_api_worktree_ready(args.prepare_api_worktree, args.source_repo_path)
+        return 0 if ready else 1
 
     repo_specs = build_repo_specs(args.workspace_root)
 

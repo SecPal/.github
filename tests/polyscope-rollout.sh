@@ -1227,6 +1227,70 @@ assert state['databases'] == ['secpal'], state['databases']
 assert 'secpal__preview__schema_badger' in state['schemas'], state['schemas']
 PY
 
+python3 - <<'PY' "$schema_api_clone/.polyscope-secpal-provisioned.json"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+marker = json.loads(path.read_text())
+marker.pop('preview_storage_target', None)
+path.write_text(json.dumps(marker, indent=2) + "\n")
+PY
+
+cat >"$schema_api_clone/.env" <<'EOF'
+APP_URL=https://api-daring-mouse.preview.secpal.dev
+FRONTEND_URL=https://frontend-daring-mouse.preview.secpal.dev
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=secpal
+DB_URL=postgresql://secpal@127.0.0.1:5432/secpal?search_path=secpal__preview__daring_mouse
+DB_USERNAME=secpal
+DB_PASSWORD=
+SESSION_DOMAIN=.secpal.dev
+SANCTUM_STATEFUL_DOMAINS=frontend-daring-mouse.preview.secpal.dev,daring-mouse.preview.secpal.dev,app.secpal.dev
+CORS_ALLOWED_ORIGINS=https://frontend-daring-mouse.preview.secpal.dev,https://daring-mouse.preview.secpal.dev,https://app.secpal.dev
+POLYSCOPE_BASE_DB_DATABASE=secpal
+POLYSCOPE_PREVIEW_STORAGE_MODE=schema
+POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__daring_mouse
+EOF
+
+schema_recovery_summary_json="$workspace/schema-recovery-summary.json"
+schema_provision_log_lines_before_recovery="$(wc -l < "$provision_log")"
+env HOME="$schema_home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$schema_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$schema_recovery_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - <<'PY' "$schema_recovery_summary_json"
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+assert 'api:schema-badger' in provisioned, provisioned
+PY
+
+test "$schema_provision_log_lines_before_recovery" -lt "$(wc -l < "$provision_log")"
+grep -qF 'APP_URL=https://api-schema-badger.preview.secpal.dev' "$schema_api_clone/.env"
+grep -qF 'FRONTEND_URL=https://frontend-schema-badger.preview.secpal.dev' "$schema_api_clone/.env"
+grep -qF 'DB_URL=postgresql://secpal@127.0.0.1:5432/secpal?search_path=secpal__preview__schema_badger' "$schema_api_clone/.env"
+grep -qF 'POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__schema_badger' "$schema_api_clone/.env"
+
+test "$(grep -cF "php:$schema_api_clone:artisan migrate --force" "$provision_log")" -eq 2
+test "$(grep -cF 'CREATE SCHEMA IF NOT EXISTS "secpal__preview__schema_badger"' "$fake_psql_log")" -eq 2
+
 rm -rf "$schema_api_clone" "$schema_frontend_clone"
 
 env HOME="$schema_home_dir" \
