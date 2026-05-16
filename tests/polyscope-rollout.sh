@@ -18,6 +18,20 @@ if [[ ! -x "$PRETTIER_BIN" ]]; then
     exit 1
 fi
 
+file_sha256() {
+    python3 - "$1" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+digest = hashlib.sha256()
+with Path(sys.argv[1]).open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
@@ -637,7 +651,7 @@ assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('or
 assert summary['repositories']['.github']['linked_repositories'] == []
 PY
 
-initial_db_hash="$(sha256sum "$db_path" | cut -d' ' -f1)"
+initial_db_hash="$(file_sha256 "$db_path")"
 initial_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
 
 python3 "$PYTHON_SCRIPT" \
@@ -648,7 +662,7 @@ python3 "$PYTHON_SCRIPT" \
     --summary-output "$repeat_summary_output" \
     > /dev/null
 
-repeat_db_hash="$(sha256sum "$db_path" | cut -d' ' -f1)"
+repeat_db_hash="$(file_sha256 "$db_path")"
 repeat_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
 
 if [ "$repeat_backup_count" -ne "$initial_backup_count" ]; then
