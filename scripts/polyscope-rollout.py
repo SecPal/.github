@@ -1447,20 +1447,80 @@ def ensure_repositories_registered(api_base: str, repo_specs: dict[str, dict[str
 
 
 def backup_db(db_path: pathlib.Path) -> pathlib.Path:
-    if not db_path.exists():
-        raise SystemExit(f"Polyscope DB not found at {db_path}; start Polyscope at least once so the DB is created before running this script")
+    ensure_polyscope_db_exists(db_path)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_path = db_path.parent / f"{db_path.name}.backup-{timestamp}"
     shutil.copy2(db_path, backup_path)
     return backup_path
 
 
-def sync_repository_metadata(db_path: pathlib.Path, repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]) -> pathlib.Path:
+def ensure_polyscope_db_exists(db_path: pathlib.Path) -> None:
+    if not db_path.exists():
+        raise SystemExit(f"Polyscope DB not found at {db_path}; start Polyscope at least once so the DB is created before running this script")
+
+
+def build_desired_repository_metadata(
+    repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]
+) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str, str, str, str]]]:
+    desired_links: set[tuple[str, str]] = set()
+    desired_prompts: dict[str, tuple[str, str, str, str, str]] = {}
+
+    for repo_name, spec in repo_specs.items():
+        repo_id = repo_state[repo_name]["id"]
+        for linked_name in spec["link_names"]:
+            desired_links.add((repo_id, repo_state[linked_name]["id"]))
+
+        prompts = build_prompt_bundle(spec)
+        desired_prompts[repo_id] = (
+            prompts["review_prompt"],
+            prompts["pr_prompt"],
+            prompts["draft_pr_prompt"],
+            prompts["merge_prompt"],
+            prompts["merge_and_push_prompt"],
+        )
+
+    return desired_links, desired_prompts
+
+
+def read_current_repository_metadata(
+    conn: sqlite3.Connection, managed_repo_ids: list[str]
+) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str, str, str, str]]]:
+    cur = conn.cursor()
+    placeholders = ", ".join("?" for _ in managed_repo_ids)
+    current_links = set(
+        cur.execute(
+            f"select repo_id, linked_repo_id from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
+            managed_repo_ids + managed_repo_ids,
+        ).fetchall()
+    )
+    current_prompts = {
+        row[0]: row[1:]
+        for row in cur.execute(
+            f"select id, review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id in ({placeholders})",
+            managed_repo_ids,
+        ).fetchall()
+    }
+    return current_links, current_prompts
+
+
+def sync_repository_metadata(
+    db_path: pathlib.Path, repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]
+) -> pathlib.Path | None:
+    managed_repo_ids = [repo_state[name]["id"] for name in REPO_SETTINGS]
+    desired_links, desired_prompts = build_desired_repository_metadata(repo_state, repo_specs)
+    ensure_polyscope_db_exists(db_path)
+
+    conn = sqlite3.connect(db_path)
+    current_links, current_prompts = read_current_repository_metadata(conn, managed_repo_ids)
+    conn.close()
+
+    if current_links == desired_links and current_prompts == desired_prompts:
+        return None
+
     backup_path = backup_db(db_path)
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    managed_repo_ids = [repo_state[name]["id"] for name in REPO_SETTINGS]
     placeholders = ", ".join("?" for _ in managed_repo_ids)
     cur.execute(
         f"delete from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
@@ -1475,7 +1535,7 @@ def sync_repository_metadata(db_path: pathlib.Path, repo_state: dict[str, dict[s
                 (repo_id, repo_state[linked_name]["id"]),
             )
 
-        prompts = build_prompt_bundle(spec)
+        prompt_values = desired_prompts[repo_id]
         cur.execute(
             """
             update repositories
@@ -1486,14 +1546,7 @@ def sync_repository_metadata(db_path: pathlib.Path, repo_state: dict[str, dict[s
                 merge_and_push_prompt = ?
             where id = ?
             """,
-            (
-                prompts["review_prompt"],
-                prompts["pr_prompt"],
-                prompts["draft_pr_prompt"],
-                prompts["merge_prompt"],
-                prompts["merge_and_push_prompt"],
-                repo_id,
-            ),
+            (*prompt_values, repo_id),
         )
 
     conn.commit()

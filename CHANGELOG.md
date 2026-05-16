@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-16 - Make Polyscope Metadata Sync Idempotent
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so `sync_repository_metadata()` now compares the desired repository prompts and managed `repository_links` against the current `polyscope.db` state before taking a backup or writing any rows
+- skipped both `backup_db()` and SQLite writes when the repository metadata is already up to date, eliminating the `polyscope-worktree-provision.path` feedback loop that was caused by no-op DB rewrites triggering fresh inotify activations
+- extended `tests/polyscope-rollout.sh` to prove a repeated identical metadata sync leaves `polyscope.db` unchanged and reports `db_backup: null` on the second run
+- tracked as [#453](https://github.com/SecPal/.github/issues/453)
+
+---
+
 ## 2026-05-16 - Restore DB Sync For Polyscope Worktree Provisioning
 
 **Changed:**
