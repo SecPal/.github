@@ -15,6 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - removed `--skip-db-sync` from the generated `polyscope-worktree-provision.service` so automatic Polyscope provisioning now reapplies repository prompt and review metadata instead of leaving AI instruction settings drifted after repo deletion or re-registration
 - kept `--skip-local-configs` in place so the background provisioner still avoids rewriting repo-local workspace config during its repair pass
+- added `StartLimitIntervalSec=300` / `StartLimitBurst=3` to the provisioner service unit to bound the self-trigger feedback loop (DB sync writes to `polyscope.db` which the path unit watches)
 
 ---
 

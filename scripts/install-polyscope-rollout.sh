@@ -297,6 +297,12 @@ cat >"$PROVISION_SERVICE_UNIT" <<EOF
 [Unit]
 Description=Provision SecPal Polyscope worktrees automatically
 After=polyscope-rollout-sync.service
+# Bound the self-trigger feedback loop: DB sync writes to polyscope.db which is
+# watched by the paired path unit; without a burst cap this can re-trigger the
+# service until systemd rate-limits the unit.  Three starts per five minutes is
+# enough to handle normal provisioning while preventing runaway activation.
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=oneshot

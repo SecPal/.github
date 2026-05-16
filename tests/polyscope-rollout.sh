@@ -1423,6 +1423,8 @@ grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-
 grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'StartLimitBurst=3' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
