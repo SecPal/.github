@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-05-16 - Reprovision Drifted Polyscope API Preview Targets
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so API worktree provisioning normalizes the preview `.env` before honoring the provision marker, instead of treating a matching `setup_hash` as sufficient even when the worktree's preview target has drifted
+- stored the API preview storage target in `.polyscope-secpal-provisioned.json`, which makes older markers trigger a one-time re-provision pass and prevents stale markers from suppressing schema/database recovery for a renamed or drifted worktree
+- extended `tests/polyscope-rollout.sh` with a schema-mode regression that mutates an existing API worktree back to a sibling preview schema and proves the next provisioning run repairs the `.env` and reruns the API setup commands
+- tracked as [#455](https://github.com/SecPal/.github/issues/455)
+
+---
+
 ## 2026-05-16 - Make Polyscope Metadata Sync Idempotent
 
 **Fixed:**
