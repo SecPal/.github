@@ -569,7 +569,7 @@ def build_repo_all_checks_command(repo_name: str) -> str | None:
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
         "changelog": "npm run check && npm run lint && npm run csp:check && npm run build",
-        ".github": "npm test && ./scripts/preflight.sh",
+        ".github": "npm run test && ./scripts/preflight.sh",
     }
     return commands.get(repo_name)
 
