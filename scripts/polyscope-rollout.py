@@ -1455,12 +1455,67 @@ def backup_db(db_path: pathlib.Path) -> pathlib.Path:
     return backup_path
 
 
-def sync_repository_metadata(db_path: pathlib.Path, repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]) -> pathlib.Path:
+def build_desired_repository_metadata(
+    repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]
+) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str, str, str, str]]]:
+    desired_links: set[tuple[str, str]] = set()
+    desired_prompts: dict[str, tuple[str, str, str, str, str]] = {}
+
+    for repo_name, spec in repo_specs.items():
+        repo_id = repo_state[repo_name]["id"]
+        for linked_name in spec["link_names"]:
+            desired_links.add((repo_id, repo_state[linked_name]["id"]))
+
+        prompts = build_prompt_bundle(spec)
+        desired_prompts[repo_id] = (
+            prompts["review_prompt"],
+            prompts["pr_prompt"],
+            prompts["draft_pr_prompt"],
+            prompts["merge_prompt"],
+            prompts["merge_and_push_prompt"],
+        )
+
+    return desired_links, desired_prompts
+
+
+def read_current_repository_metadata(
+    conn: sqlite3.Connection, managed_repo_ids: list[str]
+) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str, str, str, str]]]:
+    cur = conn.cursor()
+    placeholders = ", ".join("?" for _ in managed_repo_ids)
+    current_links = set(
+        cur.execute(
+            f"select repo_id, linked_repo_id from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
+            managed_repo_ids + managed_repo_ids,
+        ).fetchall()
+    )
+    current_prompts = {
+        row[0]: row[1:]
+        for row in cur.execute(
+            f"select id, review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id in ({placeholders})",
+            managed_repo_ids,
+        ).fetchall()
+    }
+    return current_links, current_prompts
+
+
+def sync_repository_metadata(
+    db_path: pathlib.Path, repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]
+) -> pathlib.Path | None:
+    managed_repo_ids = [repo_state[name]["id"] for name in REPO_SETTINGS]
+    desired_links, desired_prompts = build_desired_repository_metadata(repo_state, repo_specs)
+
+    conn = sqlite3.connect(db_path)
+    current_links, current_prompts = read_current_repository_metadata(conn, managed_repo_ids)
+    conn.close()
+
+    if current_links == desired_links and current_prompts == desired_prompts:
+        return None
+
     backup_path = backup_db(db_path)
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    managed_repo_ids = [repo_state[name]["id"] for name in REPO_SETTINGS]
     placeholders = ", ".join("?" for _ in managed_repo_ids)
     cur.execute(
         f"delete from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",

@@ -461,6 +461,7 @@ db_path="$workspace/polyscope.db"
 repos_json="$workspace/repos.json"
 nginx_output="$workspace/preview.secpal.dev.conf"
 summary_output="$workspace/summary.json"
+repeat_summary_output="$workspace/repeat-summary.json"
 
 python3 - <<'PY' "$db_path" "$repos_json" "$workspace_root"
 import json
@@ -626,6 +627,7 @@ assert ('api12345', 'fe123456') in links
 assert ('sa123456', 'ch123456') in links
 
 summary = json.loads(summary_path.read_text())
+assert summary['db_backup'] is not None
 assert summary['repositories']['api']['preview_prefix'] == 'api'
 assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
 assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
@@ -633,6 +635,39 @@ assert summary['repositories']['changelog']['preview_prefix'] == 'changelog'
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
+PY
+
+initial_db_hash="$(sha256sum "$db_path" | cut -d' ' -f1)"
+initial_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
+
+python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$repeat_summary_output" \
+    > /dev/null
+
+repeat_db_hash="$(sha256sum "$db_path" | cut -d' ' -f1)"
+repeat_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
+
+if [ "$repeat_backup_count" -ne "$initial_backup_count" ]; then
+    echo "repeat metadata sync must not create another DB backup when repository metadata is unchanged" >&2
+    exit 1
+fi
+
+if [ "$repeat_db_hash" != "$initial_db_hash" ]; then
+    echo "repeat metadata sync must leave polyscope.db unchanged when repository metadata is already up to date" >&2
+    exit 1
+fi
+
+python3 - <<'PY' "$repeat_summary_output"
+import json
+import sys
+from pathlib import Path
+
+summary = json.loads(Path(sys.argv[1]).read_text())
+assert summary['db_backup'] is None
 PY
 
 provision_log="$workspace/provision.log"
