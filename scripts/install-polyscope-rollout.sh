@@ -91,7 +91,7 @@ resolve_system_server_ssh_auth_sock() {
 
     system_server_user="$(detect_system_server_user)"
     if [[ -z "$system_server_user" ]]; then
-        printf '/run/user/%s/openssh_agent\n' "$(id -u)"
+        printf '/run/user/0/openssh_agent\n'
         return
     fi
 

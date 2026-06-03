@@ -1628,7 +1628,7 @@ env HOME="$system_home_dir" \
     SUDO_BIN="$fake_sudo_dir/sudo" \
     SUDO_LOG="$system_sudo_log" \
     FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
-    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="$(id -un)" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="" \
     POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$system_dropin_dir" \
     FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
@@ -1639,7 +1639,7 @@ test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q "Environment=PATH=$system_polyscope_git_dir:$system_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q "Environment=SSH_AUTH_SOCK=/run/user/$(id -u)/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'Environment=SSH_AUTH_SOCK=/run/user/0/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
