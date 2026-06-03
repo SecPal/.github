@@ -1213,13 +1213,37 @@ def load_package_scripts(repo_path: pathlib.Path) -> set[str]:
     return {str(script_name) for script_name in scripts}
 
 
-def validate_local_config_command(repo_name: str, repo_path: pathlib.Path, package_scripts: set[str], command: str) -> None:
+def load_composer_scripts(repo_path: pathlib.Path) -> set[str]:
+    composer_json_path = repo_path / "composer.json"
+    if not composer_json_path.exists():
+        return set()
+
+    raw_text = composer_json_path.read_text()
+    try:
+        composer_data = json.loads(raw_text)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid composer.json for rollout validation ({composer_json_path}): {error}") from error
+
+    scripts = composer_data.get("scripts", {})
+    if not isinstance(scripts, dict):
+        raise SystemExit(f"invalid composer.json for rollout validation ({composer_json_path}): scripts must be an object")
+
+    return {str(script_name) for script_name in scripts}
+
+
+def validate_local_config_command(
+    repo_name: str,
+    repo_path: pathlib.Path,
+    package_scripts: set[str],
+    composer_scripts: set[str],
+    command: str,
+) -> None:
     package_json_path = repo_path / "package.json"
     package_lock_path = repo_path / "package-lock.json"
     composer_json_path = repo_path / "composer.json"
     artisan_path = repo_path / "artisan"
 
-    if re.search(r"\bcomposer\s+install\b", command) and not composer_json_path.exists():
+    if re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command) and not composer_json_path.exists():
         raise SystemExit(f"{repo_name} polyscope config references composer without a composer.json at the repo root")
 
     if re.search(r"\bphp\s+artisan\b", command) and not artisan_path.exists():
@@ -1238,6 +1262,10 @@ def validate_local_config_command(repo_name: str, repo_path: pathlib.Path, packa
     for script_name in re.findall(r"\bnpm\s+run\s+([A-Za-z0-9:_-]+)\b", command):
         if script_name not in package_scripts:
             raise SystemExit(f"{repo_name} polyscope config references missing npm script '{script_name}'")
+
+    for script_name in re.findall(r"\bcomposer\s+(?:run|run-script)\s+([A-Za-z0-9:_-]+)\b", command):
+        if script_name not in composer_scripts:
+            raise SystemExit(f"{repo_name} polyscope config references missing composer script '{script_name}'")
 
     try:
         tokens = shlex.split(command)
@@ -1272,14 +1300,15 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
         repo_path = pathlib.Path(spec["path"])
         config = render_local_config(spec)
         package_scripts = load_package_scripts(repo_path)
+        composer_scripts = load_composer_scripts(repo_path)
 
         for command in config.get("scripts", {}).get("setup", []):
-            validate_local_config_command(repo_name, repo_path, package_scripts, command)
+            validate_local_config_command(repo_name, repo_path, package_scripts, composer_scripts, command)
 
         for item in config.get("scripts", {}).get("run", []):
             command = item.get("command")
             if isinstance(command, str):
-                validate_local_config_command(repo_name, repo_path, package_scripts, command)
+                validate_local_config_command(repo_name, repo_path, package_scripts, composer_scripts, command)
 
 
 def is_provisionable_worktree(
@@ -1307,9 +1336,10 @@ def is_provisionable_worktree(
         return skip(f"missing required repo file {copilot_instructions_rel}")
 
     package_scripts = load_package_scripts(worktree_path)
+    composer_scripts = load_composer_scripts(worktree_path)
     try:
         for command in validation_commands:
-            validate_local_config_command(repo_name, worktree_path, package_scripts, command)
+            validate_local_config_command(repo_name, worktree_path, package_scripts, composer_scripts, command)
     except SystemExit as error:
         return skip(str(error))
 

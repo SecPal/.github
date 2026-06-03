@@ -133,6 +133,15 @@ package_scripts = {
     },
 }
 
+guardguide_composer = {
+    "scripts": {
+        "analyse": ["./vendor/bin/phpstan analyse"],
+        "lint": ["./vendor/bin/pint --test"],
+        "test": ["@php artisan test"],
+    }
+}
+(workspace_root / "GuardGuide" / "composer.json").write_text(json.dumps(guardguide_composer, indent=2) + "\n")
+
 for repo_name, scripts in package_scripts.items():
     repo_dir = workspace_root / repo_name
     (repo_dir / "scripts").mkdir(parents=True, exist_ok=True)
@@ -591,6 +600,12 @@ python3 "$PYTHON_SCRIPT" \
     --nginx-output "$nginx_output" \
     --summary-output "$summary_output" \
     > /dev/null
+
+assert_rollout_rejects_invalid_local_config \
+    "$PYTHON_SCRIPT" \
+    'composer run analyse' \
+    'composer run missing-script' \
+    "GuardGuide polyscope config references missing composer script 'missing-script'"
 
 grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
