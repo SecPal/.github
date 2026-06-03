@@ -1505,6 +1505,10 @@ if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "FragmentPath" && "$
         printf '%s\n' "${FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT:-}"
     fi
 fi
+
+if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "User" && "${4:-}" == "--value" && "${5:-}" == "polyscope-server.service" ]]; then
+    printf '%s\n' "${FAKE_SYSTEM_POLYSCOPE_SERVER_USER:-}"
+fi
 exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
@@ -1607,6 +1611,8 @@ system_systemctl_log="$workspace/system-systemctl.log"
 system_sudo_log="$workspace/system-sudo.log"
 system_fragment_dir="$workspace/system-fragments"
 system_fragment_path="$system_fragment_dir/polyscope-server.service"
+system_server_user="$(id -un)"
+system_server_uid="$(id -u)"
 mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir"
 printf '[Unit]\nDescription=Polyscope Server\n' > "$system_fragment_path"
 
@@ -1624,6 +1630,7 @@ env HOME="$system_home_dir" \
     SUDO_BIN="$fake_sudo_dir/sudo" \
     SUDO_LOG="$system_sudo_log" \
     FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="$system_server_user" \
     POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$system_dropin_dir" \
     FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
@@ -1634,7 +1641,7 @@ test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q "Environment=PATH=$system_polyscope_git_dir:$system_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q "Environment=SSH_AUTH_SOCK=/run/user/%U/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
@@ -1647,6 +1654,24 @@ grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_l
 grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
 grep -q '^--user start polyscope-worktree-provision.service$' "$system_systemctl_log"
+
+system_fallback_dropin_dir="$workspace/system-fallback-service-units/polyscope-server.service.d"
+mkdir -p "$system_fallback_dropin_dir"
+
+env HOME="$system_home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$system_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$system_sudo_log" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="" \
+    POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$system_fallback_dropin_dir" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$system_bin_dir" --unit-dir "$system_user_unit_dir" --polyscope-server-bin "$fake_server_bin"
+
+grep -q 'Environment=SSH_AUTH_SOCK=/run/user/0/openssh_agent' "$system_fallback_dropin_dir/zz-secpal-runtime.conf"
 
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$fake_unit_dir/polyscope-server.service"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.service"
