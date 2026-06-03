@@ -565,6 +565,7 @@ def build_repo_all_checks_command(repo_name: str) -> str | None:
     commands = {
         "api": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress",
         "frontend": "npm run lint && npm run typecheck && npm run test:run:all && npm run build",
+        "GuardGuide": "npm run format:check && npm run lint && npm run typecheck && npm run test && composer run lint && composer run analyse && composer run test",
         "contracts": "npm run validate && npm run lint && npm run format:check",
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
@@ -735,6 +736,49 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 {
                     "label": "Triage failing Vitest",
                     "prompt": "Reproduce the failing behavior, add or update the smallest relevant test first, then implement the minimal fix and rerun the touched validation. Keep the change scoped to one issue.",
+                },
+            ],
+        },
+    },
+    "GuardGuide": {
+        "display_name": "SecPal/GuardGuide",
+        "base_branch": "main",
+        "copilot_instructions": ".github/copilot-instructions.md",
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/php-laravel.instructions.md",
+            ".github/instructions/react-catalyst.instructions.md",
+        ],
+        "preview_prefix": "guardguide",
+        "review_focus": "Laravel 13 monolith boundaries, Pest plus Vitest coverage, Catalyst-only UI patterns, Lingui localization, application-layer encryption for person-related data, and standalone-first acknowledgement flows.",
+        "link_names": [],
+        "local_config": {
+            "copyGitignored": True,
+            "runMode": "replace",
+            "preview": {"url": build_preview_url_template("guardguide")},
+            "scripts": {
+                "setup": [
+                    "test -d vendor || composer install",
+                    "test -d node_modules || npm ci",
+                    "test -f .env || cp .env.example .env",
+                    "test -f database/database.sqlite || touch database/database.sqlite",
+                    "grep -Eq '^APP_KEY=.+$' .env || php artisan key:generate --force",
+                    "php artisan migrate --force",
+                ],
+                "run": [
+                    {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
+                    {"label": "Vitest", "command": "npm run test:watch", "runMode": "replace"},
+                    {"label": "Vite", "command": "npm run start", "runMode": "replace"},
+                ],
+            },
+            "tasks": [
+                {
+                    "label": "Review monolith boundary",
+                    "prompt": "Review the changed GuardGuide flow for Laravel monolith boundary drift, Catalyst UI regressions, localization gaps, encryption-at-rest constraints, and missing Pest or Vitest coverage. Keep the change scoped to one GuardGuide issue.",
+                },
+                {
+                    "label": "Triage GuardGuide validation",
+                    "prompt": "Reproduce the failing GuardGuide behavior, add or update the smallest relevant Pest or Vitest coverage first when possible, then implement the minimal fix and rerun the touched validation. Keep the change scoped to one issue.",
                 },
             ],
         },
@@ -1169,13 +1213,37 @@ def load_package_scripts(repo_path: pathlib.Path) -> set[str]:
     return {str(script_name) for script_name in scripts}
 
 
-def validate_local_config_command(repo_name: str, repo_path: pathlib.Path, package_scripts: set[str], command: str) -> None:
+def load_composer_scripts(repo_path: pathlib.Path) -> set[str]:
+    composer_json_path = repo_path / "composer.json"
+    if not composer_json_path.exists():
+        return set()
+
+    raw_text = composer_json_path.read_text()
+    try:
+        composer_data = json.loads(raw_text)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid composer.json for rollout validation ({composer_json_path}): {error}") from error
+
+    scripts = composer_data.get("scripts", {})
+    if not isinstance(scripts, dict):
+        raise SystemExit(f"invalid composer.json for rollout validation ({composer_json_path}): scripts must be an object")
+
+    return {str(script_name) for script_name in scripts}
+
+
+def validate_local_config_command(
+    repo_name: str,
+    repo_path: pathlib.Path,
+    package_scripts: set[str],
+    composer_scripts: set[str],
+    command: str,
+) -> None:
     package_json_path = repo_path / "package.json"
     package_lock_path = repo_path / "package-lock.json"
     composer_json_path = repo_path / "composer.json"
     artisan_path = repo_path / "artisan"
 
-    if re.search(r"\bcomposer\s+install\b", command) and not composer_json_path.exists():
+    if re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command) and not composer_json_path.exists():
         raise SystemExit(f"{repo_name} polyscope config references composer without a composer.json at the repo root")
 
     if re.search(r"\bphp\s+artisan\b", command) and not artisan_path.exists():
@@ -1194,6 +1262,10 @@ def validate_local_config_command(repo_name: str, repo_path: pathlib.Path, packa
     for script_name in re.findall(r"\bnpm\s+run\s+([A-Za-z0-9:_-]+)\b", command):
         if script_name not in package_scripts:
             raise SystemExit(f"{repo_name} polyscope config references missing npm script '{script_name}'")
+
+    for script_name in re.findall(r"\bcomposer\s+(?:run|run-script)\s+([A-Za-z0-9:_-]+)\b", command):
+        if script_name not in composer_scripts:
+            raise SystemExit(f"{repo_name} polyscope config references missing composer script '{script_name}'")
 
     try:
         tokens = shlex.split(command)
@@ -1228,14 +1300,15 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
         repo_path = pathlib.Path(spec["path"])
         config = render_local_config(spec)
         package_scripts = load_package_scripts(repo_path)
+        composer_scripts = load_composer_scripts(repo_path)
 
         for command in config.get("scripts", {}).get("setup", []):
-            validate_local_config_command(repo_name, repo_path, package_scripts, command)
+            validate_local_config_command(repo_name, repo_path, package_scripts, composer_scripts, command)
 
         for item in config.get("scripts", {}).get("run", []):
             command = item.get("command")
             if isinstance(command, str):
-                validate_local_config_command(repo_name, repo_path, package_scripts, command)
+                validate_local_config_command(repo_name, repo_path, package_scripts, composer_scripts, command)
 
 
 def is_provisionable_worktree(
@@ -1263,9 +1336,10 @@ def is_provisionable_worktree(
         return skip(f"missing required repo file {copilot_instructions_rel}")
 
     package_scripts = load_package_scripts(worktree_path)
+    composer_scripts = load_composer_scripts(worktree_path)
     try:
         for command in validation_commands:
-            validate_local_config_command(repo_name, worktree_path, package_scripts, command)
+            validate_local_config_command(repo_name, worktree_path, package_scripts, composer_scripts, command)
     except SystemExit as error:
         return skip(str(error))
 
@@ -1649,9 +1723,10 @@ def sync_repository_metadata(
 def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
     api_id = repo_state["api"]["id"]
     frontend_id = repo_state["frontend"]["id"]
+    guardguide_id = repo_state["GuardGuide"]["id"]
     secpal_app_id = repo_state["secpal.app"]["id"]
     changelog_id = repo_state["changelog"]["id"]
-    # NOTE: workspace names starting with api-, frontend-, secpal-app-, or changelog- are
+    # NOTE: workspace names starting with api-, frontend-, guardguide-, secpal-app-, or changelog- are
     # reserved for legacy per-repo routing (e.g. api-WORKSPACE.preview.secpal.dev).
     # Generic workspaces must not use those prefixes; the regex will treat them as legacy
     # hosts and route them to the wrong backend.
@@ -1660,7 +1735,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 80;
             listen [::]:80;
-            server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             location /.well-known/acme-challenge/ {{
                 root /var/www/certbot;
@@ -1672,7 +1747,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 443 ssl;
             listen [::]:443 ssl;
-            server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+            server_name ~^(?:(?<repo>api|frontend|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
@@ -1689,11 +1764,14 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             set $api_public $api_root/public;
             set $frontend_root /home/secpal/.polyscope/clones/{frontend_id}/$workspace;
             set $frontend_dist $frontend_root/dist;
+            set $guardguide_root /home/secpal/.polyscope/clones/{guardguide_id}/$workspace;
+            set $guardguide_public $guardguide_root/public;
             set $secpal_app_root /home/secpal/.polyscope/clones/{secpal_app_id}/$workspace;
             set $secpal_app_dist $secpal_app_root/dist;
             set $changelog_root /home/secpal/.polyscope/clones/{changelog_id}/$workspace;
             set $changelog_out $changelog_root/out;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
+            set $php_root $api_public;
             set $route_mode static;
 
             if (-f $api_public/index.php) {{
@@ -1731,8 +1809,15 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 set $route_mode static;
             }}
 
+            if ($repo = guardguide) {{
+                set $preview_docroot $guardguide_public;
+                set $php_root $guardguide_public;
+                set $route_mode api;
+            }}
+
             if ($repo = api) {{
                 set $preview_docroot $api_public;
+                set $php_root $api_public;
                 set $route_mode api;
             }}
 
@@ -1769,14 +1854,14 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             }}
 
             location = /index.php {{
-                if (!-f $api_public/index.php) {{
+                if (!-f $php_root/index.php) {{
                     return 404;
                 }}
 
                 include snippets/fastcgi-php.conf;
                 fastcgi_pass unix:/run/php/php8.4-fpm-secpal-api.sock;
-                fastcgi_param SCRIPT_FILENAME $api_public/index.php;
-                fastcgi_param DOCUMENT_ROOT $api_public;
+                fastcgi_param SCRIPT_FILENAME $php_root/index.php;
+                fastcgi_param DOCUMENT_ROOT $php_root;
                 fastcgi_param HTTP_HOST $host;
             }}
 

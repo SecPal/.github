@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-03 - Register GuardGuide In Polyscope Rollout
+
+**Changed:**
+
+- added `GuardGuide` to `scripts/polyscope-rollout.py` so the rollout generator now manages its repository prompts, local Polyscope config, and preview URL alongside the existing SecPal repos
+- configured GuardGuide as a Laravel monolith with React/Catalyst guidance, combined repo-local validation commands, and a prefixed preview host at `guardguide-<workspace>.preview.secpal.dev`
+- extended the generated preview nginx mapping and `tests/polyscope-rollout.sh` so GuardGuide registration, local config rendering, and prefixed preview routing stay regression-covered
+
+---
+
 ## 2026-05-16 - Add Polyscope Run Controls For Checks And Findings
 
 **Changed:**
