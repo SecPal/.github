@@ -1999,6 +1999,8 @@ def main() -> int:
     if args.summary_output is not None:
         args.summary_output.write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
+    if failed_provision_worktrees:
+        return 1
     return 0
 
 

@@ -1293,7 +1293,9 @@ env HOME="$home_dir" \
     --skip-local-configs \
     --skip-db-sync \
     --provision-worktrees \
-    > /dev/null
+    > /dev/null || failure_isolation_exit=$?
+
+test "${failure_isolation_exit:-0}" -eq 1
 
 python3 - "$failure_isolation_summary_json" <<'PY'
 import json
