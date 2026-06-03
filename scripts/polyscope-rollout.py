@@ -1528,10 +1528,10 @@ def provision_worktrees(
         config_text = rendered_configs[repo_name]
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
-            if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
-                continue
-
             try:
+                if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
+                    continue
+
                 sync_worktree_local_config(worktree_path, config_text)
                 ensure_worktree_hooks(worktree_path)
 
@@ -1562,7 +1562,7 @@ def provision_worktrees(
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
                 provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
-            except (subprocess.CalledProcessError, SystemExit) as error:
+            except (OSError, subprocess.CalledProcessError, SystemExit) as error:
                 error_message = str(error)
                 print(
                     f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
