@@ -75,10 +75,22 @@ workspace_root = Path(sys.argv[1])
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / "api" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
 
+(workspace_root / "GuardGuide" / "composer.json").write_text("{}\n")
+(workspace_root / "GuardGuide" / "artisan").write_text("#!/usr/bin/env php\n")
+
 (workspace_root / ".github" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / ".github" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
 
 package_scripts = {
+    "GuardGuide": {
+        "build": "tsc --noEmit && vite build",
+        "format:check": "prettier --check '**/*.{md,yml,yaml,json}'",
+        "lint": "eslint .",
+        "start": "vite",
+        "test:watch": "vitest",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+    },
     "frontend": {
         "build": "vite build",
         "lint": "eslint .",
@@ -297,6 +309,57 @@ applyTo: 'src/**/*.tsx'
 - Keep load, action, and destructive-flow error state separate.
 "
 
+create_repo "GuardGuide" "$common_header
+
+# GuardGuide Instructions
+
+## Always-On Rules
+
+- Run git status --short --branch before any write action.
+- TDD is mandatory for behavior and code changes.
+- Keep one topic per branch and pull request.
+
+## Issue And PR Discipline
+
+- The first PR state must be draft.
+
+## Required Validation
+
+- the branch still covers exactly one topic
+- TDD happened for behavior changes
+- the smallest relevant validation passed for the touched area
+- CHANGELOG.md was updated for real changes
+- no bypass was used
+
+## AI Findings Triage
+
+- Treat AI findings and AI-generated fix proposals as hints, not proof.
+- Before merge, prove a claimed defect with a failing test, a reproducible defect, or an explicit invariant.
+- Green CI alone is not enough for AI-generated changes.
+" "react-catalyst.instructions.md" "---
+name: React Catalyst Rules
+applyTo: 'resources/js/**/*.tsx'
+---
+
+# React Catalyst Rules
+
+- Use React 19 with strict TypeScript.
+- Keep English source text and German translation in Lingui catalogs from the start.
+- Catalyst is the exclusive UI system.
+"
+
+printf '%s\n' "---
+name: Laravel PHP Rules
+applyTo: '**/*.php'
+---
+
+# Laravel PHP Rules
+
+- Use Form Requests for validation and services for business logic.
+- Add or update the smallest relevant Pest test for each PHP change, then run the affected tests.
+- Use vendor/bin/pint --dirty after changes.
+" > "$workspace_root/GuardGuide/.github/instructions/php-laravel.instructions.md"
+
 create_repo "contracts" "$common_header
 
 # Contracts Instructions
@@ -509,6 +572,7 @@ repo_state = {
     'android': {'id': 'an123456', 'name': 'SecPal/android', 'path': str(workspace_root / 'android')},
     'secpal.app': {'id': 'sa123456', 'name': 'SecPal/secpal.app', 'path': str(workspace_root / 'secpal.app')},
     'changelog': {'id': 'ch123456', 'name': 'SecPal/changelog', 'path': str(workspace_root / 'changelog')},
+    'GuardGuide': {'id': 'gg123456', 'name': 'SecPal/GuardGuide', 'path': str(workspace_root / 'GuardGuide')},
     '.github': {'id': 'gh123456', 'name': 'SecPal/.github', 'path': str(workspace_root / '.github')},
 }
 
@@ -552,6 +616,7 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
 fi
 grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
 grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
@@ -599,16 +664,27 @@ grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polysc
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
+grep -q 'react-catalyst.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"command": "npm run format:check && npm run lint && npm run typecheck && npm run test && composer run lint && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/GuardGuide/polyscope.local.json"
 
 if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not reference node_modules" >&2
     exit 1
 fi
 
-grep -q 'server_name ~^(?:(?<repo>api|frontend|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
+grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
+grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
+grep -qF "if (\$repo = guardguide) {" "$nginx_output"
+grep -qF "set \$php_root \$api_public;" "$nginx_output"
+grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
+grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
+grep -qF "fastcgi_param SCRIPT_FILENAME \$php_root/index.php;" "$nginx_output"
+grep -qF "fastcgi_param DOCUMENT_ROOT \$php_root;" "$nginx_output"
 
 if grep -qF "try_files \$uri \$uri/ @preview_router;" "$nginx_output"; then
     echo "preview nginx config must not treat a missing workspace docroot as a directory hit" >&2
@@ -640,6 +716,7 @@ fi
     "$workspace_root/frontend/polyscope.local.json" \
     "$workspace_root/contracts/polyscope.local.json" \
     "$workspace_root/android/polyscope.local.json" \
+    "$workspace_root/GuardGuide/polyscope.local.json" \
     "$workspace_root/secpal.app/polyscope.local.json" \
     "$workspace_root/changelog/polyscope.local.json" \
     "$workspace_root/.github/polyscope.local.json" \
@@ -677,11 +754,14 @@ summary = json.loads(summary_path.read_text())
 assert summary['db_backup'] is not None
 assert summary['repositories']['api']['preview_prefix'] == 'api'
 assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
+assert summary['repositories']['GuardGuide']['preview_prefix'] == 'guardguide'
 assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
 assert summary['repositories']['changelog']['preview_prefix'] == 'changelog'
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
+assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
+assert summary['repositories']['GuardGuide']['linked_repositories'] == []
 PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
