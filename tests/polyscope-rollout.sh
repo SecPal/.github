@@ -844,6 +844,9 @@ chmod +x "$fake_exec_dir/composer"
 cat >"$fake_exec_dir/php" <<'STUB'
 #!/usr/bin/env bash
 printf 'php:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+if [[ -n "${FAIL_ON_WORKTREE:-}" && "$PWD" == "$FAIL_ON_WORKTREE" ]]; then
+    exit 23
+fi
 exit 0
 STUB
 chmod +x "$fake_exec_dir/php"
@@ -1263,6 +1266,58 @@ summary = json.loads(open(sys.argv[1]).read())
 assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
 assert summary.get('cleaned_preview_storage_targets', []) == [], summary.get('cleaned_preview_storage_targets', [])
 PY
+
+failing_api_clone="$home_dir/.polyscope/clones/api12345/abort-hawk"
+guardguide_clone="$home_dir/.polyscope/clones/gg123456/steady-otter"
+failure_isolation_summary_json="$workspace/failure-isolation-summary.json"
+
+mkdir -p "$failing_api_clone/.git/info" "$failing_api_clone/.git/hooks" "$failing_api_clone/scripts"
+mkdir -p "$guardguide_clone/.git/info" "$guardguide_clone/.git/hooks" "$guardguide_clone/database"
+
+seed_api_worktree_files "$failing_api_clone"
+seed_api_worktree_files "$guardguide_clone"
+seed_node_worktree_files "$guardguide_clone" "guardguide-steady-otter"
+printf 'APP_KEY=\n' > "$guardguide_clone/.env.example"
+
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    FAIL_ON_WORKTREE="$failing_api_clone" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$failure_isolation_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$failure_isolation_summary_json" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+failed = summary.get('failed_provision_worktrees', [])
+
+assert 'GuardGuide:steady-otter' in provisioned, provisioned
+assert 'api:abort-hawk' not in provisioned, provisioned
+assert any(
+    entry.get('repo') == 'api'
+    and entry.get('workspace') == 'abort-hawk'
+    and 'returned non-zero exit status 23' in entry.get('error', '')
+    for entry in failed
+), failed
+PY
+
+grep -qF "php:$failing_api_clone:artisan config:clear" "$provision_log"
+grep -qF "composer:$guardguide_clone:install" "$provision_log"
+grep -qF "npm:$guardguide_clone:ci" "$provision_log"
+test -f "$guardguide_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
 
 schema_home_dir="$workspace/schema-home"
 schema_api_clone="$schema_home_dir/.polyscope/clones/api12345/schema-badger"

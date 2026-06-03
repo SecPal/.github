@@ -1508,10 +1508,11 @@ def provision_worktrees(
     repo_state: dict[str, dict[str, Any]],
     repo_specs: dict[str, dict[str, Any]],
     clone_root: pathlib.Path,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
     rendered_configs = render_local_configs(repo_specs)
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(repo_state, repo_specs, clone_root)
+    failed_provision_worktrees: list[dict[str, str]] = []
 
     for repo_name, spec in repo_specs.items():
         repo_clone_root = clone_root / repo_state[repo_name]["id"]
@@ -1530,38 +1531,53 @@ def provision_worktrees(
             if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
                 continue
 
-            sync_worktree_local_config(worktree_path, config_text)
-            ensure_worktree_hooks(worktree_path)
+            try:
+                sync_worktree_local_config(worktree_path, config_text)
+                ensure_worktree_hooks(worktree_path)
 
-            preview_storage_target: str | None = None
-            if repo_name == "api":
-                ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"])
-                if not ready:
-                    continue
+                preview_storage_target: str | None = None
+                if repo_name == "api":
+                    ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"])
+                    if not ready:
+                        continue
 
-            marker_path = worktree_path / PROVISION_MARKER_FILENAME
-            marker = load_provision_marker(marker_path)
-            if marker is not None and marker.get("setup_hash") == setup_hash:
-                if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
-                    continue
+                marker_path = worktree_path / PROVISION_MARKER_FILENAME
+                marker = load_provision_marker(marker_path)
+                if marker is not None and marker.get("setup_hash") == setup_hash:
+                    if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                        continue
 
-            if setup_commands:
-                print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
-                run_setup_commands(worktree_path, setup_commands)
+                if setup_commands:
+                    print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
+                    run_setup_commands(worktree_path, setup_commands)
 
-            marker_payload: dict[str, Any] = {
-                "repo": repo_name,
-                "workspace": worktree_path.name,
-                "setup_hash": setup_hash,
-                "provisioned_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if repo_name == "api" and preview_storage_target is not None:
-                marker_payload["preview_storage_target"] = preview_storage_target
+                marker_payload: dict[str, Any] = {
+                    "repo": repo_name,
+                    "workspace": worktree_path.name,
+                    "setup_hash": setup_hash,
+                    "provisioned_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if repo_name == "api" and preview_storage_target is not None:
+                    marker_payload["preview_storage_target"] = preview_storage_target
 
-            marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
-            provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
+                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+                provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
+            except (subprocess.CalledProcessError, SystemExit) as error:
+                error_message = str(error)
+                print(
+                    f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
+                    file=sys.stderr,
+                )
+                failed_provision_worktrees.append(
+                    {
+                        "repo": repo_name,
+                        "workspace": worktree_path.name,
+                        "path": str(worktree_path),
+                        "error": error_message,
+                    }
+                )
 
-    return provisioned_worktrees, cleaned_preview_storage_targets
+    return provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees
 
 
 def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
@@ -1880,12 +1896,14 @@ def build_summary(
     nginx_output: pathlib.Path,
     provisioned_worktrees: list[str],
     cleaned_preview_storage_targets: list[str],
+    failed_provision_worktrees: list[dict[str, str]],
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "db_backup": str(db_backup) if db_backup is not None else None,
         "rendered_nginx_config": str(nginx_output),
         "provisioned_worktrees": provisioned_worktrees,
         "cleaned_preview_storage_targets": cleaned_preview_storage_targets,
+        "failed_provision_worktrees": failed_provision_worktrees,
         "repositories": {},
     }
     for repo_name, spec in repo_specs.items():
@@ -1961,8 +1979,13 @@ def main() -> int:
 
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
+    failed_provision_worktrees: list[dict[str, str]] = []
     if args.provision_worktrees:
-        provisioned_worktrees, cleaned_preview_storage_targets = provision_worktrees(repo_state, repo_specs, args.clone_root)
+        provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
+            repo_state,
+            repo_specs,
+            args.clone_root,
+        )
 
     summary = build_summary(
         repo_state,
@@ -1971,6 +1994,7 @@ def main() -> int:
         args.nginx_output,
         provisioned_worktrees,
         cleaned_preview_storage_targets,
+        failed_provision_worktrees,
     )
     if args.summary_output is not None:
         args.summary_output.write_text(json.dumps(summary, indent=2) + "\n")
