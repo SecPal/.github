@@ -14,7 +14,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - updated `scripts/install-polyscope-rollout.sh` so the system-scope `polyscope-server.service` override resolves `SSH_AUTH_SOCK` to the actual service user's runtime directory instead of writing the broken literal `%U` placeholder that expands to `/run/user/0/openssh_agent` at runtime
-- extended `tests/polyscope-rollout.sh` so the installer regression suite now proves the generated system drop-in uses the resolved numeric runtime socket path for the target server user, preventing future regressions in API-driven worktree creation
+- extended `tests/polyscope-rollout.sh` so the installer regression suite now proves both the resolved numeric runtime socket path for an explicit system service user and the root fallback when the unit omits `User=`, preventing future regressions in API-driven worktree creation
 
 ---
 
