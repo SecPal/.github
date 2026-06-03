@@ -18,6 +18,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-03 - Fix Polyscope Server SSH Agent Socket For Worktree Creation
+
+**Fixed:**
+
+- updated `scripts/install-polyscope-rollout.sh` so the system-scope `polyscope-server.service` override resolves `SSH_AUTH_SOCK` to the actual service user's runtime directory instead of writing the broken literal `%U` placeholder that expands to `/run/user/0/openssh_agent` at runtime
+- extended `tests/polyscope-rollout.sh` so the installer regression suite now proves both the resolved numeric runtime socket path for an explicit system service user and the root fallback when the unit omits `User=`, preventing future regressions in API-driven worktree creation
+
+---
+
 ## 2026-06-03 - Register GuardGuide In Polyscope Rollout
 
 **Changed:**
