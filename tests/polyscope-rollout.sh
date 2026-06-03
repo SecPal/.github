@@ -1292,6 +1292,16 @@ rm -rf "$failing_frontend_io_clone/.git/info"
 printf 'not a directory\n' > "$failing_frontend_io_clone/.git/info"
 printf 'APP_KEY=\n' > "$guardguide_clone/.env.example"
 
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+state['databases'].append('secpal__preview__broken_mole')
+state.setdefault('schemas', []).append('secpal__preview__broken_mole')
+open(sys.argv[1], 'w').write(json.dumps(state))
+PY
+
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -1317,12 +1327,14 @@ import sys
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
 failed = summary.get('failed_provision_worktrees', [])
+cleaned = summary.get('cleaned_preview_storage_targets', [])
 
 assert 'GuardGuide:steady-otter' in provisioned, provisioned
 assert 'api:abort-hawk' not in provisioned, provisioned
 assert 'api:broken-mole' not in provisioned, provisioned
 assert 'frontend:broken-ibis' not in provisioned, provisioned
 assert 'frontend:locked-oryx' not in provisioned, provisioned
+assert 'secpal__preview__broken_mole' not in cleaned, cleaned
 assert any(
     entry.get('repo') == 'api'
     and entry.get('workspace') == 'abort-hawk'
@@ -1347,6 +1359,15 @@ assert any(
     and 'File exists' in entry.get('error', '')
     for entry in failed
 ), failed
+PY
+
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+assert 'secpal__preview__broken_mole' in state['databases'], state['databases']
+assert 'secpal__preview__broken_mole' in state.get('schemas', []), state.get('schemas', [])
 PY
 
 grep -qF "php:$failing_api_clone:artisan config:clear" "$provision_log"

@@ -13,8 +13,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- updated `scripts/polyscope-rollout.py` so `--provision-worktrees` now isolates expected per-worktree provisioning failures, records them under `failed_provision_worktrees` in the rollout summary, and continues provisioning the remaining managed workspaces instead of aborting the entire run on the first broken clone
-- extended `tests/polyscope-rollout.sh` with a regression where one API workspace setup fails while a fresh GuardGuide workspace must still provision successfully, proving the shared rollout path no longer lets unrelated workspace failures block newer repositories
+- updated `scripts/polyscope-rollout.py` so `--provision-worktrees` now isolates expected per-worktree provisioning failures, records them under `failed_provision_worktrees` in the rollout summary, continues provisioning the remaining managed workspaces instead of aborting the entire run on the first broken clone, and keeps preview database/schema targets for still-present but broken API clones out of cleanup
+- extended `tests/polyscope-rollout.sh` with regressions where one API workspace setup fails, a malformed API clone must still protect its preview storage targets from cleanup, and a fresh GuardGuide workspace must still provision successfully, proving the shared rollout path no longer lets unrelated workspace failures block newer repositories or delete live preview data for broken clones
 
 ---
 

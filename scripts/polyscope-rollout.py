@@ -361,12 +361,17 @@ def cleanup_removed_api_preview_databases(
             continue
 
         try:
-            if not is_provisionable_worktree("api", worktree_path, api_validation_commands, log_skip_reason=False):
-                continue
+            protects_storage_target = is_provisionable_worktree(
+                "api",
+                worktree_path,
+                api_validation_commands,
+                log_skip_reason=False,
+            )
         except (OSError, SystemExit):
-            continue
+            protects_storage_target = True
 
-        active_targets.add(build_preview_database_name(base_database, worktree_path.name))
+        if protects_storage_target:
+            active_targets.add(build_preview_database_name(base_database, worktree_path.name))
 
     cleaned_databases: list[str] = []
     if postgres_role_can_create_databases(env_values, base_database):
