@@ -78,8 +78,29 @@ detect_system_server_fragment_path() {
     "$SYSTEMCTL_BIN" show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
 }
 
+detect_system_server_user() {
+    "$SYSTEMCTL_BIN" show -p User --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
+}
+
 detect_user_server_fragment_path() {
     "$SYSTEMCTL_BIN" --user show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
+}
+
+resolve_system_server_ssh_auth_sock() {
+    local system_server_user system_server_uid
+
+    system_server_user="$(detect_system_server_user)"
+    if [[ -z "$system_server_user" ]]; then
+        printf '/run/user/%s/openssh_agent\n' "$(id -u)"
+        return
+    fi
+
+    if ! system_server_uid="$(id -u "$system_server_user" 2>/dev/null)"; then
+        echo "Error: could not resolve uid for system server user '$system_server_user'." >&2
+        exit 1
+    fi
+
+    printf '/run/user/%s/openssh_agent\n' "$system_server_uid"
 }
 
 resolve_server_scope() {
@@ -164,6 +185,11 @@ done
 
 server_scope="$(resolve_server_scope)"
 system_server_fragment_path="$(detect_system_server_fragment_path)"
+system_server_ssh_auth_sock=""
+
+if [[ "$server_scope" == "system" ]]; then
+    system_server_ssh_auth_sock="$(resolve_system_server_ssh_auth_sock)"
+fi
 
 if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]]; then
     echo "Error: --polyscope-server-scope system was requested but no system $POLYSCOPE_SYSTEM_SERVER_UNIT unit was found." >&2
@@ -239,7 +265,7 @@ ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
 Environment=PATH=$SERVICE_PATH
-Environment=SSH_AUTH_SOCK=/run/user/%U/openssh_agent
+Environment=SSH_AUTH_SOCK=$system_server_ssh_auth_sock
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 EOF
 
