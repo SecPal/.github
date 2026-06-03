@@ -355,12 +355,18 @@ def cleanup_removed_api_preview_databases(
 
     api_spec = repo_specs["api"]
     api_validation_commands = render_local_config(api_spec).get("scripts", {}).get("setup", [])
-    active_targets = {
-        build_preview_database_name(base_database, worktree_path.name)
-        for worktree_path in api_clone_root.iterdir()
-        if worktree_path.is_dir()
-        if is_provisionable_worktree("api", worktree_path, api_validation_commands, log_skip_reason=False)
-    }
+    active_targets: set[str] = set()
+    for worktree_path in api_clone_root.iterdir():
+        if not worktree_path.is_dir():
+            continue
+
+        try:
+            if not is_provisionable_worktree("api", worktree_path, api_validation_commands, log_skip_reason=False):
+                continue
+        except (OSError, SystemExit):
+            continue
+
+        active_targets.add(build_preview_database_name(base_database, worktree_path.name))
 
     cleaned_databases: list[str] = []
     if postgres_role_can_create_databases(env_values, base_database):
