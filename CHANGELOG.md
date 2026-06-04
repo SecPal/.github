@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-04 - Seed GuardGuide During Polyscope Preview Setup
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so GuardGuide preview setup now runs `php artisan db:seed --force` after migrations, matching the explicit request that newly created GuardGuide Polyscope workspaces come up with seeded local/testing data instead of schema-only state
+- extended `tests/polyscope-rollout.sh` so the rollout regression now proves both the generated GuardGuide `polyscope.local.json` setup commands and the real GuardGuide worktree provisioning path include the seed step
+
+---
+
 ## 2026-06-04 - Align GuardGuide Polyscope Rollout With The Laravel Monolith
 
 **Fixed:**
