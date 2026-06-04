@@ -84,12 +84,11 @@ workspace_root = Path(sys.argv[1])
 package_scripts = {
     "GuardGuide": {
         "build": "tsc --noEmit && vite build",
+        "dev": "vite",
         "format:check": "prettier --check '**/*.{md,yml,yaml,json}'",
-        "lint": "eslint .",
-        "start": "vite",
-        "test:watch": "vitest",
+        "lint:check": "eslint .",
         "typecheck": "tsc --noEmit",
-        "test": "vitest run",
+        "test": "npm run build",
     },
     "frontend": {
         "build": "vite build",
@@ -137,6 +136,7 @@ guardguide_composer = {
     "scripts": {
         "analyse": ["./vendor/bin/phpstan analyse"],
         "lint": ["./vendor/bin/pint --test"],
+        "lint:check": ["./vendor/bin/pint --test"],
         "test": ["@php artisan test"],
     }
 }
@@ -345,16 +345,16 @@ create_repo "GuardGuide" "$common_header
 - Treat AI findings and AI-generated fix proposals as hints, not proof.
 - Before merge, prove a claimed defect with a failing test, a reproducible defect, or an explicit invariant.
 - Green CI alone is not enough for AI-generated changes.
-" "react-catalyst.instructions.md" "---
-name: React Catalyst Rules
+" "react-shadcn.instructions.md" "---
+name: React shadcn Rules
 applyTo: 'resources/js/**/*.tsx'
 ---
 
-# React Catalyst Rules
+# React shadcn Rules
 
 - Use React 19 with strict TypeScript.
 - Keep English source text and German translation in Lingui catalogs from the start.
-- Catalyst is the exclusive UI system.
+- shadcn/ui is the exclusive UI baseline.
 "
 
 printf '%s\n' "---
@@ -679,10 +679,38 @@ grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polysc
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
-grep -q 'react-catalyst.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "npm run format:check && npm run lint && npm run typecheck && npm run test && composer run lint && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"command": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"label": "Typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"command": "npm run typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"label": "Build"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"command": "npm run build"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"command": "npm run dev"' "$workspace_root/GuardGuide/polyscope.local.json"
+
+if grep -q 'react-catalyst.instructions.md' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not reference the legacy Catalyst instruction path" >&2
+    exit 1
+fi
+
+if grep -q 'Catalyst' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not reference Catalyst wording after the shadcn reset" >&2
+    exit 1
+fi
+
+if grep -qF '"command": "npm run start"' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not reference the removed npm run start command" >&2
+    exit 1
+fi
+
+if grep -qF '"command": "npm run test:watch"' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not reference the removed npm run test:watch command" >&2
+    exit 1
+fi
 
 if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not reference node_modules" >&2

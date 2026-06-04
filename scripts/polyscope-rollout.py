@@ -539,6 +539,33 @@ def build_frontend_preview_build_watch_command() -> str:
     return f"python3 -c {shlex.quote(script)}"
 
 
+def build_guardguide_preview_env_setup_command() -> str:
+    script = "\n".join(
+        [
+            "from pathlib import Path",
+            "import os",
+            "import re",
+            "",
+            'workspace = os.environ["POLYSCOPE_WORKSPACE"]',
+            'env_path = Path(".env")',
+            'text = env_path.read_text() if env_path.exists() else ""',
+            'pattern = re.compile(r"^APP_URL=.*$", re.MULTILINE)',
+            'replacement = f"APP_URL=https://guardguide-{workspace}.preview.secpal.dev"',
+            "",
+            "if pattern.search(text):",
+            "    text = pattern.sub(replacement, text)",
+            "else:",
+            '    if text and not text.endswith("\\n"):',
+            '        text += "\\n"',
+            '    text += replacement + "\\n"',
+            "",
+            "env_path.write_text(text)",
+        ]
+    )
+
+    return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
+
+
 def build_api_preview_seed_command(migration_command: str = "php artisan migrate --force") -> str:
     tinker_script = textwrap.dedent(
         r"""
@@ -576,7 +603,7 @@ def build_repo_all_checks_command(repo_name: str) -> str | None:
     commands = {
         "api": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress",
         "frontend": "npm run lint && npm run typecheck && npm run test:run:all && npm run build",
-        "GuardGuide": "npm run format:check && npm run lint && npm run typecheck && npm run test && composer run lint && composer run analyse && composer run test",
+        "GuardGuide": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test",
         "contracts": "npm run validate && npm run lint && npm run format:check",
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
@@ -758,10 +785,10 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "focus_instruction_paths": [
             ".github/instructions/org-shared.instructions.md",
             ".github/instructions/php-laravel.instructions.md",
-            ".github/instructions/react-catalyst.instructions.md",
+            ".github/instructions/react-shadcn.instructions.md",
         ],
         "preview_prefix": "guardguide",
-        "review_focus": "Laravel 13 monolith boundaries, Pest plus Vitest coverage, Catalyst-only UI patterns, Lingui localization, application-layer encryption for person-related data, and standalone-first acknowledgement flows.",
+        "review_focus": "Laravel 13 monolith boundaries, Pest coverage plus frontend build and typecheck validation, shadcn/ui-aligned UI patterns, Lingui localization, application-layer encryption for person-related data, and standalone-first acknowledgement flows.",
         "link_names": [],
         "local_config": {
             "copyGitignored": True,
@@ -772,24 +799,27 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     "test -d vendor || composer install",
                     "test -d node_modules || npm ci",
                     "test -f .env || cp .env.example .env",
+                    build_guardguide_preview_env_setup_command(),
                     "test -f database/database.sqlite || touch database/database.sqlite",
                     "grep -Eq '^APP_KEY=.+$' .env || php artisan key:generate --force",
                     "php artisan migrate --force",
+                    "npm run build",
                 ],
                 "run": [
                     {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
-                    {"label": "Vitest", "command": "npm run test:watch", "runMode": "replace"},
-                    {"label": "Vite", "command": "npm run start", "runMode": "replace"},
+                    {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
+                    {"label": "Build", "command": "npm run build", "runMode": "preserve"},
+                    {"label": "Vite Dev", "command": "npm run dev", "runMode": "replace"},
                 ],
             },
             "tasks": [
                 {
                     "label": "Review monolith boundary",
-                    "prompt": "Review the changed GuardGuide flow for Laravel monolith boundary drift, Catalyst UI regressions, localization gaps, encryption-at-rest constraints, and missing Pest or Vitest coverage. Keep the change scoped to one GuardGuide issue.",
+                    "prompt": "Review the changed GuardGuide flow for Laravel monolith boundary drift, shadcn/ui regressions, localization gaps, encryption-at-rest constraints, and missing Pest coverage or frontend validation. Keep the change scoped to one GuardGuide issue.",
                 },
                 {
                     "label": "Triage GuardGuide validation",
-                    "prompt": "Reproduce the failing GuardGuide behavior, add or update the smallest relevant Pest or Vitest coverage first when possible, then implement the minimal fix and rerun the touched validation. Keep the change scoped to one issue.",
+                    "prompt": "Reproduce the failing GuardGuide behavior, add or update the smallest relevant Pest coverage first when possible, then implement the minimal fix and rerun the touched validation. Use typecheck or build validation when the touched slice is frontend-only. Keep the change scoped to one issue.",
                 },
             ],
         },

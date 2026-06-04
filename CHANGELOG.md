@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-04 - Align GuardGuide Polyscope Rollout With The Laravel Monolith
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so GuardGuide now emits the current shadcn/ui instruction path, check-only validation commands, a preview `APP_URL` rewrite during setup, a required frontend build step, and the real current run actions (`Pest`, `Typecheck`, `Build`, `Vite Dev`) instead of stale Catalyst/Vitest-era commands
+- fixed the GuardGuide preview environment helper to generate a worktree-safe inline Python command without leading indentation, preventing `--provision-worktrees` from failing with `IndentationError` while rewriting `.env`
+- extended `tests/polyscope-rollout.sh` so the rollout regression suite now proves the renamed GuardGuide instruction file, current validation/run command surface, preview `APP_URL` rewrite, and successful GuardGuide worktree provisioning
+
+---
+
 ## 2026-06-03 - Continue Polyscope Provisioning After Workspace Failures
 
 **Fixed:**
