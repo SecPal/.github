@@ -8,6 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYNC_SCRIPT="$REPO_ROOT/scripts/sync-required-checks.sh"
 SHELL_BIN="${BASH:-$(command -v bash)}"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sync-required-checks.XXXXXX")"
+
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT
 
 assert_payload_has_context() {
   local payload="$1"
@@ -74,8 +81,7 @@ if [[ "$unknown_output" != *"Unknown repository"* ]]; then
   exit 1
 fi
 
-missing_jq_bin="/tmp/sync-required-checks-missing-jq.$$"
-rm -rf "$missing_jq_bin"
+missing_jq_bin="$TMP_DIR/missing-jq-bin"
 mkdir -p "$missing_jq_bin"
 ln -s "$(command -v cat)" "$missing_jq_bin/cat"
 
@@ -83,8 +89,6 @@ set +e
 missing_jq_output="$(PATH="$missing_jq_bin" "$SHELL_BIN" "$SYNC_SCRIPT" --repo api --print-payload 2>&1)"
 missing_jq_status=$?
 set -e
-
-rm -rf "$missing_jq_bin"
 
 if [[ $missing_jq_status -ne 2 ]]; then
   echo "Expected --print-payload without jq to exit with status 2" >&2
