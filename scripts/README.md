@@ -184,6 +184,7 @@ bash scripts/sync-required-checks.sh --apply
 
 **Managed Repositories:**
 
+- `.github`
 - `api`
 - `changelog`
 - `frontend`

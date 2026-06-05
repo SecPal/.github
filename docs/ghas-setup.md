@@ -159,7 +159,7 @@ bash scripts/sync-required-checks.sh --repo api --print-payload | jq
 # Apply one repository's required-check payload
 bash scripts/sync-required-checks.sh --repo api --apply
 
-# Apply the full managed SecPal application baseline
+# Apply the full managed SecPal repository baseline
 bash scripts/sync-required-checks.sh --apply
 ```
 

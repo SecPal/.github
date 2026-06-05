@@ -42,6 +42,11 @@ secpal_app_payload="$(bash "$SYNC_SCRIPT" --repo secpal.app --print-payload)"
 assert_payload_has_context "$secpal_app_payload" "Node Tests / Run Tests"
 assert_payload_has_context "$secpal_app_payload" "CodeQL"
 
+github_payload="$(bash "$SYNC_SCRIPT" --repo .github --print-payload)"
+assert_payload_has_context "$github_payload" "Validate PR Evidence"
+assert_payload_has_context "$github_payload" "Validate PR Title And Body Language"
+assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
+
 set +e
 unknown_output="$(bash "$SYNC_SCRIPT" --repo does-not-exist --print-payload 2>&1)"
 unknown_status=$?

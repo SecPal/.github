@@ -6,6 +6,19 @@ set -euo pipefail
 
 REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
 {
+  ".github": [
+    "Check REUSE Compliance",
+    "Check License Compatibility",
+    "Check Code Formatting",
+    "Lint Markdown Files",
+    "Check PR Size / Check PR Size",
+    "conflict-markers / Detect Git Conflict Markers",
+    "Lint GitHub Actions Workflows",
+    "CodeQL",
+    "Validate PR Evidence",
+    "Validate PR Title And Body Language",
+    "Validate Signed PR Commits"
+  ],
   "GuardGuide": [
     "check-conflicts / Detect Git Conflict Markers",
     "Check PR Size / Check PR Size",
