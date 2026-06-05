@@ -173,7 +173,7 @@ apply_repository() {
   local payload_file
 
   ensure_known_repository "$repo"
-  payload_file="$(mktemp "${TMPDIR:-/tmp}/sync-required-checks.${repo//[^A-Za-z0-9]/_}.XXXXXX.json")"
+  payload_file="$(mktemp "${TMPDIR:-/tmp}/sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX")"
   build_payload "$repo" > "$payload_file"
 
   gh api "repos/SecPal/$repo/branches/main/protection/required_status_checks" \
@@ -224,6 +224,8 @@ if [[ -z "$mode" ]]; then
   exit 2
 fi
 
+require_command jq
+
 if [[ "$mode" == "print-payload" ]]; then
   if [[ -z "$repo" ]]; then
     echo "--print-payload requires --repo <name>" >&2
@@ -236,7 +238,6 @@ if [[ "$mode" == "print-payload" ]]; then
 fi
 
 require_command gh
-require_command jq
 
 if [[ -n "$repo" ]]; then
   apply_repository "$repo"

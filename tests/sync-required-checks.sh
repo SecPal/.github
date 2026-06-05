@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYNC_SCRIPT="$REPO_ROOT/scripts/sync-required-checks.sh"
+SHELL_BIN="${BASH:-$(command -v bash)}"
 
 assert_payload_has_context() {
   local payload="$1"
@@ -21,6 +22,16 @@ assert_payload_has_context() {
 
 if [[ ! -x "$SYNC_SCRIPT" ]]; then
   echo "Expected executable sync script at $SYNC_SCRIPT" >&2
+  exit 1
+fi
+
+if grep -Fq 'XXXXXX.json' "$SYNC_SCRIPT"; then
+  echo "Sync script uses a BSD-incompatible mktemp template with a suffix after the X placeholder." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX' "$SYNC_SCRIPT"; then
+  echo "Sync script must use a portable mktemp template whose X placeholder is at the end." >&2
   exit 1
 fi
 
@@ -60,5 +71,29 @@ fi
 if [[ "$unknown_output" != *"Unknown repository"* ]]; then
   echo "Expected unknown repo error to mention 'Unknown repository'" >&2
   echo "$unknown_output" >&2
+  exit 1
+fi
+
+missing_jq_bin="/tmp/sync-required-checks-missing-jq.$$"
+rm -rf "$missing_jq_bin"
+mkdir -p "$missing_jq_bin"
+ln -s "$(command -v cat)" "$missing_jq_bin/cat"
+
+set +e
+missing_jq_output="$(PATH="$missing_jq_bin" "$SHELL_BIN" "$SYNC_SCRIPT" --repo api --print-payload 2>&1)"
+missing_jq_status=$?
+set -e
+
+rm -rf "$missing_jq_bin"
+
+if [[ $missing_jq_status -ne 2 ]]; then
+  echo "Expected --print-payload without jq to exit with status 2" >&2
+  echo "$missing_jq_output" >&2
+  exit 1
+fi
+
+if [[ "$missing_jq_output" != *"Missing required command: jq"* ]]; then
+  echo "Expected --print-payload without jq to report the missing jq dependency" >&2
+  echo "$missing_jq_output" >&2
   exit 1
 fi
