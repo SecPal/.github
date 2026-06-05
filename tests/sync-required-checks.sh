@@ -8,6 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYNC_SCRIPT="$REPO_ROOT/scripts/sync-required-checks.sh"
 SHELL_BIN="${BASH:-$(command -v bash)}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Missing required command: jq" >&2
+  echo "Install jq before running tests/sync-required-checks.sh (preflight wires this test in)." >&2
+  exit 2
+fi
+
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sync-required-checks.XXXXXX")"
 
 cleanup() {
@@ -59,6 +66,16 @@ assert_payload_has_context "$guardguide_payload" "CodeQL"
 secpal_app_payload="$(bash "$SYNC_SCRIPT" --repo secpal.app --print-payload)"
 assert_payload_has_context "$secpal_app_payload" "Node Tests / Run Tests"
 assert_payload_has_context "$secpal_app_payload" "CodeQL"
+
+frontend_payload="$(bash "$SYNC_SCRIPT" --repo frontend --print-payload)"
+assert_payload_has_context "$frontend_payload" "Analyze with CodeQL (javascript-typescript)"
+assert_payload_has_context "$frontend_payload" "Vitest Tests"
+
+if jq -e '.checks | any(.context == "CodeQL")' >/dev/null <<<"$frontend_payload"; then
+  echo "frontend manifest must not require the bare 'CodeQL' context (frontend's CodeQL workflow emits 'Analyze with CodeQL (<language>)')." >&2
+  echo "$frontend_payload" >&2
+  exit 1
+fi
 
 github_payload="$(bash "$SYNC_SCRIPT" --repo .github --print-payload)"
 assert_payload_has_context "$github_payload" "Validate PR Evidence"

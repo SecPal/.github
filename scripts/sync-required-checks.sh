@@ -94,7 +94,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Formatting Check / Check Code Formatting",
     "ESLint / Run Linter",
     "TypeScript Check / Build Project",
-    "CodeQL",
+    "Analyze with CodeQL (javascript-typescript)",
     "Markdown Lint / Lint Markdown Files",
     "Check PR Size / Check PR Size",
     "Vitest Tests",
@@ -170,17 +170,27 @@ require_command() {
 
 apply_repository() {
   local repo="$1"
-  local payload_file
 
   ensure_known_repository "$repo"
-  payload_file="$(mktemp "${TMPDIR:-/tmp}/sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX")"
-  build_payload "$repo" > "$payload_file"
 
-  gh api "repos/SecPal/$repo/branches/main/protection/required_status_checks" \
-    -X PATCH \
-    --input "$payload_file" >/dev/null
+  # Subshell scopes both the temp file and its EXIT trap so the payload is
+  # always removed, even if build_payload or `gh api` fail under `set -e`.
+  (
+    payload_file="$(mktemp "${TMPDIR:-/tmp}/sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX")"
+    trap 'rm -f "$payload_file"' EXIT
 
-  rm -f "$payload_file"
+    build_payload "$repo" > "$payload_file"
+
+    if ! gh api "repos/SecPal/$repo/branches/main/protection/required_status_checks" \
+      -X PATCH \
+      --input "$payload_file" >/dev/null; then
+      echo "Failed to update required_status_checks for SecPal/$repo." >&2
+      echo "Hint: this PATCH endpoint only updates an existing branch protection rule; GitHub returns 404 if 'main' is not yet protected." >&2
+      echo "      Initialize base branch protection first (see docs/ghas-setup.md), then rerun --apply." >&2
+      exit 1
+    fi
+  )
+
   echo "Synced required checks for SecPal/$repo"
 }
 
