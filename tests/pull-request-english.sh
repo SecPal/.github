@@ -83,6 +83,11 @@ if ! grep -Fq 'edited' "$WORKFLOW"; then
   exit 1
 fi
 
+if ! grep -Fq 'synchronize' "$WORKFLOW"; then
+  echo "Workflow must rerun on 'synchronize' so the required check reports against every new PR head SHA." >&2
+  exit 1
+fi
+
 if ! grep -Fq 'CI blocks obvious German PR title/body markers.' "$QUICK_REFERENCE"; then
   echo "Quick reference must document that obvious German PR title/body markers are CI-blocked." >&2
   exit 1

@@ -37,7 +37,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "PHPStan / Static Analysis",
     "Pest Tests (PostgreSQL)",
     "Pest Tests (MariaDB)",
-    "CodeQL"
+    "Analyze with CodeQL (javascript-typescript)"
   ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -74,7 +74,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "check-conflicts / Detect Git Conflict Markers",
     "TypeScript Check / Build Project",
-    "CodeQL",
+    "Analyze Code (javascript-typescript)",
     "Copilot Instructions / Validate Copilot Instructions"
   ],
   "contracts": [
@@ -111,7 +111,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Astro Build / Build Project",
     "Check PR Size / Check PR Size",
     "check-conflicts / Detect Git Conflict Markers",
-    "CodeQL",
+    "Analyze Code (javascript-typescript)",
     "Copilot Instructions / Validate Copilot Instructions",
     "Node Tests / Run Tests"
   ]
