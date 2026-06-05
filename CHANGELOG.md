@@ -20,6 +20,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Changed:**
 
 - removed the duplicate inline REUSE and license-compatibility jobs from `.github/workflows/quality.yml` so those required checks are reported only by their dedicated workflows
+- added `licensecheck` dependency scan to `.github/workflows/license-compatibility.yml` alongside the existing REUSE SPDX header check so both coverage axes (in-repo file headers and upstream dependency licenses) are enforced
+- corrected the `.github` required-check context names in `scripts/sync-required-checks.sh` from bare job names to the full `"<workflow> / <job>"` format that GitHub Actions actually emits; updated `tests/sync-required-checks.sh` to assert the corrected contexts
 
 ---
 

@@ -92,6 +92,10 @@ for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload
 done
 
 github_payload="$(bash "$SYNC_SCRIPT" --repo .github --print-payload)"
+assert_payload_has_context "$github_payload" "REUSE Compliance / Check REUSE Compliance"
+assert_payload_has_context "$github_payload" "License Compatibility / Check License Compatibility"
+assert_payload_has_context "$github_payload" "Code Quality / Check Code Formatting"
+assert_payload_has_context "$github_payload" "Code Quality / Lint Markdown Files"
 assert_payload_has_context "$github_payload" "Validate PR Evidence"
 assert_payload_has_context "$github_payload" "Validate PR Title And Body Language"
 assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
