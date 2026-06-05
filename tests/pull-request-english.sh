@@ -83,7 +83,7 @@ if ! grep -Fq 'edited' "$WORKFLOW"; then
   exit 1
 fi
 
-if ! grep -Fq 'synchronize' "$WORKFLOW"; then
+if ! grep -Eq '^\s*-\s*synchronize\s*$' "$WORKFLOW"; then
   echo "Workflow must rerun on 'synchronize' so the required check reports against every new PR head SHA." >&2
   exit 1
 fi
