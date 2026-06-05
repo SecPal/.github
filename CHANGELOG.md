@@ -16,6 +16,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added `scripts/sync-required-checks.sh` so the SecPal application repositories, the org defaults repository itself, and `GuardGuide` now have a single manifest-backed way to print or apply the intended required status-check payloads instead of relying on ad hoc GitHub API calls
 - added `tests/sync-required-checks.sh` and hooked it into `scripts/preflight.sh` so required-check drift is caught locally before branch-protection guidance or workflow names change again
 - updated `docs/ghas-setup.md` and `scripts/README.md` so the documented branch-protection path now points at the repo-specific sync flow rather than the stale one-size-fits-all `CodeQL` example
+
+**Changed:**
+
 - removed the duplicate inline REUSE and license-compatibility jobs from `.github/workflows/quality.yml` so those required checks are reported only by their dedicated workflows
 
 ---
