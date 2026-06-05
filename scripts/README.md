@@ -164,6 +164,46 @@ The script automatically detects repository type:
 - **website**: Astro landing page (has `astro.config.mjs`)
 - **contracts**: OpenAPI contracts (has `package.json` with `openapi` or `docs/openapi.yaml`)
 
+### `sync-required-checks.sh`
+
+Builds and applies the repository-specific required status-check payloads for
+the SecPal application repositories.
+
+**Usage:**
+
+```bash
+# Inspect the payload for one repository without writing to GitHub
+bash scripts/sync-required-checks.sh --repo GuardGuide --print-payload | jq
+
+# Apply the configured payload to one repository
+bash scripts/sync-required-checks.sh --repo api --apply
+
+# Apply the configured payloads to every managed repository
+bash scripts/sync-required-checks.sh --apply
+```
+
+**Managed Repositories:**
+
+- `api`
+- `changelog`
+- `frontend`
+- `contracts`
+- `android`
+- `secpal.app`
+- `GuardGuide`
+
+**What It Does:**
+
+1. Defines the required status-check contexts per repository in one manifest
+2. Builds the exact JSON payload GitHub expects for branch protection updates
+3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
+4. Keeps the live branch-protection baseline repeatable after workflow or context drift
+
+**Exit Codes:**
+
+- `0`: Payload printed or sync applied successfully
+- `2`: Usage error, unknown repository, or missing dependency
+
 ## Adding New Scripts
 
 When adding new scripts:

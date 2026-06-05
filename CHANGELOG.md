@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-05 - Codify Required Branch Protection Checks
+
+**Added:**
+
+- added `scripts/sync-required-checks.sh` so the SecPal application repositories and `GuardGuide` now have a single manifest-backed way to print or apply the intended required status-check payloads instead of relying on ad hoc GitHub API calls
+- added `tests/sync-required-checks.sh` and hooked it into `scripts/preflight.sh` so required-check drift is caught locally before branch-protection guidance or workflow names change again
+- updated `docs/ghas-setup.md` and `scripts/README.md` so the documented branch-protection path now points at the repo-specific sync flow rather than the stale one-size-fits-all `CodeQL` example
+
+---
+
 ## 2026-06-04 - Seed GuardGuide During Polyscope Preview Setup
 
 **Fixed:**
