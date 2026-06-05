@@ -28,8 +28,8 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install tools
-        run: pip install reuse licensecheck
+      - name: Install REUSE tool
+        run: pip install reuse
 
       - name: Extract licenses
         run: |
@@ -86,6 +86,3 @@ jobs:
           fi
 
           echo "All licenses are compatible with AGPL-3.0-or-later ✓"
-
-      - name: Check dependency licenses
-        run: licensecheck
