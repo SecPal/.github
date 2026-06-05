@@ -146,23 +146,28 @@ updates:
 
 ## 🎯 Branch Protection (recommended)
 
-For `main` branch in each repository:
+Required status checks are repo-specific. Do not rely on the stale one-size-fits-all
+`["CodeQL"]` example for application repositories.
+
+Use the sync script in this repository to keep the live branch-protection payloads
+aligned with the meaningful CI gates per repository:
 
 ```bash
-# Via GitHub CLI:
-gh api repos/SecPal/{REPO_NAME}/branches/main/protection \
-  --method PUT \
-  --field required_status_checks='{"strict":true,"contexts":["CodeQL"]}' \
-  --field enforce_admins=true \
-  --field required_pull_request_reviews='{"required_approving_review_count":0}' \
-  --field restrictions=null
+# Inspect one payload before applying it
+bash scripts/sync-required-checks.sh --repo api --print-payload | jq
+
+# Apply one repository's required-check payload
+bash scripts/sync-required-checks.sh --repo api --apply
+
+# Apply the full managed SecPal repository baseline
+bash scripts/sync-required-checks.sh --apply
 ```
 
 **Note:**
 
 - `enforce_admins=true`: Non-negotiable - even admins must follow rules
 - `required_approving_review_count=0`: Single maintainer project, automated checks provide quality gates
-- Required status checks: Adjust based on repository type (CodeQL for JS/TS only, not for PHP)
+- Required status checks: Keep them aligned with the real lint, test, build, analysis, and governance gates each repository actually runs
 
 ### Copilot Review Ruleset
 

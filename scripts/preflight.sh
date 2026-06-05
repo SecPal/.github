@@ -197,6 +197,15 @@ if [ -f tests/validate-copilot-instructions.sh ]; then
   }
 fi
 
+if [ -f tests/sync-required-checks.sh ]; then
+  bash tests/sync-required-checks.sh || {
+    echo "" >&2
+    echo "❌ Required-check sync regression test failed!" >&2
+    echo "Fix scripts/sync-required-checks.sh before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/polyscope-rollout.sh ]; then
   bash tests/polyscope-rollout.sh || {
     echo "" >&2
