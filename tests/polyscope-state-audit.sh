@@ -302,10 +302,11 @@ git init -q "$poly2_home/clones/api22222/drift"
 printf '{"preview":{"url":"https://drift.preview.secpal.dev"}}\n' > "$poly2_home/clones/api22222/drift/polyscope.local.json"
 printf 'polyscope.local.json\n' > "$poly2_home/clones/api22222/drift/.git/info/exclude"
 
-# wt-no-excl: config matches but exclude entry missing -> missing_worktree_excludes
+# wt-no-excl: config matches but exclude only has a commented entry ->
+# missing_worktree_excludes
 git init -q "$poly2_home/clones/api22222/no-exclude"
 cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/no-exclude/polyscope.local.json"
-printf 'unrelated-entry\n' > "$poly2_home/clones/api22222/no-exclude/.git/info/exclude"
+printf '# polyscope.local.json\n' > "$poly2_home/clones/api22222/no-exclude/.git/info/exclude"
 
 # wt-linked: real linked worktree (.git is a file) - proves gitdir is resolved
 # before reading info/exclude. The linked gitdir lives outside the clones tree

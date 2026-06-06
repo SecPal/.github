@@ -69,6 +69,12 @@ def resolve_git_dir(worktree_path: Path) -> Path:
     return Path(result.stdout.strip())
 
 
+def has_exclude_entry(exclude_path: Path, entry: str) -> bool:
+    if not exclude_path.exists():
+        return False
+    return any(line.strip() == entry for line in exclude_path.read_text().splitlines())
+
+
 def load_state(db_path: Path) -> tuple[dict[str, dict[str, str]], list[dict[str, str]]]:
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -161,7 +167,7 @@ def audit_state(polyscope_home: Path, backup_retention: int) -> dict[str, list[A
                 findings["worktree_config_mismatches"].append(str(worktree_path))
 
             exclude_path = resolve_git_dir(worktree_path) / "info" / "exclude"
-            if not exclude_path.exists() or "polyscope.local.json" not in exclude_path.read_text():
+            if not has_exclude_entry(exclude_path, "polyscope.local.json"):
                 findings["missing_worktree_excludes"].append(str(worktree_path))
 
     backups = sorted(polyscope_home.glob("polyscope.db.backup-*"))
