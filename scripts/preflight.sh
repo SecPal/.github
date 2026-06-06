@@ -206,6 +206,15 @@ if [ -f tests/sync-required-checks.sh ]; then
   }
 fi
 
+if [ -f tests/polyscope-state-audit.sh ]; then
+  bash tests/polyscope-state-audit.sh || {
+    echo "" >&2
+    echo "❌ Polyscope state audit regression test failed!" >&2
+    echo "Fix scripts/audit-polyscope-state.py before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/polyscope-rollout.sh ]; then
   bash tests/polyscope-rollout.sh || {
     echo "" >&2
