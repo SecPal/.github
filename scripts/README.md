@@ -205,6 +205,37 @@ bash scripts/sync-required-checks.sh --apply
 - `0`: Payload printed or sync applied successfully
 - `2`: Usage error, unknown repository, or missing dependency
 
+### `audit-polyscope-state.py`
+
+Audits the local Polyscope runtime state for repository/clone drift, stale
+worktree directories, clone-local config hygiene, and over-retained SQLite
+backups.
+
+**Usage:**
+
+```bash
+# Audit the real local Polyscope state
+python3 scripts/audit-polyscope-state.py
+
+# Audit a custom Polyscope home and print JSON findings
+python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --json
+```
+
+**What It Checks:**
+
+1. Repository IDs in `polyscope.db` that do not have a matching clone root
+2. Clone roots that no longer belong to any registered repository
+3. Clone subdirectories that are not valid Git worktrees
+4. Valid Git worktrees that are not registered in the `worktrees` table
+5. Registered worktrees missing clone-local `polyscope.local.json`, drifting from the repo-root config, or missing `.git/info/exclude` coverage
+6. `polyscope.db.backup-*` files beyond the configured retention count
+
+**Exit Codes:**
+
+- `0`: No findings
+- `1`: One or more findings detected
+- `2`: Usage error or missing dependency/state
+
 ## Adding New Scripts
 
 When adding new scripts:

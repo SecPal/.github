@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-06 - Add Local Polyscope State Audit Guard
+
+**Added:**
+
+- added `scripts/audit-polyscope-state.py` to audit the local Polyscope runtime for clone-root drift, unregistered Git worktrees, invalid stub directories, clone-local config hygiene, and over-retained `polyscope.db` backups
+- added `tests/polyscope-state-audit.sh` plus a `scripts/preflight.sh` hook so the local Polyscope audit stays regression-tested with fixture-backed SQLite and filesystem coverage
+- documented the new audit script in `scripts/README.md` so the operational cleanup path no longer depends on ad hoc one-off shell commands
+
+---
+
 ## 2026-06-05 - Codify Required Branch Protection Checks
 
 **Added:**
