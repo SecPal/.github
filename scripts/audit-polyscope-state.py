@@ -94,6 +94,7 @@ def audit_state(polyscope_home: Path, backup_retention: int) -> dict[str, list[A
         "invalid_clone_worktrees": [],
         "unregistered_git_worktrees": [],
         "missing_registered_worktrees": [],
+        "worktrees_missing_repositories": [],
         "missing_clone_local_configs": [],
         "worktree_config_mismatches": [],
         "missing_worktree_excludes": [],
@@ -130,7 +131,12 @@ def audit_state(polyscope_home: Path, backup_retention: int) -> dict[str, list[A
             findings["missing_registered_worktrees"].append(worktree)
             continue
 
-        repo_root = Path(repositories[worktree["repo_id"]]["path"])
+        repo = repositories.get(worktree["repo_id"])
+        if repo is None:
+            findings["worktrees_missing_repositories"].append(worktree)
+            continue
+
+        repo_root = Path(repo["path"])
         repo_config = repo_root / "polyscope.local.json"
         worktree_config = worktree_path / "polyscope.local.json"
         if repo_config.exists():
@@ -159,6 +165,7 @@ def print_human(findings: dict[str, list[Any]]) -> None:
         "invalid_clone_worktrees": "Invalid clone worktrees",
         "unregistered_git_worktrees": "Unregistered git worktrees",
         "missing_registered_worktrees": "Missing registered worktrees",
+        "worktrees_missing_repositories": "Worktrees missing repositories",
         "missing_clone_local_configs": "Missing clone-local configs",
         "worktree_config_mismatches": "Clone-local config mismatches",
         "missing_worktree_excludes": "Missing worktree exclude entries",

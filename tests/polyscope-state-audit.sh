@@ -122,6 +122,7 @@ assert report['repos_missing_clone_roots'] == [
     }
 ]
 assert report['missing_registered_worktrees'] == []
+assert report['worktrees_missing_repositories'] == []
 assert report['missing_clone_local_configs'] == []
 assert report['worktree_config_mismatches'] == []
 assert report['missing_worktree_excludes'] == []
@@ -172,5 +173,54 @@ assert report['excess_db_backups'] == [
         str(polyscope_home / 'polyscope.db.backup-20260603T000000Z'),
         str(polyscope_home / 'polyscope.db.backup-20260604T000000Z'),
         str(polyscope_home / 'polyscope.db.backup-20260605T000000Z'),
+]
+PY
+
+broken_worktree="$workspace/missing-repo-worktree"
+mkdir -p "$broken_worktree"
+
+python3 - <<'PY' "$polyscope_home" "$broken_worktree"
+import sqlite3
+import sys
+from pathlib import Path
+
+polyscope_home = Path(sys.argv[1])
+broken_worktree = Path(sys.argv[2])
+conn = sqlite3.connect(polyscope_home / 'polyscope.db')
+cur = conn.cursor()
+cur.execute(
+    'INSERT INTO worktrees (id, repo_id, branch, path, status) VALUES (?, ?, ?, ?, ?)',
+    ('wt-missing-repo', 'missing99', 'feature/missing-repo', str(broken_worktree), 'active'),
+)
+conn.commit()
+conn.close()
+PY
+
+set +e
+missing_repo_output="$(python3 "$AUDIT_SCRIPT" --polyscope-home "$polyscope_home" --backup-retention 10 --json 2>&1)"
+missing_repo_status=$?
+set -e
+
+if [[ $missing_repo_status -ne 1 ]]; then
+    echo "Expected missing-repo audit to exit with status 1, got $missing_repo_status" >&2
+    echo "$missing_repo_output" >&2
+    exit 1
+fi
+
+python3 - <<'PY' "$missing_repo_output" "$broken_worktree"
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(sys.argv[1])
+broken_worktree = Path(sys.argv[2])
+
+assert report['worktrees_missing_repositories'] == [
+    {
+        'repo_id': 'missing99',
+        'branch': 'feature/missing-repo',
+        'path': str(broken_worktree),
+        'status': 'active',
+    }
 ]
 PY
