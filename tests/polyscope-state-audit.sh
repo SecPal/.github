@@ -224,3 +224,136 @@ assert report['worktrees_missing_repositories'] == [
     }
 ]
 PY
+
+# === Scenario: worktree-level findings ===
+# Covers missing_registered_worktrees, missing_clone_local_configs,
+# worktree_config_mismatches, missing_worktree_excludes plus proves
+# that exclude resolution follows the gitdir pointer for linked worktrees.
+
+poly2_home="$workspace/poly2/.polyscope"
+poly2_workspace="$workspace/poly2/SecPal"
+mkdir -p "$poly2_home/clones/api22222" "$poly2_workspace/api"
+
+printf '{"preview":{"url":"https://api-{{folder}}.preview.secpal.dev"}}\n' > "$poly2_workspace/api/polyscope.local.json"
+
+python3 - <<'PY' "$poly2_home" "$poly2_workspace"
+import sqlite3
+import sys
+from pathlib import Path
+
+poly2_home = Path(sys.argv[1])
+poly2_workspace = Path(sys.argv[2])
+db_path = poly2_home / 'polyscope.db'
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+cur.executescript(
+    '''
+    CREATE TABLE repositories (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        base_branch TEXT DEFAULT 'main' NOT NULL
+    );
+
+    CREATE TABLE worktrees (
+        id TEXT PRIMARY KEY NOT NULL,
+        repo_id TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status TEXT DEFAULT 'active' NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        FOREIGN KEY (repo_id) REFERENCES repositories(id)
+    );
+    '''
+)
+
+cur.execute(
+    'INSERT INTO repositories (id, name, path, base_branch) VALUES (?, ?, ?, ?)',
+    ('api22222', 'SecPal/api', str(poly2_workspace / 'api'), 'main'),
+)
+
+clone_root = poly2_home / 'clones' / 'api22222'
+entries = [
+    ('wt-disappear', 'feature/disappear', clone_root / 'disappeared'),
+    ('wt-no-cfg',    'feature/no-cfg',    clone_root / 'no-config'),
+    ('wt-drift',     'feature/drift',     clone_root / 'drift'),
+    ('wt-no-excl',   'feature/no-excl',   clone_root / 'no-exclude'),
+    ('wt-linked',    'feature/linked',    clone_root / 'linked'),
+]
+cur.executemany(
+    'INSERT INTO worktrees (id, repo_id, branch, path, status) VALUES (?, ?, ?, ?, ?)',
+    [(wid, 'api22222', branch, str(path), 'active') for wid, branch, path in entries],
+)
+
+conn.commit()
+conn.close()
+PY
+
+# wt-disappear: intentionally not created on disk -> missing_registered_worktrees
+
+# wt-no-cfg: dir + git init, no polyscope.local.json copied -> missing_clone_local_configs
+# (audit then short-circuits exclude check because worktree_config branch already failed)
+git init -q "$poly2_home/clones/api22222/no-config"
+
+# wt-drift: config differs from repo config -> worktree_config_mismatches; exclude is fine
+git init -q "$poly2_home/clones/api22222/drift"
+printf '{"preview":{"url":"https://drift.preview.secpal.dev"}}\n' > "$poly2_home/clones/api22222/drift/polyscope.local.json"
+printf 'polyscope.local.json\n' > "$poly2_home/clones/api22222/drift/.git/info/exclude"
+
+# wt-no-excl: config matches but exclude entry missing -> missing_worktree_excludes
+git init -q "$poly2_home/clones/api22222/no-exclude"
+cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/no-exclude/polyscope.local.json"
+printf 'unrelated-entry\n' > "$poly2_home/clones/api22222/no-exclude/.git/info/exclude"
+
+# wt-linked: real linked worktree (.git is a file) - proves gitdir is resolved
+# before reading info/exclude. The linked gitdir lives outside the clones tree
+# so the clone-scan loop does not see it as a clone subdir.
+main_repo="$workspace/poly2/main-repo"
+git init -q "$main_repo"
+git -C "$main_repo" -c user.email=t@example.com -c user.name=tester commit -q --allow-empty -m bootstrap
+git -C "$main_repo" worktree add --quiet -b feature/linked "$poly2_home/clones/api22222/linked"
+cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/linked/polyscope.local.json"
+linked_gitdir="$(git -C "$poly2_home/clones/api22222/linked" rev-parse --absolute-git-dir)"
+mkdir -p "$linked_gitdir/info"
+printf 'polyscope.local.json\n' > "$linked_gitdir/info/exclude"
+
+set +e
+worktree_findings_output="$(python3 "$AUDIT_SCRIPT" --polyscope-home "$poly2_home" --backup-retention 10 --json 2>&1)"
+worktree_findings_status=$?
+set -e
+
+if [[ $worktree_findings_status -ne 1 ]]; then
+    echo "Expected worktree-findings scenario to exit with status 1, got $worktree_findings_status" >&2
+    echo "$worktree_findings_output" >&2
+    exit 1
+fi
+
+python3 - <<'PY' "$worktree_findings_output" "$poly2_home"
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(sys.argv[1])
+clones = Path(sys.argv[2]) / 'clones' / 'api22222'
+
+linked_path = str(clones / 'linked')
+
+assert [wt['branch'] for wt in report['missing_registered_worktrees']] == ['feature/disappear']
+assert [wt['path']   for wt in report['missing_registered_worktrees']] == [str(clones / 'disappeared')]
+
+assert sorted(report['missing_clone_local_configs']) == [str(clones / 'no-config')]
+assert sorted(report['worktree_config_mismatches'])  == [str(clones / 'drift')]
+assert sorted(report['missing_worktree_excludes'])   == sorted([
+    str(clones / 'no-config'),
+    str(clones / 'no-exclude'),
+])
+
+# Linked worktree must NOT show up in any worktree-level finding: that proves
+# audit resolves the gitdir before reading info/exclude.
+for key in ('missing_clone_local_configs', 'worktree_config_mismatches', 'missing_worktree_excludes'):
+    assert linked_path not in report[key], (key, report[key])
+
+assert report['worktrees_missing_repositories'] == []
+PY

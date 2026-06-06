@@ -227,8 +227,10 @@ python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --
 2. Clone roots that no longer belong to any registered repository
 3. Clone subdirectories that are not valid Git worktrees
 4. Valid Git worktrees that are not registered in the `worktrees` table
-5. Registered worktrees missing clone-local `polyscope.local.json`, drifting from the repo-root config, or missing `.git/info/exclude` coverage
-6. `polyscope.db.backup-*` files beyond the configured retention count
+5. Registered worktrees whose on-disk path no longer exists
+6. Worktree rows referencing a `repo_id` that is missing from `repositories`
+7. Registered worktrees missing clone-local `polyscope.local.json`, drifting from the repo-root config, or missing `polyscope.local.json` coverage in the worktree's `info/exclude` (resolved via the per-worktree gitdir so linked worktrees are handled)
+8. `polyscope.db.backup-*` files beyond the configured retention count
 
 **Exit Codes:**
 
