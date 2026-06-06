@@ -280,6 +280,8 @@ entries = [
     ('wt-no-cfg',    'feature/no-cfg',    clone_root / 'no-config'),
     ('wt-drift',     'feature/drift',     clone_root / 'drift'),
     ('wt-no-excl',   'feature/no-excl',   clone_root / 'no-exclude'),
+    ('wt-comment',   'feature/comment',   clone_root / 'commented-exclude'),
+    ('wt-negated',   'feature/negated',   clone_root / 'negated-exclude'),
     ('wt-linked',    'feature/linked',    clone_root / 'linked'),
 ]
 cur.executemany(
@@ -308,17 +310,29 @@ git init -q "$poly2_home/clones/api22222/no-exclude"
 cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/no-exclude/polyscope.local.json"
 printf '# polyscope.local.json\n' > "$poly2_home/clones/api22222/no-exclude/.git/info/exclude"
 
-# wt-linked: real linked worktree (.git is a file) - proves gitdir is resolved
-# before reading info/exclude. The linked gitdir lives outside the clones tree
-# so the clone-scan loop does not see it as a clone subdir.
+# wt-comment: exclude line is a Git comment (`#`), audit must NOT accept it
+git init -q "$poly2_home/clones/api22222/commented-exclude"
+cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/commented-exclude/polyscope.local.json"
+printf '# polyscope.local.json\n' > "$poly2_home/clones/api22222/commented-exclude/.git/info/exclude"
+
+# wt-negated: exclude has the entry plus a later negation; Git tracks the file again
+git init -q "$poly2_home/clones/api22222/negated-exclude"
+cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/negated-exclude/polyscope.local.json"
+printf 'polyscope.local.json\n!polyscope.local.json\n' > "$poly2_home/clones/api22222/negated-exclude/.git/info/exclude"
+
+# wt-linked: real linked worktree (.git is a file) - proves that exclude
+# resolution follows Git semantics. For linked worktrees Git reads
+# info/exclude from the common gitdir (not the per-worktree gitdir), and
+# `git check-ignore` honours that automatically. The main repo lives outside
+# the clones tree so the clone-scan loop does not see it as a clone subdir.
 main_repo="$workspace/poly2/main-repo"
 git init -q "$main_repo"
 git -C "$main_repo" -c user.email=t@example.com -c user.name=tester commit -q --allow-empty -m bootstrap
 git -C "$main_repo" worktree add --quiet -b feature/linked "$poly2_home/clones/api22222/linked"
 cp "$poly2_workspace/api/polyscope.local.json" "$poly2_home/clones/api22222/linked/polyscope.local.json"
-linked_gitdir="$(git -C "$poly2_home/clones/api22222/linked" rev-parse --absolute-git-dir)"
-mkdir -p "$linked_gitdir/info"
-printf 'polyscope.local.json\n' > "$linked_gitdir/info/exclude"
+linked_common_gitdir="$(git -C "$poly2_home/clones/api22222/linked" rev-parse --git-common-dir)"
+mkdir -p "$linked_common_gitdir/info"
+printf 'polyscope.local.json\n' > "$linked_common_gitdir/info/exclude"
 
 set +e
 worktree_findings_output="$(python3 "$AUDIT_SCRIPT" --polyscope-home "$poly2_home" --backup-retention 10 --json 2>&1)"
@@ -347,6 +361,8 @@ assert [wt['path']   for wt in report['missing_registered_worktrees']] == [str(c
 assert sorted(report['missing_clone_local_configs']) == [str(clones / 'no-config')]
 assert sorted(report['worktree_config_mismatches'])  == [str(clones / 'drift')]
 assert sorted(report['missing_worktree_excludes'])   == sorted([
+    str(clones / 'commented-exclude'),
+    str(clones / 'negated-exclude'),
     str(clones / 'no-config'),
     str(clones / 'no-exclude'),
 ])

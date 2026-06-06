@@ -54,25 +54,20 @@ def is_git_worktree(path: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
-def resolve_git_dir(worktree_path: Path) -> Path:
-    # Linked worktrees store .git as a file pointing at <main>/.git/worktrees/<name>,
-    # which is where per-worktree info/exclude lives; resolve it via git so the
-    # audit reads the correct location instead of <worktree>/.git/info/exclude.
+def worktree_ignores_polyscope_config(worktree_path: Path) -> bool:
+    # Ask Git itself whether polyscope.local.json is effectively ignored.
+    # A substring scan of info/exclude would accept commented (`# polyscope.local.json`),
+    # negated (`!polyscope.local.json`), or look-alike (`polyscope.local.json.bak`)
+    # entries even though Git would still pick the file up via `git add`.
+    # `git check-ignore` also transparently follows the per-worktree gitdir, so
+    # linked worktrees (.git as a file) are handled without manual resolution.
     result = subprocess.run(
-        ["git", "-C", str(worktree_path), "rev-parse", "--absolute-git-dir"],
+        ["git", "-C", str(worktree_path), "check-ignore", "-q", "--", "polyscope.local.json"],
         check=False,
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        return worktree_path / ".git"
-    return Path(result.stdout.strip())
-
-
-def has_exclude_entry(exclude_path: Path, entry: str) -> bool:
-    if not exclude_path.exists():
-        return False
-    return any(line.strip() == entry for line in exclude_path.read_text().splitlines())
+    return result.returncode == 0
 
 
 def load_state(db_path: Path) -> tuple[dict[str, dict[str, str]], list[dict[str, str]]]:
@@ -166,8 +161,7 @@ def audit_state(polyscope_home: Path, backup_retention: int) -> dict[str, list[A
             elif repo_config.read_text() != worktree_config.read_text():
                 findings["worktree_config_mismatches"].append(str(worktree_path))
 
-            exclude_path = resolve_git_dir(worktree_path) / "info" / "exclude"
-            if not has_exclude_entry(exclude_path, "polyscope.local.json"):
+            if not worktree_ignores_polyscope_config(worktree_path):
                 findings["missing_worktree_excludes"].append(str(worktree_path))
 
     backups = sorted(polyscope_home.glob("polyscope.db.backup-*"))

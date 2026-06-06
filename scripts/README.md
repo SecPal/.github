@@ -229,7 +229,7 @@ python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --
 4. Valid Git worktrees that are not registered in the `worktrees` table
 5. Registered worktrees whose on-disk path no longer exists
 6. Worktree rows referencing a `repo_id` that is missing from `repositories`
-7. Registered worktrees missing clone-local `polyscope.local.json`, drifting from the repo-root config, or missing `polyscope.local.json` coverage in the worktree's `info/exclude` (resolved via the per-worktree gitdir so linked worktrees are handled)
+7. Registered worktrees missing clone-local `polyscope.local.json`, drifting from the repo-root config, or where Git would still track `polyscope.local.json` (the check uses `git check-ignore` so commented (`#`), negated (`!`), or look-alike (`.bak`) entries in `info/exclude` are not mistaken for effective coverage, and per-worktree gitdirs of linked worktrees are followed automatically)
 8. `polyscope.db.backup-*` files beyond the configured retention count
 
 **Exit Codes:**
