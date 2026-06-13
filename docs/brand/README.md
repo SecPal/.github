@@ -26,9 +26,9 @@ Brand standards do not cover:
 - app or website implementation details
 - one-off campaign copy that is not reusable guidance
 
-## Planned Layout
+## Document Layout
 
-Later documents should stay focused and live under this directory:
+Current brand standards live under this directory:
 
 - `docs/brand/README.md` - section entry point and scope boundary
 - `docs/brand/brand-architecture.md` - SecPal and product-family hierarchy
@@ -37,6 +37,9 @@ Later documents should stay focused and live under this directory:
 - `docs/brand/footer-wording.md` - approved compact footer strings
 - `docs/brand/logo-usage.md` - logo usage rules and asset ownership boundaries
 - `docs/brand/licensing-wording.md` - human-readable and SPDX license wording rules
+
+Future brand standards may include:
+
 - `docs/brand/voice-and-tone.md` - organization voice, tone, and messaging guidance
 - `docs/brand/color.md` - brand color identity and usage guidance
 - `docs/brand/typography.md` - brand typography identity and usage guidance

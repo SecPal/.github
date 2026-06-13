@@ -66,13 +66,18 @@ What other options did we evaluate?
 
 ## Naming Convention
 
-Files are named: `YYYYMMDD-short-descriptive-title.md`
+Most ADR files are named: `YYYYMMDD-short-descriptive-title.md`
 
 Examples:
 
 - `20251027-event-sourcing-for-guard-book.md`
 - `20251028-postgresql-temporal-tables.md`
 - `20251030-digital-signature-strategy.md`
+
+Focused ADR series may use a four-digit prefix when the series is added as a documented set:
+
+- `0001-brand-architecture.md`
+- `0002-typography.md`
 
 ## Index
 
