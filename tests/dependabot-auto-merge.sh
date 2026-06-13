@@ -38,8 +38,8 @@ grep -q "^    if: github.actor == 'dependabot\\[bot\\]'$" "$WORKFLOW" || {
   exit 1
 }
 
-grep -q '@v1$' "$WORKFLOW" || {
-  echo "Dependabot caller workflow must keep the reusable workflow pinned to @v1." >&2
+grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$WORKFLOW" || {
+  echo "Dependabot caller workflow must keep the reusable workflow uses line pinned to @v1." >&2
   exit 1
 }
 

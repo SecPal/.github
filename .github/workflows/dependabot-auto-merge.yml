@@ -29,6 +29,7 @@ concurrency:
 jobs:
   auto-merge:
     if: github.actor == 'dependabot[bot]'
+    timeout-minutes: 10
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
     with:
       phase: "1" # Phase 1: Only PATCH updates auto-merge
