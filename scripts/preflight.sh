@@ -233,6 +233,15 @@ if [ -f tests/license-compatibility.sh ]; then
   }
 fi
 
+if [ -f tests/dependabot-auto-merge.sh ]; then
+  bash tests/dependabot-auto-merge.sh || {
+    echo "" >&2
+    echo "❌ Dependabot auto-merge workflow regression test failed!" >&2
+    echo "Restore explicit caller permissions and the Dependabot-only job guard in .github/workflows/dependabot-auto-merge.yml before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then

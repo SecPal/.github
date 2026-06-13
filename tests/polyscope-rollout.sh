@@ -649,7 +649,10 @@ grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "
 grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
-grep -q 'npm run test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"
+if grep -q 'test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"; then
+    echo "generated frontend Polyscope config must not reference the removed test:e2e:staging script" >&2
+    exit 1
+fi
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
 if grep -q 'TEST_USER_EMAIL=test@password\.com' "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope preview commands must not use the obsolete test@password.com credential" >&2
@@ -682,7 +685,9 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.lo
 grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"php artisan db:seed --force"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'php artisan db:seed --class=Database.*GuardGuideAccessSeeder --force && php artisan tinker --execute=' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "firstOrNew" "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "test@example.com" "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -727,8 +732,16 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
+grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
+grep -qF "fastcgi_buffer_size 32k;" "$nginx_output"
+grep -qF "fastcgi_buffers 16 16k;" "$nginx_output"
 grep -qF "fastcgi_param SCRIPT_FILENAME \$php_root/index.php;" "$nginx_output"
 grep -qF "fastcgi_param DOCUMENT_ROOT \$php_root;" "$nginx_output"
+
+if grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-api.sock;" "$nginx_output"; then
+    echo "preview nginx config must not route shared preview PHP traffic through the API-specific FPM pool" >&2
+    exit 1
+fi
 
 if grep -qF "try_files \$uri \$uri/ @preview_router;" "$nginx_output"; then
     echo "preview nginx config must not treat a missing workspace docroot as a directory hit" >&2
@@ -792,6 +805,10 @@ assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
+assert ('gg123456', 'an123456') in links
+assert ('gg123456', 'api12345') in links
+assert ('gg123456', 'co123456') in links
+assert ('gg123456', 'fe123456') in links
 assert ('sa123456', 'ch123456') in links
 
 summary = json.loads(summary_path.read_text())
@@ -805,7 +822,7 @@ assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
-assert summary['repositories']['GuardGuide']['linked_repositories'] == []
+assert summary['repositories']['GuardGuide']['linked_repositories'] == ['api', 'frontend', 'contracts', 'android']
 PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
@@ -1402,7 +1419,8 @@ PY
 grep -qF "php:$failing_api_clone:artisan config:clear" "$provision_log"
 grep -qF "composer:$guardguide_clone:install" "$provision_log"
 grep -qF "npm:$guardguide_clone:ci" "$provision_log"
-grep -qF "php:$guardguide_clone:artisan db:seed --force" "$provision_log"
+grep -q "php:$guardguide_clone:artisan db:seed --class=Database.*GuardGuideAccessSeeder --force" "$provision_log"
+grep -qF "php:$guardguide_clone:artisan tinker --execute=" "$provision_log"
 test -f "$guardguide_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_cleanup_clone/.polyscope-secpal-provisioned.json"

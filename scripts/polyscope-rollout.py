@@ -599,6 +599,35 @@ def build_api_preview_seed_command(migration_command: str = "php artisan migrate
     )
 
 
+def build_guardguide_preview_seed_command() -> str:
+    tinker_script = textwrap.dedent(
+        r"""
+        $role = \Spatie\Permission\Models\Role::findByName(
+            \App\Auth\GuardGuideAccessCatalog::ROLE_PLATFORM_ADMINISTRATOR,
+            \App\Auth\GuardGuideAccessCatalog::GUARD,
+        );
+
+        $user = \App\Models\User::firstOrNew([
+            'email' => 'test@example.com',
+        ]);
+
+        $user->forceFill([
+            'name' => 'Test User',
+            'email' => 'test@example.com',
+            'password' => bcrypt('password'),
+            'email_verified_at' => now(),
+        ])->save();
+
+        $user->assignRole($role);
+        """
+    ).strip()
+
+    return (
+        "php artisan db:seed --class=Database\\\\Seeders\\\\GuardGuideAccessSeeder --force && "
+        f"php artisan tinker --execute={shlex.quote(tinker_script)}"
+    )
+
+
 def build_repo_all_checks_command(repo_name: str) -> str | None:
     commands = {
         "api": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress",
@@ -759,11 +788,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                         "command": "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev npx playwright test",
                         "runMode": "preserve",
                     },
-                    {
-                        "label": "Playwright Live Staging",
-                        "command": "npm run test:e2e:staging",
-                        "runMode": "preserve",
-                    },
                 ],
             },
             "tasks": [
@@ -789,7 +813,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         ],
         "preview_prefix": "guardguide",
         "review_focus": "Laravel 13 monolith boundaries, Pest coverage plus frontend build and typecheck validation, shadcn/ui-aligned UI patterns, Lingui localization, application-layer encryption for person-related data, and standalone-first acknowledgement flows.",
-        "link_names": [],
+        "link_names": ["api", "frontend", "contracts", "android"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
@@ -803,7 +827,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     "test -f database/database.sqlite || touch database/database.sqlite",
                     "grep -Eq '^APP_KEY=.+$' .env || php artisan key:generate --force",
                     "php artisan migrate --force",
-                    "php artisan db:seed --force",
+                    build_guardguide_preview_seed_command(),
                     "npm run build",
                 ],
                 "run": [
@@ -1917,7 +1941,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 }}
 
                 include snippets/fastcgi-php.conf;
-                fastcgi_pass unix:/run/php/php8.4-fpm-secpal-api.sock;
+                fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;
+                fastcgi_buffer_size 32k;
+                fastcgi_buffers 16 16k;
                 fastcgi_param SCRIPT_FILENAME $php_root/index.php;
                 fastcgi_param DOCUMENT_ROOT $php_root;
                 fastcgi_param HTTP_HOST $host;
