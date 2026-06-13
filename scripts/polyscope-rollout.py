@@ -559,7 +559,7 @@ def build_preview_full_rebuild_watch_command(
         from pathlib import Path
 
         watch_directories = [Path(value) for value in {watch_directories!r}]
-        ignored_directories = [Path(value).resolve() for value in {ignored_directories!r} if Path(value).exists()]
+        ignored_directories = [Path(value).resolve() for value in {ignored_directories!r}]
         watch_files = [Path(value) for value in {watch_files!r}]
         watch_suffixes = set({watch_suffixes!r})
         build_args = {command!r}
@@ -701,6 +701,7 @@ def build_static_preview_build_watch_command(site_name: str, watch_directories: 
             ".astro",
             ".css",
             ".html",
+            ".ico",
             ".js",
             ".json",
             ".md",
@@ -709,8 +710,13 @@ def build_static_preview_build_watch_command(site_name: str, watch_directories: 
             ".png",
             ".svg",
             ".ts",
+            ".txt",
             ".tsx",
+            ".webmanifest",
             ".webp",
+            ".woff",
+            ".woff2",
+            ".xml",
             ".yml",
             ".yaml",
         ],
