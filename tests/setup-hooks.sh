@@ -38,7 +38,7 @@ STUB
   chmod +x "$workspace/$repo/scripts/setup-pre-push.sh" "$workspace/$repo/scripts/setup-pre-commit.sh"
 }
 
-repos=(api frontend contracts android secpal.app changelog .github)
+repos=(api frontend contracts android secpal.app guardguide.de changelog .github)
 expected_hook_count=$(( ${#repos[@]} * 2 ))
 
 for repo in "${repos[@]}"; do

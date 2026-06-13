@@ -77,6 +77,20 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Analyze Code (javascript-typescript)",
     "Copilot Instructions / Validate Copilot Instructions"
   ],
+  "guardguide.de": [
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Check License Compatibility / Check License Compatibility",
+    "Formatting Check / Check Code Formatting",
+    "Markdown Lint / Lint Markdown Files",
+    "ESLint / Run Linter",
+    "Astro TypeScript Check / Build Project",
+    "Astro Build / Build Project",
+    "Check PR Size / Check PR Size",
+    "check-conflicts / Detect Git Conflict Markers",
+    "Analyze Code (javascript-typescript)",
+    "Copilot Instructions / Validate Copilot Instructions",
+    "Node Tests / Run Tests"
+  ],
   "contracts": [
     "REUSE Compliance / Check REUSE Compliance",
     "Prettier Formatting / Check Code Formatting",

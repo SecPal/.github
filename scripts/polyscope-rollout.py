@@ -838,6 +838,7 @@ def build_repo_all_checks_command(repo_name: str) -> str | None:
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
         "changelog": "npm run check && npm run lint && npm run csp:check && npm run build",
+        "guardguide.de": "npm run check && npm run lint && npm run test && npm run build",
         ".github": "./scripts/preflight.sh",
     }
     return commands.get(repo_name)
@@ -1147,6 +1148,50 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                         "command": build_static_preview_build_watch_command(
                             "secpal.app",
                             ["public", "scripts", "secpal.app", "src"],
+                        ),
+                        "autostart": True,
+                        "runMode": "replace",
+                    },
+                    {"label": "Astro Check", "command": "npm run check", "runMode": "preserve"},
+                    {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
+                    {"label": "Tests", "command": "npm run test", "runMode": "preserve"},
+                ],
+            },
+            "tasks": [
+                {
+                    "label": "Review site semantics",
+                    "prompt": "Review the marketing-site change for static-build regressions, accessibility drift, semantic HTML changes, and missing test or Astro-check coverage. Keep the work scoped to the touched page or component.",
+                },
+                {
+                    "label": "Triage failing Astro",
+                    "prompt": "Reproduce the failing static-site behavior or Astro check, add or update the smallest relevant validation first, then implement the minimal fix and rerun the touched commands. Keep the change scoped to one issue.",
+                },
+            ],
+        },
+    },
+    "guardguide.de": {
+        "display_name": "SecPal/guardguide.de",
+        "base_branch": "main",
+        "copilot_instructions": ".github/copilot-instructions.md",
+        "focus_instruction_paths": [
+            ".github/instructions/org-shared.instructions.md",
+            ".github/instructions/astro-static.instructions.md",
+        ],
+        "preview_prefix": "guardguide-de",
+        "review_focus": "Astro static rendering, minimal client-side JavaScript, semantic HTML, accessible landmarks, and strict TypeScript on the public site.",
+        "link_names": [],
+        "local_config": {
+            "copyGitignored": True,
+            "runMode": "replace",
+            "preview": {"url": build_preview_url_template("guardguide-de")},
+            "scripts": {
+                "setup": ["test -d node_modules || npm ci", "npm run build"],
+                "run": [
+                    {
+                        "label": "Build Watch",
+                        "command": build_static_preview_build_watch_command(
+                            "guardguide.de",
+                            ["public", "scripts", "src"],
                         ),
                         "autostart": True,
                         "runMode": "replace",
@@ -2031,8 +2076,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
     frontend_id = repo_state["frontend"]["id"]
     guardguide_id = repo_state["GuardGuide"]["id"]
     secpal_app_id = repo_state["secpal.app"]["id"]
+    guardguide_de_id = repo_state["guardguide.de"]["id"]
     changelog_id = repo_state["changelog"]["id"]
-    # NOTE: workspace names starting with api-, frontend-, guardguide-, secpal-app-, or changelog- are
+    # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-, secpal-app-, or changelog- are
     # reserved for legacy per-repo routing (e.g. api-WORKSPACE.preview.secpal.dev).
     # Generic workspaces must not use those prefixes; the regex will treat them as legacy
     # hosts and route them to the wrong backend.
@@ -2041,7 +2087,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 80;
             listen [::]:80;
-            server_name ~^(?:(?<repo>api|frontend|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|guardguide|guardguide-de|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             location /.well-known/acme-challenge/ {{
                 root /var/www/certbot;
@@ -2053,7 +2099,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 443 ssl;
             listen [::]:443 ssl;
-            server_name ~^(?:(?<repo>api|frontend|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+            server_name ~^(?:(?<repo>api|frontend|guardguide|guardguide-de|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
@@ -2074,6 +2120,8 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             set $guardguide_public $guardguide_root/public;
             set $secpal_app_root /home/secpal/.polyscope/clones/{secpal_app_id}/$workspace;
             set $secpal_app_dist $secpal_app_root/dist;
+            set $guardguide_de_root /home/secpal/.polyscope/clones/{guardguide_de_id}/$workspace;
+            set $guardguide_de_dist $guardguide_de_root/dist;
             set $changelog_root /home/secpal/.polyscope/clones/{changelog_id}/$workspace;
             set $changelog_out $changelog_root/out;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
@@ -2095,6 +2143,11 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 set $route_mode static;
             }}
 
+            if (-f $guardguide_de_dist/index.html) {{
+                set $preview_docroot $guardguide_de_dist;
+                set $route_mode static;
+            }}
+
             if (-f $changelog_out/index.html) {{
                 set $preview_docroot $changelog_out;
                 set $route_mode static;
@@ -2107,6 +2160,11 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             if ($repo = secpal-app) {{
                 set $preview_docroot $secpal_app_dist;
+                set $route_mode static;
+            }}
+
+            if ($repo = guardguide-de) {{
+                set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
             }}
 
