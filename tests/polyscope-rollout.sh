@@ -649,7 +649,10 @@ grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "
 grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
-grep -q 'npm run test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"
+if grep -q 'test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"; then
+    echo "generated frontend Polyscope config must not reference the removed test:e2e:staging script" >&2
+    exit 1
+fi
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
 if grep -q 'TEST_USER_EMAIL=test@password\.com' "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope preview commands must not use the obsolete test@password.com credential" >&2
@@ -682,7 +685,9 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.lo
 grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"php artisan db:seed --force"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'php artisan db:seed --class=Database.*GuardGuideAccessSeeder --force && php artisan tinker --execute=' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "firstOrNew" "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "test@example.com" "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -1414,7 +1419,8 @@ PY
 grep -qF "php:$failing_api_clone:artisan config:clear" "$provision_log"
 grep -qF "composer:$guardguide_clone:install" "$provision_log"
 grep -qF "npm:$guardguide_clone:ci" "$provision_log"
-grep -qF "php:$guardguide_clone:artisan db:seed --force" "$provision_log"
+grep -q "php:$guardguide_clone:artisan db:seed --class=Database.*GuardGuideAccessSeeder --force" "$provision_log"
+grep -qF "php:$guardguide_clone:artisan tinker --execute=" "$provision_log"
 test -f "$guardguide_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_cleanup_clone/.polyscope-secpal-provisioned.json"

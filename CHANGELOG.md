@@ -16,6 +16,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - updated `scripts/polyscope-rollout.py` so generated preview nginx config routes Laravel preview workspaces through a neutral `secpal-preview` PHP-FPM socket instead of the API-specific pool, preventing GuardGuide previews from inheriting API runtime assumptions
 - increased generated FastCGI response-header buffers for preview PHP routes so GuardGuide login pages with Inertia preload links and encrypted Laravel cookies no longer fail with `upstream sent too big header`
 - kept GuardGuide repository links to `api`, `frontend`, `contracts`, and `android` in the managed Polyscope metadata so future rollout syncs preserve the intended cross-workspace context
+- removed the stale frontend `test:e2e:staging` run action from generated Polyscope configs so `polyscope-rollout-sync.service` no longer fails validation before writing updated workspace metadata
+- made generated GuardGuide preview seeding idempotent by seeding the access catalog directly and normalizing the preview test user instead of re-running the non-idempotent local `DatabaseSeeder`
 - extended `tests/polyscope-rollout.sh` to prove the generated nginx route, GuardGuide repository links, and rollout summary stay aligned
 
 ---
