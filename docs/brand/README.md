@@ -31,9 +31,13 @@ Brand standards do not cover:
 Later documents should stay focused and live under this directory:
 
 - `docs/brand/README.md` - section entry point and scope boundary
+- `docs/brand/brand-architecture.md` - SecPal and product-family hierarchy
+- `docs/brand/naming.md` - public names, capitalization, and terminology rules
+- `docs/brand/slogans.md` - approved slogan strings and punctuation rules
+- `docs/brand/footer-wording.md` - approved compact footer strings
+- `docs/brand/logo-usage.md` - logo usage rules and asset ownership boundaries
+- `docs/brand/licensing-wording.md` - human-readable and SPDX license wording rules
 - `docs/brand/voice-and-tone.md` - organization voice, tone, and messaging guidance
-- `docs/brand/naming.md` - naming, capitalization, and terminology rules
-- `docs/brand/logo.md` - logo, wordmark, and mark usage rules
 - `docs/brand/color.md` - brand color identity and usage guidance
 - `docs/brand/typography.md` - brand typography identity and usage guidance
 
