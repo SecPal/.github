@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-13 - Fix GuardGuide Polyscope Preview Routing
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so generated preview nginx config routes Laravel preview workspaces through a neutral `secpal-preview` PHP-FPM socket instead of the API-specific pool, preventing GuardGuide previews from inheriting API runtime assumptions
+- increased generated FastCGI response-header buffers for preview PHP routes so GuardGuide login pages with Inertia preload links and encrypted Laravel cookies no longer fail with `upstream sent too big header`
+- kept GuardGuide repository links to `api`, `frontend`, `contracts`, and `android` in the managed Polyscope metadata so future rollout syncs preserve the intended cross-workspace context
+- extended `tests/polyscope-rollout.sh` to prove the generated nginx route, GuardGuide repository links, and rollout summary stay aligned
+
+---
+
 ## 2026-06-06 - Add Local Polyscope State Audit Guard
 
 **Added:**

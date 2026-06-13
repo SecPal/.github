@@ -727,8 +727,16 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
+grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
+grep -qF "fastcgi_buffer_size 32k;" "$nginx_output"
+grep -qF "fastcgi_buffers 16 16k;" "$nginx_output"
 grep -qF "fastcgi_param SCRIPT_FILENAME \$php_root/index.php;" "$nginx_output"
 grep -qF "fastcgi_param DOCUMENT_ROOT \$php_root;" "$nginx_output"
+
+if grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-api.sock;" "$nginx_output"; then
+    echo "preview nginx config must not route shared preview PHP traffic through the API-specific FPM pool" >&2
+    exit 1
+fi
 
 if grep -qF "try_files \$uri \$uri/ @preview_router;" "$nginx_output"; then
     echo "preview nginx config must not treat a missing workspace docroot as a directory hit" >&2
@@ -792,6 +800,10 @@ assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
+assert ('gg123456', 'an123456') in links
+assert ('gg123456', 'api12345') in links
+assert ('gg123456', 'co123456') in links
+assert ('gg123456', 'fe123456') in links
 assert ('sa123456', 'ch123456') in links
 
 summary = json.loads(summary_path.read_text())
@@ -805,7 +817,7 @@ assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
-assert summary['repositories']['GuardGuide']['linked_repositories'] == []
+assert summary['repositories']['GuardGuide']['linked_repositories'] == ['api', 'frontend', 'contracts', 'android']
 PY
 
 initial_db_hash="$(file_sha256 "$db_path")"

@@ -789,7 +789,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         ],
         "preview_prefix": "guardguide",
         "review_focus": "Laravel 13 monolith boundaries, Pest coverage plus frontend build and typecheck validation, shadcn/ui-aligned UI patterns, Lingui localization, application-layer encryption for person-related data, and standalone-first acknowledgement flows.",
-        "link_names": [],
+        "link_names": ["api", "frontend", "contracts", "android"],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
@@ -1917,7 +1917,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 }}
 
                 include snippets/fastcgi-php.conf;
-                fastcgi_pass unix:/run/php/php8.4-fpm-secpal-api.sock;
+                fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;
+                fastcgi_buffer_size 32k;
+                fastcgi_buffers 16 16k;
                 fastcgi_param SCRIPT_FILENAME $php_root/index.php;
                 fastcgi_param DOCUMENT_ROOT $php_root;
                 fastcgi_param HTTP_HOST $host;
