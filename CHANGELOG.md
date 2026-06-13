@@ -15,6 +15,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - replaced the generated GuardGuide Polyscope `Vite Dev` action with an autostarted full-build watcher so nginx-backed previews keep `public/build` current without depending on the Vite dev server or hot-file behavior
 - added matching full-build watchers for the generated `secpal.app` and `changelog` Polyscope configs so static preview hosts rebuild their served output after source changes instead of relying on a one-time setup build
+- excluded generated build output directories from preview watcher snapshots so GuardGuide `public/build` updates do not trigger a continuous rebuild loop
+- reduced preview watcher polling from every second to every two seconds so multiple open Polyscope workspaces spend less CPU while idle
 - extended `tests/polyscope-rollout.sh` to reject GuardGuide `npm run dev` preview actions and to prove the generated static and GuardGuide preview configs include the build watcher commands
 
 ---

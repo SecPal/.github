@@ -532,7 +532,7 @@ def build_frontend_preview_build_watch_command() -> str:
                         flush=True,
                     )
 
-            time.sleep(1)
+            time.sleep(2)
         """
     ).strip()
 
@@ -576,7 +576,7 @@ def build_preview_full_rebuild_watch_command(
             seen = set()
 
             for path in watch_files:
-                if not path.exists():
+                if not path.exists() or is_ignored(path):
                     continue
 
                 try:
@@ -598,7 +598,7 @@ def build_preview_full_rebuild_watch_command(
                     continue
 
                 for path in sorted(directory.rglob("*")):
-                    if not path.is_file() or path.suffix not in watch_suffixes:
+                    if not path.is_file() or path.suffix not in watch_suffixes or is_ignored(path):
                         continue
 
                     try:
@@ -646,7 +646,7 @@ def build_preview_full_rebuild_watch_command(
                         flush=True,
                     )
 
-            time.sleep(1)
+            time.sleep(2)
         """
     ).strip()
 
