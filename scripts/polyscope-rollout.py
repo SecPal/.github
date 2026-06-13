@@ -539,6 +539,207 @@ def build_frontend_preview_build_watch_command() -> str:
     return f"python3 -c {shlex.quote(script)}"
 
 
+def build_preview_full_rebuild_watch_command(
+    *,
+    label: str,
+    watch_directories: list[str],
+    ignored_directories: list[str] | None = None,
+    watch_files: list[str],
+    watch_suffixes: list[str],
+    build_args: list[str] | None = None,
+) -> str:
+    command = build_args or ["npm", "run", "build"]
+    ignored_directories = ignored_directories or []
+    script = textwrap.dedent(
+        f"""
+        import hashlib
+        import subprocess
+        import sys
+        import time
+        from pathlib import Path
+
+        watch_directories = [Path(value) for value in {watch_directories!r}]
+        ignored_directories = [Path(value).resolve() for value in {ignored_directories!r}]
+        watch_files = [Path(value) for value in {watch_files!r}]
+        watch_suffixes = set({watch_suffixes!r})
+        build_args = {command!r}
+
+        def is_ignored(path: Path) -> bool:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                return True
+
+            return any(ignored == resolved or ignored in resolved.parents for ignored in ignored_directories)
+
+        def iter_watch_paths():
+            seen = set()
+
+            for path in watch_files:
+                if not path.exists():
+                    continue
+
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+
+                if is_ignored(path):
+                    continue
+
+                if resolved in seen:
+                    continue
+
+                seen.add(resolved)
+                yield path
+
+            for directory in watch_directories:
+                if not directory.exists():
+                    continue
+
+                for path in sorted(directory.rglob("*")):
+                    if not path.is_file() or path.suffix not in watch_suffixes:
+                        continue
+
+                    try:
+                        resolved = path.resolve()
+                    except OSError:
+                        continue
+
+                    if is_ignored(path):
+                        continue
+
+                    if resolved in seen:
+                        continue
+
+                    seen.add(resolved)
+                    yield path
+
+        def snapshot() -> str:
+            state = []
+
+            for path in iter_watch_paths():
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+
+                state.append(f"{{path.as_posix()}}:{{stat.st_mtime_ns}}:{{stat.st_size}}")
+
+            return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
+
+        def run_build() -> int:
+            return subprocess.run(build_args, check=False).returncode
+
+        print({label!r}, flush=True)
+        previous_snapshot = None
+
+        while True:
+            current_snapshot = snapshot()
+            if current_snapshot != previous_snapshot:
+                previous_snapshot = current_snapshot
+                exit_code = run_build()
+                if exit_code != 0:
+                    print(
+                        f"Preview rebuild failed with exit code {{exit_code}}; waiting for the next change before retrying.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+
+            time.sleep(1)
+        """
+    ).strip()
+
+    return f"python3 -c {shlex.quote(script)}"
+
+
+def build_guardguide_preview_build_watch_command() -> str:
+    return build_preview_full_rebuild_watch_command(
+        label="Watching GuardGuide preview sources for changes...",
+        watch_directories=["app", "config", "public", "resources", "routes"],
+        ignored_directories=["public/build"],
+        watch_files=[
+            "components.json",
+            "lingui.config.cjs",
+            "package.json",
+            "package-lock.json",
+            "postcss.config.mjs",
+            "tailwind.config.js",
+            "tailwind.config.cjs",
+            "tailwind.config.mjs",
+            "tailwind.config.ts",
+            "tsconfig.json",
+            "vite.config.ts",
+        ],
+        watch_suffixes=[
+            ".avif",
+            ".css",
+            ".gif",
+            ".html",
+            ".jpeg",
+            ".jpg",
+            ".js",
+            ".json",
+            ".mjs",
+            ".otf",
+            ".php",
+            ".po",
+            ".png",
+            ".svg",
+            ".ts",
+            ".tsx",
+            ".vue",
+            ".webp",
+            ".woff",
+            ".woff2",
+        ],
+    )
+
+
+def build_static_preview_build_watch_command(site_name: str, watch_directories: list[str]) -> str:
+    return build_preview_full_rebuild_watch_command(
+        label=f"Watching {site_name} preview sources for changes...",
+        watch_directories=watch_directories,
+        watch_files=[
+            "astro.config.mjs",
+            "eslint.config.js",
+            "next.config.mjs",
+            "package.json",
+            "package-lock.json",
+            "postcss.config.mjs",
+            "tailwind.config.ts",
+            "tsconfig.json",
+        ],
+        watch_suffixes=[
+            ".avif",
+            ".astro",
+            ".css",
+            ".gif",
+            ".html",
+            ".ico",
+            ".jpeg",
+            ".jpg",
+            ".js",
+            ".json",
+            ".md",
+            ".mdx",
+            ".mjs",
+            ".png",
+            ".svg",
+            ".ts",
+            ".txt",
+            ".tsx",
+            ".webmanifest",
+            ".webp",
+            ".woff",
+            ".woff2",
+            ".xml",
+            ".yml",
+            ".yaml",
+        ],
+    )
+
+
 def build_guardguide_preview_env_setup_command() -> str:
     script = "\n".join(
         [
@@ -834,7 +1035,12 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
                     {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
                     {"label": "Build", "command": "npm run build", "runMode": "preserve"},
-                    {"label": "Vite Dev", "command": "npm run dev", "runMode": "replace"},
+                    {
+                        "label": "Build Watch",
+                        "command": build_guardguide_preview_build_watch_command(),
+                        "autostart": True,
+                        "runMode": "replace",
+                    },
                 ],
             },
             "tasks": [
@@ -936,6 +1142,15 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": ["test -d node_modules || npm ci", "npm run build"],
                 "run": [
+                    {
+                        "label": "Build Watch",
+                        "command": build_static_preview_build_watch_command(
+                            "secpal.app",
+                            ["public", "scripts", "secpal.app", "src"],
+                        ),
+                        "autostart": True,
+                        "runMode": "replace",
+                    },
                     {"label": "Astro Check", "command": "npm run check", "runMode": "preserve"},
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
                     {"label": "Tests", "command": "npm run test", "runMode": "preserve"},
@@ -971,6 +1186,15 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": ["test -d node_modules || npm ci", "npm run build"],
                 "run": [
+                    {
+                        "label": "Build Watch",
+                        "command": build_static_preview_build_watch_command(
+                            "changelog",
+                            ["changelog", "mdx", "public", "scripts", "src"],
+                        ),
+                        "autostart": True,
+                        "runMode": "replace",
+                    },
                     {"label": "Typecheck", "command": "npm run check", "runMode": "preserve"},
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
                     {"label": "CSP Check", "command": "npm run csp:check", "runMode": "preserve"},

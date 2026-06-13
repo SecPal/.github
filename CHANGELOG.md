@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-13 - Fix Polyscope Preview Build Watchers
+
+**Fixed:**
+
+- replaced the generated GuardGuide Polyscope `Vite Dev` action with an autostarted full-build watcher so nginx-backed previews keep `public/build` current without depending on the Vite dev server or hot-file behavior
+- added matching full-build watchers for the generated `secpal.app` and `changelog` Polyscope configs so static preview hosts rebuild their served output after source changes instead of relying on a one-time setup build
+- extended `tests/polyscope-rollout.sh` to reject GuardGuide `npm run dev` preview actions and to prove the generated static and GuardGuide preview configs include the build watcher commands
+
+---
+
 ## 2026-06-13 - Fix Dependabot Auto-Merge Gating To Use PR Author
 
 **Fixed:**

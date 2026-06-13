@@ -677,11 +677,124 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.lo
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF 'Watching changelog preview sources for changes...' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+script_path = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace = Path(tempfile.mkdtemp(prefix="polyscope-build-watch-"))
+
+try:
+    (workspace / "src").mkdir()
+    (workspace / "src" / "input.ts").write_text("seed\n")
+    (workspace / "package.json").write_text("{}\n")
+
+    command = module.build_preview_full_rebuild_watch_command(
+        label="watching",
+        watch_directories=["src", "public"],
+        ignored_directories=["public/build"],
+        watch_files=["package.json"],
+        watch_suffixes=[".json", ".ts"],
+        build_args=[
+            "python3",
+            "-c",
+            (
+                "from pathlib import Path; "
+                "counter = Path('build-count.txt'); "
+                "count = int(counter.read_text()) + 1 if counter.exists() else 1; "
+                "counter.write_text(str(count)); "
+                "Path('public/build').mkdir(parents=True, exist_ok=True); "
+                "Path('public/build/manifest.json').write_text(str(count))"
+            ),
+        ],
+    )
+
+    process = subprocess.Popen(
+        shlex.split(command),
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    time.sleep(3.5)
+    process.terminate()
+
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+
+    build_count = int((workspace / "build-count.txt").read_text())
+    if build_count != 1:
+        raise SystemExit(
+            f"build watcher must ignore generated output directories after they appear; observed {build_count} builds"
+        )
+finally:
+    shutil.rmtree(workspace)
+PY
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+command = module.build_static_preview_build_watch_command("changelog", ["public", "src"])
+
+for required_suffix in (".avif", ".gif", ".ico", ".jpeg", ".jpg", ".woff2"):
+    if required_suffix not in command:
+        raise SystemExit(
+            f"static preview build watcher must track {required_suffix} assets so preview output stays current"
+        )
+PY
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+command = module.build_guardguide_preview_build_watch_command()
+
+for required_input in ("tailwind.config.js", "tailwind.config.ts", ".png", ".jpg", ".webp", ".woff2"):
+    if required_input not in command:
+        raise SystemExit(
+            f"GuardGuide preview build watcher must track {required_input} changes so preview output stays current"
+        )
+PY
+
 grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -695,8 +808,20 @@ grep -qF '"label": "Typecheck"' "$workspace_root/GuardGuide/polyscope.local.json
 grep -qF '"command": "npm run typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Build"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run build"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "npm run dev"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF 'Watching GuardGuide preview sources for changes...' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "public/build" "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "def is_ignored(path: Path) -> bool:" "$workspace_root/GuardGuide/polyscope.local.json"
+
+if grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not start the Vite dev server for nginx-backed previews" >&2
+    exit 1
+fi
+
+if grep -qF '"command": "npm run dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not run npm dev for nginx-backed previews" >&2
+    exit 1
+fi
 
 if grep -q 'react-catalyst.instructions.md' "$workspace_root/GuardGuide/polyscope.local.json"; then
     echo "GuardGuide Polyscope config must not reference the legacy Catalyst instruction path" >&2
