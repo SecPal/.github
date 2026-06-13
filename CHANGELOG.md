@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-13 - Fix Dependabot Auto-Merge Gating To Use PR Author
+
+**Fixed:**
+
+- updated `.github/workflows/dependabot-auto-merge.yml` and `.github/workflows/reusable-dependabot-auto-merge.yml` to gate on `github.event.pull_request.user.login == 'dependabot[bot]'` instead of `github.actor`, so maintainer-triggered `reopened` and `ready_for_review` events on Dependabot-authored PRs no longer skip auto-merge enrollment
+- extended `tests/dependabot-auto-merge.sh` to assert the PR-author-based invariant across both the caller and reusable workflows and to fail loudly if either workflow regresses to the brittle `github.actor` gate
+
+---
+
 ## 2026-06-13 - Fix GuardGuide Polyscope Preview Routing
 
 **Fixed:**

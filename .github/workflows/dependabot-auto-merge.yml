@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
 # Dependabot Auto-Merge Workflow (.github repository)
@@ -28,7 +28,11 @@ concurrency:
 
 jobs:
   auto-merge:
-    if: github.actor == 'dependabot[bot]'
+    # Gate on the PR author rather than the event actor so maintainer-triggered
+    # `reopened` and `ready_for_review` events on Dependabot-authored PRs do not
+    # skip auto-merge enrollment. See:
+    # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     timeout-minutes: 10
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
     with:

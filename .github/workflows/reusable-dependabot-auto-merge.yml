@@ -43,7 +43,11 @@ jobs:
   check-eligibility:
     name: Check Auto-Merge Eligibility
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    # Gate on the PR author rather than the event actor so maintainer-triggered
+    # `reopened` and `ready_for_review` events on Dependabot-authored PRs do not
+    # skip auto-merge enrollment. See:
+    # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     timeout-minutes: 10
     outputs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
@@ -238,7 +242,7 @@ jobs:
     name: Skip Auto-Merge
     runs-on: ubuntu-latest
     needs: check-eligibility
-    if: needs.check-eligibility.outputs.should-auto-merge != 'true' && github.actor == 'dependabot[bot]'
+    if: needs.check-eligibility.outputs.should-auto-merge != 'true' && github.event.pull_request.user.login == 'dependabot[bot]'
     timeout-minutes: 10
     steps:
       - name: Add comment for manual review
