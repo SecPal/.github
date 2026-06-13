@@ -677,9 +677,13 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.lo
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/changelog/polyscope.local.json"
+grep -qF 'Watching changelog preview sources for changes...' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -695,8 +699,18 @@ grep -qF '"label": "Typecheck"' "$workspace_root/GuardGuide/polyscope.local.json
 grep -qF '"command": "npm run typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Build"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run build"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "npm run dev"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF 'Watching GuardGuide preview sources for changes...' "$workspace_root/GuardGuide/polyscope.local.json"
+
+if grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not start the Vite dev server for nginx-backed previews" >&2
+    exit 1
+fi
+
+if grep -qF '"command": "npm run dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide Polyscope config must not run npm dev for nginx-backed previews" >&2
+    exit 1
+fi
 
 if grep -q 'react-catalyst.instructions.md' "$workspace_root/GuardGuide/polyscope.local.json"; then
     echo "GuardGuide Polyscope config must not reference the legacy Catalyst instruction path" >&2
