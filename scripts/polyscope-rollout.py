@@ -2087,7 +2087,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 80;
             listen [::]:80;
-            server_name ~^(?:(?<repo>api|frontend|guardguide|guardguide-de|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             location /.well-known/acme-challenge/ {{
                 root /var/www/certbot;
@@ -2099,7 +2099,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 443 ssl;
             listen [::]:443 ssl;
-            server_name ~^(?:(?<repo>api|frontend|guardguide|guardguide-de|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;

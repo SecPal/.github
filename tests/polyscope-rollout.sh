@@ -897,7 +897,7 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide|guardguide-de|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
+grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
 grep -qF "if (\$repo = guardguide) {" "$nginx_output"
