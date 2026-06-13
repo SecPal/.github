@@ -50,8 +50,11 @@ grep -q "^    if: github.event.pull_request.user.login == 'dependabot\\[bot\\]'$
 
 # Defensive guard against regression: the brittle actor-based gate must not
 # come back, because it silently skips auto-merge enrollment whenever a
-# maintainer reopens or marks a Dependabot PR as ready for review.
-if grep -q "github.actor == 'dependabot\\[bot\\]'" "$CALLER_WORKFLOW"; then
+# maintainer reopens or marks a Dependabot PR as ready for review. The
+# pattern is anchored to real YAML `if:` lines so explanatory comments or
+# documentation that mention the old `github.actor` pattern do not trip the
+# check.
+if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WORKFLOW"; then
   echo "Dependabot caller workflow must not gate on github.actor; use github.event.pull_request.user.login instead so maintainer-triggered events on Dependabot PRs are not skipped." >&2
   exit 1
 fi
@@ -74,7 +77,10 @@ grep -q "needs.check-eligibility.outputs.should-auto-merge != 'true' && github.e
   exit 1
 }
 
-if grep -q "github.actor == 'dependabot\\[bot\\]'" "$REUSABLE_WORKFLOW"; then
+# Same anchoring as the caller guard: only flag actual YAML `if:` lines so
+# explanatory comments or documentation mentioning the old `github.actor`
+# pattern do not trip the regression check.
+if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$REUSABLE_WORKFLOW"; then
   echo "Reusable Dependabot workflow must not gate on github.actor; use github.event.pull_request.user.login instead so maintainer-triggered events on Dependabot PRs are not skipped." >&2
   exit 1
 fi
