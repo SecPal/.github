@@ -17,6 +17,10 @@ on:
       - reopened
       - ready_for_review
 
+permissions:
+  contents: write
+  pull-requests: write
+
 # Ensure only one auto-merge runs at a time per PR
 concurrency:
   group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
@@ -24,6 +28,7 @@ concurrency:
 
 jobs:
   auto-merge:
+    if: github.actor == 'dependabot[bot]'
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
     with:
       phase: "1" # Phase 1: Only PATCH updates auto-merge
