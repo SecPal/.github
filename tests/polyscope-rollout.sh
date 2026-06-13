@@ -679,11 +679,14 @@ grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polys
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF "'dist'" "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF 'Watching changelog preview sources for changes...' "$workspace_root/changelog/polyscope.local.json"
+grep -qF "'.next'" "$workspace_root/changelog/polyscope.local.json"
+grep -qF "'out'" "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -701,6 +704,7 @@ grep -qF '"label": "Build"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run build"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF 'Watching GuardGuide preview sources for changes...' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "'public/build'" "$workspace_root/GuardGuide/polyscope.local.json"
 
 if grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
     echo "GuardGuide Polyscope config must not start the Vite dev server for nginx-backed previews" >&2

@@ -532,7 +532,7 @@ def build_frontend_preview_build_watch_command() -> str:
                         flush=True,
                     )
 
-            time.sleep(1)
+            time.sleep(2)
         """
     ).strip()
 
@@ -546,8 +546,22 @@ def build_preview_full_rebuild_watch_command(
     watch_files: list[str],
     watch_suffixes: list[str],
     build_args: list[str] | None = None,
+    ignored_path_parts: list[str] | None = None,
 ) -> str:
     command = build_args or ["npm", "run", "build"]
+    ignored_parts = ignored_path_parts or [
+        ".astro",
+        ".next",
+        ".turbo",
+        ".vite",
+        "bootstrap/cache",
+        "dist",
+        "node_modules",
+        "out",
+        "public/build",
+        "storage",
+        "vendor",
+    ]
     script = textwrap.dedent(
         f"""
         import hashlib
@@ -560,12 +574,27 @@ def build_preview_full_rebuild_watch_command(
         watch_files = [Path(value) for value in {watch_files!r}]
         watch_suffixes = set({watch_suffixes!r})
         build_args = {command!r}
+        ignored_path_parts = [Path(value).parts for value in {ignored_parts!r}]
+
+        def is_ignored(path: Path) -> bool:
+            parts = path.parts
+
+            for ignored_parts in ignored_path_parts:
+                ignored_len = len(ignored_parts)
+                if ignored_len == 0 or ignored_len > len(parts):
+                    continue
+
+                for index in range(len(parts) - ignored_len + 1):
+                    if parts[index : index + ignored_len] == ignored_parts:
+                        return True
+
+            return False
 
         def iter_watch_paths():
             seen = set()
 
             for path in watch_files:
-                if not path.exists():
+                if not path.exists() or is_ignored(path):
                     continue
 
                 try:
@@ -584,7 +613,7 @@ def build_preview_full_rebuild_watch_command(
                     continue
 
                 for path in sorted(directory.rglob("*")):
-                    if not path.is_file() or path.suffix not in watch_suffixes:
+                    if not path.is_file() or path.suffix not in watch_suffixes or is_ignored(path):
                         continue
 
                     try:
@@ -629,7 +658,7 @@ def build_preview_full_rebuild_watch_command(
                         flush=True,
                     )
 
-            time.sleep(1)
+            time.sleep(2)
         """
     ).strip()
 
