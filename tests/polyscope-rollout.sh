@@ -689,6 +689,7 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.lo
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT"
 import importlib.util
+import shlex
 import shutil
 import subprocess
 import sys
@@ -730,8 +731,7 @@ try:
     )
 
     process = subprocess.Popen(
-        command,
-        shell=True,
+        shlex.split(command),
         cwd=workspace,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -768,10 +768,30 @@ spec.loader.exec_module(module)
 
 command = module.build_static_preview_build_watch_command("changelog", ["public", "src"])
 
-for required_suffix in (".ico", ".woff2"):
+for required_suffix in (".avif", ".gif", ".ico", ".jpeg", ".jpg", ".woff2"):
     if required_suffix not in command:
         raise SystemExit(
             f"static preview build watcher must track {required_suffix} assets so preview output stays current"
+        )
+PY
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+command = module.build_guardguide_preview_build_watch_command()
+
+for required_input in ("tailwind.config.js", "tailwind.config.ts", ".png", ".jpg", ".webp", ".woff2"):
+    if required_input not in command:
+        raise SystemExit(
+            f"GuardGuide preview build watcher must track {required_input} changes so preview output stays current"
         )
 PY
 
