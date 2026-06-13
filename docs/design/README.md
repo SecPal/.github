@@ -39,8 +39,12 @@ Later documents should stay focused and live under this directory:
 - `docs/design/dark-mode.md` - shared dark-mode token requirements
 - `docs/design/page-titles.md` - shared browser title patterns
 - `docs/design/accessibility.md` - accessibility standards and review expectations
+- `docs/design/components.md` - approved application UI stack and component standards
+- `docs/design/forms.md` - shared form structure, validation, and state guidance
 - `docs/design/interaction-patterns.md` - reusable interaction behavior guidance
 - `docs/design/layout.md` - layout and information architecture guidance
+- `docs/design/navigation.md` - shared application shell and navigation patterns
+- `docs/design/tables.md` - table layout, interaction, and accessibility guidance
 - `docs/design/content.md` - user-facing content structure and writing patterns
 
 Add new design standards here only when they describe reusable organization-wide guidance.
