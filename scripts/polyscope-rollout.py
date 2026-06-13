@@ -543,11 +543,13 @@ def build_preview_full_rebuild_watch_command(
     *,
     label: str,
     watch_directories: list[str],
+    ignored_directories: list[str] | None = None,
     watch_files: list[str],
     watch_suffixes: list[str],
     build_args: list[str] | None = None,
 ) -> str:
     command = build_args or ["npm", "run", "build"]
+    ignored_directories = ignored_directories or []
     script = textwrap.dedent(
         f"""
         import hashlib
@@ -557,9 +559,18 @@ def build_preview_full_rebuild_watch_command(
         from pathlib import Path
 
         watch_directories = [Path(value) for value in {watch_directories!r}]
+        ignored_directories = [Path(value).resolve() for value in {ignored_directories!r} if Path(value).exists()]
         watch_files = [Path(value) for value in {watch_files!r}]
         watch_suffixes = set({watch_suffixes!r})
         build_args = {command!r}
+
+        def is_ignored(path: Path) -> bool:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                return True
+
+            return any(ignored == resolved or ignored in resolved.parents for ignored in ignored_directories)
 
         def iter_watch_paths():
             seen = set()
@@ -571,6 +582,9 @@ def build_preview_full_rebuild_watch_command(
                 try:
                     resolved = path.resolve()
                 except OSError:
+                    continue
+
+                if is_ignored(path):
                     continue
 
                 if resolved in seen:
@@ -590,6 +604,9 @@ def build_preview_full_rebuild_watch_command(
                     try:
                         resolved = path.resolve()
                     except OSError:
+                        continue
+
+                    if is_ignored(path):
                         continue
 
                     if resolved in seen:
@@ -640,6 +657,7 @@ def build_guardguide_preview_build_watch_command() -> str:
     return build_preview_full_rebuild_watch_command(
         label="Watching GuardGuide preview sources for changes...",
         watch_directories=["app", "config", "public", "resources", "routes"],
+        ignored_directories=["public/build"],
         watch_files=[
             "components.json",
             "lingui.config.cjs",

@@ -701,6 +701,8 @@ grep -qF '"label": "Build"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run build"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF 'Watching GuardGuide preview sources for changes...' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "public/build" "$workspace_root/GuardGuide/polyscope.local.json"
+grep -qF "def is_ignored(path: Path) -> bool:" "$workspace_root/GuardGuide/polyscope.local.json"
 
 if grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
     echo "GuardGuide Polyscope config must not start the Vite dev server for nginx-backed previews" >&2
