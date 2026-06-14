@@ -239,6 +239,46 @@ python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --
 - `1`: One or more findings detected
 - `2`: Usage error or missing dependency/state
 
+### `install-polyscope-rollout.sh`
+
+Installs the SecPal Polyscope rollout systemd units that keep workspace clones,
+prompts, and preview config in sync. Run this from the workspace root when
+`setup-hooks.sh` reports a managed repo as **skipped (missing directory)** so
+the rollout-managed workspace can sync back to the expected repository set.
+
+**Usage:**
+
+```bash
+bash .github/scripts/install-polyscope-rollout.sh
+```
+
+After installation, the user-level `polyscope-rollout-sync.service` and
+`polyscope-worktree-provision.service` units take care of provisioning new
+managed repositories automatically when the canonical repo list changes.
+
+### `setup-hooks.sh`
+
+Installs pre-push, pre-commit, and commit-msg hooks across every managed
+SecPal repo discovered next to the `.github` checkout.
+
+**Behavior:**
+
+- Repos that are **missing on disk** are surfaced as a soft warning (separate
+  summary line) and the script still exits `0` when every other repo's hooks
+  installed cleanly. Run `.github/scripts/install-polyscope-rollout.sh` (or
+  sync via Polyscope) to recover the rollout-managed workspace state.
+- Managed repo paths that exist but are **not directories** are treated as real
+  failures because they indicate a corrupted workspace layout, not a repo that
+  simply has not been synced yet.
+- Real failures in `setup-pre-push.sh`, `setup-pre-commit.sh`, or the
+  commit-msg symlink still mark the repo as failed and exit `1`.
+
+**Usage:**
+
+```bash
+bash .github/setup-hooks.sh
+```
+
 ## Adding New Scripts
 
 When adding new scripts:

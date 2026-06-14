@@ -242,6 +242,15 @@ if [ -f tests/dependabot-auto-merge.sh ]; then
   }
 fi
 
+if [ -f tests/setup-hooks.sh ]; then
+  bash tests/setup-hooks.sh || {
+    echo "" >&2
+    echo "❌ setup-hooks.sh regression test failed!" >&2
+    echo "Restore the soft-warn-on-missing-repo contract in setup-hooks.sh (see SecPal/.github#485) before continuing." >&2
+    exit 1
+  }
+fi
+
 # 1) PHP / Laravel
 if [ -f composer.json ]; then
   if ! command -v composer >/dev/null 2>&1; then

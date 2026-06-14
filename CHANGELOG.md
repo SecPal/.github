@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Soft-Warn Missing Repos In `setup-hooks.sh`
+
+**Changed:**
+
+- reworked `setup-hooks.sh` so a missing managed repository directory is reported as a warning (`Skipped (missing directory)` summary line) instead of being added to `FAILED_REPOS`, and the script now exits `0` when every present repo's pre-push, pre-commit, and commit-msg hooks installed cleanly — only real installation step failures still exit `1`. The summary now points users at `.github/scripts/install-polyscope-rollout.sh`, matching the actual workspace layout, and still treats non-directory managed paths as hard failures so corrupted workspaces do not slip through as success.
+- documented the new soft-warn contract and the rollout sync command in `scripts/README.md` so the `setup-hooks.sh` and `install-polyscope-rollout.sh` flows are discoverable side-by-side.
+
+**Added:**
+
+- expanded `tests/setup-hooks.sh` from a single happy-path assertion into four regression scenarios — happy path, warning path (missing managed repo still exits `0` with the correct rollout hint), corrupt-path failure path (managed repo path exists but is not a directory), and failure path (broken `setup-pre-push.sh` still exits `1`) — and wired the test into `scripts/preflight.sh` so the soft-warn contract from SecPal/.github#485 cannot regress unnoticed.
+
+---
+
 ## 2026-06-14 - Bootstrap guardguide.de Rollout
 
 **Added:**
