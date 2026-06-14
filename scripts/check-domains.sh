@@ -33,6 +33,39 @@ echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io
 echo "  secpal.example, app.secpal.app, and any other unapproved secpal.* host."
 echo ""
 
+# Defense in depth: `--exclude-dir=".context"` (below) is git-tracking
+# unaware, so a `git add --force` on `.context/forced.md` would otherwise
+# let a committed forbidden host slip past the gate. Inside a git workspace
+# we list every tracked path that sits inside `.context/` and fail loudly
+# if any exist — the exclusion is then only doing what it advertises:
+# skipping the gitignored agent scratch directory (see SecPal/.github#489).
+if command -v git >/dev/null 2>&1 \
+    && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    tracked_context_paths=()
+    while IFS= read -r -d '' tracked_path; do
+        tracked_context_paths+=("$tracked_path")
+    done < <(git ls-files -z -- '.context' '.context/**' '**/.context' '**/.context/**' 2>/dev/null || true)
+    if [[ ${#tracked_context_paths[@]} -gt 0 ]]; then
+        echo -e "${RED}❌ Domain Policy Check FAILED${NC}"
+        echo ""
+        echo "Tracked files inside the gitignored agent scratch directory '.context/':"
+        printf '  %s\n' "${tracked_context_paths[@]}"
+        echo ""
+        echo ".context/ is meant to be gitignored scratch space for Polyscope-managed"
+        echo "workspaces. Never use 'git add --force' on .context/ content — move the"
+        echo "file to a tracked path instead so the domain policy gate (and CI) can"
+        echo "inspect it. See SecPal/.github#489."
+        exit 1
+    fi
+fi
+
+# --exclude-dir=".context" skips any directory named exactly ".context" at
+# any recursion depth. Polyscope-managed workspaces use .context/ as a
+# gitignored scratch directory for throwaway agent files (PR body drafts,
+# notes, etc.) that never reach CI — so the local gate must not flag them
+# either (see SecPal/.github#489). The git-tracking guard above closes the
+# `git add --force` bypass so this exclusion can only skip genuinely
+# untracked scratch files; violations in any tracked path still fail.
 matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     --include="*.md" \
     --include="*.yaml" \
@@ -48,6 +81,7 @@ matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     --exclude-dir=".git" \
     --exclude-dir="node_modules" \
     --exclude-dir="vendor" \
+    --exclude-dir=".context" \
     . 2>/dev/null | \
     grep -v -- "check-domains.sh" | \
     grep -v -- "Forbidden:" | \

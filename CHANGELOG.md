@@ -27,6 +27,24 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Skip Gitignored Agent Scratch Dir In `check-domains.sh`
+
+**Changed:**
+
+- taught `scripts/check-domains.sh` to skip the gitignored agent scratch directory `.context/` by adding `--exclude-dir=".context"` alongside the existing `.git`, `node_modules`, and `vendor` exclusions. The exclusion applies at every directory depth. Polyscope-managed workspaces use `.context/` to pass throwaway files between agents and the `gh` CLI (PR body drafts, scratch notes, etc.) which are never tracked and never reach CI, so the local gate now mirrors what CI actually sees instead of failing on prose that quotes forbidden `secpal.*` hosts verbatim.
+- hardened `scripts/check-domains.sh` with a tracking-aware guard that runs before the grep scan: inside a git workspace the script lists every tracked path under `.context/` via `git ls-files` and fails loudly when any exist, so a `git add --force` on `.context/forced.md` can no longer slip past the gate by riding on the directory-name exclusion. Together with `--exclude-dir=".context"` this closes the local/CI divergence Codex flagged on SecPal/.github#489 (`scripts/check-domains.sh:59`).
+- documented the new `.context/` exclusion plus the tracking-aware guard in `scripts/README.md` under the existing `check-domains.sh` "Scope (intentional limit)" section so contributors discover both layers alongside the existing dependency-directory exclusions.
+- refined the `.context` entry added to `.gitignore` by the brand-and-design-standards change to `.context/` (directory-only, trailing slash) so the rule matches only the Polyscope agent scratch directory and cannot accidentally ignore a file named `.context`.
+
+**Added:**
+
+- extended `tests/check-domains.sh` with a regression fixture (check 6) that proves the gate ignores an unapproved host stashed inside `.context/notes.md` (positive case, `.context/` cleaned up before the next subcase) while still failing on the same string in a tracked-equivalent location at the workspace root (negative case). The two subcases are now fully isolated so neither can mask the other.
+- added a check-7 regression fixture in `tests/check-domains.sh` that boots a throwaway `git init` workspace, force-adds `.context/forced.md` with an unapproved host, and asserts the gate exits non-zero and surfaces the tracked path — proving the tracking-aware guard closes the `--exclude-dir` bypass on SecPal/.github#489. A paired clean-workspace assertion confirms the guard is scoped to `.context/` and does not regress the happy path on git workspaces without tracked scratch content.
+- hardened the test's temp-directory cleanup: a single `cleanup()` function is registered on EXIT with empty- and existence-guarded `rm -rf` calls so an early-assertion exit can no longer fire `rm -rf ""` errors and mask real failure output.
+- modernized the guardguide grep assertion to use `grep -E '|...|'` (POSIX extended regex) instead of the GNU-only `\|` alternation, so the test is portable to BSD/macOS grep (see SecPal/.github#489).
+
+---
+
 ## 2026-06-14 - Align `check-domains.sh` Banner With Its `secpal.*` Scope
 
 **Changed:**
