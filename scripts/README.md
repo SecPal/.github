@@ -173,7 +173,7 @@ the SecPal application repositories.
 
 ```bash
 # Inspect the payload for one repository without writing to GitHub
-bash scripts/sync-required-checks.sh --repo GuardGuide --print-payload | jq
+bash scripts/sync-required-checks.sh --repo guardguide.de --print-payload | jq
 
 # Apply the configured payload to one repository
 bash scripts/sync-required-checks.sh --repo api --apply
@@ -192,6 +192,7 @@ bash scripts/sync-required-checks.sh --apply
 - `android`
 - `secpal.app`
 - `GuardGuide`
+- `guardguide.de`
 
 **What It Does:**
 
