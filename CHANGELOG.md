@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Align `check-domains.sh` Banner With Its `secpal.*` Scope
+
+**Changed:**
+
+- rewrote the banner and on-failure Policy block in `scripts/check-domains.sh` so the help text matches the script's actual `secpal\.[A-Za-z0-9.-]+` match regex: the gate explicitly documents that it only enforces the `secpal.*` namespace split, drops the misleading "ANY other" claim in favour of "any other unapproved `secpal.*` host", and points readers at the owning repository's policy guards for non-`secpal` SecPal hosts such as `guardguide.de` (introduced in SecPal/.github#483).
+- documented `scripts/check-domains.sh` in `scripts/README.md` with an explicit "Scope (intentional limit)" section so contributors discover the boundary alongside the other validation scripts and stop expecting the org-wide gate to police every external SecPal domain.
+
+**Added:**
+
+- added `tests/check-domains.sh` regression test that locks in the banner/README scope language, exercises a synthetic workspace to prove `guardguide.de` references pass cleanly, and proves an unapproved `secpal.*` host (one is staged inside the test's own temporary workspace, never in the repo) still fails the gate, and wired it into `scripts/preflight.sh` so the contradiction surfaced on SecPal/.github#483 (resolved as out of scope and tracked in SecPal/.github#484) cannot return unnoticed.
+
+---
+
 ## 2026-06-14 - Soft-Warn Missing Repos In `setup-hooks.sh`
 
 **Changed:**

@@ -9,6 +9,40 @@ This directory contains utility scripts for SecPal development.
 
 ## Validation Scripts
 
+### `check-domains.sh`
+
+Enforces the SecPal `secpal.*` namespace split. The script greps text files
+in the working tree (via `grep -r --include=...`, so untracked files matching
+the include patterns are inspected too) for any `secpal.<something>`
+substring and flags entries that fall outside the approved set
+(`secpal.app`, `changelog.secpal.app`, `apk.secpal.app`, `secpal.dev`,
+`api.secpal.dev`, `app.secpal.dev`, plus arbitrary `*.preview.secpal.dev`
+previews). It also surfaces `api.secpal.app`, the deprecated `.app` web
+host, so callers cannot reintroduce it as an active host.
+
+**Scope (intentional limit):**
+
+- The match regex is `secpal\.[A-Za-z0-9.-]+`, so only `secpal.*` strings are
+  ever inspected. Non-`secpal` domains are out of scope by design — even when
+  they belong to SecPal (e.g. `guardguide.de`).
+- SecPal-owned external hosts such as `guardguide.de` (managed via
+  SecPal/.github#483) are governed by their own repository policy guards and
+  are not first-class entries here. Adding them to this allowlist would be
+  inert because the matcher never sees them.
+- Treat the banner's "Forbidden" list as "forbidden `secpal.*` variants",
+  not "every non-SecPal domain on the internet".
+
+**Usage:**
+
+```bash
+bash scripts/check-domains.sh
+```
+
+**Exit Codes:**
+
+- `0`: No forbidden `secpal.*` variants or deprecated `.app` web-host usages
+- `1`: One or more violations found
+
 ### `audit-closed-epics.sh`
 
 Audits Epic issues and reports checklist drift, such as closed child issues
