@@ -5,41 +5,66 @@ SPDX-License-Identifier: CC0-1.0
 
 # Footer Wording
 
-Use these footer strings when an AGPL-licensed public product surface needs compact brand and license wording.
+Use this footer pattern on every AGPL-licensed public product surface that needs compact brand, attribution, and license wording.
+
+## Approved Footer Pattern
+
+The footer has two stacked lines.
+
+**Line 1 — brand attribution (linked to the brand's homepage):**
+
+```text
+Powered by <Brand> – <Slogan>
+```
+
+**Line 2 — license and source links, each preceded by its icon:**
+
+```text
+<license-icon> AGPL v3+   <source-icon> <Source label>
+```
 
 ## Approved Footer Strings
 
-SecPal platform or suite surface:
+### SecPal Platform Or Suite Surface
 
-```text
-SecPal – A guard's best friend | Licensed under AGPL v3+
-```
+- **Line 1**: `Powered by SecPal – A guard's best friend`
+  - Linked to: `https://secpal.app`
+- **Line 2**: `AGPL v3+` plus the localized source-code label
+  - `AGPL v3+` linked to: `https://www.gnu.org/licenses/agpl-3.0.html`
+  - Source-code link target: `https://github.com/SecPal`
 
-GuardGuide product surface (with platform attribution):
+### GuardGuide Product Surface
 
-```text
-GuardGuide – A guard's source of truth | Powered by SecPal | Licensed under AGPL v3+
-```
-
-License-only compact footer:
-
-```text
-Licensed under AGPL v3+
-```
+- **Line 1**: `Powered by GuardGuide – A guard's source of truth`
+  - Linked to: `https://guardguide.de`
+- **Line 2**: `AGPL v3+` plus the localized source-code label
+  - `AGPL v3+` linked to: `https://www.gnu.org/licenses/agpl-3.0.html`
+  - Source-code link target: `https://github.com/SecPal/GuardGuide`
 
 ## Usage Rules
 
-- Use these examples only on AGPL-licensed public surfaces.
-- Use the brand name followed by an en-dash (`–`, U+2013) and the exact approved slogan from `slogans.md`, with no trailing period on the slogan.
-- For GuardGuide footers, attribute the platform with the exact wording `Powered by SecPal` as a separate footer segment placed between the brand-plus-slogan lockup and the license wording.
-- Use `AGPL v3+` only for human-readable AGPL footer wording.
-- Use `AGPL-3.0-or-later` for SPDX headers, package metadata, license scanners, and machine-readable license fields.
-- Commercially licensed or otherwise non-AGPL surfaces must use wording that matches the actual license terms for that deployment, but still use the approved English slogan and the `Powered by SecPal` attribution on GuardGuide surfaces.
-- Do not translate the slogan or the `Powered by SecPal` credit, even on German-language pages or other localized surfaces.
-- Product repositories may adapt layout, separators, and responsive wrapping, but AGPL-licensed surfaces should keep the approved brand wording, slogan, attribution credit, and English language unchanged.
+### Brand Attribution Line
+
+- Use the exact wording `Powered by <Brand> – <Slogan>` with the brand name and slogan exactly as documented in `slogans.md`.
+- Use the en-dash `–` (U+2013) with **one space on each side** between brand and slogan. Do not substitute a hyphen-minus (`-`, U+002D) or an em dash (`—`, U+2014). See `slogans.md` § "Separator Rule".
+- Do not translate the `Powered by` prefix or the slogan, even on German-language pages or other localized surfaces.
+- Each surface uses its own brand: SecPal pages use `Powered by SecPal`, GuardGuide pages use `Powered by GuardGuide`. Do not write `Powered by SecPal` on GuardGuide surfaces, and do not write `Powered by GuardGuide` on SecPal surfaces.
+- The entire line 1 string is the link target's link text and points to the brand's homepage (`https://secpal.app` or `https://guardguide.de`).
+
+### License And Source Line
+
+- Use the public AGPL link target `https://www.gnu.org/licenses/agpl-3.0.html` for the `AGPL v3+` label in compact public footers. See `licensing-wording.md` for the full link-target rule.
+- Use the localized source-code label for the source link. Translate this label to the page's language: English `Source`, German `Quelltext`, and the canonical local term in every other supported locale. The link itself does not change with locale.
+- Use the source-code link target documented per brand above. The SecPal footer points at the SecPal GitHub organization because the SecPal platform spans multiple repositories; the GuardGuide footer points at the GuardGuide product repository because that product has a single repository.
+- Precede each label with its appropriate icon from the product repository's documented icon system: a license/legal glyph for `AGPL v3+`, and a source-control glyph for the source-code link.
+
+### General
+
+- Use this pattern only on AGPL-licensed public surfaces. Commercially licensed surfaces must adjust the license label to wording that matches the active commercial terms (see `licensing-wording.md`), but keep the line-1 brand attribution and the source-code link unchanged.
+- Product repositories may adapt visual layout, separators between line-2 items, responsive wrapping, and icon styling, but must preserve the exact strings, link targets, separator characters, and language rules above.
 
 ## Rationale
 
-AGPL footers need to be short and readable, so the license appears as `AGPL v3+`. Technical metadata needs a precise SPDX expression, so it uses `AGPL-3.0-or-later` instead. Other licensing models need their own accurate public wording.
+A two-line footer keeps brand attribution and legal/source attribution visually separate while staying compact enough for every surface. The `Powered by <own brand> – <own slogan>` line is the recognisable brand signature that travels unchanged across languages. The second line satisfies the AGPL's source-availability and license-disclosure expectations using the canonical public license URL and the canonical public source location for each product, while letting the source-code label localize to the reader.
 
-The `Powered by SecPal` attribution acknowledges that GuardGuide is a SecPal-family product in compact footer space without forcing the long-form `GuardGuide by SecPal` lockup into every footer cell. Keeping it as a separate, untranslated segment makes the platform relationship visible regardless of page language.
+Linking the AGPL label to `https://www.gnu.org/licenses/agpl-3.0.html` rather than to a repo-local snapshot guarantees readers always reach the canonical, up-to-date license text the AGPL itself references.

@@ -14,20 +14,45 @@ Slogans are short brand lines, not sentences. They do not end with a period.
 | SecPal               | `A guard's best friend`     |
 | GuardGuide by SecPal | `A guard's source of truth` |
 
-The brand-plus-slogan lockup uses an en-dash (`–`, U+2013) between brand and slogan for compact public surfaces:
+## Brand-Plus-Slogan Lockup
+
+The brand-plus-slogan lockup joins the brand name to its exact approved slogan with a separator:
 
 - `SecPal – A guard's best friend`
 - `GuardGuide – A guard's source of truth`
+
+Public footers prefix the lockup with `Powered by` (note the trailing space before the brand):
+
+- `Powered by SecPal – A guard's best friend`
+- `Powered by GuardGuide – A guard's source of truth`
+
+See `footer-wording.md` for the exact footer pattern, including the AGPL link and the localized source-code link.
+
+## Separator Rule
+
+Footer and slogan separators use **EN DASH `–` (U+2013) with one space on each side**.
+
+Correct:
+
+- `Powered by SecPal – A guard's best friend`
+- `SecPal – A guard's best friend`
+
+Incorrect:
+
+- `Powered by SecPal - A guard's best friend` (hyphen-minus, U+002D)
+- `Powered by SecPal — A guard's best friend` (em dash, U+2014)
+- `Powered by SecPal –A guard's best friend` (missing space before slogan)
+- `Powered by SecPal– A guard's best friend` (missing space after brand)
 
 ## Usage Rules
 
 - Use the exact capitalization and punctuation shown above.
 - Do not add a period, exclamation mark, or trailing full stop.
-- Do not translate the slogan. The English wording above is the only approved wording for every locale and every surface, including German-language pages, marketing copy, app store metadata, and repository profile copy.
+- Do not translate the slogan or the `Powered by` prefix. The English wording above is the only approved wording for every locale and every surface, including German-language pages, marketing copy, app store metadata, and repository profile copy.
 - Do not rewrite, paraphrase, abbreviate, or invent local variants for repository, region, campaign, or seasonal needs.
 - Do not combine the slogan with technical license identifiers or package metadata.
 - Use slogans in public-facing surfaces where a short brand line is expected, such as profile text, website hero support copy, app metadata, and product footers.
 
 ## Rationale
 
-Keeping slogans period-free makes them work as labels, lockups, and footer fragments. Locking each brand to a single English wording preserves recognisability across all locales and surfaces, and removes the editorial debate every translation or local rewrite would otherwise reopen.
+Keeping slogans period-free and locked to a single English wording per brand preserves recognisability across all locales and surfaces, and removes the editorial debate every translation or local rewrite would otherwise reopen. The en-dash plus single spaces gives the lockup a typographically correct, language-neutral separator that does not collide with the hyphens used inside file paths or identifiers.
