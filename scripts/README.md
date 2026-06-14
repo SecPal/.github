@@ -31,14 +31,23 @@ host, so callers cannot reintroduce it as an active host.
   inert because the matcher never sees them.
 - Treat the banner's "Forbidden" list as "forbidden `secpal.*` variants",
   not "every non-SecPal domain on the internet".
-- The scan skips every directory named exactly `.context/` at any depth
-  (alongside `.git/`, `node_modules/`, and `vendor/`). Polyscope-managed
-  workspaces use `.context/` as a gitignored scratch directory for throwaway
-  agent files (PR body drafts, notes, etc.) that never reach CI, so the
-  local gate must not flag them either (SecPal/.github#489). Violations in
-  any tracked path still fail the gate. **Important:** this exclusion is
-  unconditional — never use `git add --force` on `.context/` content, as
-  force-tracked files would be visible to CI but silently ignored locally.
+- The scan protects the gitignored agent scratch directory `.context/` with
+  two complementary layers (SecPal/.github#489). Layer one is the
+  **grep exclusion** `--exclude-dir=".context"`, which skips every directory
+  named exactly `.context/` at any depth (alongside `.git/`, `node_modules/`,
+  and `vendor/`). Polyscope-managed workspaces use `.context/` to pass
+  throwaway files between agents and the `gh` CLI (PR body drafts, scratch
+  notes, etc.) that never reach CI, so the local gate must not flag them
+  either. Layer two is the **tracking-aware guard**: before grep runs, the
+  script invokes `git ls-files` on `.context/` and exits non-zero if any
+  path under `.context/` is actually tracked by git. Because `--exclude-dir`
+  is git-tracking-unaware, this guard closes the `git add --force` bypass
+  Codex flagged on this PR — force-tracked `.context/` files would
+  otherwise be visible to CI but silently ignored locally. The guard is a
+  no-op outside a git working tree (e.g. in the throwaway `mktemp`
+  workspaces the regression tests use), so it does not interfere with
+  packaging or distribution scenarios. Violations in any tracked path
+  (inside or outside `.context/`) still fail the gate.
 
 **Usage:**
 

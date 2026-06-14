@@ -34,6 +34,12 @@
 #      the local gate (CI never sees `.context/` because it is gitignored).
 #      Tracked content with the same string still fails so the exclusion is
 #      not a free pass (see SecPal/.github#489).
+#   7. Defense in depth against a `git add --force` bypass: because
+#      `grep --exclude-dir` is git-tracking-unaware, force-adding
+#      `.context/forced.md` would otherwise let a committed forbidden host
+#      slip past the gate. The script fails loudly whenever any path inside
+#      `.context/` is actually tracked by git (see SecPal/.github#489 review
+#      thread on scripts/check-domains.sh:59).
 
 set -euo pipefail
 
@@ -136,7 +142,16 @@ fi
 # 5. Behavioural check: guardguide.de references pass, unapproved secpal.* fails.
 workspace=""
 ctx_workspace=""
-cleanup() { rm -rf "${workspace:-}" "${ctx_workspace:-}"; }
+tracked_workspace=""
+cleanup() {
+  # Guard each path so the trap stays a no-op when an earlier assertion
+  # exits before a workspace was created. `rm -rf ""` would otherwise
+  # emit `cannot remove ''` errors and noise up real failure output.
+  [ -n "${workspace:-}" ] && [ -d "$workspace" ] && rm -rf "$workspace"
+  [ -n "${ctx_workspace:-}" ] && [ -d "$ctx_workspace" ] && rm -rf "$ctx_workspace"
+  [ -n "${tracked_workspace:-}" ] && [ -d "$tracked_workspace" ] && rm -rf "$tracked_workspace"
+  return 0
+}
 trap cleanup EXIT
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains.XXXXXX")"
@@ -283,5 +298,76 @@ if ! grep -Fq 'regression.md' "$ctx_workspace/output.txt"; then
   echo "check-domains.sh must surface the tracked-equivalent regression fixture in its output" >&2
   exit 1
 fi
+
+# 7. Defense-in-depth: `--exclude-dir=".context"` is git-tracking-unaware,
+# so a `git add --force` on `.context/forced.md` could otherwise let a
+# committed forbidden host slip past the gate. Inside a git workspace the
+# script must therefore fail loudly the moment any path under `.context/`
+# is actually tracked, regardless of whether grep would have inspected it.
+tracked_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-tracked.XXXXXX")"
+
+mkdir -p "$tracked_workspace/scripts" "$tracked_workspace/.context"
+cp "$SCRIPT" "$tracked_workspace/scripts/check-domains.sh"
+
+cat >"$tracked_workspace/.context/forced.md" <<'EOF'
+# Force-added agent scratch fixture
+
+This file references the unapproved secpal.xyz host. It is force-added
+into the workspace's git index so the gate must fail even though
+`--exclude-dir=".context"` would otherwise skip it.
+EOF
+
+(
+  cd "$tracked_workspace"
+  git init --quiet
+  git config user.email "tests@secpal.app"
+  git config user.name "tests"
+  printf '.context/\n' >.gitignore
+  git add -f .gitignore scripts/check-domains.sh .context/forced.md
+  git commit --quiet -m "regression fixture"
+)
+
+set +e
+(
+  cd "$tracked_workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+tracked_exit_code=$?
+set -e
+
+if [ "$tracked_exit_code" -eq 0 ]; then
+  cat "$tracked_workspace/output.txt"
+  echo "check-domains.sh must fail when .context/ content is tracked by git, even with --exclude-dir=.context (see SecPal/.github#489)" >&2
+  exit 1
+fi
+
+if ! grep -Fq '.context/forced.md' "$tracked_workspace/output.txt"; then
+  cat "$tracked_workspace/output.txt"
+  echo "check-domains.sh must surface the force-added .context/forced.md path in its output" >&2
+  exit 1
+fi
+
+# Confirm the guard is scoped to .context/: a fresh workspace with no
+# tracked .context/ content (and no .context/ on disk) must still pass.
+clean_workspace="$tracked_workspace.clean"
+mkdir -p "$clean_workspace/scripts"
+cp "$SCRIPT" "$clean_workspace/scripts/check-domains.sh"
+(
+  cd "$clean_workspace"
+  git init --quiet
+  git config user.email "tests@secpal.app"
+  git config user.name "tests"
+  git add -f scripts/check-domains.sh
+  git commit --quiet -m "clean baseline"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+
+if ! grep -Fq 'Domain Policy Check PASSED' "$clean_workspace/output.txt"; then
+  cat "$clean_workspace/output.txt"
+  echo "check-domains.sh must still pass on a clean git workspace with no tracked .context/ content" >&2
+  rm -rf "$clean_workspace"
+  exit 1
+fi
+rm -rf "$clean_workspace"
 
 echo "tests/check-domains.sh: ok"
