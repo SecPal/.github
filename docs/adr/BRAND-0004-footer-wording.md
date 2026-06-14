@@ -39,7 +39,7 @@ SecPal and GuardGuide use a fixed two-line footer on every AGPL-licensed public 
 
 - SecPal source-code label points at the SecPal GitHub organization (`https://github.com/SecPal`) because the SecPal platform spans multiple repositories.
 - GuardGuide source-code label points at the GuardGuide product repository (`https://github.com/SecPal/GuardGuide`).
-- The source-code label is the canonical local term for "source code" in the page's language (English `Source`, German `Quelltext`, and so on). The link target does not change with locale.
+- The source-code label is the canonical local term for "source code" in the page's language: English `Source Code`, German `Quellcode`, and the canonical local term in every other supported locale. Do not abbreviate to a one-word form such as `Source`, `Quelle`, or `Quelltext`. The link target does not change with locale.
 - Each label is preceded by its icon from the product repository's documented icon system (a license/legal glyph for `AGPL v3+`, a source-control glyph for the source-code link).
 
 Commercially licensed or otherwise non-AGPL surfaces must adjust the license label to wording that matches the active license terms instead of reusing `AGPL v3+`, but keep the line-1 brand attribution and the source-code link unchanged.

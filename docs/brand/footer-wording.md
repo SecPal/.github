@@ -20,7 +20,7 @@ Powered by <Brand> – <Slogan>
 **Line 2 — license and source links, each preceded by its icon:**
 
 ```text
-<license-icon> AGPL v3+   <source-icon> <Source label>
+<license-icon> AGPL v3+   <source-icon> <Source Code label>
 ```
 
 ## Approved Footer Strings
@@ -54,7 +54,7 @@ Powered by <Brand> – <Slogan>
 ### License And Source Line
 
 - Use the public AGPL link target `https://www.gnu.org/licenses/agpl-3.0.html` for the `AGPL v3+` label in compact public footers. See `licensing-wording.md` for the full link-target rule.
-- Use the localized source-code label for the source link. Translate this label to the page's language: English `Source`, German `Quelltext`, and the canonical local term in every other supported locale. The link itself does not change with locale.
+- Use the localized source-code label for the source link. Translate this label to the page's language using the canonical local two-word term for "source code": English `Source Code`, German `Quellcode`, and the canonical local term in every other supported locale. Do not abbreviate to a one-word form such as `Source` (English) or `Quelle` / `Quelltext` (German). The link target itself does not change with locale.
 - Use the source-code link target documented per brand above. The SecPal footer points at the SecPal GitHub organization because the SecPal platform spans multiple repositories; the GuardGuide footer points at the GuardGuide product repository because that product has a single repository.
 - Precede each label with its appropriate icon from the product repository's documented icon system: a license/legal glyph for `AGPL v3+`, and a source-control glyph for the source-code link.
 
