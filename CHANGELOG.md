@@ -9,6 +9,24 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Document SecPal Brand And Shared Design Standards
+
+**Added:**
+
+- introduced `docs/brand/` with the SecPal and GuardGuide brand architecture, naming, slogans, footer wording, logo usage, and licensing wording standards, plus a section README that documents the brand scope boundary between this organization-wide repository and the owning product repositories
+- introduced `docs/design/` with shared standards for typography, color usage, dark mode, page titles, layout, navigation, components, forms, tables, and accessibility, plus a section README that documents the design scope boundary between organization-wide guidance and product-repository implementation
+- added a domain-prefixed brand ADR series (BRAND-0001 brand architecture, BRAND-0002 typography, BRAND-0003 navigation pattern, BRAND-0004 footer wording, BRAND-0005 page titles, BRAND-0006 app UI stack ownership) using a `BRAND-NNNN-` filename prefix to avoid collisions with the existing date-prefixed `ADR-NNN` series; linked all six from `docs/adr/README.md` and documented the domain-prefix naming exception alongside the existing convention
+- documented the canonical two-line public AGPL footer in `docs/brand/footer-wording.md`, `docs/brand/brand-architecture.md`, and `docs/adr/BRAND-0004-footer-wording.md`: line 1 is `Powered by <Product> – <Slogan>` linked to the brand's homepage, with each surface using its own `Powered by <own brand>` self-attribution; line 2 is `AGPL v3+ | <Source Code label>` with `AGPL v3+` linked to the canonical public AGPL URL and the Source Code label linked to the surface's own canonical public source repository
+- documented the per-surface Source Code link-target rule with worked examples for every managed SecPal/GuardGuide surface — `SecPal` platform/suite uses the SecPal GitHub organization, `secpal.app`/`changelog`/`guardguide.de` marketing surfaces each link to their own dedicated repository, and the GuardGuide product app links to `SecPal/GuardGuide` — so the AGPL source-attribution purpose is preserved instead of all surfaces pointing at the same product repository
+- documented the brand-plus-slogan en-dash separator rule (`–` U+2013 with one space on each side) and the line-2 license/source-code separator rule (`|` U+007C with one space on each side) in `docs/brand/slogans.md`, `docs/brand/footer-wording.md`, and `docs/adr/BRAND-0004-footer-wording.md`, with explicit incorrect examples for hyphen-minus (`-` U+002D), em dash (`—` U+2014), and substitute separators (`/`, `·`, `•`, `,`, space-only gap)
+- documented the public AGPL link-target scope in `docs/brand/licensing-wording.md`: the canonical URL `https://www.gnu.org/licenses/agpl-3.0.html` is used in product brand footers and in policy documents that need an authoritative external anchor (such as `CLA.md`), while repository READMEs and in-repo "License" sections link to the local `LICENSE` file or `LICENSES/AGPL-3.0-or-later.txt`, and SPDX headers and package metadata use the URL-free SPDX expression `AGPL-3.0-or-later`
+- documented that the slogan, the `Powered by` prefix, the brand name, and the `AGPL v3+` label remain English on every surface and locale (including German-language pages); the Source Code label is localized using the canonical local term for "source code" (English `Source Code`, German `Quellcode`, canonical local term in other locales), and abbreviated or informal forms such as `Source`, `Quelle`, or `Quelltext` are not allowed
+- documented that icons on line 2 are an optional product-level visual addition; the `.github` text standard remains the source of truth so plain-text README footers, generated PDFs, and screen-reader transcripts render the same canonical strings
+- documented in `docs/brand/slogans.md` that the compact lockup uses the short form `GuardGuide` once the relationship is established, while body copy first mentions still use the full `GuardGuide by SecPal` name per `docs/brand/naming.md`
+- added `.context/` to `.gitignore` so the Polyscope per-workspace agent scratch directory is excluded from version control and REUSE coverage
+
+---
+
 ## 2026-06-14 - Align `check-domains.sh` Banner With Its `secpal.*` Scope
 
 **Changed:**
