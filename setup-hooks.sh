@@ -13,8 +13,10 @@ WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$WORKSPACE_ROOT"
 
 REPOS=("api" "frontend" "contracts" "android" "secpal.app" "guardguide.de" "changelog" ".github")
+ROLLOUT_HINT="Run .github/scripts/install-polyscope-rollout.sh (or sync via Polyscope) to provision missing SecPal repositories."
 SUCCESS_COUNT=0
 FAILED_REPOS=()
+MISSING_REPOS=()
 
 # Check if pre-commit is installed
 if ! command -v pre-commit &>/dev/null; then
@@ -26,10 +28,19 @@ if ! command -v pre-commit &>/dev/null; then
 fi
 
 for repo in "${REPOS[@]}"; do
+	if [ ! -e "$repo" ]; then
+		# Missing managed repos are a soft warning, not a failure: workspaces that
+		# have not yet synced the latest REPOS list (or are otherwise incomplete)
+		# should still install hooks for whatever is present and exit 0.
+		echo "  ⚠ Directory not found: $repo (skipping)"
+		MISSING_REPOS+=("$repo")
+		continue
+	fi
+
 	if [ ! -d "$repo" ]; then
-                echo "  ✗ Directory not found: $repo"
-                FAILED_REPOS+=("$repo (directory not found)")
-                continue
+		echo "  ✗ Path is not a directory: $repo"
+		FAILED_REPOS+=("$repo (path is not a directory)")
+		continue
 	fi
 
 	echo "────────────────────────────────────────"
@@ -108,25 +119,34 @@ else
 	echo "  • Optional direct install: go install github.com/rhysd/actionlint/cmd/actionlint@latest"
 fi
 
+if [ ${#MISSING_REPOS[@]} -gt 0 ]; then
+	echo "Skipped (missing directory): ${#MISSING_REPOS[@]} repositories"
+	for missing in "${MISSING_REPOS[@]}"; do
+		echo "  ⚠ $missing"
+	done
+	echo ""
+	echo "💡 $ROLLOUT_HINT"
+fi
+
 if [ ${#FAILED_REPOS[@]} -gt 0 ]; then
 	echo "Failed: ${#FAILED_REPOS[@]} repositories"
 	for failed in "${FAILED_REPOS[@]}"; do
 		echo "  ✗ $failed"
 	done
 	exit 1
-else
-	echo ""
-	echo "✅ All Git hooks have been successfully installed!"
-	echo ""
-	echo "📝 What's installed:"
-	echo "  • Pre-commit hooks: Formatting, linting, REUSE compliance"
-	echo "  • Pre-push hooks: Comprehensive quality checks (via scripts/preflight.sh)"
-	echo "  • Commit-msg hooks: Strip AI agent attribution trailers (Cursor, Copilot)"
-	echo ""
-	echo "💡 Usage:"
-	echo "  • Hooks run automatically on commit/push"
-	echo "  • Test manually: cd <repo> && ./scripts/preflight.sh"
-	echo "  • Manual workflow lint: pre-commit run actionlint --all-files"
-	echo "  • Bypass (emergencies only): git push --no-verify"
-	echo ""
 fi
+
+echo ""
+echo "✅ All Git hooks have been successfully installed!"
+echo ""
+echo "📝 What's installed:"
+echo "  • Pre-commit hooks: Formatting, linting, REUSE compliance"
+echo "  • Pre-push hooks: Comprehensive quality checks (via scripts/preflight.sh)"
+echo "  • Commit-msg hooks: Strip AI agent attribution trailers (Cursor, Copilot)"
+echo ""
+echo "💡 Usage:"
+echo "  • Hooks run automatically on commit/push"
+echo "  • Test manually: cd <repo> && ./scripts/preflight.sh"
+echo "  • Manual workflow lint: pre-commit run actionlint --all-files"
+echo "  • Bypass (emergencies only): git push --no-verify"
+echo ""
