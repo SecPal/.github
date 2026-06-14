@@ -63,9 +63,21 @@ AGPL v3+ | Source Code
 | --------------------------- | -------------------------------------------- | -------------------------------------------- |
 | Footer line 1 (entire line) | `https://secpal.app`                         | `https://guardguide.de`                      |
 | `AGPL v3+` label            | `https://www.gnu.org/licenses/agpl-3.0.html` | `https://www.gnu.org/licenses/agpl-3.0.html` |
-| Source Code label           | `https://github.com/SecPal`                  | `https://github.com/SecPal/GuardGuide`       |
+| Source Code label           | per-surface — see table below                | per-surface — see table below                |
 
-The SecPal Source Code link points at the SecPal GitHub organization because the SecPal platform spans multiple repositories. The GuardGuide Source Code link points at the GuardGuide product repository because that product has a single repository.
+The Source Code link target is **per-surface**, not per-brand. It points to the canonical public source repository that backs the surface rendering the footer, so a reader following the link reaches the source for the page they are visiting. Pointing every GuardGuide-family footer at the same product repository would send `guardguide.de` marketing-site visitors to the unrelated product app source, undermining the AGPL source-attribution purpose of the footer.
+
+### Source Code Link Targets Per Managed Surface
+
+| Surface                                        | Source Code link target                   |
+| ---------------------------------------------- | ----------------------------------------- |
+| SecPal platform/suite footer (org-level page)  | `https://github.com/SecPal`               |
+| SecPal landing page (`secpal.app`)             | `https://github.com/SecPal/secpal.app`    |
+| SecPal changelog site (`changelog.secpal.app`) | `https://github.com/SecPal/changelog`     |
+| GuardGuide product app                         | `https://github.com/SecPal/GuardGuide`    |
+| GuardGuide marketing site (`guardguide.de`)    | `https://github.com/SecPal/guardguide.de` |
+
+The SecPal platform/suite entry points at the SecPal GitHub organization because no single repository backs the platform as a whole. Every per-surface entry points at that surface's own repository because every managed SecPal/GuardGuide deployment is published from its own dedicated public AGPL repository. Surfaces added in the future follow the same per-surface rule.
 
 ## Separator Rules
 

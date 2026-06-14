@@ -26,7 +26,9 @@ The canonical public footer line 1 prefixes the lockup with `Powered by`:
 - `Powered by SecPal – A guard's best friend`
 - `Powered by GuardGuide – A guard's source of truth`
 
-See `footer-wording.md` for the full two-line footer pattern, including the line-2 `AGPL v3+ | <Source Code label>` rule and the link targets.
+The lockup uses the short product reference `GuardGuide`, not the long-form first-mention name `GuardGuide by SecPal`. The compact lockup, footer, and any other surface where the SecPal-family relationship is already established (for example, app metadata, repository profile text, and product footers) use the short form. The long-form `GuardGuide by SecPal` first-mention rule from `docs/brand/naming.md` continues to apply in body copy, marketplace listings, app store descriptions, and any other surface that introduces the product to a reader who has not yet seen the relationship.
+
+See `footer-wording.md` for the full two-line footer pattern, including the line-2 `AGPL v3+ | <Source Code label>` rule and the per-surface link targets.
 
 ## Separator Rule
 

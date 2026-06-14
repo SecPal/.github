@@ -38,7 +38,13 @@ SecPal and GuardGuide use a fixed two-line footer on every AGPL-licensed public 
 **Footer line 2 — license and source-code links:** `AGPL v3+ | <Source Code label>`.
 
 - `AGPL v3+` is linked to `https://www.gnu.org/licenses/agpl-3.0.html`.
-- The Source Code label is linked to the product's public source location: SecPal points at the SecPal GitHub organization (`https://github.com/SecPal`) because the SecPal platform spans multiple repositories; GuardGuide points at the GuardGuide product repository (`https://github.com/SecPal/GuardGuide`).
+- The Source Code label is linked **per surface** to the canonical public source repository that backs the surface rendering the footer:
+  - SecPal platform/suite (org-level page): `https://github.com/SecPal` (the SecPal organization is used because no single repository backs the platform as a whole).
+  - SecPal landing page (`secpal.app`): `https://github.com/SecPal/secpal.app`.
+  - SecPal changelog site (`changelog.secpal.app`): `https://github.com/SecPal/changelog`.
+  - GuardGuide product app: `https://github.com/SecPal/GuardGuide`.
+  - GuardGuide marketing site (`guardguide.de`): `https://github.com/SecPal/guardguide.de`.
+  - Surfaces added in the future follow the same per-surface rule.
 - The Source Code label is the canonical local term for "source code" in the page's language: English `Source Code`, German `Quellcode`, and the canonical local term in every other supported locale. Do not use abbreviated or informal forms such as `Source`, `Quelle`, or `Quelltext`. The link target does not change with locale.
 - The separator between the two labels is the vertical bar `|` (U+007C) with one space on each side. Other separator characters and missing spaces are not allowed.
 - The `AGPL v3+` label stays English on every surface and locale.
@@ -83,6 +89,9 @@ A text-first standard (with the `|` separator visible as a character, and icons 
 4. **Prescribe a specific icon system in the `.github` standard**
    - Pro: visually identical line 2 across every product
    - Contra: forces every product repository to adopt one icon library and breaks text-only contexts such as plain-text README footers, generated PDFs, and screen-reader transcripts; icons are kept as an optional product-level visual addition instead
+5. **One brand-level Source Code link for every SecPal-family surface (one URL for SecPal, one URL for GuardGuide)**
+   - Pro: only two URLs to remember
+   - Contra: links footers away from the surface a reader is actually visiting — applying it on the `guardguide.de` marketing site (its own repository) would link to the unrelated GuardGuide product app source, undermining the AGPL source-attribution purpose of the footer; the per-surface rule keeps every footer pointing at its own source
 
 ## Related
 
