@@ -21,6 +21,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - rewrote the `CREATED`, `UPDATED`, and `SKIPPED` counter increments in `scripts/sync-labels.sh` from `((COUNTER++))` to `COUNTER=$((COUNTER + 1))` so label sync no longer exits early under `set -e` when a counter is incremented from `0` (post-increment of `0` returns `0`, which `set -e` treats as a failed command)
+- taught the generic static preview watcher in `scripts/polyscope-rollout.py` to ignore explicit generated files, and configured the `secpal.app` and `guardguide.de` Build Watch commands to skip their generated `public/og-*.svg` and `public/og-*.png` assets so `npm run build` no longer retriggers the watcher indefinitely by rewriting files inside the watched `public/` tree
 
 ---
 

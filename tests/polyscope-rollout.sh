@@ -723,11 +723,15 @@ grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polys
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF 'public/og-default.svg' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF 'public/og-de.png' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF 'Watching guardguide.de preview sources for changes...' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF 'public/og-default.svg' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF 'public/og-de.png' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
@@ -806,6 +810,75 @@ PY
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT"
 import importlib.util
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+script_path = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace = Path(tempfile.mkdtemp(prefix="polyscope-build-watch-generated-files-"))
+
+try:
+    (workspace / "public").mkdir()
+    (workspace / "src").mkdir()
+    (workspace / "src" / "input.ts").write_text("seed\n")
+    (workspace / "package.json").write_text("{}\n")
+
+    command = module.build_preview_full_rebuild_watch_command(
+        label="watching",
+        watch_directories=["public", "src"],
+        ignored_paths=["public/generated.svg", "public/generated.png"],
+        watch_files=["package.json"],
+        watch_suffixes=[".json", ".png", ".svg", ".ts"],
+        build_args=[
+            "python3",
+            "-c",
+            (
+                "from pathlib import Path; "
+                "counter = Path('build-count.txt'); "
+                "count = int(counter.read_text()) + 1 if counter.exists() else 1; "
+                "counter.write_text(str(count)); "
+                "Path('public/generated.svg').write_text(f'svg-{count}'); "
+                "Path('public/generated.png').write_text(f'png-{count}')"
+            ),
+        ],
+    )
+
+    process = subprocess.Popen(
+        shlex.split(command),
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    time.sleep(3.5)
+    process.terminate()
+
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+
+    build_count = int((workspace / "build-count.txt").read_text())
+    if build_count != 1:
+        raise SystemExit(
+            f"build watcher must ignore generated files inside watched source trees; observed {build_count} builds"
+        )
+finally:
+    shutil.rmtree(workspace)
+PY
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -815,13 +888,22 @@ module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
-command = module.build_static_preview_build_watch_command("changelog", ["public", "src"])
+command = module.build_static_preview_build_watch_command(
+    "changelog",
+    ["public", "src"],
+    ignored_paths=["public/generated.svg"],
+)
 
 for required_suffix in (".avif", ".gif", ".ico", ".jpeg", ".jpg", ".woff2"):
     if required_suffix not in command:
         raise SystemExit(
             f"static preview build watcher must track {required_suffix} assets so preview output stays current"
         )
+
+if "public/generated.svg" not in command:
+    raise SystemExit(
+        "static preview build watcher must support explicitly ignored generated files"
+    )
 PY
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT"

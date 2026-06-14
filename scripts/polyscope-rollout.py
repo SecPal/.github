@@ -544,12 +544,14 @@ def build_preview_full_rebuild_watch_command(
     label: str,
     watch_directories: list[str],
     ignored_directories: list[str] | None = None,
+    ignored_paths: list[str] | None = None,
     watch_files: list[str],
     watch_suffixes: list[str],
     build_args: list[str] | None = None,
 ) -> str:
     command = build_args or ["npm", "run", "build"]
     ignored_directories = ignored_directories or []
+    ignored_paths = ignored_paths or []
     script = textwrap.dedent(
         f"""
         import hashlib
@@ -559,7 +561,7 @@ def build_preview_full_rebuild_watch_command(
         from pathlib import Path
 
         watch_directories = [Path(value) for value in {watch_directories!r}]
-        ignored_directories = [Path(value).resolve() for value in {ignored_directories!r}]
+        ignored_entries = [Path(value).resolve() for value in {(ignored_directories + ignored_paths)!r}]
         watch_files = [Path(value) for value in {watch_files!r}]
         watch_suffixes = set({watch_suffixes!r})
         build_args = {command!r}
@@ -570,7 +572,7 @@ def build_preview_full_rebuild_watch_command(
             except OSError:
                 return True
 
-            return any(ignored == resolved or ignored in resolved.parents for ignored in ignored_directories)
+            return any(ignored == resolved or ignored in resolved.parents for ignored in ignored_entries)
 
         def iter_watch_paths():
             seen = set()
@@ -696,10 +698,16 @@ def build_guardguide_preview_build_watch_command() -> str:
     )
 
 
-def build_static_preview_build_watch_command(site_name: str, watch_directories: list[str]) -> str:
+def build_static_preview_build_watch_command(
+    site_name: str,
+    watch_directories: list[str],
+    *,
+    ignored_paths: list[str] | None = None,
+) -> str:
     return build_preview_full_rebuild_watch_command(
         label=f"Watching {site_name} preview sources for changes...",
         watch_directories=watch_directories,
+        ignored_paths=ignored_paths,
         watch_files=[
             "astro.config.mjs",
             "eslint.config.js",
@@ -1148,6 +1156,12 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                         "command": build_static_preview_build_watch_command(
                             "secpal.app",
                             ["public", "scripts", "secpal.app", "src"],
+                            ignored_paths=[
+                                "public/og-default.svg",
+                                "public/og-default.png",
+                                "public/og-de.svg",
+                                "public/og-de.png",
+                            ],
                         ),
                         "autostart": True,
                         "runMode": "replace",
@@ -1192,6 +1206,12 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                         "command": build_static_preview_build_watch_command(
                             "guardguide.de",
                             ["public", "scripts", "src"],
+                            ignored_paths=[
+                                "public/og-default.svg",
+                                "public/og-default.png",
+                                "public/og-de.svg",
+                                "public/og-de.png",
+                            ],
                         ),
                         "autostart": True,
                         "runMode": "replace",
