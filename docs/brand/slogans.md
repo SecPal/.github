@@ -16,17 +16,17 @@ Slogans are short brand lines, not sentences. They do not end with a period.
 
 ## Brand-Plus-Slogan Lockup
 
-The brand-plus-slogan lockup joins the brand name to its exact approved slogan with a separator:
+The brand-plus-slogan lockup joins the product name to its exact approved slogan with a separator:
 
 - `SecPal – A guard's best friend`
 - `GuardGuide – A guard's source of truth`
 
-Public footers prefix the lockup with `Powered by` (note the trailing space before the brand):
+The canonical public footer line 1 prefixes the lockup with `Powered by`:
 
 - `Powered by SecPal – A guard's best friend`
 - `Powered by GuardGuide – A guard's source of truth`
 
-See `footer-wording.md` for the exact footer pattern, including the AGPL link and the localized source-code link.
+See `footer-wording.md` for the full two-line footer pattern, including the line-2 `AGPL v3+ | <Source Code label>` rule and the link targets.
 
 ## Separator Rule
 
