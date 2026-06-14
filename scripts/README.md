@@ -31,6 +31,14 @@ host, so callers cannot reintroduce it as an active host.
   inert because the matcher never sees them.
 - Treat the banner's "Forbidden" list as "forbidden `secpal.*` variants",
   not "every non-SecPal domain on the internet".
+- The scan skips every directory named exactly `.context/` at any depth
+  (alongside `.git/`, `node_modules/`, and `vendor/`). Polyscope-managed
+  workspaces use `.context/` as a gitignored scratch directory for throwaway
+  agent files (PR body drafts, notes, etc.) that never reach CI, so the
+  local gate must not flag them either (SecPal/.github#489). Violations in
+  any tracked path still fail the gate. **Important:** this exclusion is
+  unconditional — never use `git add --force` on `.context/` content, as
+  force-tracked files would be visible to CI but silently ignored locally.
 
 **Usage:**
 

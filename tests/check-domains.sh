@@ -28,6 +28,12 @@
 #   5. Behaviour matches the documented scope: guardguide.de references in
 #      a workspace pass cleanly, while an unapproved secpal.* host still
 #      fails the gate.
+#   6. The gate skips the gitignored agent scratch directory `.context/` so
+#      Polyscope-managed workspaces can stash PR body drafts and other
+#      throwaway notes that quote forbidden hosts verbatim without tripping
+#      the local gate (CI never sees `.context/` because it is gitignored).
+#      Tracked content with the same string still fails so the exclusion is
+#      not a free pass (see SecPal/.github#489).
 
 set -euo pipefail
 
@@ -110,6 +116,14 @@ if ! grep -Fq 'working tree' "$README"; then
   exit 1
 fi
 
+# 3c. README documents the `.context/` exclusion so contributors discover
+# that the gate intentionally skips the gitignored agent scratch directory
+# (SecPal/.github#489).
+if ! grep -Fq '.context' "$README"; then
+  echo "scripts/README.md must document the .context/ exclusion (see SecPal/.github#489)" >&2
+  exit 1
+fi
+
 # 4. CHANGELOG.md must not contain a literal unapproved secpal.* host even
 # in its prose. The regression fixture lives in the test's own temporary
 # workspace so the changelog entry cannot accidentally trip the gate after
@@ -120,8 +134,12 @@ if grep -Fq 'secpal.xyz' "$CHANGELOG"; then
 fi
 
 # 5. Behavioural check: guardguide.de references pass, unapproved secpal.* fails.
+workspace=""
+ctx_workspace=""
+cleanup() { rm -rf "${workspace:-}" "${ctx_workspace:-}"; }
+trap cleanup EXIT
+
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains.XXXXXX")"
-trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p "$workspace/scripts"
 cp "$SCRIPT" "$workspace/scripts/check-domains.sh"
@@ -141,18 +159,21 @@ Approved SecPal hosts used in examples:
 - https://feature-branch.preview.secpal.dev
 EOF
 
+set +e
 (
   cd "$workspace"
   bash scripts/check-domains.sh >output.txt 2>&1
 )
+_rc=$?
+set -e
 
-if ! grep -Fq 'Domain Policy Check PASSED' "$workspace/output.txt"; then
+if [ "$_rc" -ne 0 ] || ! grep -Fq 'Domain Policy Check PASSED' "$workspace/output.txt"; then
   cat "$workspace/output.txt"
   echo "check-domains.sh should pass when only guardguide.de + approved secpal.* hosts are present" >&2
   exit 1
 fi
 
-if grep -F 'guardguide' "$workspace/output.txt" | grep -qiv 'out of scope\|governed by\|namespace'; then
+if grep -F 'guardguide' "$workspace/output.txt" | grep -qiEv 'out of scope|governed by|namespace'; then
   cat "$workspace/output.txt"
   echo "check-domains.sh must not flag guardguide.de as a violation" >&2
   exit 1
@@ -186,6 +207,80 @@ fi
 if ! grep -Fq 'secpal.xyz' "$workspace/output.txt"; then
   cat "$workspace/output.txt"
   echo "check-domains.sh must surface the unapproved secpal.xyz host in its output" >&2
+  exit 1
+fi
+
+# 6. Behavioural check: the gitignored agent scratch directory `.context/`
+# must be skipped (positive case) while tracked content with the same
+# string still fails (negative case). Use a fresh workspace so the previous
+# regression.md fixture cannot mask either result.
+ctx_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-context.XXXXXX")"
+
+mkdir -p "$ctx_workspace/scripts" "$ctx_workspace/.context"
+cp "$SCRIPT" "$ctx_workspace/scripts/check-domains.sh"
+
+cat >"$ctx_workspace/.context/notes.md" <<'EOF'
+# Agent scratch notes
+
+PR body draft mentioning the unapproved secpal.xyz fixture host so the
+gate has a reason to fail if .context/ is not excluded.
+EOF
+
+set +e
+(
+  cd "$ctx_workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+_ctx_rc=$?
+set -e
+
+if [ "$_ctx_rc" -ne 0 ] || ! grep -Fq 'Domain Policy Check PASSED' "$ctx_workspace/output.txt"; then
+  cat "$ctx_workspace/output.txt"
+  echo "check-domains.sh must ignore .context/ content (see SecPal/.github#489)" >&2
+  exit 1
+fi
+
+if grep -Fq '.context/notes.md' "$ctx_workspace/output.txt"; then
+  cat "$ctx_workspace/output.txt"
+  echo "check-domains.sh must not surface .context/ files even in passing output" >&2
+  exit 1
+fi
+
+# Remove .context/ before the negative case so only the tracked-equivalent
+# regression.md is present. This isolates the two subcases: the positive run
+# proved that .context/ alone is ignored; the negative run must prove that a
+# non-.context/ violation is still caught — without .context/notes.md
+# providing a false failure path if the exclusion were broken.
+rm -rf "$ctx_workspace/.context"
+
+# Negative case: the same string in a tracked-equivalent location at the
+# workspace root must still fail the gate so the exclusion cannot be
+# mistaken for a blanket free pass.
+cat >"$ctx_workspace/regression.md" <<'EOF'
+# Regression fixture
+
+Tracked-equivalent content still references the unapproved secpal.xyz
+host so the gate must still fail when the violation lives outside
+.context/.
+EOF
+
+set +e
+(
+  cd "$ctx_workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+ctx_exit_code=$?
+set -e
+
+if [ "$ctx_exit_code" -eq 0 ]; then
+  cat "$ctx_workspace/output.txt"
+  echo "check-domains.sh must still fail on tracked-equivalent content even when .context/ is excluded" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'regression.md' "$ctx_workspace/output.txt"; then
+  cat "$ctx_workspace/output.txt"
+  echo "check-domains.sh must surface the tracked-equivalent regression fixture in its output" >&2
   exit 1
 fi
 

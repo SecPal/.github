@@ -33,6 +33,14 @@ echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io
 echo "  secpal.example, app.secpal.app, and any other unapproved secpal.* host."
 echo ""
 
+# --exclude-dir=".context" skips any directory named exactly ".context" at
+# any recursion depth. Polyscope-managed workspaces use .context/ as a
+# gitignored scratch directory for throwaway agent files (PR body drafts,
+# notes, etc.) that never reach CI — so the local gate must not flag them
+# either (see SecPal/.github#489). Violations in any tracked path still fail.
+# Note: this exclusion is unconditional. If .context/ content were ever
+# force-tracked via `git add --force`, CI would see it but the local gate
+# would not. Never force-track files from .context/.
 matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     --include="*.md" \
     --include="*.yaml" \
@@ -48,6 +56,7 @@ matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     --exclude-dir=".git" \
     --exclude-dir="node_modules" \
     --exclude-dir="vendor" \
+    --exclude-dir=".context" \
     . 2>/dev/null | \
     grep -v -- "check-domains.sh" | \
     grep -v -- "Forbidden:" | \

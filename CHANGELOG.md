@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Skip Gitignored Agent Scratch Dir In `check-domains.sh`
+
+**Changed:**
+
+- taught `scripts/check-domains.sh` to skip the gitignored agent scratch directory `.context/` by adding `--exclude-dir=".context"` alongside the existing `.git`, `node_modules`, and `vendor` exclusions. The exclusion applies at every directory depth. Polyscope-managed workspaces use `.context/` to pass throwaway files between agents and the `gh` CLI (PR body drafts, scratch notes, etc.) which are never tracked and never reach CI, so the local gate now mirrors what CI actually sees instead of failing on prose that quotes forbidden `secpal.*` hosts verbatim. Violations in any tracked path still fail the gate.
+- documented the new `.context/` exclusion in `scripts/README.md` under the existing `check-domains.sh` "Scope (intentional limit)" section so contributors discover the boundary alongside the existing dependency-directory exclusions, including a note that `git add --force` on `.context/` content must never be used as it would create a local/CI divergence.
+- tightened `.gitignore` so `.context` is listed as `.context/` (directory-only, trailing slash) to match the intent of the exclusion and prevent a file named `.context` from being inadvertently gitignored.
+
+**Added:**
+
+- extended `tests/check-domains.sh` with a regression fixture (check 6) that proves the gate ignores an unapproved host stashed inside `.context/notes.md` (positive case, `.context/` cleaned up before the next subcase) while still failing on the same string in a tracked-equivalent location at the workspace root (negative case). The two subcases are now fully isolated so neither can mask the other.
+- hardened the test's temp-directory cleanup: a single `cleanup()` function is registered on EXIT with safe `${var:-}` expansion, replacing the prior `trap` line that was overwritten mid-script (maintenance hazard).
+- fixed a GNU-only `\|` alternation in the guardguide grep assertion (line 169) to use `-E` so the test is portable to BSD/macOS grep (see SecPal/.github#489).
+
+---
+
 ## 2026-06-14 - Align `check-domains.sh` Banner With Its `secpal.*` Scope
 
 **Changed:**
