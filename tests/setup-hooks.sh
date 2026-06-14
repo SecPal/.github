@@ -87,9 +87,9 @@ if ! run_setup_hooks "$happy_workspace" "$happy_output"; then
 fi
 
 happy_expected_hooks=$(( ${#ALL_REPOS[@]} * 3 ))
-grep -q "Successfully installed: ${happy_expected_hooks} hooks" "$happy_output"
-grep -q 'All Git hooks have been successfully installed' "$happy_output"
-if grep -q 'Skipped (missing directory)' "$happy_output"; then
+grep -Fq "Successfully installed: ${happy_expected_hooks} hooks" "$happy_output"
+grep -Fq 'All Git hooks have been successfully installed' "$happy_output"
+if grep -Fq 'Skipped (missing directory)' "$happy_output"; then
   cat "$happy_output"
   echo "happy-path output should not report skipped repositories" >&2
   exit 1
@@ -115,13 +115,13 @@ if ! run_setup_hooks "$warning_workspace" "$warning_output"; then
   exit 1
 fi
 
-grep -q 'Directory not found: guardguide.de' "$warning_output"
-grep -q 'Skipped (missing directory): 1 repositories' "$warning_output"
-grep -q '.github/scripts/install-polyscope-rollout.sh' "$warning_output"
-grep -q 'All Git hooks have been successfully installed' "$warning_output"
+grep -Fq 'Directory not found: guardguide.de' "$warning_output"
+grep -Fq 'Skipped (missing directory): 1 repositories' "$warning_output"
+grep -Fq '.github/scripts/install-polyscope-rollout.sh' "$warning_output"
+grep -Fq 'All Git hooks have been successfully installed' "$warning_output"
 
 warning_expected_hooks=$(( ${#warning_present_repos[@]} * 3 ))
-grep -q "Successfully installed: ${warning_expected_hooks} hooks" "$warning_output"
+grep -Fq "Successfully installed: ${warning_expected_hooks} hooks" "$warning_output"
 
 if grep -q '^Failed: ' "$warning_output"; then
   cat "$warning_output"
@@ -144,7 +144,7 @@ if run_setup_hooks "$corrupt_workspace" "$corrupt_output"; then
 fi
 
 grep -q '^Failed: 1 repositories' "$corrupt_output"
-grep -q 'guardguide.de (path is not a directory)' "$corrupt_output"
+grep -Fq 'guardguide.de (path is not a directory)' "$corrupt_output"
 if grep -q '^Skipped (missing directory): ' "$corrupt_output"; then
   cat "$corrupt_output"
   echo "corrupt-path output must not treat a regular file as a missing directory" >&2
@@ -168,8 +168,8 @@ if run_setup_hooks "$failure_workspace" "$failure_output"; then
   exit 1
 fi
 
-grep -q 'Pre-push hook installation failed' "$failure_output"
+grep -Fq 'Pre-push hook installation failed' "$failure_output"
 grep -q '^Failed: 1 repositories' "$failure_output"
-grep -q 'api (pre-push)' "$failure_output"
+grep -Fq 'api (pre-push)' "$failure_output"
 
 echo "tests/setup-hooks.sh: happy, warning, corrupt-path, and failure paths verified."
