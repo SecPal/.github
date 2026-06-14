@@ -2234,7 +2234,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                     rewrite ^ /index.php last;
                 }}
 
-                try_files /index.html =404;
+                try_files $uri/index.html /index.html =404;
             }}
 
             location = /index.php {{
