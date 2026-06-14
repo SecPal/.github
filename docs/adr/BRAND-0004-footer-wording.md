@@ -39,7 +39,7 @@ SecPal and GuardGuide use a fixed two-line footer on every AGPL-licensed public 
 
 - `AGPL v3+` is linked to `https://www.gnu.org/licenses/agpl-3.0.html`.
 - The Source Code label is linked to the product's public source location: SecPal points at the SecPal GitHub organization (`https://github.com/SecPal`) because the SecPal platform spans multiple repositories; GuardGuide points at the GuardGuide product repository (`https://github.com/SecPal/GuardGuide`).
-- The Source Code label is the canonical local two-word term for "source code" in the page's language: English `Source Code`, German `Quellcode`, and the canonical local term in every other supported locale. Do not abbreviate to a one-word form such as `Source`, `Quelle`, or `Quelltext`. The link target does not change with locale.
+- The Source Code label is the canonical local term for "source code" in the page's language: English `Source Code`, German `Quellcode`, and the canonical local term in every other supported locale. Do not use abbreviated or informal forms such as `Source`, `Quelle`, or `Quelltext`. The link target does not change with locale.
 - The separator between the two labels is the vertical bar `|` (U+007C) with one space on each side. Other separator characters and missing spaces are not allowed.
 - The `AGPL v3+` label stays English on every surface and locale.
 - Product repositories may render an optional icon before each line-2 label (a license/legal glyph for `AGPL v3+`, a source-control glyph for the Source Code link), but the exact text strings, the `|` separator, the spaces around the `|`, and the link targets must remain unchanged.
@@ -67,7 +67,7 @@ A text-first standard (with the `|` separator visible as a character, and icons 
 
 - Product repositories must preserve the approved AGPL words, the approved slogan, the en-dash separator, the `|` line-2 separator and its surrounding spaces, the link targets, and the language rules exactly, even when adapting visual layout, responsive wrapping, or optional icons.
 - Commercial deployments still need repository-local license wording that matches the actual agreement.
-- Existing public surfaces may need copy-only updates to adopt the two-line layout, the `Powered by <own brand>` self-attribution, the en-dash lockup, the corrected GuardGuide slogan, the `|` separator with surrounding spaces, and the two-word localized Source Code label.
+- Existing public surfaces may need copy-only updates to adopt the two-line layout, the `Powered by <own brand>` self-attribution, the en-dash lockup, the corrected GuardGuide slogan, the `|` separator with surrounding spaces, and the canonical localized Source Code label.
 
 ## Alternatives Considered
 

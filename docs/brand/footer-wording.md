@@ -76,11 +76,11 @@ The SecPal Source Code link points at the SecPal GitHub organization because the
 ## Language Rules
 
 - The `Powered by` prefix, the brand name, the slogan, and the `AGPL v3+` label stay English on every surface and locale, including German-language pages.
-- The Source Code label is localized to the page's language using the canonical local two-word term for "source code":
+- The Source Code label is localized to the page's language using the canonical local term for "source code":
   - English: `Source Code`
   - German: `Quellcode`
-  - Other locales: the canonical local two-word term
-- Do not abbreviate the Source Code label to a one-word form such as `Source` (English) or `Quelle` / `Quelltext` (German).
+  - Other locales: the canonical local term
+- Do not use abbreviated or informal forms such as `Source` (English) or `Quelle` / `Quelltext` (German).
 - The Source Code link target does not change with locale.
 
 ## Usage Rules
