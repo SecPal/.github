@@ -11,13 +11,14 @@ This directory contains utility scripts for SecPal development.
 
 ### `check-domains.sh`
 
-Enforces the SecPal `secpal.*` namespace split. The script scans tracked text
-files for any `secpal.<something>` substring and flags entries that fall
-outside the approved set (`secpal.app`, `changelog.secpal.app`,
-`apk.secpal.app`, `secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, plus
-arbitrary `*.preview.secpal.dev` previews). It also surfaces the deprecated
-`.app` web host (the `api.secpal.app` deprecated web host) so callers cannot
-reintroduce it as an active host.
+Enforces the SecPal `secpal.*` namespace split. The script greps text files
+in the working tree (via `grep -r --include=...`, so untracked files matching
+the include patterns are inspected too) for any `secpal.<something>`
+substring and flags entries that fall outside the approved set
+(`secpal.app`, `changelog.secpal.app`, `apk.secpal.app`, `secpal.dev`,
+`api.secpal.dev`, `app.secpal.dev`, plus arbitrary `*.preview.secpal.dev`
+previews). It also surfaces `api.secpal.app`, the deprecated `.app` web
+host, so callers cannot reintroduce it as an active host.
 
 **Scope (intentional limit):**
 

@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: MIT
 
 # Domain Policy Enforcement Script
-# Validates that only approved SecPal domains and identifiers are used
-# ZERO TOLERANCE for other domains or deprecated .app web hosts
+# Scope: enforces the secpal.* namespace split only (match regex:
+#   secpal\.[A-Za-z0-9.-]+). Non-secpal SecPal-owned hosts (e.g.
+#   guardguide.de) are intentionally out of scope here and are governed by
+#   their owning repository's policy guard.
+# ZERO TOLERANCE for unapproved secpal.* hosts or deprecated .app web hosts.
 
 set -euo pipefail
 

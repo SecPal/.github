@@ -18,7 +18,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Added:**
 
-- added `tests/check-domains.sh` regression test that locks in the banner/README scope language, exercises a synthetic workspace to prove `guardguide.de` references pass cleanly, and proves an unapproved `secpal.*` host (e.g. `secpal.xyz`) still fails the gate, and wired it into `scripts/preflight.sh` so the contradiction surfaced on SecPal/.github#483 (resolved as out of scope and tracked in SecPal/.github#484) cannot return unnoticed.
+- added `tests/check-domains.sh` regression test that locks in the banner/README scope language, exercises a synthetic workspace to prove `guardguide.de` references pass cleanly, and proves an unapproved `secpal.*` host (one is staged inside the test's own temporary workspace, never in the repo) still fails the gate, and wired it into `scripts/preflight.sh` so the contradiction surfaced on SecPal/.github#483 (resolved as out of scope and tracked in SecPal/.github#484) cannot return unnoticed.
 
 ---
 

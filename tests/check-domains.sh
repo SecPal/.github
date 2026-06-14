@@ -2,18 +2,30 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-# Regression test for scripts/check-domains.sh covering SecPal/.github#484.
+# Regression test for scripts/check-domains.sh covering SecPal/.github#484
+# plus the PR #488 Copilot review findings.
 #
 # The script is intentionally scoped to enforcing the secpal.* namespace
 # split. SecPal-external hosts (e.g. guardguide.de) are governed by their
 # own repository policy guards and must NOT be flagged here. This test
-# locks in three guarantees so the banner can never drift back to claiming
-# the gate covers "any other" domain:
+# locks in the following guarantees so neither the banner nor any of the
+# surrounding documentation can drift back to claiming the gate covers
+# "any other" domain:
 #
-#   1. The banner and the failure-mode Policy block document the scope limit
-#      (so the help text and the regex agree).
-#   2. scripts/README.md documents the same intentional scope.
-#   3. Behaviour matches the documented scope: guardguide.de references in
+#   1. The banner and the failure-mode Policy block document the scope
+#      limit (so the help text and the regex agree).
+#   2. The script's top-of-file header comment documents the same scope
+#      instead of the legacy "ZERO TOLERANCE for other domains" wording
+#      that contradicted the matcher.
+#   3. scripts/README.md documents the same intentional scope and does not
+#      claim the script only scans tracked files (it greps the working
+#      tree, untracked files included) so contributors do not develop the
+#      wrong mental model.
+#   4. CHANGELOG.md does not contain a literal unapproved secpal.* host
+#      such as secpal.xyz, even when describing the regression fixture;
+#      such hosts only ever live inside the test's own temporary workspace
+#      so the prose cannot accidentally trip the gate after a reword.
+#   5. Behaviour matches the documented scope: guardguide.de references in
 #      a workspace pass cleanly, while an unapproved secpal.* host still
 #      fails the gate.
 
@@ -23,6 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/check-domains.sh"
 README="$REPO_ROOT/scripts/README.md"
+CHANGELOG="$REPO_ROOT/CHANGELOG.md"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -31,6 +44,11 @@ fi
 
 if [ ! -f "$README" ]; then
   echo "Missing scripts/README.md" >&2
+  exit 1
+fi
+
+if [ ! -f "$CHANGELOG" ]; then
+  echo "Missing CHANGELOG.md" >&2
   exit 1
 fi
 
@@ -56,6 +74,18 @@ if ! grep -Fq 'Non-secpal SecPal hosts' "$SCRIPT"; then
   exit 1
 fi
 
+# 2b. Header comment documents the scope and does not contradict it
+# (PR #488 review thread on scripts/check-domains.sh:7).
+if ! grep -Fq '# Scope: enforces the secpal.* namespace split only' "$SCRIPT"; then
+  echo "scripts/check-domains.sh header comment must declare the secpal.* namespace scope" >&2
+  exit 1
+fi
+
+if grep -Fq 'ZERO TOLERANCE for other domains' "$SCRIPT"; then
+  echo "scripts/check-domains.sh header comment must not reuse the contradicting 'ZERO TOLERANCE for other domains' wording" >&2
+  exit 1
+fi
+
 # 3. README documents the intentional scope.
 if ! grep -Fq 'Scope (intentional limit)' "$README"; then
   echo "scripts/README.md must document the check-domains.sh scope limit" >&2
@@ -67,7 +97,29 @@ if ! grep -Fq 'guardguide.de' "$README"; then
   exit 1
 fi
 
-# 4. Behavioural check: guardguide.de references pass, unapproved secpal.* fails.
+# 3b. README accurately describes the scan target (working tree, not just
+# tracked files) so contributors do not develop the wrong mental model
+# (PR #488 review thread on scripts/README.md:20).
+if grep -Fq 'scans tracked text files' "$README"; then
+  echo "scripts/README.md must not claim check-domains.sh scans only tracked files; it greps the working tree" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'working tree' "$README"; then
+  echo "scripts/README.md must describe the scan target as the working tree" >&2
+  exit 1
+fi
+
+# 4. CHANGELOG.md must not contain a literal unapproved secpal.* host even
+# in its prose. The regression fixture lives in the test's own temporary
+# workspace so the changelog entry cannot accidentally trip the gate after
+# a reword (PR #488 review thread on CHANGELOG.md:21).
+if grep -Fq 'secpal.xyz' "$CHANGELOG"; then
+  echo "CHANGELOG.md must not contain literal unapproved secpal.* hosts (e.g. secpal.xyz); keep such fixtures inside tests/check-domains.sh" >&2
+  exit 1
+fi
+
+# 5. Behavioural check: guardguide.de references pass, unapproved secpal.* fails.
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
