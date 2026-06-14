@@ -9,6 +9,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Document SecPal Brand And Shared Design Standards
+
+**Added:**
+
+- introduced `docs/brand/` with the SecPal and GuardGuide brand architecture, naming, slogans, footer wording, logo usage, and licensing wording standards, plus a section README that documents the brand scope boundary between this organization-wide repository and the owning product repositories
+- introduced `docs/design/` with shared standards for typography, color usage, dark mode, page titles, layout, navigation, components, forms, tables, and accessibility, plus a section README that documents the design scope boundary between organization-wide guidance and product-repository implementation
+- added a focused four-digit ADR series (ADR-0001 brand architecture, ADR-0002 typography, ADR-0003 navigation pattern, ADR-0004 footer wording, ADR-0005 page titles, ADR-0006 app UI stack ownership) and linked them from `docs/adr/README.md`, documenting the four-digit prefix as an accepted exception alongside the existing date-prefixed ADR convention
+
+**Fixed:**
+
+- limited the new AGPL footer and licensing wording guidance in `docs/brand/` and `docs/adr/0004-footer-wording.md` to AGPL-licensed public surfaces so the shared docs no longer mislabel commercially licensed deployments
+- removed the would-be organization-wide runtime UI stack mandate from `docs/design/components.md`, `docs/design/accessibility.md`, and `docs/adr/0006-app-ui-stack.md`, keeping framework and library choices in the owning product repositories
+- rewrote `docs/design/dark-mode.md` to describe platform-neutral dark-mode expectations and token vocabulary instead of requiring a web-specific class-based implementation model
+- stopped tracking the `.context/` agent scratch directory and added it to `.gitignore` so accidentally generated workspace progress notes do not land in the repository or its REUSE coverage
+
+---
+
 ## 2026-06-14 - Align `check-domains.sh` Banner With Its `secpal.*` Scope
 
 **Changed:**

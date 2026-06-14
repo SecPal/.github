@@ -20,11 +20,11 @@ Application interfaces must provide:
 
 Use text, accessible labels, icons, shape, layout, or state messaging with color whenever status, validation, selection, or severity must be understood.
 
-## Radix Patterns
+## Layered Controls
 
-Dialogs, dropdowns, sheets, menus, popovers, tabs, tooltips, and similar layered controls should use Radix-based accessibility patterns from the approved component stack. These patterns should preserve expected focus management, escape behavior, keyboard operation, accessible names, and focus return.
+Dialogs, dropdowns, sheets, menus, popovers, tabs, tooltips, and similar layered controls should use well-tested accessible patterns from the owning repository's approved component stack. These patterns should preserve expected focus management, escape behavior, keyboard operation, accessible names, and focus return.
 
-Do not replace Radix-based behavior with custom implementations unless the owning repository documents why the standard primitive cannot meet the workflow.
+Do not replace the owning repository's approved accessible behavior with custom implementations unless that repository documents why the standard primitive cannot meet the workflow.
 
 ## Keyboard And Focus
 

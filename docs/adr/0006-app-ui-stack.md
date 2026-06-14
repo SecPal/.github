@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# ADR-0006: App UI Stack
+# ADR-0006: App UI Stack Ownership
 
 ## Status
 
@@ -19,39 +19,41 @@ SecPal maintainers
 
 ## Context
 
-SecPal and GuardGuide application surfaces need consistent component behavior, accessibility patterns, iconography, styling vocabulary, and dark-mode support. The organization needs a standard stack while keeping shared standards separate from product implementation details.
+SecPal and GuardGuide application surfaces need consistent component behavior, accessibility patterns, iconography expectations, styling vocabulary, and dark-mode support. Contributors also need clear boundaries between organization-wide design guidance and repository-local runtime implementation choices.
 
 ## Decision
 
-The approved application UI stack is shadcn/ui for component composition, Radix UI for accessible primitives, Tailwind CSS for utility styling and token-backed visual implementation, and Lucide icons for standard interface iconography.
+This repository does not define one required runtime UI stack for every SecPal surface.
 
-Product repositories own installation, file layout, build configuration, token values, routing, component APIs, runtime assets, and product-specific code wiring. Shared standards define the approved stack and expected behavior only.
+Product repositories own their framework, component library, styling system, icon set, installation, file layout, build configuration, token values, routing, component APIs, runtime assets, and product-specific code wiring.
+
+Shared standards in `.github` define cross-product expectations such as accessibility, predictable component states, navigation behavior, and documentation boundaries without turning product-local stack choices into organization-wide mandates.
 
 ## Rationale
 
-This stack provides accessible primitives, practical composition patterns, token-friendly styling, and consistent iconography while still letting each product own its implementation.
+Keeping stack selection in the owning repository avoids false organization-wide mandates while still allowing shared design guidance to describe the behaviors every surface should preserve.
 
 ## Consequences
 
 ### Positive
 
-- Products can share interaction and accessibility expectations without depending on shared runtime implementation packages.
-- Standard controls, focus behavior, dark-mode tokens, and icons become easier to recognize across surfaces.
-- Product repositories retain control over framework integration and release timing.
+- Products can share interaction and accessibility expectations without depending on a central runtime stack decision.
+- Product repositories retain control over framework integration, release timing, and platform-specific implementation choices.
+- Shared standards can stay stable even when different products use different UI technologies.
 
 ### Negative
 
-- Product teams must resist adding parallel UI libraries for ordinary controls.
-- Specialized workflows still need local documentation when they require custom components.
+- Product repositories must document their chosen stack clearly enough that contributors can follow local conventions.
+- Cross-product visual consistency depends on behavior and review discipline instead of a single enforced library choice.
 
 ## Alternatives Considered
 
-1. **Publish shared implementation packages**
-   - Pro: strongest implementation reuse
-   - Contra: adds release coupling and is outside the scope of these shared standards
-2. **Allow any UI library per product**
+1. **Approve one shared runtime stack for every product**
+   - Pro: strongest implementation uniformity
+   - Contra: conflicts with repository-local ownership and existing per-product instruction paths
+2. **Provide no shared component guidance at all**
    - Pro: maximum local choice
-   - Contra: fragments accessibility behavior, icons, styling, and maintenance expectations
+   - Contra: weakens cross-product expectations for accessibility and interaction behavior
 
 ## Related
 

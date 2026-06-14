@@ -90,7 +90,7 @@ Focused ADR series may use a four-digit prefix when the series is added as a doc
 - [ADR-0003: Navigation Pattern](0003-navigation-pattern.md) - 2026-06-13
 - [ADR-0004: Footer Wording](0004-footer-wording.md) - 2026-06-13
 - [ADR-0005: Page Titles](0005-page-titles.md) - 2026-06-13
-- [ADR-0006: App UI Stack](0006-app-ui-stack.md) - 2026-06-13
+- [ADR-0006: App UI Stack Ownership](0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15
 - [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27

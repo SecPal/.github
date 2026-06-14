@@ -5,24 +5,19 @@ SPDX-License-Identifier: CC0-1.0
 
 # Components
 
-SecPal and GuardGuide application UI should use a shared web component stack so product surfaces remain consistent while implementation details stay in the owning repositories.
+SecPal and GuardGuide application UI should preserve consistent component behavior and accessibility expectations while runtime implementation choices stay in the owning repositories.
 
-## Standard Stack
+## Ownership Boundaries
 
-The standard application UI stack is:
+This repository does not define a single required runtime UI stack for every SecPal surface. Product repositories own their framework, component library, styling system, icon set, installation steps, file layout, build configuration, component APIs, and token values.
 
-- shadcn/ui for component composition and reusable application patterns
-- Radix UI for accessible primitives such as dialogs, dropdowns, popovers, menus, tabs, tooltips, and sheets
-- Tailwind CSS for utility styling and token-backed visual implementation
-- Lucide icons for standard interface iconography
-
-Product repositories own installation, file layout, build configuration, component APIs, and token values. These shared standards define the approved stack and expected behavior, not a central component package.
+Shared standards in this directory define cross-product expectations such as accessible interaction behavior, predictable states, and documentation boundaries. Repository-local instruction files may standardize specific stacks for individual products.
 
 ## Component Selection
 
-Prefer standard shadcn/ui and Radix-based components before adding custom replacements. Do not introduce parallel UI libraries, ad hoc component kits, or one-off replacements for standard controls unless the owning repository documents a specific product need.
+Prefer the owning repository's documented component patterns before adding custom replacements. Do not introduce parallel component kits, ad hoc control libraries, or one-off replacements for standard controls unless the owning repository documents a specific product need.
 
-Use Lucide icons for common UI actions and navigation where an appropriate icon exists. Do not mix unrelated icon libraries for ordinary actions such as search, settings, filters, save, edit, delete, expand, close, or navigation.
+Use one documented icon system per product surface for ordinary UI actions and navigation. Do not mix unrelated icon libraries for common actions such as search, settings, filters, save, edit, delete, expand, close, or navigation without a documented reason in the owning repository.
 
 ## Composition Rules
 
@@ -32,6 +27,6 @@ Reusable application components should support labels, descriptions, empty state
 
 ## Exceptions
 
-Use custom components when the standard stack does not cover a specialized workflow, visualization, editor, map, chart, or native platform surface. Keep exceptions focused and document why the standard component was not sufficient.
+Use custom components when the owning repository's standard patterns do not cover a specialized workflow, visualization, editor, map, chart, or native platform surface. Keep exceptions focused and document why the standard pattern was not sufficient.
 
-Do not use a custom exception to bypass keyboard navigation, visible focus states, accessible names, contrast requirements, or Radix-based behavior for dialogs, dropdowns, sheets, and menus.
+Do not use a custom exception to bypass keyboard navigation, visible focus states, accessible names, contrast requirements, or expected accessible behavior for dialogs, dropdowns, sheets, tabs, and menus.

@@ -28,6 +28,9 @@ credentials/
 .idea/
 .vscode/
 *.swp
+
+# Polyscope agent scratch directory (per-workspace collaboration notes)
+.context/
 *.swo
 *~
 

@@ -22,7 +22,7 @@ Do not make a permanent left sidebar the default navigation pattern. A product r
 
 The topbar should contain stable global destinations and controls. Keep labels short, use clear active states, and avoid placing page-specific filters or table controls in the global shell.
 
-Topbar items should support keyboard navigation and visible focus states. Menus, dropdowns, and account controls should use Radix-based accessibility patterns as described in `docs/design/accessibility.md`.
+Topbar items should support keyboard navigation and visible focus states. Menus, dropdowns, and account controls should use the owning repository's approved accessible patterns as described in `docs/design/accessibility.md`.
 
 ## Breadcrumb And Context Bar
 

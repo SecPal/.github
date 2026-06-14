@@ -35,10 +35,10 @@ Current design standards live under this directory:
 - `docs/design/README.md` - section entry point and scope boundary
 - `docs/design/typography.md` - shared typeface, scale, and rendering rules
 - `docs/design/colors.md` - shared color usage boundaries
-- `docs/design/dark-mode.md` - shared dark-mode token requirements
+- `docs/design/dark-mode.md` - shared dark-mode behavior and token vocabulary
 - `docs/design/page-titles.md` - shared browser title patterns
 - `docs/design/accessibility.md` - accessibility standards and review expectations
-- `docs/design/components.md` - approved application UI stack and component standards
+- `docs/design/components.md` - shared component behavior and accessibility expectations
 - `docs/design/forms.md` - shared form structure, validation, and state guidance
 - `docs/design/layout.md` - layout and information architecture guidance
 - `docs/design/navigation.md` - shared application shell and navigation patterns
