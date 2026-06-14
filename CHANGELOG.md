@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-14 - Bootstrap guardguide.de Rollout
+
+**Added:**
+
+- registered `guardguide.de` in `scripts/polyscope-rollout.py` as a static Astro site with its own copilot instructions, preview prefix `guardguide-de`, autostarted Build Watch, and an All Checks command so Polyscope workspaces for the marketing site come up with the same governance and preview tooling as the other managed repositories
+- extended generated nginx preview routing in `scripts/polyscope-rollout.py` to recognize the `guardguide-de` host prefix and serve the built Astro `dist/` output, with the generic preview precedence updated so `changelog > guardguide.de > secpal.app > frontend > api` still resolves deterministically
+- added `guardguide.de` to the managed required-checks baseline in `scripts/sync-required-checks.sh` (Astro check/build plus Node tests), the hook installation coverage in `setup-hooks.sh`, the epic audit repo list in `scripts/audit-closed-epics.sh`, and the Polyscope installer watch list in `scripts/install-polyscope-rollout.sh`
+- extended `tests/polyscope-rollout.sh`, `tests/sync-required-checks.sh`, and `tests/setup-hooks.sh` to prove the generated rollout output, branch-protection payload, and hook installation coverage all include the new repository
+
+**Fixed:**
+
+- rewrote the `CREATED`, `UPDATED`, and `SKIPPED` counter increments in `scripts/sync-labels.sh` from `((COUNTER++))` to `COUNTER=$((COUNTER + 1))` so label sync no longer exits early under `set -e` when a counter is incremented from `0` (post-increment of `0` returns `0`, which `set -e` treats as a failed command)
+- taught the generic static preview watcher in `scripts/polyscope-rollout.py` to ignore explicit generated files, and configured the `secpal.app` and `guardguide.de` Build Watch commands to skip their generated `public/og-*.svg` and `public/og-*.png` assets so `npm run build` no longer retriggers the watcher indefinitely by rewriting files inside the watched `public/` tree
+
+---
+
 ## 2026-06-13 - Fix Polyscope Preview Build Watchers
 
 **Fixed:**

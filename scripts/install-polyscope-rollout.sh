@@ -307,6 +307,8 @@ PathChanged=$WORKSPACE_ROOT/android/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/android/.github/instructions
 PathChanged=$WORKSPACE_ROOT/secpal.app/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/secpal.app/.github/instructions
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/copilot-instructions.md
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/instructions
 PathChanged=$WORKSPACE_ROOT/changelog/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/changelog/.github/instructions
 PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
@@ -352,6 +354,7 @@ PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/android/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/secpal.app/polyscope.local.json
+PathChanged=$WORKSPACE_ROOT/guardguide.de/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/changelog/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/.github/polyscope.local.json
 

@@ -28,7 +28,7 @@ Options:
   --repo REPO  Repository name to inspect. Repeat to scope the audit.
 
 If no repositories are provided, the script audits the active SecPal workspace
-repositories: api, changelog, frontend, contracts, android, secpal.app, .github.
+repositories: api, changelog, frontend, contracts, android, secpal.app, guardguide.de, .github.
 EOF
       exit 0
       ;;
@@ -40,7 +40,7 @@ EOF
 done
 
 if [ ${#repos[@]} -eq 0 ]; then
-  repos=(api changelog frontend contracts android secpal.app .github)
+  repos=(api changelog frontend contracts android secpal.app guardguide.de .github)
 fi
 
 if ! command -v gh >/dev/null 2>&1; then

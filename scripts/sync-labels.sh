@@ -103,12 +103,12 @@ for label_spec in "${LABELS[@]}"; do
 
     if [ "$CURRENT_COLOR" = "$color" ] && [ "$CURRENT_DESC" = "$description" ]; then
       # Already up to date
-      ((SKIPPED++))
+      SKIPPED=$((SKIPPED + 1))
     else
       # Update needed
       if gh label edit "$name" --repo "$ORG/$REPO" --color "$color" --description "$description" &> /dev/null; then
         echo "🔄 Updated: $name"
-        ((UPDATED++))
+        UPDATED=$((UPDATED + 1))
       else
         echo "❌ Failed to update: $name"
       fi
@@ -117,7 +117,7 @@ for label_spec in "${LABELS[@]}"; do
     # Label doesn't exist, create it
     if gh label create "$name" --repo "$ORG/$REPO" --color "$color" --description "$description" &> /dev/null; then
       echo "✨ Created: $name"
-      ((CREATED++))
+      CREATED=$((CREATED + 1))
     else
       echo "❌ Failed to create: $name"
     fi

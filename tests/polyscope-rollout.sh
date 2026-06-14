@@ -118,6 +118,12 @@ package_scripts = {
         "lint": "eslint .",
         "test": "node --test tests/**/*.mjs",
     },
+    "guardguide.de": {
+        "build": "astro build",
+        "check": "astro check",
+        "lint": "eslint .",
+        "test": "node --test tests/**/*.mjs",
+    },
     "changelog": {
         "build": "next build",
         "check": "tsc --noEmit",
@@ -478,6 +484,42 @@ applyTo: 'src/**/*.astro'
 - Run formatting, lint, typecheck, and build.
 "
 
+create_repo "guardguide.de" "$common_header
+
+# guardguide.de Instructions
+
+## Always-On Rules
+
+- Run git status --short --branch before any write action.
+- Validate-first.
+
+## Issue And PR Discipline
+
+- The first PR state must be draft.
+
+## Required Validation
+
+- the smallest relevant validation passed for the touched area: formatting, lint, typecheck, and build when applicable
+- CHANGELOG.md was updated for real changes
+- no bypass was used
+
+## AI Findings Triage
+
+- Treat AI findings and AI-generated fix PRs as hints, not proof.
+- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant.
+- Green CI alone is not enough for AI-generated changes.
+" "astro-static.instructions.md" "---
+name: Astro Static Site Rules
+applyTo: 'src/**/*.astro'
+---
+
+# Astro Static Site Rules
+
+- Prefer semantic HTML, accessible landmarks, and keyboard-safe interactions.
+- Keep client-side JavaScript minimal.
+- Run formatting, lint, typecheck, and build.
+"
+
 create_repo "changelog" "$common_header
 
 # Changelog Instructions
@@ -580,6 +622,7 @@ repo_state = {
     'contracts': {'id': 'co123456', 'name': 'SecPal/contracts', 'path': str(workspace_root / 'contracts')},
     'android': {'id': 'an123456', 'name': 'SecPal/android', 'path': str(workspace_root / 'android')},
     'secpal.app': {'id': 'sa123456', 'name': 'SecPal/secpal.app', 'path': str(workspace_root / 'secpal.app')},
+    'guardguide.de': {'id': 'gd123456', 'name': 'SecPal/guardguide.de', 'path': str(workspace_root / 'guardguide.de')},
     'changelog': {'id': 'ch123456', 'name': 'SecPal/changelog', 'path': str(workspace_root / 'changelog')},
     'GuardGuide': {'id': 'gg123456', 'name': 'SecPal/GuardGuide', 'path': str(workspace_root / 'GuardGuide')},
     '.github': {'id': 'gh123456', 'name': 'SecPal/.github', 'path': str(workspace_root / '.github')},
@@ -633,6 +676,7 @@ grep -q 'react-typescript.instructions.md before taking action' "$workspace_root
 grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
+grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
@@ -679,6 +723,15 @@ grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polys
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF 'public/og-default.svg' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF 'public/og-de.png' "$workspace_root/secpal.app/polyscope.local.json"
+grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF '"label": "Fix current findings"' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF '"label": "Build Watch"' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF 'Watching guardguide.de preview sources for changes...' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF 'public/og-default.svg' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -qF 'public/og-de.png' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
@@ -757,6 +810,75 @@ PY
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT"
 import importlib.util
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+script_path = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace = Path(tempfile.mkdtemp(prefix="polyscope-build-watch-generated-files-"))
+
+try:
+    (workspace / "public").mkdir()
+    (workspace / "src").mkdir()
+    (workspace / "src" / "input.ts").write_text("seed\n")
+    (workspace / "package.json").write_text("{}\n")
+
+    command = module.build_preview_full_rebuild_watch_command(
+        label="watching",
+        watch_directories=["public", "src"],
+        ignored_paths=["public/generated.svg", "public/generated.png"],
+        watch_files=["package.json"],
+        watch_suffixes=[".json", ".png", ".svg", ".ts"],
+        build_args=[
+            "python3",
+            "-c",
+            (
+                "from pathlib import Path; "
+                "counter = Path('build-count.txt'); "
+                "count = int(counter.read_text()) + 1 if counter.exists() else 1; "
+                "counter.write_text(str(count)); "
+                "Path('public/generated.svg').write_text(f'svg-{count}'); "
+                "Path('public/generated.png').write_text(f'png-{count}')"
+            ),
+        ],
+    )
+
+    process = subprocess.Popen(
+        shlex.split(command),
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    time.sleep(3.5)
+    process.terminate()
+
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+
+    build_count = int((workspace / "build-count.txt").read_text())
+    if build_count != 1:
+        raise SystemExit(
+            f"build watcher must ignore generated files inside watched source trees; observed {build_count} builds"
+        )
+finally:
+    shutil.rmtree(workspace)
+PY
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -766,13 +888,22 @@ module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
-command = module.build_static_preview_build_watch_command("changelog", ["public", "src"])
+command = module.build_static_preview_build_watch_command(
+    "changelog",
+    ["public", "src"],
+    ignored_paths=["public/generated.svg"],
+)
 
 for required_suffix in (".avif", ".gif", ".ico", ".jpeg", ".jpg", ".woff2"):
     if required_suffix not in command:
         raise SystemExit(
             f"static preview build watcher must track {required_suffix} assets so preview output stays current"
         )
+
+if "public/generated.svg" not in command:
+    raise SystemExit(
+        "static preview build watcher must support explicitly ignored generated files"
+    )
 PY
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT"
@@ -848,7 +979,7 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
+grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
 grep -qF "if (\$repo = guardguide) {" "$nginx_output"
@@ -881,15 +1012,17 @@ fi
 api_if_line="$(grep -nF "if (-f \$api_public/index.php) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 frontend_if_line="$(grep -nF "if (-f \$frontend_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 secpal_app_if_line="$(grep -nF "if (-f \$secpal_app_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
+guardguide_de_if_line="$(grep -nF "if (-f \$guardguide_de_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 changelog_if_line="$(grep -nF "if (-f \$changelog_out/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 
 test -n "$api_if_line"
 test -n "$frontend_if_line"
 test -n "$secpal_app_if_line"
+test -n "$guardguide_de_if_line"
 test -n "$changelog_if_line"
 
-if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line || secpal_app_if_line >= changelog_if_line )); then
-    echo "generic preview precedence must prefer changelog > secpal.app > frontend > api" >&2
+if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line || secpal_app_if_line >= guardguide_de_if_line || guardguide_de_if_line >= changelog_if_line )); then
+    echo "generic preview precedence must prefer changelog > guardguide.de > secpal.app > frontend > api" >&2
     exit 1
 fi
 
@@ -900,6 +1033,7 @@ fi
     "$workspace_root/android/polyscope.local.json" \
     "$workspace_root/GuardGuide/polyscope.local.json" \
     "$workspace_root/secpal.app/polyscope.local.json" \
+    "$workspace_root/guardguide.de/polyscope.local.json" \
     "$workspace_root/changelog/polyscope.local.json" \
     "$workspace_root/.github/polyscope.local.json" \
     >/dev/null
@@ -942,6 +1076,7 @@ assert summary['repositories']['api']['preview_prefix'] == 'api'
 assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
 assert summary['repositories']['GuardGuide']['preview_prefix'] == 'guardguide'
 assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
+assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
 assert summary['repositories']['changelog']['preview_prefix'] == 'changelog'
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
