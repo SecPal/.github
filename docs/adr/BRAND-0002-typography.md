@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# ADR-0002: Typography
+# BRAND-0002: Typography
 
 ## Status
 

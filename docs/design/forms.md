@@ -9,7 +9,7 @@ Forms should be predictable, accessible, and explicit about required input, vali
 
 ## Structure
 
-Use standard form components from the approved UI stack before creating custom controls. Each input must have a visible label or an accessible name when a visible label is not appropriate.
+Use standard form components from the product repository's chosen UI stack before creating custom controls. Each input must have a visible label or an accessible name when a visible label is not appropriate.
 
 Form fields should support:
 

@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# ADR-0004: Footer Wording
+# BRAND-0004: Footer Wording
 
 ## Status
 
@@ -23,9 +23,11 @@ Public product surfaces need compact footer wording that combines brand identity
 
 ## Decision
 
-SecPal and GuardGuide use the approved footer strings documented in the brand standards for AGPL-licensed public surfaces. Public AGPL footer copy uses slogan text without trailing periods and uses `AGPL v3+` for compact human-readable license wording.
+SecPal and GuardGuide use the approved footer strings documented in the brand standards for AGPL-licensed public surfaces. Public AGPL footer copy uses the exact approved slogan from `brand/slogans.md`, joined to the brand name with an en-dash (`–`, U+2013), without a trailing period, and uses `AGPL v3+` for compact human-readable license wording.
 
-Commercially licensed or otherwise non-AGPL surfaces must use public license wording that matches the active license terms instead of reusing the AGPL footer examples.
+GuardGuide footers add the exact attribution `Powered by SecPal` as a separate footer segment placed between the brand-plus-slogan lockup and the license wording. Neither the slogan nor the `Powered by SecPal` attribution is translated, regardless of page language.
+
+Commercially licensed or otherwise non-AGPL surfaces must use public license wording that matches the active license terms instead of reusing the AGPL footer examples, but they still use the approved English slogan and `Powered by SecPal` attribution on GuardGuide surfaces.
 
 Machine-readable contexts continue to use `AGPL-3.0-or-later` for SPDX headers, package metadata, license scanners, and license fields.
 
@@ -43,9 +45,9 @@ Approved footer strings prevent small punctuation, naming, and AGPL-license word
 
 ### Negative
 
-- Product repositories must preserve the approved AGPL words even when adapting layout or responsive wrapping.
+- Product repositories must preserve the approved AGPL words, the approved slogan, and the `Powered by SecPal` attribution exactly, even when adapting layout, separators, or responsive wrapping.
 - Commercial deployments still need repository-local license wording that matches the actual agreement.
-- Existing public surfaces may need copy-only updates.
+- Existing public surfaces may need copy-only updates to adopt the en-dash lockup, the corrected GuardGuide slogan, and the `Powered by SecPal` attribution.
 
 ## Alternatives Considered
 

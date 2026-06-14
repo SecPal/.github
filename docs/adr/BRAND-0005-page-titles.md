@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# ADR-0005: Page Titles
+# BRAND-0005: Page Titles
 
 ## Status
 

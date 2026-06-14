@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# ADR-0006: App UI Stack Ownership
+# BRAND-0006: App UI Stack Ownership
 
 ## Status
 

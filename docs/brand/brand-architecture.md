@@ -17,9 +17,11 @@ GuardGuide by SecPal is a standalone product within the SecPal family. Use the f
 
 Do not describe GuardGuide as a feature, module, edition, or subpage of SecPal. It can integrate with the SecPal platform, but its public brand position is a standalone product endorsed by the family name.
 
+In compact footer surfaces, the long-form `GuardGuide by SecPal` lockup is replaced by the brand-only `GuardGuide` plus a separate `Powered by SecPal` attribution segment. See `footer-wording.md` for the exact wording and `slogans.md` for the approved slogan strings (none of which are translated).
+
 ## Rationale
 
-This hierarchy keeps SecPal broad enough to cover current and future products while giving GuardGuide a clear public name that can stand on its own. The `by SecPal` endorsement connects the product to the family without making every product name start with SecPal.
+This hierarchy keeps SecPal broad enough to cover current and future products while giving GuardGuide a clear public name that can stand on its own. The `by SecPal` endorsement connects the product to the family without making every product name start with SecPal, and the `Powered by SecPal` footer attribution carries that connection into compact surfaces without requiring the long-form lockup in every footer cell.
 
 ## Repository Scope
 

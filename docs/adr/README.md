@@ -74,10 +74,10 @@ Examples:
 - `20251028-postgresql-temporal-tables.md`
 - `20251030-digital-signature-strategy.md`
 
-Focused ADR series may use a four-digit prefix when the series is added as a documented set:
+Focused ADR series for a specific domain may use a domain-prefix plus four-digit number when the series is added as a documented set. The domain prefix avoids collisions with the numeric `ADR-NNN` identifiers used by the date-prefixed series:
 
-- `0001-brand-architecture.md`
-- `0002-typography.md`
+- `BRAND-0001-brand-architecture.md`
+- `BRAND-0002-typography.md`
 
 ## Index
 
@@ -85,12 +85,12 @@ Focused ADR series may use a four-digit prefix when the series is added as a doc
 
 ### Accepted
 
-- [ADR-0001: Brand Architecture](0001-brand-architecture.md) - 2026-06-13
-- [ADR-0002: Typography](0002-typography.md) - 2026-06-13
-- [ADR-0003: Navigation Pattern](0003-navigation-pattern.md) - 2026-06-13
-- [ADR-0004: Footer Wording](0004-footer-wording.md) - 2026-06-13
-- [ADR-0005: Page Titles](0005-page-titles.md) - 2026-06-13
-- [ADR-0006: App UI Stack Ownership](0006-app-ui-stack.md) - 2026-06-13
+- [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13
+- [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
+- [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
+- [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13
+- [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13
+- [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15
 - [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27
