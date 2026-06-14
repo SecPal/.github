@@ -16,6 +16,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}=== Domain Policy Check ===${NC}"
+echo "Scope: enforces the secpal.* namespace split only (match regex: secpal\\.[A-Za-z0-9.-]+)."
+echo "Out of scope: non-secpal SecPal-owned hosts such as guardguide.de are governed by"
+echo "their own repository policy guards and are intentionally not inspected here."
 echo "Allowed: secpal.app, changelog.secpal.app, apk.secpal.app, secpal.dev"
 echo "Public changelog site: changelog.secpal.app"
 echo "Active web hosts: api.secpal.dev, app.secpal.dev"
@@ -23,7 +26,8 @@ echo "Android artifact host: apk.secpal.app"
 echo "Human-facing Android landing page: secpal.app/android"
 echo "Identifier-only: app.secpal (Android application ID)"
 echo "Deprecated web hosts: api.secpal.app"
-echo "Forbidden: secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, app.secpal.app, ANY other"
+echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io,"
+echo "  secpal.example, app.secpal.app, and any other unapproved secpal.* host."
 echo ""
 
 matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
@@ -106,7 +110,7 @@ else
         echo "$deprecated_web_hosts"
         echo ""
     fi
-    echo -e "${YELLOW}Policy:${NC}"
+    echo -e "${YELLOW}Policy (scope: secpal.* namespace split only):${NC}"
     echo "  - secpal.app: public homepage and real email addresses"
     echo "  - changelog.secpal.app: public changelog site"
     echo "  - apk.secpal.app: canonical Android artifact/download host"
@@ -116,7 +120,8 @@ else
     echo "  - app.secpal: Android application identifier only"
     echo "  - secpal.app/android: human-facing Android landing page"
     echo "  - DEPRECATED as web hosts: api.secpal.app"
-    echo "  - FORBIDDEN: secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, app.secpal.app"
+    echo "  - FORBIDDEN secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, app.secpal.app"
+    echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."
     echo ""
     echo "Fix these violations before committing."
     exit 1

@@ -79,6 +79,15 @@ if [ -f scripts/check-domains.sh ]; then
   }
 fi
 
+if [ -f tests/check-domains.sh ]; then
+  bash tests/check-domains.sh || {
+    echo "" >&2
+    echo "❌ Domain policy scope regression test failed!" >&2
+    echo "Keep scripts/check-domains.sh and scripts/README.md aligned on the secpal.* namespace scope (see SecPal/.github#484) before continuing." >&2
+    exit 1
+  }
+fi
+
 # Conflict Marker Check (prevents accidental commits of broken code)
 if [ -f scripts/check-conflict-markers.sh ]; then
   bash scripts/check-conflict-markers.sh || {
