@@ -1030,7 +1030,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "preview": {"url": build_preview_url_template("guardguide")},
             "scripts": {
                 "setup": [
-                    "test -d vendor || composer install",
+                    "composer install",
                     "npm ci",
                     "test -f .env || cp .env.example .env",
                     build_guardguide_preview_env_setup_command(),
