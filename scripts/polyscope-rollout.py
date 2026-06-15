@@ -970,7 +970,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     build_frontend_preview_env_setup_command(),
-                    "test -d node_modules || npm ci",
+                    "npm ci",
                     "VITE_API_URL=https://api-${PWD##*/}.preview.secpal.dev npm run build -- --mode preview",
                 ],
                 "run": [
@@ -1031,7 +1031,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     "test -d vendor || composer install",
-                    "test -d node_modules || npm ci",
+                    "npm ci",
                     "test -f .env || cp .env.example .env",
                     build_guardguide_preview_env_setup_command(),
                     "test -f database/database.sqlite || touch database/database.sqlite",
@@ -1079,7 +1079,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "copyGitignored": True,
             "runMode": "replace",
             "scripts": {
-                "setup": ["test -d node_modules || npm ci"],
+                "setup": ["npm ci"],
                 "run": [
                     {"label": "Validate", "command": "npm run validate", "runMode": "preserve"},
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
@@ -1113,7 +1113,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "copyGitignored": True,
             "runMode": "replace",
             "scripts": {
-                "setup": ["test -d node_modules || npm ci"],
+                "setup": ["npm ci"],
                 "run": [
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
                     {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
@@ -1149,7 +1149,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("secpal-app")},
             "scripts": {
-                "setup": ["test -d node_modules || npm ci", "npm run build"],
+                "setup": ["npm ci", "npm run build"],
                 "run": [
                     {
                         "label": "Build Watch",
@@ -1199,7 +1199,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("guardguide-de")},
             "scripts": {
-                "setup": ["test -d node_modules || npm ci", "npm run build"],
+                "setup": ["npm ci", "npm run build"],
                 "run": [
                     {
                         "label": "Build Watch",
@@ -1249,7 +1249,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("changelog")},
             "scripts": {
-                "setup": ["test -d node_modules || npm ci", "npm run build"],
+                "setup": ["npm ci", "npm run build"],
                 "run": [
                     {
                         "label": "Build Watch",
@@ -1289,7 +1289,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "copyGitignored": True,
             "runMode": "replace",
             "scripts": {
-                "setup": ["test -d node_modules || npm ci"],
+                "setup": ["npm ci"],
                 "run": [
                     {"label": "Preflight", "command": "./scripts/preflight.sh", "runMode": "preserve"},
                     {"label": "Copilot Review Scan", "command": "npm run copilot:review:scan", "runMode": "preserve"},
@@ -1747,9 +1747,31 @@ def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str
     }
 
 
-def build_setup_hash(setup_commands: list[str]) -> str:
-    payload = json.dumps(setup_commands, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(payload.encode()).hexdigest()
+def collect_setup_inputs(worktree_path: pathlib.Path, setup_commands: list[str]) -> dict[str, str]:
+    inputs: dict[str, str] = {}
+    command_text = "\n".join(setup_commands)
+
+    candidate_paths: list[pathlib.Path] = []
+    if re.search(r"\bnpm\s+(?:ci|install|run)\b|\bnpx\b", command_text):
+        candidate_paths.extend([worktree_path / "package.json", worktree_path / "package-lock.json"])
+
+    if re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command_text):
+        candidate_paths.extend([worktree_path / "composer.json", worktree_path / "composer.lock"])
+
+    for path in candidate_paths:
+        if path.is_file():
+            inputs[path.name] = path.read_text()
+
+    return inputs
+
+
+def build_setup_hash(worktree_path: pathlib.Path, setup_commands: list[str]) -> str:
+    payload = {
+        "commands": setup_commands,
+        "inputs": collect_setup_inputs(worktree_path, setup_commands),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def load_provision_marker(marker_path: pathlib.Path) -> dict[str, Any] | None:
@@ -1879,7 +1901,6 @@ def provision_worktrees(
         setup_commands = validation_commands
         if repo_name == "api":
             setup_commands = setup_commands[1:]
-        setup_hash = build_setup_hash(setup_commands)
         config_text = rendered_configs[repo_name]
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
@@ -1889,6 +1910,7 @@ def provision_worktrees(
 
                 sync_worktree_local_config(worktree_path, config_text)
                 ensure_worktree_hooks(worktree_path)
+                setup_hash = build_setup_hash(worktree_path, setup_commands)
 
                 preview_storage_target: str | None = None
                 if repo_name == "api":

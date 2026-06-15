@@ -1843,6 +1843,45 @@ grep -qF 'POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__schema_badger' "$schema_api_
 test "$(grep -cF "php:$schema_api_clone:artisan migrate --force" "$provision_log")" -eq 2
 test "$(grep -cF 'CREATE SCHEMA IF NOT EXISTS "secpal__preview__schema_badger"' "$fake_psql_log")" -eq 2
 
+python3 - <<'PY' "$schema_frontend_clone/package-lock.json"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text())
+payload["packages"][""] = {"name": "frontend-schema-badger", "version": "0.0.2"}
+path.write_text(json.dumps(payload, indent=2) + "\n")
+PY
+
+schema_lockfile_summary_json="$workspace/schema-lockfile-summary.json"
+schema_frontend_npm_ci_count_before="$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log" || true)"
+env HOME="$schema_home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$schema_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$schema_lockfile_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - <<'PY' "$schema_lockfile_summary_json"
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+assert 'frontend:schema-badger' in provisioned, provisioned
+PY
+
+test "$schema_frontend_npm_ci_count_before" -lt "$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log")"
+
 rm -rf "$schema_api_clone" "$schema_frontend_clone"
 
 env HOME="$schema_home_dir" \
@@ -1878,7 +1917,7 @@ grep -qF 'DROP SCHEMA IF EXISTS "secpal__preview__schema_badger" CASCADE' "$fake
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
     '"test -d vendor || composer install",' \
-    '"test -d vendor || composer install",\n                    "test -d node_modules || npm ci",' \
+    '"test -d vendor || composer install",\n                    "npm ci",' \
     "api polyscope config references npm without a package.json at the repo root"
 
 assert_rollout_rejects_invalid_local_config \

@@ -27,6 +27,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-15 - Reprovision Polyscope Worktrees On Lockfile Drift
+
+**Changed:**
+
+- updated `scripts/polyscope-rollout.py` so Node-based managed worktrees now run plain `npm ci` during provisioning instead of `test -d node_modules || npm ci`. Provisioning is already marker-gated, so the old existence check only preserved stale dependency trees after lockfile changes.
+- updated `scripts/polyscope-rollout.py` so the per-worktree provision marker hash now includes dependency manifest inputs (`package.json`, `package-lock.json`, `composer.json`, `composer.lock`) in addition to the setup command list. Together with unconditional `npm ci`, this forces a fresh dependency install when a managed workspace's lockfiles change, closing the drift that left GuardGuide preview worktrees with stale `node_modules` after the new `@fontsource/inter` dependency landed.
+
+**Added:**
+
+- extended `tests/polyscope-rollout.sh` with a regression that mutates a provisioned frontend worktree `package-lock.json` and proves the next provisioning pass reruns setup instead of trusting the previous marker.
+
+---
+
 ## 2026-06-14 - Skip Gitignored Agent Scratch Dir In `check-domains.sh`
 
 **Changed:**
