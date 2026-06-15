@@ -1593,6 +1593,7 @@ seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibi
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
 seed_api_worktree_files "$guardguide_clone"
 seed_node_worktree_files "$guardguide_clone" "guardguide-steady-otter"
+printf '{\n  "packages": []\n}\n' > "$guardguide_clone/composer.lock"
 printf '{"scripts": ' > "$failing_api_cleanup_clone/composer.json"
 printf '{"scripts": ' > "$failing_frontend_manifest_clone/package.json"
 rm -rf "$failing_frontend_io_clone/.git/info"
@@ -1687,6 +1688,48 @@ test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_cleanup_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_frontend_manifest_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_frontend_io_clone/.polyscope-secpal-provisioned.json"
+
+python3 - <<'PY' "$guardguide_clone/composer.lock"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text())
+payload["packages"].append({"name": "guardguide/app", "version": "1.0.1"})
+path.write_text(json.dumps(payload, indent=2) + "\n")
+PY
+
+guardguide_lockfile_summary_json="$workspace/guardguide-lockfile-summary.json"
+guardguide_composer_install_count_before="$(grep -cF "composer:$guardguide_clone:install" "$provision_log" || true)"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    FAIL_ON_WORKTREE="$failing_api_clone" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$guardguide_lockfile_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null || guardguide_lockfile_exit=$?
+
+test "${guardguide_lockfile_exit:-0}" -eq 1
+
+python3 - "$guardguide_lockfile_summary_json" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+assert 'GuardGuide:steady-otter' in provisioned, provisioned
+PY
+
+test "$guardguide_composer_install_count_before" -lt "$(grep -cF "composer:$guardguide_clone:install" "$provision_log")"
 
 schema_home_dir="$workspace/schema-home"
 schema_api_clone="$schema_home_dir/.polyscope/clones/api12345/schema-badger"
@@ -1843,6 +1886,45 @@ grep -qF 'POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__schema_badger' "$schema_api_
 test "$(grep -cF "php:$schema_api_clone:artisan migrate --force" "$provision_log")" -eq 2
 test "$(grep -cF 'CREATE SCHEMA IF NOT EXISTS "secpal__preview__schema_badger"' "$fake_psql_log")" -eq 2
 
+python3 - <<'PY' "$schema_frontend_clone/package-lock.json"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text())
+payload["packages"][""] = {"name": "frontend-schema-badger", "version": "0.0.2"}
+path.write_text(json.dumps(payload, indent=2) + "\n")
+PY
+
+schema_lockfile_summary_json="$workspace/schema-lockfile-summary.json"
+schema_frontend_npm_ci_count_before="$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log" || true)"
+env HOME="$schema_home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$schema_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$schema_lockfile_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - <<'PY' "$schema_lockfile_summary_json"
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+provisioned = summary.get('provisioned_worktrees', [])
+assert 'frontend:schema-badger' in provisioned, provisioned
+PY
+
+test "$schema_frontend_npm_ci_count_before" -lt "$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log")"
+
 rm -rf "$schema_api_clone" "$schema_frontend_clone"
 
 env HOME="$schema_home_dir" \
@@ -1878,7 +1960,7 @@ grep -qF 'DROP SCHEMA IF EXISTS "secpal__preview__schema_badger" CASCADE' "$fake
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
     '"test -d vendor || composer install",' \
-    '"test -d vendor || composer install",\n                    "test -d node_modules || npm ci",' \
+    '"test -d vendor || composer install",\n                    "npm ci",' \
     "api polyscope config references npm without a package.json at the repo root"
 
 assert_rollout_rejects_invalid_local_config \
