@@ -2490,7 +2490,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
-    parser.add_argument("--db-path", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "polyscope.db")
+    parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
     parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
     parser.add_argument("--polyscope-api-base", default="http://127.0.0.1:4321/api")
     parser.add_argument("--repo-state-file", type=pathlib.Path)

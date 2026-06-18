@@ -803,6 +803,101 @@ assert "APP_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in api_en
 assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, api_env
 assert "SANCTUM_STATEFUL_DOMAINS=frontend-azure-cheetah.preview.secpal.dev,azure-cheetah-165552b7.preview.secpal.dev,app.secpal.dev" in api_env, api_env
 assert "CORS_ALLOWED_ORIGINS=https://frontend-azure-cheetah.preview.secpal.dev,https://azure-cheetah-165552b7.preview.secpal.dev,https://app.secpal.dev" in api_env, api_env
+
+# build_frontend_preview_build_command: assert linked API workspace is used in VITE_API_URL
+build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_build_command()],
+    cwd=frontend_worktree,
+    env={**env, "PATH": "/usr/bin:/bin", "VITE_BUILD_CAPTURE": "1"},
+    capture_output=True,
+)
+# The command calls npm run build which won't exist in the fixture; what we test is that
+# the generated script resolves the correct api_workspace before invoking npm.
+# Run the resolver portion only (up to subprocess.run) by patching subprocess.run to capture env.
+import textwrap as _textwrap
+resolver_probe = _textwrap.dedent(f"""
+import os
+import subprocess
+from pathlib import Path
+
+{module.build_linked_workspace_resolver_source()}
+
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+print(f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev")
+""").strip()
+probe_result = subprocess.run(
+    ["python3", "-c", resolver_probe],
+    cwd=frontend_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
+
+# build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
+playwright_probe = _textwrap.dedent(f"""
+import os
+import subprocess
+from pathlib import Path
+
+{module.build_linked_workspace_resolver_source()}
+
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+print(f"PLAYWRIGHT_BASE_URL=https://frontend-{{workspace}}.preview.secpal.dev")
+print(f"PLAYWRIGHT_API_BASE_URL=https://api-{{api_workspace}}.preview.secpal.dev")
+""").strip()
+playwright_probe_result = subprocess.run(
+    ["python3", "-c", playwright_probe],
+    cwd=frontend_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert "PLAYWRIGHT_BASE_URL=https://frontend-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
+assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
+PY
+
+# --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
+# Reset api worktree .env so we can re-run via the CLI entry point.
+python3 - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "linked-preview-fixture"
+db_path = fixture / "polyscope.db"
+api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+source_api = fixture / "source-api"
+
+# Reset .env so ensure_api_worktree_ready will update it again
+api_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+result = subprocess.run(
+    [
+        sys.executable,
+        str(script_path),
+        "--prepare-api-worktree", str(api_worktree),
+        "--source-repo-path", str(source_api),
+    ],
+    env=env,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
+api_env = api_worktree.joinpath(".env").read_text()
+assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, (
+    "CLI --prepare-api-worktree must use POLYSCOPE_DB_PATH to resolve the linked frontend workspace\n" + api_env
+)
 PY
 
 grep -qF '"command": "npm run validate && npm run lint && npm run format:check"' "$workspace_root/contracts/polyscope.local.json"

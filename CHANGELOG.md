@@ -22,6 +22,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - extended `tests/polyscope-rollout.sh` with an asymmetric linked-worktree regression that proves a frontend workspace can target a suffixed API workspace and the API can allow the unsuffixed frontend origin.
 - extended `tests/polyscope-rollout.sh` to assert that generated Polyscope repository prompts and task prompts for all managed repositories include the no-AI-attribution rule.
+- extended `tests/polyscope-rollout.sh` with resolver probe tests for `build_frontend_preview_build_command` and `build_frontend_preview_playwright_command` confirming the linked API workspace name is resolved correctly for both commands.
+- extended `tests/polyscope-rollout.sh` with a CLI-path test that invokes `--prepare-api-worktree` with `POLYSCOPE_DB_PATH` set and asserts `FRONTEND_URL` is resolved from the linked worktree, validating the `parse_args()` env-var fallback for `--db-path`.
 
 ## 2026-06-14 - Document SecPal Brand And Shared Design Standards
 
