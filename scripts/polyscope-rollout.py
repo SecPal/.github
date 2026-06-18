@@ -82,6 +82,44 @@ def resolve_linked_workspace_name(
     return pathlib.Path(row[0]).name
 
 
+def collect_linked_setup_context(
+    worktree_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> dict[str, str]:
+    resolved_db_path = db_path or default_polyscope_db_path()
+    if not resolved_db_path.exists():
+        return {}
+
+    try:
+        current_path = str(worktree_path.resolve())
+    except OSError:
+        current_path = str(worktree_path)
+
+    try:
+        with sqlite3.connect(resolved_db_path) as connection:
+            rows = connection.execute(
+                """
+                select linked_repo.name, linked_worktree.path
+                from worktree_links
+                join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
+                join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
+                join repositories linked_repo on linked_repo.id = linked_worktree.repo_id
+                where current_worktree.path = ?
+                order by linked_repo.name asc, worktree_links.created_at desc
+                """,
+                (current_path,),
+            ).fetchall()
+    except sqlite3.Error:
+        return {}
+
+    context: dict[str, str] = {}
+    for repo_name, linked_path in rows:
+        context.setdefault(repo_name, pathlib.Path(linked_path).name)
+
+    return context
+
+
 def build_linked_workspace_resolver_source() -> str:
     return textwrap.dedent(
         """
@@ -347,14 +385,14 @@ def build_api_preview_env_updates(workspace: str, frontend_workspace: str | None
         "SANCTUM_STATEFUL_DOMAINS": ",".join(
             (
                 f"frontend-{resolved_frontend_workspace}.preview.secpal.dev",
-                f"{workspace}.preview.secpal.dev",
+                f"{resolved_frontend_workspace}.preview.secpal.dev",
                 "app.secpal.dev",
             )
         ),
         "CORS_ALLOWED_ORIGINS": ",".join(
             (
                 f"https://frontend-{resolved_frontend_workspace}.preview.secpal.dev",
-                f"https://{workspace}.preview.secpal.dev",
+                f"https://{resolved_frontend_workspace}.preview.secpal.dev",
                 "https://app.secpal.dev",
             )
         ),
@@ -1922,11 +1960,22 @@ def collect_setup_inputs(worktree_path: pathlib.Path, setup_commands: list[str])
     return inputs
 
 
-def build_setup_hash(worktree_path: pathlib.Path, setup_commands: list[str]) -> str:
+def build_setup_hash(
+    worktree_path: pathlib.Path,
+    setup_commands: list[str],
+    *,
+    db_path: pathlib.Path | None = None,
+    linked_context: dict[str, str] | None = None,
+) -> str:
     payload = {
         "commands": setup_commands,
         "inputs": collect_setup_inputs(worktree_path, setup_commands),
     }
+    if linked_context is None:
+        linked_context = collect_linked_setup_context(worktree_path, db_path=db_path)
+    if linked_context:
+        payload["linked_workspaces"] = linked_context
+
     raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -2074,7 +2123,12 @@ def provision_worktrees(
 
                 sync_worktree_local_config(worktree_path, config_text)
                 ensure_worktree_hooks(worktree_path)
-                setup_hash = build_setup_hash(worktree_path, setup_commands)
+                linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
+                setup_hash = build_setup_hash(
+                    worktree_path,
+                    setup_commands,
+                    linked_context=linked_setup_context,
+                )
 
                 preview_storage_target: str | None = None
                 if repo_name == "api":
@@ -2100,6 +2154,8 @@ def provision_worktrees(
                 }
                 if repo_name == "api" and preview_storage_target is not None:
                     marker_payload["preview_storage_target"] = preview_storage_target
+                if linked_setup_context:
+                    marker_payload["linked_workspaces"] = linked_setup_context
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
                 provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")

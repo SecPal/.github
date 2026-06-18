@@ -715,7 +715,7 @@ if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-python3 - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
 import pathlib
@@ -729,9 +729,11 @@ fixture = workspace / "linked-preview-fixture"
 db_path = fixture / "polyscope.db"
 frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah"
 api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+relinked_api_worktree = fixture / "clones" / "api12345" / "crimson-link"
 source_api = fixture / "source-api"
 frontend_worktree.mkdir(parents=True)
 api_worktree.mkdir(parents=True)
+relinked_api_worktree.mkdir(parents=True)
 source_api.mkdir(parents=True)
 
 source_api.joinpath(".env").write_text(
@@ -769,6 +771,7 @@ with sqlite3.connect(db_path) as connection:
         "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
         [
             ("api-worktree", "api12345", str(api_worktree)),
+            ("api-worktree-relinked", "api12345", str(relinked_api_worktree)),
             ("frontend-worktree", "fe123456", str(frontend_worktree)),
         ],
     )
@@ -801,8 +804,31 @@ assert ready
 api_env = api_worktree.joinpath(".env").read_text()
 assert "APP_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in api_env, api_env
 assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, api_env
-assert "SANCTUM_STATEFUL_DOMAINS=frontend-azure-cheetah.preview.secpal.dev,azure-cheetah-165552b7.preview.secpal.dev,app.secpal.dev" in api_env, api_env
-assert "CORS_ALLOWED_ORIGINS=https://frontend-azure-cheetah.preview.secpal.dev,https://azure-cheetah-165552b7.preview.secpal.dev,https://app.secpal.dev" in api_env, api_env
+assert "SANCTUM_STATEFUL_DOMAINS=frontend-azure-cheetah.preview.secpal.dev,azure-cheetah.preview.secpal.dev,app.secpal.dev" in api_env, api_env
+assert "CORS_ALLOWED_ORIGINS=https://frontend-azure-cheetah.preview.secpal.dev,https://azure-cheetah.preview.secpal.dev,https://app.secpal.dev" in api_env, api_env
+
+setup_commands = [module.build_frontend_preview_env_setup_command(), "npm run build -- --mode preview"]
+initial_setup_hash = module.build_setup_hash(frontend_worktree, setup_commands, db_path=db_path)
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "delete from worktree_links where worktree_id = ? and linked_worktree_id = ?",
+        ("frontend-worktree", "api-worktree"),
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("frontend-worktree", "api-worktree-relinked"),
+    )
+changed_setup_hash = module.build_setup_hash(frontend_worktree, setup_commands, db_path=db_path)
+assert changed_setup_hash != initial_setup_hash, "linked workspace changes must invalidate frontend provisioning"
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "delete from worktree_links where worktree_id = ? and linked_worktree_id = ?",
+        ("frontend-worktree", "api-worktree-relinked"),
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("frontend-worktree", "api-worktree"),
+    )
 
 # build_frontend_preview_build_command: assert linked API workspace is used in VITE_API_URL
 build_result = subprocess.run(
@@ -863,7 +889,7 @@ PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
 # Reset api worktree .env so we can re-run via the CLI entry point.
-python3 - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
 import pathlib
@@ -1283,7 +1309,7 @@ assert summary['repositories']['.github']['linked_repositories'] == []
 assert summary['repositories']['GuardGuide']['linked_repositories'] == ['api', 'frontend', 'contracts', 'android']
 PY
 
-python3 - <<'PY' "$workspace_root"
+python3 -B - <<'PY' "$workspace_root"
 import json
 import sys
 from pathlib import Path
