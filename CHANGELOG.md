@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-18 - Fix Linked Polyscope Preview URLs
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so frontend and API preview configuration resolves linked worktree names from Polyscope `worktree_links` instead of assuming every linked repository uses the same workspace folder name. This keeps asymmetric linked previews such as `frontend-azure-cheetah` and `api-azure-cheetah-165552b7` wired to each other correctly.
+- changed generated frontend preview setup, build, watch, and workspace Playwright commands to target the linked API worktree host when one exists, with the current folder name retained as the fallback for unlinked workspaces.
+- changed API preview `.env` preparation to allow the linked frontend worktree origin in `FRONTEND_URL`, `SANCTUM_STATEFUL_DOMAINS`, and `CORS_ALLOWED_ORIGINS`, while keeping the API workspace host based on its own worktree name.
+
+**Added:**
+
+- extended `tests/polyscope-rollout.sh` with an asymmetric linked-worktree regression that proves a frontend workspace can target a suffixed API workspace and the API can allow the unsuffixed frontend origin.
+
 ## 2026-06-14 - Document SecPal Brand And Shared Design Standards
 
 **Added:**

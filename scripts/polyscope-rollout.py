@@ -34,6 +34,92 @@ POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z0-9_]+)=(.*)$")
 
 
+def default_polyscope_db_path() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("POLYSCOPE_DB_PATH", pathlib.Path.home() / ".polyscope" / "polyscope.db"))
+
+
+def resolve_linked_workspace_name(
+    worktree_path: pathlib.Path,
+    linked_repo_name: str,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> str | None:
+    resolved_db_path = db_path or default_polyscope_db_path()
+    if not resolved_db_path.exists():
+        return None
+
+    try:
+        current_path = str(worktree_path.resolve())
+    except OSError:
+        current_path = str(worktree_path)
+
+    try:
+        with sqlite3.connect(resolved_db_path) as connection:
+            row = connection.execute(
+                """
+                select linked_worktree.path
+                from worktree_links
+                join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
+                join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
+                join repositories linked_repo on linked_repo.id = linked_worktree.repo_id
+                where current_worktree.path = ? and linked_repo.name = ?
+                order by worktree_links.created_at desc
+                limit 1
+                """,
+                (current_path, linked_repo_name),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+
+    if row is None:
+        return None
+
+    return pathlib.Path(row[0]).name
+
+
+def build_linked_workspace_resolver_source() -> str:
+    return textwrap.dedent(
+        """
+        from pathlib import Path
+        import os
+        import sqlite3
+
+        def resolve_linked_workspace(linked_repo_name, fallback):
+            db_path = Path(os.environ.get("POLYSCOPE_DB_PATH", Path.home() / ".polyscope" / "polyscope.db"))
+            if not db_path.exists():
+                return fallback
+
+            try:
+                current_path = str(Path.cwd().resolve())
+            except OSError:
+                current_path = str(Path.cwd())
+
+            try:
+                with sqlite3.connect(db_path) as connection:
+                    row = connection.execute(
+                        '''
+                        select linked_worktree.path
+                        from worktree_links
+                        join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
+                        join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
+                        join repositories linked_repo on linked_repo.id = linked_worktree.repo_id
+                        where current_worktree.path = ? and linked_repo.name = ?
+                        order by worktree_links.created_at desc
+                        limit 1
+                        ''',
+                        (current_path, linked_repo_name),
+                    ).fetchone()
+            except sqlite3.Error:
+                return fallback
+
+            if row is None:
+                return fallback
+
+            return Path(row[0]).name
+        """
+    ).strip()
+
+
 def build_preview_url_template(preview_prefix: str | None) -> str:
     if preview_prefix:
         return f"https://{preview_prefix}-{{{{folder}}}}.preview.secpal.dev"
@@ -247,21 +333,22 @@ def build_postgres_url(env_values: dict[str, str], database_name: str, search_pa
     )
 
 
-def build_api_preview_env_updates(workspace: str) -> dict[str, str]:
+def build_api_preview_env_updates(workspace: str, frontend_workspace: str | None = None) -> dict[str, str]:
+    resolved_frontend_workspace = frontend_workspace or workspace
     return {
         "APP_URL": f"https://api-{workspace}.preview.secpal.dev",
-        "FRONTEND_URL": f"https://frontend-{workspace}.preview.secpal.dev",
+        "FRONTEND_URL": f"https://frontend-{resolved_frontend_workspace}.preview.secpal.dev",
         "SESSION_DOMAIN": ".secpal.dev",
         "SANCTUM_STATEFUL_DOMAINS": ",".join(
             (
-                f"frontend-{workspace}.preview.secpal.dev",
+                f"frontend-{resolved_frontend_workspace}.preview.secpal.dev",
                 f"{workspace}.preview.secpal.dev",
                 "app.secpal.dev",
             )
         ),
         "CORS_ALLOWED_ORIGINS": ",".join(
             (
-                f"https://frontend-{workspace}.preview.secpal.dev",
+                f"https://frontend-{resolved_frontend_workspace}.preview.secpal.dev",
                 f"https://{workspace}.preview.secpal.dev",
                 "https://app.secpal.dev",
             )
@@ -286,7 +373,12 @@ def build_api_preview_storage_target(env_values: dict[str, str]) -> str | None:
     return None
 
 
-def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pathlib.Path) -> tuple[bool, str | None]:
+def ensure_api_worktree_ready(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> tuple[bool, str | None]:
     env_path = worktree_path / ".env"
     if not env_path.exists():
         source_env_path = source_repo_path / ".env"
@@ -301,7 +393,8 @@ def ensure_api_worktree_ready(worktree_path: pathlib.Path, source_repo_path: pat
     env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
     workspace = worktree_path.name
-    updated_values = build_api_preview_env_updates(workspace)
+    frontend_workspace = resolve_linked_workspace_name(worktree_path, "SecPal/frontend", db_path=db_path)
+    updated_values = build_api_preview_env_updates(workspace, frontend_workspace)
 
     if env_values.get("DB_CONNECTION", "").lower() == "pgsql":
         base_database = resolve_base_database_name(env_values, workspace)
@@ -392,45 +485,70 @@ def cleanup_removed_api_preview_databases(
 
 def build_frontend_preview_env_setup_command() -> str:
     script = textwrap.dedent(
-        """
-        from pathlib import Path
-        import os
-        import re
+        f"""\
+from pathlib import Path
+import re
 
-        workspace = os.environ["POLYSCOPE_WORKSPACE"]
-        pattern = re.compile(r"^VITE_API_URL=.*$", re.MULTILINE)
-        replacement = f"VITE_API_URL=https://api-{workspace}.preview.secpal.dev"
+{build_linked_workspace_resolver_source()}
 
-        for env_name in (".env.local", ".env.preview.local", ".env.production.local"):
-            env_path = Path(env_name)
-            text = env_path.read_text() if env_path.exists() else ""
-            if pattern.search(text):
-                text = pattern.sub(replacement, text)
-            else:
-                if text and not text.endswith("\\n"):
-                    text += "\\n"
-                text += replacement + "\\n"
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+pattern = re.compile(r"^VITE_API_URL=.*$", re.MULTILINE)
+replacement = f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev"
 
-            env_path.write_text(text)
+for env_name in (".env.local", ".env.preview.local", ".env.production.local"):
+    env_path = Path(env_name)
+    text = env_path.read_text() if env_path.exists() else ""
+    if pattern.search(text):
+        text = pattern.sub(replacement, text)
+    else:
+        if text and not text.endswith("\\n"):
+            text += "\\n"
+        text += replacement + "\\n"
+
+    env_path.write_text(text)
         """
     ).strip()
 
-    return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
+    return f"python3 -c {shlex.quote(script)}"
+
+
+def build_frontend_preview_build_command() -> str:
+    script = textwrap.dedent(
+        f"""\
+import os
+import subprocess
+from pathlib import Path
+
+{build_linked_workspace_resolver_source()}
+
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+env = os.environ.copy()
+env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
+raise SystemExit(subprocess.run(["npm", "run", "build", "--", "--mode", "preview"], env=env).returncode)
+        """
+    ).strip()
+
+    return f"python3 -c {shlex.quote(script)}"
 
 
 def build_frontend_preview_build_watch_command() -> str:
     script = textwrap.dedent(
-        """
-        import hashlib
-        import os
-        import subprocess
-        import sys
-        import time
-        from pathlib import Path
+        f"""\
+import hashlib
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
 
-        api_url = f"https://api-{Path.cwd().name}.preview.secpal.dev"
-        watch_directories = [Path("src"), Path("public"), Path("config")]
-        watch_files = [
+{build_linked_workspace_resolver_source()}
+
+api_workspace = resolve_linked_workspace("SecPal/api", Path.cwd().name)
+api_url = f"https://api-{{api_workspace}}.preview.secpal.dev"
+watch_directories = [Path("src"), Path("public"), Path("config")]
+watch_files = [
             Path("index.html"),
             Path("package.json"),
             Path("package-lock.json"),
@@ -441,8 +559,8 @@ def build_frontend_preview_build_watch_command() -> str:
             Path(".env.local"),
             Path(".env.preview.local"),
             Path(".env.production.local"),
-        ]
-        watch_suffixes = {
+]
+watch_suffixes = {
             ".css",
             ".html",
             ".ico",
@@ -455,84 +573,111 @@ def build_frontend_preview_build_watch_command() -> str:
             ".ts",
             ".tsx",
             ".webmanifest",
-        }
+}
 
-        def iter_watch_paths():
-            seen = set()
+def iter_watch_paths():
+    seen = set()
 
-            for path in watch_files:
-                if not path.exists():
-                    continue
+    for path in watch_files:
+        if not path.exists():
+            continue
 
-                try:
-                    resolved = path.resolve()
-                except OSError:
-                    continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
 
-                if resolved in seen:
-                    continue
+        if resolved in seen:
+            continue
 
-                seen.add(resolved)
-                yield path
+        seen.add(resolved)
+        yield path
 
-            for directory in watch_directories:
-                if not directory.exists():
-                    continue
+    for directory in watch_directories:
+        if not directory.exists():
+            continue
 
-                for path in sorted(directory.rglob("*")):
-                    if not path.is_file() or path.suffix not in watch_suffixes:
-                        continue
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.suffix not in watch_suffixes:
+                continue
 
-                    try:
-                        resolved = path.resolve()
-                    except OSError:
-                        continue
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
 
-                    if resolved in seen:
-                        continue
+            if resolved in seen:
+                continue
 
-                    seen.add(resolved)
-                    yield path
+            seen.add(resolved)
+            yield path
 
-        def snapshot() -> str:
-            state = []
+def snapshot() -> str:
+    state = []
 
-            for path in iter_watch_paths():
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
+    for path in iter_watch_paths():
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
 
-                state.append(f"{path.as_posix()}:{stat.st_mtime_ns}:{stat.st_size}")
+        state.append(f"{{path.as_posix()}}:{{stat.st_mtime_ns}}:{{stat.st_size}}")
 
-            return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
+    return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
-        def run_build() -> int:
-            env = os.environ.copy()
-            env["VITE_API_URL"] = api_url
+def run_build() -> int:
+    env = os.environ.copy()
+    env["VITE_API_URL"] = api_url
 
-            return subprocess.run(
-                ["npm", "run", "build", "--", "--mode", "preview"],
-                check=False,
-                env=env,
-            ).returncode
+    return subprocess.run(
+        ["npm", "run", "build", "--", "--mode", "preview"],
+        check=False,
+        env=env,
+    ).returncode
 
-        print("Watching frontend preview sources for changes...", flush=True)
-        previous_snapshot = None
+print("Watching frontend preview sources for changes...", flush=True)
+previous_snapshot = None
 
-        while True:
-            current_snapshot = snapshot()
-            if current_snapshot != previous_snapshot:
-                previous_snapshot = current_snapshot
-                exit_code = run_build()
-                if exit_code != 0:
-                    print(
-                        f"Preview rebuild failed with exit code {exit_code}; waiting for the next change before retrying.",
-                        file=sys.stderr,
-                        flush=True,
-                    )
+while True:
+    current_snapshot = snapshot()
+    if current_snapshot != previous_snapshot:
+        previous_snapshot = current_snapshot
+        exit_code = run_build()
+        if exit_code != 0:
+            print(
+                f"Preview rebuild failed with exit code {{exit_code}}; waiting for the next change before retrying.",
+                file=sys.stderr,
+                flush=True,
+            )
 
-            time.sleep(1)
+    time.sleep(1)
+        """
+    ).strip()
+
+    return f"python3 -c {shlex.quote(script)}"
+
+
+def build_frontend_preview_playwright_command(*, authenticated: bool) -> str:
+    test_args = ["npx", "playwright", "test"]
+    if not authenticated:
+        test_args.extend(["tests/e2e/smoke.spec.ts", "--project=chromium", "--project=mobile-chrome"])
+
+    script = textwrap.dedent(
+        f"""\
+import os
+import subprocess
+from pathlib import Path
+
+{build_linked_workspace_resolver_source()}
+
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+env = os.environ.copy()
+env["PLAYWRIGHT_BASE_URL"] = f"https://frontend-{{workspace}}.preview.secpal.dev"
+env["PLAYWRIGHT_API_BASE_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
+{"env['TEST_USER_EMAIL'] = 'test@example.com'" if authenticated else "env['CI'] = 'true'"}
+{"env['TEST_USER_PASSWORD'] = 'password'" if authenticated else "env['PLAYWRIGHT_SKIP_GLOBAL_LOGIN'] = '1'"}
+raise SystemExit(subprocess.run({test_args!r}, env=env).returncode)
         """
     ).strip()
 
@@ -971,7 +1116,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 "setup": [
                     build_frontend_preview_env_setup_command(),
                     "npm ci",
-                    "VITE_API_URL=https://api-${PWD##*/}.preview.secpal.dev npm run build -- --mode preview",
+                    build_frontend_preview_build_command(),
                 ],
                 "run": [
                     {
@@ -990,12 +1135,12 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     },
                     {
                         "label": "Playwright Workspace Preview Smoke",
-                        "command": "CI=true PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_SKIP_GLOBAL_LOGIN=1 npx playwright test tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome",
+                        "command": build_frontend_preview_playwright_command(authenticated=False),
                         "runMode": "preserve",
                     },
                     {
                         "label": "Playwright Workspace Preview Authenticated",
-                        "command": "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-${PWD##*/}.preview.secpal.dev npx playwright test",
+                        "command": build_frontend_preview_playwright_command(authenticated=True),
                         "runMode": "preserve",
                     },
                 ],
@@ -1788,11 +1933,16 @@ def load_provision_marker(marker_path: pathlib.Path) -> dict[str, Any] | None:
     return marker
 
 
-def run_setup_commands(worktree_path: pathlib.Path, commands: list[str]) -> None:
+def run_setup_commands(worktree_path: pathlib.Path, commands: list[str], *, db_path: pathlib.Path | None = None) -> None:
+    env = os.environ.copy()
+    if db_path is not None:
+        env["POLYSCOPE_DB_PATH"] = str(db_path)
+
     for command in commands:
         subprocess.run(
             ["bash", "-c", f"set -euo pipefail; {command}"],
             cwd=worktree_path,
+            env=env,
             check=True,
         )
 
@@ -1885,6 +2035,8 @@ def provision_worktrees(
     repo_state: dict[str, dict[str, Any]],
     repo_specs: dict[str, dict[str, Any]],
     clone_root: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     rendered_configs = render_local_configs(repo_specs)
     provisioned_worktrees: list[str] = []
@@ -1914,7 +2066,7 @@ def provision_worktrees(
 
                 preview_storage_target: str | None = None
                 if repo_name == "api":
-                    ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"])
+                    ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"], db_path=db_path)
                     if not ready:
                         continue
 
@@ -1926,7 +2078,7 @@ def provision_worktrees(
 
                 if setup_commands:
                     print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
-                    run_setup_commands(worktree_path, setup_commands)
+                    run_setup_commands(worktree_path, setup_commands, db_path=db_path)
 
                 marker_payload: dict[str, Any] = {
                     "repo": repo_name,
@@ -2377,6 +2529,7 @@ def main() -> int:
             repo_state,
             repo_specs,
             args.clone_root,
+            db_path=args.db_path,
         )
 
     summary = build_summary(

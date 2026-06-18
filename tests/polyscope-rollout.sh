@@ -679,7 +679,8 @@ grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secp
 grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/frontend/polyscope.local.json"
@@ -689,10 +690,12 @@ if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/po
     exit 1
 fi
 grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
-grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'PLAYWRIGHT_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'PLAYWRIGHT_API_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'tests/e2e/smoke.spec.ts' "$workspace_root/frontend/polyscope.local.json"
+grep -qF -- '--project=chromium' "$workspace_root/frontend/polyscope.local.json"
+grep -qF -- '--project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'TEST_USER_EMAIL' "$workspace_root/frontend/polyscope.local.json"
 if grep -q 'test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope config must not reference the removed test:e2e:staging script" >&2
     exit 1
@@ -711,6 +714,96 @@ if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not run npm build" >&2
     exit 1
 fi
+
+python3 - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "linked-preview-fixture"
+db_path = fixture / "polyscope.db"
+frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah"
+api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+source_api = fixture / "source-api"
+frontend_worktree.mkdir(parents=True)
+api_worktree.mkdir(parents=True)
+source_api.mkdir(parents=True)
+
+source_api.joinpath(".env").write_text(
+    "\n".join(
+        [
+            "APP_URL=https://api.secpal.dev",
+            "FRONTEND_URL=https://app.secpal.dev",
+            "DB_CONNECTION=sqlite",
+            "SESSION_DOMAIN=.secpal.dev",
+            "SANCTUM_STATEFUL_DOMAINS=app.secpal.dev",
+            "CORS_ALLOWED_ORIGINS=https://app.secpal.dev",
+            "",
+        ]
+    )
+)
+api_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+frontend_worktree.joinpath(".env.local").write_text("VITE_API_URL=https://api.secpal.dev\n")
+
+with sqlite3.connect(db_path) as connection:
+    connection.executescript(
+        """
+        create table repositories (id text primary key, name text not null, path text not null);
+        create table worktrees (id text primary key, repo_id text not null, path text not null, created_at text default (datetime('now')) not null);
+        create table worktree_links (worktree_id text not null, linked_worktree_id text not null, created_at text default (datetime('now')) not null);
+        """
+    )
+    connection.executemany(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        [
+            ("api12345", "SecPal/api", str(source_api)),
+            ("fe123456", "SecPal/frontend", str(fixture / "source-frontend")),
+        ],
+    )
+    connection.executemany(
+        "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
+        [
+            ("api-worktree", "api12345", str(api_worktree)),
+            ("frontend-worktree", "fe123456", str(frontend_worktree)),
+        ],
+    )
+    connection.executemany(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        [
+            ("frontend-worktree", "api-worktree"),
+            ("api-worktree", "frontend-worktree"),
+        ],
+    )
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_env_setup_command()],
+    cwd=frontend_worktree,
+    env=env,
+    check=True,
+)
+frontend_env = frontend_worktree.joinpath(".env.local").read_text()
+assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in frontend_env, frontend_env
+
+ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api, db_path=db_path)
+assert ready
+api_env = api_worktree.joinpath(".env").read_text()
+assert "APP_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in api_env, api_env
+assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, api_env
+assert "SANCTUM_STATEFUL_DOMAINS=frontend-azure-cheetah.preview.secpal.dev,azure-cheetah-165552b7.preview.secpal.dev,app.secpal.dev" in api_env, api_env
+assert "CORS_ALLOWED_ORIGINS=https://frontend-azure-cheetah.preview.secpal.dev,https://azure-cheetah-165552b7.preview.secpal.dev,https://app.secpal.dev" in api_env, api_env
+PY
 
 grep -qF '"command": "npm run validate && npm run lint && npm run format:check"' "$workspace_root/contracts/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/contracts/polyscope.local.json"
