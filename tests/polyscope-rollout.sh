@@ -719,6 +719,7 @@ python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
 import pathlib
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -861,6 +862,12 @@ probe_result = subprocess.run(
     check=True,
 )
 assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
+
+watch_command = module.build_frontend_preview_build_watch_command()
+watch_script = shlex.split(watch_command)[2]
+run_build_source = watch_script[watch_script.index("def run_build()") :]
+assert 'api_url = f"https://api-' not in watch_script, watch_script
+assert 'resolve_linked_workspace("SecPal/api", Path.cwd().name)' in run_build_source, run_build_source
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""

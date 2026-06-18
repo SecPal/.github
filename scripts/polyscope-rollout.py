@@ -588,8 +588,6 @@ from pathlib import Path
 
 {build_linked_workspace_resolver_source()}
 
-api_workspace = resolve_linked_workspace("SecPal/api", Path.cwd().name)
-api_url = f"https://api-{{api_workspace}}.preview.secpal.dev"
 watch_directories = [Path("src"), Path("public"), Path("config")]
 watch_files = [
             Path("index.html"),
@@ -669,8 +667,9 @@ def snapshot() -> str:
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
 def run_build() -> int:
+    api_workspace = resolve_linked_workspace("SecPal/api", Path.cwd().name)
     env = os.environ.copy()
-    env["VITE_API_URL"] = api_url
+    env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
 
     return subprocess.run(
         ["npm", "run", "build", "--", "--mode", "preview"],
