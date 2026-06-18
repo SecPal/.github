@@ -32,6 +32,11 @@ PREVIEW_STORAGE_MODE_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_MODE"
 POSTGRES_PREVIEW_DATABASE_SEPARATOR = "__preview__"
 POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z0-9_]+)=(.*)$")
+NO_AI_ATTRIBUTION_RULE = (
+    "Do not add AI agent attribution, AI tool labels such as Codex, Copilot, or Cursor, "
+    "`[codex]` prefixes, or AI `Co-authored-by` trailers to commits, branches, pull request "
+    "titles or bodies, issues, comments, or any other GitHub-facing content."
+)
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -1600,7 +1605,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     instruction_ref = instruction_reference(spec)
     review_prompt = collapse_spaces(
         f"Apply the current SecPal instructions from {instruction_ref}. "
-        f"Non-negotiable rules: {format_bullets(always_on)}. "
+        f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(always_on)}. "
         f"Repository focus: {spec['review_focus']} "
         f"Targeted file-scope rules: {format_bullets(focus)}. "
         f"Review and AI-triage bar: {format_bullets(triage)}. "
@@ -1608,21 +1613,25 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     )
     pr_prompt = collapse_spaces(
         f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
+        f"{NO_AI_ATTRIBUTION_RULE} "
         f"Keep the PR to one topic and reflect the PR discipline: {format_bullets(issue_pr)}. "
         "Lead with the failing test, validation, or reproduced defect. Then summarize the user-, API-, contract-, or governance-visible change, the validations run, CHANGELOG impact, linked-repo impact, and any out-of-scope issues filed."
     )
     draft_pr_prompt = collapse_spaces(
         f"Create a draft PR in English for {spec['display_name']}. Apply {instruction_ref}. "
+        f"{NO_AI_ATTRIBUTION_RULE} "
         f"Keep one topic per branch and follow: {format_bullets(issue_pr)}. "
         "Lead with the failing test, validation, or reproduced defect, summarize the current change and validations already run, and note any linked workspaces or unresolved checks that still need follow-up before marking the PR ready."
     )
     merge_prompt = collapse_spaces(
         f"Before merge for {spec['display_name']}, stop on the first failed check and enforce the current SecPal instructions from {instruction_ref}. "
+        f"{NO_AI_ATTRIBUTION_RULE} "
         f"Required validation gate: {format_bullets(validation)}. "
         f"Also enforce: {format_bullets(select_bullets(always_on, ['one topic', 'bypass', 'changelog', 'issue immediately'], 4))}."
     )
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
+        f"{NO_AI_ATTRIBUTION_RULE} "
         f"Run or re-run the touched checks demanded by the repo instructions, then verify: {format_bullets(select_bullets(validation, ['validation', 'lint', 'typecheck', 'build', 'pest', 'preflight', 'changelog', 'issue', 'gpg', 'reuse'], 7))}. "
         "Do not bypass hooks or force operations, and after merge return the repo to the ready state described in the repo instructions."
     )
@@ -1639,7 +1648,10 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
 def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
     config = copy.deepcopy(spec["local_config"])
     config = enrich_local_config(spec["path"].name, spec, config)
-    preamble = collapse_spaces(f"Apply the current SecPal instructions from {instruction_reference(spec)} before taking action.")
+    preamble = collapse_spaces(
+        f"Apply the current SecPal instructions from {instruction_reference(spec)} before taking action. "
+        f"{NO_AI_ATTRIBUTION_RULE}"
+    )
     for task in config.get("tasks", []):
         task["prompt"] = collapse_spaces(f"{preamble} {task['prompt']}")
     return config

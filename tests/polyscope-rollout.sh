@@ -1146,15 +1146,24 @@ cur = conn.cursor()
 
 api_prompt = cur.execute('select review_prompt from repositories where id = ?', ('api12345',)).fetchone()[0]
 frontend_prompt = cur.execute('select pr_prompt from repositories where id = ?', ('fe123456',)).fetchone()[0]
+prompt_rows = cur.execute(
+    'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories order by id'
+).fetchall()
 links = cur.execute('select repo_id, linked_repo_id from repository_links order by repo_id, linked_repo_id').fetchall()
 
 assert 'api/.github/copilot-instructions.md' in api_prompt
 assert 'org-shared.instructions.md' in api_prompt
 assert 'php-laravel.instructions.md' in api_prompt
+assert 'Do not add AI agent attribution' in api_prompt
+assert '`[codex]` prefixes' in frontend_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
 assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
+for row in prompt_rows:
+    for prompt in row:
+        assert 'Do not add AI agent attribution' in prompt
+        assert '`[codex]` prefixes' in prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
@@ -1177,6 +1186,22 @@ assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('or
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
 assert summary['repositories']['GuardGuide']['linked_repositories'] == ['api', 'frontend', 'contracts', 'android']
+PY
+
+python3 - <<'PY' "$workspace_root"
+import json
+import sys
+from pathlib import Path
+
+workspace_root = Path(sys.argv[1])
+config_paths = sorted(workspace_root.glob("*/polyscope.local.json"))
+config_paths.append(workspace_root / ".github" / "polyscope.local.json")
+for config_path in config_paths:
+    payload = json.loads(config_path.read_text())
+    for task in payload.get("tasks", []):
+        prompt = task.get("prompt", "")
+        assert "Do not add AI agent attribution" in prompt, (config_path, task.get("label"), prompt)
+        assert "`[codex]` prefixes" in prompt, (config_path, task.get("label"), prompt)
 PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
