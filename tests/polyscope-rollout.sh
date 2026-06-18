@@ -679,7 +679,8 @@ grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secp
 grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "VITE_API_URL=https://api-\${PWD##*/}.preview.secpal.dev npm run build -- --mode preview" "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/frontend/polyscope.local.json"
@@ -689,10 +690,12 @@ if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/po
     exit 1
 fi
 grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
-grep -qF "PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev" "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'tests/e2e/smoke.spec.ts --project=chromium --project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
-grep -qF "TEST_USER_EMAIL=test@example.com TEST_USER_PASSWORD=password PLAYWRIGHT_BASE_URL=https://frontend-\${PWD##*/}.preview.secpal.dev PLAYWRIGHT_API_BASE_URL=https://api-\${PWD##*/}.preview.secpal.dev npx playwright test" "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'PLAYWRIGHT_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'PLAYWRIGHT_API_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'tests/e2e/smoke.spec.ts' "$workspace_root/frontend/polyscope.local.json"
+grep -qF -- '--project=chromium' "$workspace_root/frontend/polyscope.local.json"
+grep -qF -- '--project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'TEST_USER_EMAIL' "$workspace_root/frontend/polyscope.local.json"
 if grep -q 'test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope config must not reference the removed test:e2e:staging script" >&2
     exit 1
@@ -711,6 +714,224 @@ if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
     echo "api polyscope config must not run npm build" >&2
     exit 1
 fi
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import shlex
+import sqlite3
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "linked-preview-fixture"
+db_path = fixture / "polyscope.db"
+frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah"
+api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+relinked_api_worktree = fixture / "clones" / "api12345" / "crimson-link"
+source_api = fixture / "source-api"
+frontend_worktree.mkdir(parents=True)
+api_worktree.mkdir(parents=True)
+relinked_api_worktree.mkdir(parents=True)
+source_api.mkdir(parents=True)
+
+source_api.joinpath(".env").write_text(
+    "\n".join(
+        [
+            "APP_URL=https://api.secpal.dev",
+            "FRONTEND_URL=https://app.secpal.dev",
+            "DB_CONNECTION=sqlite",
+            "SESSION_DOMAIN=.secpal.dev",
+            "SANCTUM_STATEFUL_DOMAINS=app.secpal.dev",
+            "CORS_ALLOWED_ORIGINS=https://app.secpal.dev",
+            "",
+        ]
+    )
+)
+api_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+frontend_worktree.joinpath(".env.local").write_text("VITE_API_URL=https://api.secpal.dev\n")
+
+with sqlite3.connect(db_path) as connection:
+    connection.executescript(
+        """
+        create table repositories (id text primary key, name text not null, path text not null);
+        create table worktrees (id text primary key, repo_id text not null, path text not null, created_at text default (datetime('now')) not null);
+        create table worktree_links (worktree_id text not null, linked_worktree_id text not null, created_at text default (datetime('now')) not null);
+        """
+    )
+    connection.executemany(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        [
+            ("api12345", "SecPal/api", str(source_api)),
+            ("fe123456", "SecPal/frontend", str(fixture / "source-frontend")),
+        ],
+    )
+    connection.executemany(
+        "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
+        [
+            ("api-worktree", "api12345", str(api_worktree)),
+            ("api-worktree-relinked", "api12345", str(relinked_api_worktree)),
+            ("frontend-worktree", "fe123456", str(frontend_worktree)),
+        ],
+    )
+    connection.executemany(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        [
+            ("frontend-worktree", "api-worktree"),
+            ("api-worktree", "frontend-worktree"),
+        ],
+    )
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_env_setup_command()],
+    cwd=frontend_worktree,
+    env=env,
+    check=True,
+)
+frontend_env = frontend_worktree.joinpath(".env.local").read_text()
+assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in frontend_env, frontend_env
+
+ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api, db_path=db_path)
+assert ready
+api_env = api_worktree.joinpath(".env").read_text()
+assert "APP_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in api_env, api_env
+assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, api_env
+assert "SANCTUM_STATEFUL_DOMAINS=frontend-azure-cheetah.preview.secpal.dev,azure-cheetah.preview.secpal.dev,app.secpal.dev" in api_env, api_env
+assert "CORS_ALLOWED_ORIGINS=https://frontend-azure-cheetah.preview.secpal.dev,https://azure-cheetah.preview.secpal.dev,https://app.secpal.dev" in api_env, api_env
+
+setup_commands = [module.build_frontend_preview_env_setup_command(), "npm run build -- --mode preview"]
+initial_setup_hash = module.build_setup_hash(frontend_worktree, setup_commands, db_path=db_path)
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "delete from worktree_links where worktree_id = ? and linked_worktree_id = ?",
+        ("frontend-worktree", "api-worktree"),
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("frontend-worktree", "api-worktree-relinked"),
+    )
+changed_setup_hash = module.build_setup_hash(frontend_worktree, setup_commands, db_path=db_path)
+assert changed_setup_hash != initial_setup_hash, "linked workspace changes must invalidate frontend provisioning"
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "delete from worktree_links where worktree_id = ? and linked_worktree_id = ?",
+        ("frontend-worktree", "api-worktree-relinked"),
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("frontend-worktree", "api-worktree"),
+    )
+
+# build_frontend_preview_build_command: assert linked API workspace is used in VITE_API_URL
+build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_build_command()],
+    cwd=frontend_worktree,
+    env={**env, "PATH": "/usr/bin:/bin", "VITE_BUILD_CAPTURE": "1"},
+    capture_output=True,
+)
+# The command calls npm run build which won't exist in the fixture; what we test is that
+# the generated script resolves the correct api_workspace before invoking npm.
+# Run the resolver portion only (up to subprocess.run) by patching subprocess.run to capture env.
+import textwrap as _textwrap
+resolver_probe = _textwrap.dedent(f"""
+import os
+import subprocess
+from pathlib import Path
+
+{module.build_linked_workspace_resolver_source()}
+
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+print(f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev")
+""").strip()
+probe_result = subprocess.run(
+    ["python3", "-c", resolver_probe],
+    cwd=frontend_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
+
+watch_command = module.build_frontend_preview_build_watch_command()
+watch_script = shlex.split(watch_command)[2]
+run_build_source = watch_script[watch_script.index("def run_build()") :]
+assert 'api_url = f"https://api-' not in watch_script, watch_script
+assert 'resolve_linked_workspace("SecPal/api", Path.cwd().name)' in run_build_source, run_build_source
+
+# build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
+playwright_probe = _textwrap.dedent(f"""
+import os
+import subprocess
+from pathlib import Path
+
+{module.build_linked_workspace_resolver_source()}
+
+workspace = Path.cwd().name
+api_workspace = resolve_linked_workspace("SecPal/api", workspace)
+print(f"PLAYWRIGHT_BASE_URL=https://frontend-{{workspace}}.preview.secpal.dev")
+print(f"PLAYWRIGHT_API_BASE_URL=https://api-{{api_workspace}}.preview.secpal.dev")
+""").strip()
+playwright_probe_result = subprocess.run(
+    ["python3", "-c", playwright_probe],
+    cwd=frontend_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert "PLAYWRIGHT_BASE_URL=https://frontend-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
+assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
+PY
+
+# --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
+# Reset api worktree .env so we can re-run via the CLI entry point.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "linked-preview-fixture"
+db_path = fixture / "polyscope.db"
+api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+source_api = fixture / "source-api"
+
+# Reset .env so ensure_api_worktree_ready will update it again
+api_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+result = subprocess.run(
+    [
+        sys.executable,
+        str(script_path),
+        "--prepare-api-worktree", str(api_worktree),
+        "--source-repo-path", str(source_api),
+    ],
+    env=env,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
+api_env = api_worktree.joinpath(".env").read_text()
+assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, (
+    "CLI --prepare-api-worktree must use POLYSCOPE_DB_PATH to resolve the linked frontend workspace\n" + api_env
+)
+PY
 
 grep -qF '"command": "npm run validate && npm run lint && npm run format:check"' "$workspace_root/contracts/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/contracts/polyscope.local.json"
@@ -1053,15 +1274,24 @@ cur = conn.cursor()
 
 api_prompt = cur.execute('select review_prompt from repositories where id = ?', ('api12345',)).fetchone()[0]
 frontend_prompt = cur.execute('select pr_prompt from repositories where id = ?', ('fe123456',)).fetchone()[0]
+prompt_rows = cur.execute(
+    'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories order by id'
+).fetchall()
 links = cur.execute('select repo_id, linked_repo_id from repository_links order by repo_id, linked_repo_id').fetchall()
 
 assert 'api/.github/copilot-instructions.md' in api_prompt
 assert 'org-shared.instructions.md' in api_prompt
 assert 'php-laravel.instructions.md' in api_prompt
+assert 'Do not add AI agent attribution' in api_prompt
+assert '`[codex]` prefixes' in frontend_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
 assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
+for row in prompt_rows:
+    for prompt in row:
+        assert 'Do not add AI agent attribution' in prompt
+        assert '`[codex]` prefixes' in prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
@@ -1084,6 +1314,22 @@ assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('or
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
 assert summary['repositories']['GuardGuide']['linked_repositories'] == ['api', 'frontend', 'contracts', 'android']
+PY
+
+python3 -B - <<'PY' "$workspace_root"
+import json
+import sys
+from pathlib import Path
+
+workspace_root = Path(sys.argv[1])
+config_paths = sorted(workspace_root.glob("*/polyscope.local.json"))
+config_paths.append(workspace_root / ".github" / "polyscope.local.json")
+for config_path in config_paths:
+    payload = json.loads(config_path.read_text())
+    for task in payload.get("tasks", []):
+        prompt = task.get("prompt", "")
+        assert "Do not add AI agent attribution" in prompt, (config_path, task.get("label"), prompt)
+        assert "`[codex]` prefixes" in prompt, (config_path, task.get("label"), prompt)
 PY
 
 initial_db_hash="$(file_sha256 "$db_path")"

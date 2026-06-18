@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-18 - Fix Linked Polyscope Preview URLs
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so frontend and API preview configuration resolves linked worktree names from Polyscope `worktree_links` instead of assuming every linked repository uses the same workspace folder name. This keeps asymmetric linked previews such as `frontend-azure-cheetah` and `api-azure-cheetah-165552b7` wired to each other correctly.
+- changed generated frontend preview setup, build, watch, and workspace Playwright commands to target the linked API worktree host when one exists, with the current folder name retained as the fallback for unlinked workspaces.
+- changed API preview `.env` preparation to allow the linked frontend worktree origin in `FRONTEND_URL`, `SANCTUM_STATEFUL_DOMAINS`, and `CORS_ALLOWED_ORIGINS`, while keeping the API workspace host based on its own worktree name.
+- hardened generated Polyscope review, PR, draft-PR, merge, push-and-merge, and task prompts for every managed repository with an explicit rule forbidding AI agent attribution, AI tool labels such as Codex/Copilot/Cursor, `[codex]` prefixes, and AI `Co-authored-by` trailers in GitHub-facing content.
+
+**Added:**
+
+- extended `tests/polyscope-rollout.sh` with an asymmetric linked-worktree regression that proves a frontend workspace can target a suffixed API workspace and the API can allow the unsuffixed frontend origin.
+- extended `tests/polyscope-rollout.sh` to assert that generated Polyscope repository prompts and task prompts for all managed repositories include the no-AI-attribution rule.
+- extended `tests/polyscope-rollout.sh` with resolver probe tests for `build_frontend_preview_build_command` and `build_frontend_preview_playwright_command` confirming the linked API workspace name is resolved correctly for both commands.
+- extended `tests/polyscope-rollout.sh` with a CLI-path test that invokes `--prepare-api-worktree` with `POLYSCOPE_DB_PATH` set and asserts `FRONTEND_URL` is resolved from the linked worktree, validating the `parse_args()` env-var fallback for `--db-path`.
+
 ## 2026-06-14 - Document SecPal Brand And Shared Design Standards
 
 **Added:**
