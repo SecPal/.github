@@ -2509,7 +2509,11 @@ def main() -> int:
     if args.prepare_api_worktree is not None:
         if args.source_repo_path is None:
             raise SystemExit("--source-repo-path is required with --prepare-api-worktree")
-        ready, _preview_storage_target = ensure_api_worktree_ready(args.prepare_api_worktree, args.source_repo_path)
+        ready, _preview_storage_target = ensure_api_worktree_ready(
+            args.prepare_api_worktree,
+            args.source_repo_path,
+            db_path=args.db_path,
+        )
         return 0 if ready else 1
 
     repo_specs = build_repo_specs(args.workspace_root)
