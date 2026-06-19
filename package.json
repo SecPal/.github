@@ -24,7 +24,7 @@
   "author": "SecPal Contributors",
   "license": "CC0-1.0",
   "devDependencies": {
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.2.0",
     "prettier": "3.5.3"
   }
 }
