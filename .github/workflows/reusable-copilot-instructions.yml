@@ -27,11 +27,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout target repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Checkout governance repository
         if: ${{ github.repository != 'SecPal/.github' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: SecPal/.github
           ref: ${{ inputs.governance-ref }}
