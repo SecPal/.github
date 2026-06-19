@@ -32,7 +32,7 @@ jobs:
           owner: SecPal
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Export unresolved Copilot findings
         id: scan
