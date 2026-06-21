@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-26
 
-**Last Updated:** 2025-12-21 (ADR-009 Integration: Inheritance Blocking & Leadership Levels)
+**Last Updated:** 2026-06-21 (Terminology editorial alignment)
 
 **Deciders:** @kevalyq
 
@@ -27,7 +27,7 @@ This ADR defines the architecture for flexible, unlimited-depth organizational h
 
 2. **Customer Structure** (`customers`): External customer organizations (Corporate → Regional → Local)
    - For **customer users** (Client role)
-   - Access control via `customer_user_accesses` + site-specific access mappings
+   - Access control via `customer_user_accesses` + site-specific access mappings (`customer_user_object_accesses`)
    - Read-only access, completely independent from internal structure
 
 **Key Technology:** Closure Table Pattern enables unlimited hierarchy depth, fast queries (O(1) for descendants), and seamless RBAC integration.

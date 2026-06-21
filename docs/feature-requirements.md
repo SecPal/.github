@@ -70,8 +70,8 @@ Security companies have different organizational structures and job titles:
    | System Settings         | ✗      | ✓    | ✓      | ✗      | ✗      |
 
 4. **Scope-Based Permissions:**
-   - **Organization-wide:** Access all locations/clients
-   - **Location-specific:** Only specific sites
+   - **Organization-wide:** Access all sites/clients
+   - **Site-specific:** Only specific sites
    - **Team-specific:** Only own team members
    - **Self-only:** Own data only (guards)
 
