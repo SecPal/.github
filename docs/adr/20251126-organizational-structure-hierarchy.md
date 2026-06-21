@@ -1068,12 +1068,12 @@ DB::transaction(function () use ($unit, $newParent) {
 2. **Customer Organization Structure** (`customers`)
    - External customer hierarchy (Corporate → Regional → Local)
    - For **customer users only** (Client role)
-   - Access control via `customer_user_accesses` + `customer_user_object_accesses`
+   - Access control via `customer_user_accesses` + site-specific access mappings (`customer_user_object_accesses`)
    - Read-only access, limited scope
 
 **Key Insight:** A customer (e.g., "Rewe Group") is **managed by** an internal organizational unit (e.g., "Niederlassung Berlin"), but the two hierarchies remain completely separate. Internal employees see both hierarchies (for management), customer users see only their own structure (for access control).
 
-**RBAC Infrastructure:** Both internal employees AND customer users share the **same technical RBAC system** (Spatie Laravel-Permission, Sanctum guard, hierarchical scopes). The difference is in **assigned permissions**: internal roles have CRUD capabilities (`guard_book.create`, `object.update`), while customer roles typically have read-only access (`guard_book.read`, `reports.export`).
+**RBAC Infrastructure:** Both internal employees AND customer users share the **same technical RBAC system** (Spatie Laravel-Permission, Sanctum guard, hierarchical scopes). The difference is in **assigned permissions**: internal roles have CRUD capabilities (`guard_book.create`, `site.update`), while customer roles typically have read-only access (`guard_book.read`, `reports.export`).
 
 ---
 

@@ -969,7 +969,7 @@ SecPal uses the **Closure Table Pattern** for storing and querying hierarchical 
 2. **Customer Structure** (`customers`):
    - External customer hierarchy (Corporate → Regional → Local)
    - For customer users (Client role)
-   - Access control via `customer_user_accesses` + site-specific access mappings
+   - Access control via `customer_user_accesses` + site-specific access mappings (`customer_user_object_accesses`)
 
 **RBAC Integration:**
 
@@ -2037,7 +2037,7 @@ Schema::create('work_instructions', function (Blueprint $table) {
     $table->foreignUuid('organization_id');
     $table->foreignUuid('template_id')->nullable(); // If created from template
 
-    $table->string('title'); // "Dienstanweisung Site A"
+    $table->string('title'); // "Dienstanweisung Objekt A"
     $table->string('instruction_number')->unique(); // "DA-2025-001"
     $table->integer('version')->default(1); // Version control
 
@@ -2422,12 +2422,12 @@ Schema::create('shift_plan_periods', function (Blueprint $table) {
 **Define recurring shift patterns:**
 
 ```yaml
-Shift Template: "Nachtschicht Site A"
+Shift Template: "Nachtschicht Objekt A"
   Time: 22:00 - 06:00
   Required Staff:
     - 2x Security Guard (§34a)
     - 1x First Aid Certified
-  Location: "Site A, Berlin Mitte"
+  Location: "Objekt A, Berlin Mitte"
   Recurrence: Mo-Fr (weekly)
 ```
 
@@ -2577,11 +2577,11 @@ class CheckShiftCoverage extends Command {
 ┌─────────────────────────────────────────────────────┐
 │ ⚠️ Unterbesetzte Schichten (nächste 14 Tage)       │
 ├─────────────────────────────────────────────────────┤
-│ 🚨 Mo, 28.10. 22:00-06:00 Site A                   │
+│ 🚨 Mo, 28.10. 22:00-06:00 Objekt A                 │
 │    2/3 Mitarbeiter eingeteilt                       │
 │    [Mitarbeiter hinzufügen]                         │
 │                                                     │
-│ ⚠️ Di, 29.10. 06:00-14:00 Site B                   │
+│ ⚠️ Di, 29.10. 06:00-14:00 Objekt B                 │
 │    4/5 Mitarbeiter eingeteilt                       │
 │    [Mitarbeiter hinzufügen]                         │
 └─────────────────────────────────────────────────────┘
@@ -2711,9 +2711,9 @@ Hallo Max,
 Dein Dienstplan für November 2025 ist jetzt verfügbar.
 
 Deine Schichten:
-- Mo, 04.11.2025, 22:00-06:00, Site A Berlin
-- Mi, 06.11.2025, 22:00-06:00, Site A Berlin
-- Fr, 08.11.2025, 22:00-06:00, Site A Berlin
+- Mo, 04.11.2025, 22:00-06:00, Objekt A Berlin
+- Mi, 06.11.2025, 22:00-06:00, Objekt A Berlin
+- Fr, 08.11.2025, 22:00-06:00, Objekt A Berlin
 ... (12 weitere Schichten)
 
 Gesamt: 15 Schichten, 120 Stunden
@@ -2895,7 +2895,7 @@ Clients want to see what happens on their premises:
   "shift": {
     "date": "2025-10-27",
     "time": "22:00 - 06:00",
-    "location": "Site A",
+    "location": "Objekt A",
     "guards": [
       {
         "guard_id": "G-1234", // Pseudonym
