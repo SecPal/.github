@@ -20,6 +20,7 @@ Use these names exactly in public and contributor-facing materials.
 - Use `SecPal` for the platform or suite.
 - Use `GuardGuide by SecPal` for the standalone product within the SecPal family.
 - After the full product name appears once in the same document or screen, `GuardGuide` is acceptable where the SecPal relationship is already clear.
+- Follow domain terminology rules from `docs/brand/terminology.md` for concepts such as customer locations and role names.
 - Keep repository names, package names, domains, and code identifiers in their technical form when documenting commands or file paths.
 - Do not invent campaign names, editions, or abbreviations unless a brand document adds them explicitly.
 

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -9,9 +9,11 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-26
 
-**Last Updated:** 2025-12-21 (ADR-009 Integration: Inheritance Blocking & Leadership Levels)
+**Last Updated:** 2026-06-21 (Terminology editorial alignment)
 
 **Deciders:** @kevalyq
+
+**Editorial Note:** This ADR preserves parts of the original ADR-007 proposal for historical context. Where older sections use `object` or `objects` for customer locations, the current implementation and repository terminology standardize on `site` and `sites`. See [Terminology](../brand/terminology.md).
 
 ## Summary
 
@@ -21,11 +23,11 @@ This ADR defines the architecture for flexible, unlimited-depth organizational h
 
    - For **internal employees** (Guards, Managers, explicitly scoped operators)
    - Access control via `user_internal_organizational_scopes`
-   - Fine-grained RBAC: From branch-wide access down to specific object areas
+   - Fine-grained RBAC: From branch-wide access down to specific site areas
 
 2. **Customer Structure** (`customers`): External customer organizations (Corporate → Regional → Local)
    - For **customer users** (Client role)
-   - Access control via `customer_user_accesses` + `customer_user_object_accesses`
+   - Access control via `customer_user_accesses` + site-specific access mappings (`customer_user_object_accesses`)
    - Read-only access, completely independent from internal structure
 
 **Key Technology:** Closure Table Pattern enables unlimited hierarchy depth, fast queries (O(1) for descendants), and seamless RBAC integration.
@@ -43,7 +45,7 @@ SecPal targets the German private security service industry, which encompasses o
 Security service companies have diverse organizational structures:
 
 1. **Flat structures:** Small businesses where customers are managed directly without intermediate organizational layers
-2. **Branch structures:** Regional branches managing local customers and objects
+2. **Branch structures:** Regional branches managing local customers and sites
 3. **Regional structures:** Multiple branches grouped into regions
 4. **Holding structures:** Multiple subsidiaries (e.g., "ProSec Nord GmbH", "ProSec Süd GmbH") under a parent holding company
 5. **Division structures:** Large companies with separate business units (e.g., "Aviation Security", "Event Security", "Industrial Security")
@@ -55,7 +57,7 @@ Security service companies have diverse organizational structures:
 3. **Dynamic Growth:** Small companies should be able to start simple and add organizational layers as they grow
 4. **Access Control Integration:** RBAC must respect organizational boundaries (e.g., "Regional Manager" sees all branches in their region)
 5. **Customer Hierarchies:** Support for national customers with regional/local contact persons
-6. **Object Segmentation:** Large objects (e.g., airports, industrial sites) need to be divided into areas with separate guard books
+6. **Site Segmentation:** Large sites (e.g., airports, industrial complexes) may need to be divided into areas with separate guard books
 
 ### Real-World Scenarios
 
@@ -1066,12 +1068,12 @@ DB::transaction(function () use ($unit, $newParent) {
 2. **Customer Organization Structure** (`customers`)
    - External customer hierarchy (Corporate → Regional → Local)
    - For **customer users only** (Client role)
-   - Access control via `customer_user_accesses` + `customer_user_object_accesses`
+   - Access control via `customer_user_accesses` + site-specific access mappings (`customer_user_object_accesses`)
    - Read-only access, limited scope
 
 **Key Insight:** A customer (e.g., "Rewe Group") is **managed by** an internal organizational unit (e.g., "Niederlassung Berlin"), but the two hierarchies remain completely separate. Internal employees see both hierarchies (for management), customer users see only their own structure (for access control).
 
-**RBAC Infrastructure:** Both internal employees AND customer users share the **same technical RBAC system** (Spatie Laravel-Permission, Sanctum guard, hierarchical scopes). The difference is in **assigned permissions**: internal roles have CRUD capabilities (`guard_book.create`, `object.update`), while customer roles typically have read-only access (`guard_book.read`, `reports.export`).
+**RBAC Infrastructure:** Both internal employees AND customer users share the **same technical RBAC system** (Spatie Laravel-Permission, Sanctum guard, hierarchical scopes). The difference is in **assigned permissions**: internal roles have CRUD capabilities (`guard_book.create`, `site.update`), while customer roles typically have read-only access (`guard_book.read`, `reports.export`).
 
 ---
 
