@@ -71,7 +71,7 @@ Security companies have different organizational structures and job titles:
 
 4. **Scope-Based Permissions:**
    - **Organization-wide:** Access all locations/clients
-   - **Location-specific:** Only specific objects/sites
+   - **Location-specific:** Only specific sites
    - **Team-specific:** Only own team members
    - **Self-only:** Own data only (guards)
 
@@ -633,7 +633,7 @@ SecPal targets the German private security service industry, which encompasses o
 Security service companies have diverse organizational structures that cannot be modeled with fixed, hardcoded hierarchy levels:
 
 1. **Flat structures:** Small businesses where customers are managed directly without intermediate organizational layers
-2. **Branch structures:** Regional branches managing local customers and objects
+2. **Branch structures:** Regional branches managing local customers and sites
 3. **Regional structures:** Multiple branches grouped into regions
 4. **Holding structures:** Multiple subsidiaries (e.g., "ProSec Nord GmbH", "ProSec Süd GmbH") under a parent holding company
 5. **Division structures:** Large companies with separate business units (e.g., "Aviation Security", "Event Security", "Industrial Security")
@@ -644,7 +644,7 @@ Security service companies have diverse organizational structures that cannot be
 - Enable dynamic growth: Small companies can start simple and add organizational layers as they grow
 - Provide granular access control based on organizational position
 - Support customer hierarchies (national customers with regional/local structures)
-- Allow segmentation of large objects into areas with separate guard books
+- Allow segmentation of large sites into areas with separate guard books
 
 ### User Stories
 
@@ -652,12 +652,12 @@ Security service companies have diverse organizational structures that cannot be
 
 ```
 As a Regional Manager,
-I want to see all objects and guard books managed by branches in my region,
+I want to see all sites and guard books managed by branches in my region,
 So that I can oversee operations and ensure quality standards across all locations.
 
 Acceptance Criteria:
 - Regional Manager can view all branches in assigned region
-- Access includes all customers and objects managed by those branches
+- Access includes all customers and sites managed by those branches
 - Access automatically extends to newly created branches in region
 - No manual permission updates needed when organizational structure changes
 - Can generate regional reports combining data from all branches
@@ -667,7 +667,7 @@ Acceptance Criteria:
 
 ```
 As a Branch Manager,
-I want to manage only my branch's customers and objects,
+I want to manage only my branch's customers and sites,
 So that I focus on my operational area without confusion from other branches' data.
 
 Acceptance Criteria:
@@ -682,13 +682,13 @@ Acceptance Criteria:
 
 ```
 As a Guard,
-I want to access only the objects I'm assigned to,
+I want to access only the sites I'm assigned to,
 So that I can complete my shifts without seeing irrelevant data.
 
 Acceptance Criteria:
 - Guard can only access own current and upcoming shifts
-- Can read/write guard book entries only for assigned objects
-- Cannot see other guards' shifts or unassigned objects
+- Can read/write guard book entries only for assigned sites
+- Cannot see other guards' shifts or unassigned sites
 - Mobile-optimized view for on-site work
 - Offline mode for areas with poor connectivity
 ```
@@ -767,22 +767,22 @@ Acceptance Criteria:
 - Can link customer users to appropriate hierarchy level
 - Customer hierarchies are independent from our internal structure
 - Can assign different access levels (corporate-wide, regional, local)
-- Can grant fine-grained object access when needed
+- Can grant fine-grained site access when needed
 - Visual tree view of customer hierarchy
 ```
 
-#### Story 9: Object Area Segmentation
+#### Story 9: Site Area Segmentation
 
 ```
 As an Operations Manager,
-I want to divide large objects into separate areas with individual guard books,
+I want to divide large sites into separate areas with individual guard books,
 So that guard book entries remain organized and relevant per area.
 
 Acceptance Criteria:
-- Can define multiple areas per object (e.g., Terminal 1, Terminal 2, Apron)
+- Can define multiple areas per site (e.g., Terminal 1, Terminal 2, Apron)
 - Each area can have separate guard book
 - Guards assigned to specific area only access that area's guard book
-- Can generate reports per area or combined for entire object
+- Can generate reports per area or combined for entire site
 - Optional GPS boundaries for geofencing (future enhancement)
 - Clear visual distinction between areas in UI
 ```
@@ -854,31 +854,31 @@ Acceptance Criteria:
 
 3. **Hierarchical Customer Access:**
 
-   - Corporate customer user can access all descendant customers' objects
+   - Corporate customer user can access all descendant customers' sites
    - Regional customer user limited to own region
-   - Local customer user limited to specific objects
+   - Local customer user limited to specific sites
    - Access inheritance follows customer hierarchy, not internal structure
 
-4. **Fine-Grained Object Permissions:**
-   - Customer users can have object-specific permissions
+4. **Fine-Grained Site Permissions:**
+   - Customer users can have site-specific permissions
    - Allowed actions: ["read_guard_book", "read_reports", "export_reports"]
    - Cannot override read-only restriction at entry level
-   - Object permissions can be more restrictive than hierarchy access
+   - Site permissions can be more restrictive than hierarchy access
 
-#### Object Area Segmentation Rules
+#### Site Area Segmentation Rules
 
 1. **Optional Segmentation:**
 
-   - Small objects: Single guard book for entire object (default)
-   - Large objects: Multiple areas with separate guard books (optional)
-   - Decision made per object based on operational needs
+   - Small sites: Single guard book for entire site (default)
+   - Large sites: Multiple areas with separate guard books (optional)
+   - Decision made per site based on operational needs
 
 2. **Area-Specific Guard Books:**
 
    - Each area can require separate guard book (configurable)
    - Guards assigned to area only access that area's guard book
-   - Parent object must exist before areas can be created
-   - Deleting object cascades to all areas and their guard books
+   - Parent site must exist before areas can be created
+   - Deleting a site cascades to all areas and their guard books
 
 3. **Area Boundaries:**
    - Areas are logical divisions (e.g., "Terminal 1", "Warehouse")
@@ -936,7 +936,7 @@ Acceptance Criteria:
 - **Mobile-First:** Guard book access optimized for mobile devices (iOS/Android)
 - **Internationalization:** Support German (primary) and English
 - **Accessibility:** WCAG 2.1 Level AA compliance for all UI components
-- **Offline Mode:** Guards can view assigned shifts and objects offline
+- **Offline Mode:** Guards can view assigned shifts and sites offline
 
 #### Maintainability
 
@@ -969,13 +969,13 @@ SecPal uses the **Closure Table Pattern** for storing and querying hierarchical 
 2. **Customer Structure** (`customers`):
    - External customer hierarchy (Corporate → Regional → Local)
    - For customer users (Client role)
-   - Access control via `customer_user_accesses` + `customer_user_object_accesses`
+   - Access control via `customer_user_accesses` + site-specific access mappings
 
 **RBAC Integration:**
 
 - **Hierarchical Scopes:** Users granted access to organizational unit or customer
 - **Include Descendants:** Configurable flag to include all child units/customers
-- **Fine-Grained Permissions:** Object-level and action-level permissions
+- **Fine-Grained Permissions:** Site-level and action-level permissions
 - **Policy Enforcement:** Laravel policies check both permissions and scopes
 
 **Implementation Reference:**
@@ -991,8 +991,8 @@ SecPal/api#228 - Epic: Flexible Organizational Structure & Multi-Level Hierarchi
 - SecPal/api#229: Database Migrations: Organizational Units & Closure Tables
 - SecPal/api#230: Database Migrations: Customer Hierarchies & Access Control
 - SecPal/api#231: Eloquent Models: Organizational Units with Hierarchical Relationships
-- SecPal/api#232: Eloquent Models: Customers, Objects, and Object Areas
-- SecPal/api#233: Guard Books: Event Stream Implementation & Object Area Segmentation
+- SecPal/api#232: Eloquent Models: Customers, Objects, and Object Areas (historical issue title)
+- SecPal/api#233: Guard Books: Event Stream Implementation & Object Area Segmentation (historical issue title)
 - SecPal/api#234: RBAC: Hierarchical Access Control for Internal Employees
 - SecPal/api#235: RBAC: Customer User Access Control (Read-Only Scopes)
 - SecPal/api#236: API: REST Endpoints for Organizational Structure & Customer Hierarchies
@@ -2002,7 +2002,7 @@ Objektbezogene Dienstanweisungen (Site-Specific):
   - Zugangskontrollen (Access Control)
   - Rundgangspläne (Patrol Routes)
   - Besondere Gefahren (Specific Hazards)
-  - Ansprechpartner Objekt (Client Contacts)
+  - Ansprechpartner am Objekt (Client Contacts)
 
 Sicherheitstechnische Anweisungen (Safety):
   - Brandschutz (Fire Safety)
@@ -2037,7 +2037,7 @@ Schema::create('work_instructions', function (Blueprint $table) {
     $table->foreignUuid('organization_id');
     $table->foreignUuid('template_id')->nullable(); // If created from template
 
-    $table->string('title'); // "Dienstanweisung Objekt A"
+    $table->string('title'); // "Dienstanweisung Site A"
     $table->string('instruction_number')->unique(); // "DA-2025-001"
     $table->integer('version')->default(1); // Version control
 
@@ -2422,12 +2422,12 @@ Schema::create('shift_plan_periods', function (Blueprint $table) {
 **Define recurring shift patterns:**
 
 ```yaml
-Shift Template: "Nachtschicht Objekt A"
+Shift Template: "Nachtschicht Site A"
   Time: 22:00 - 06:00
   Required Staff:
     - 2x Security Guard (§34a)
     - 1x First Aid Certified
-  Location: "Objekt A, Berlin Mitte"
+  Location: "Site A, Berlin Mitte"
   Recurrence: Mo-Fr (weekly)
 ```
 
@@ -2577,11 +2577,11 @@ class CheckShiftCoverage extends Command {
 ┌─────────────────────────────────────────────────────┐
 │ ⚠️ Unterbesetzte Schichten (nächste 14 Tage)       │
 ├─────────────────────────────────────────────────────┤
-│ 🚨 Mo, 28.10. 22:00-06:00 Objekt A                 │
+│ 🚨 Mo, 28.10. 22:00-06:00 Site A                   │
 │    2/3 Mitarbeiter eingeteilt                       │
 │    [Mitarbeiter hinzufügen]                         │
 │                                                     │
-│ ⚠️ Di, 29.10. 06:00-14:00 Objekt B                 │
+│ ⚠️ Di, 29.10. 06:00-14:00 Site B                   │
 │    4/5 Mitarbeiter eingeteilt                       │
 │    [Mitarbeiter hinzufügen]                         │
 └─────────────────────────────────────────────────────┘
@@ -2711,9 +2711,9 @@ Hallo Max,
 Dein Dienstplan für November 2025 ist jetzt verfügbar.
 
 Deine Schichten:
-- Mo, 04.11.2025, 22:00-06:00, Objekt A Berlin
-- Mi, 06.11.2025, 22:00-06:00, Objekt A Berlin
-- Fr, 08.11.2025, 22:00-06:00, Objekt A Berlin
+- Mo, 04.11.2025, 22:00-06:00, Site A Berlin
+- Mi, 06.11.2025, 22:00-06:00, Site A Berlin
+- Fr, 08.11.2025, 22:00-06:00, Site A Berlin
 ... (12 weitere Schichten)
 
 Gesamt: 15 Schichten, 120 Stunden
@@ -2895,7 +2895,7 @@ Clients want to see what happens on their premises:
   "shift": {
     "date": "2025-10-27",
     "time": "22:00 - 06:00",
-    "location": "Objekt A",
+    "location": "Site A",
     "guards": [
       {
         "guard_id": "G-1234", // Pseudonym
@@ -3182,7 +3182,7 @@ Schema::create('registered_devices', function (Blueprint $table) {
 ```php
 Schema::create('locations', function (Blueprint $table) {
     $table->uuid('id')->primary();
-    $table->string('name'); // "Objekt A"
+    $table->string('name'); // "Site A"
     $table->jsonb('gps_center'); // { lat: 52.520, lon: 13.405 }
     $table->integer('geofence_radius_meters')->default(100); // 100m tolerance
     $table->boolean('require_geofence_check')->default(true);
@@ -3208,7 +3208,7 @@ class ClockInService {
 
             if ($distance > $location->geofence_radius_meters) {
                 throw new GeofenceViolationException(
-                    "Sie sind {$distance}m vom Objekt entfernt. Maximal {$location->geofence_radius_meters}m erlaubt."
+                    "Sie sind {$distance}m vom Einsatzort entfernt. Maximal {$location->geofence_radius_meters}m erlaubt."
                 );
             }
         }

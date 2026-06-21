@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-21 - Standardize Site Terminology For Customer Locations
+
+**Added:**
+
+- added `docs/brand/terminology.md` to define the approved customer-location domain terminology: English uses `site`/`sites`, German domain copy may use `Objekt`/`Objekte`, and `object` remains reserved for technical contexts
+
+**Changed:**
+
+- linked `docs/brand/naming.md` and `docs/brand/README.md` to the new terminology standard so naming and public-copy guidance point to a single source of truth
+- aligned `docs/feature-requirements.md` to use `site` terminology consistently in English domain copy, while keeping historical issue titles explicitly marked as historical
+- added an editorial note and summary cleanup in `docs/adr/20251126-organizational-structure-hierarchy.md` so preserved historical `object` wording cannot be mistaken for current repository terminology
+
+---
+
 ## 2026-06-18 - Fix Linked Polyscope Preview URLs
 
 **Fixed:**
