@@ -1323,6 +1323,12 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
 fi
 
 grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
+grep -qF "listen 443 ssl http2;" "$nginx_output"
+grep -qF "listen [::]:443 ssl http2;" "$nginx_output"
+if grep -qF "http2 on;" "$nginx_output"; then
+    echo "preview nginx config must use listen-level http2 syntax for nginx 1.24 compatibility" >&2
+    exit 1
+fi
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
 grep -qF "if (\$repo = guardguide) {" "$nginx_output"
@@ -1348,6 +1354,14 @@ grep -qF "default_type application/manifest+json;" "$nginx_output"
 grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
+for _hidden_asset_loc in "/assets/." "/_astro/." "/_next/static/."; do
+    _hidden_asset_block=$(awk "/location \^\~ ${_hidden_asset_loc//\//\\/} \{/,/^[[:space:]]*\}/" "$nginx_output")
+    if ! printf '%s\n' "$_hidden_asset_block" | grep -qF "deny all;"; then
+        echo "nginx location ^~ ${_hidden_asset_loc} must deny hidden files below immutable asset prefixes" >&2
+        exit 1
+    fi
+done
+unset _hidden_asset_loc _hidden_asset_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.
@@ -1370,6 +1384,10 @@ for _immutable_loc in "/assets/" "/_astro/" "/_next/static/"; do
             exit 1
         fi
     done
+    if ! printf '%s\n' "$_immutable_block" | grep -qF 'if ($uri ~ \.php$) {'; then
+        echo "nginx location ^~ ${_immutable_loc} must deny PHP files below immutable asset prefixes" >&2
+        exit 1
+    fi
 done
 unset _immutable_loc _immutable_block _immutable_header
 

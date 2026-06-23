@@ -2571,9 +2571,8 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         }}
 
         server {{
-            listen 443 ssl;
-            listen [::]:443 ssl;
-            http2 on;
+            listen 443 ssl http2;
+            listen [::]:443 ssl http2;
             server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
@@ -2758,6 +2757,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 try_files $uri =404;
             }}
 
+            location ^~ /assets/. {{
+                deny all;
+            }}
+
             location ^~ /assets/ {{
                 try_files $uri =404;
                 expires 1y;
@@ -2773,6 +2776,13 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 add_header Cross-Origin-Resource-Policy "same-origin" always;
                 add_header Origin-Agent-Cluster "?1" always;
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
+                if ($uri ~ \\.php$) {{
+                    return 404;
+                }}
+            }}
+
+            location ^~ /_astro/. {{
+                deny all;
             }}
 
             location ^~ /_astro/ {{
@@ -2790,6 +2800,13 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 add_header Cross-Origin-Resource-Policy "same-origin" always;
                 add_header Origin-Agent-Cluster "?1" always;
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
+                if ($uri ~ \\.php$) {{
+                    return 404;
+                }}
+            }}
+
+            location ^~ /_next/static/. {{
+                deny all;
             }}
 
             location ^~ /_next/static/ {{
@@ -2807,6 +2824,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 add_header Cross-Origin-Resource-Policy "same-origin" always;
                 add_header Origin-Agent-Cluster "?1" always;
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
+                if ($uri ~ \\.php$) {{
+                    return 404;
+                }}
             }}
 
             location ~* \\.(?:svg|ico|png|jpg|jpeg|webp|avif|woff|woff2|ttf|otf|xml|txt)$ {{
