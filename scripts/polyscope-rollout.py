@@ -568,8 +568,6 @@ from pathlib import Path
 {build_linked_workspace_resolver_source()}
 
 def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
-    if src_file.is_symlink():
-        raise RuntimeError(f"staged build output contains symlink: {{src_file}}")
     dest_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
     os.close(fd)
@@ -579,8 +577,6 @@ def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
     os.replace(tmp_path, dest_file)
 
 def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
-    if src_dir.is_symlink():
-        raise RuntimeError(f"staged build output contains symlink: {{src_dir}}")
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -618,6 +614,8 @@ def prune_live_tree(live_root: Path, stage_dirs: set[Path], stage_files: set[Pat
 
 def publish_preview_build(stage_dir: Path) -> None:
     live_root = Path("dist")
+    if live_root.is_symlink():
+        raise RuntimeError("live preview dist is a symlink")
     live_root.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
@@ -777,8 +775,6 @@ def snapshot() -> str:
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
 def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
-    if src_file.is_symlink():
-        raise RuntimeError(f"staged build output contains symlink: {{src_file}}")
     dest_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
     os.close(fd)
@@ -788,8 +784,6 @@ def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
     os.replace(tmp_path, dest_file)
 
 def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
-    if src_dir.is_symlink():
-        raise RuntimeError(f"staged build output contains symlink: {{src_dir}}")
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -827,6 +821,8 @@ def prune_live_tree(live_root: Path, stage_dirs: set[Path], stage_files: set[Pat
 
 def publish_preview_build(stage_dir: Path) -> None:
     live_root = Path("dist")
+    if live_root.is_symlink():
+        raise RuntimeError("live preview dist is a symlink")
     live_root.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
@@ -2601,7 +2597,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
-            set $secpal_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            set $secpal_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{
@@ -2757,14 +2753,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 try_files $uri =404;
             }}
 
-            location ^~ /assets/. {{
-                deny all;
-            }}
-
             location ^~ /assets/ {{
                 try_files $uri =404;
-                expires 1y;
-                add_header Cache-Control "public, immutable" always;
+                expires off;
+                add_header Cache-Control "no-cache, must-revalidate" always;
                 add_header Content-Security-Policy $secpal_csp always;
                 add_header Permissions-Policy $secpal_permissions_policy always;
                 add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
@@ -2776,13 +2768,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 add_header Cross-Origin-Resource-Policy "same-origin" always;
                 add_header Origin-Agent-Cluster "?1" always;
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
-                if ($uri ~ \\.php$) {{
+                if ($uri ~ (?:/\\.|\\.php$)) {{
                     return 404;
                 }}
-            }}
-
-            location ^~ /_astro/. {{
-                deny all;
             }}
 
             location ^~ /_astro/ {{
@@ -2800,13 +2788,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 add_header Cross-Origin-Resource-Policy "same-origin" always;
                 add_header Origin-Agent-Cluster "?1" always;
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
-                if ($uri ~ \\.php$) {{
+                if ($uri ~ (?:/\\.|\\.php$)) {{
                     return 404;
                 }}
-            }}
-
-            location ^~ /_next/static/. {{
-                deny all;
             }}
 
             location ^~ /_next/static/ {{
@@ -2824,7 +2808,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
                 add_header Cross-Origin-Resource-Policy "same-origin" always;
                 add_header Origin-Agent-Cluster "?1" always;
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
-                if ($uri ~ \\.php$) {{
+                if ($uri ~ (?:/\\.|\\.php$)) {{
                     return 404;
                 }}
             }}

@@ -952,6 +952,13 @@ assert symlink_build_result.returncode == 1, symlink_build_result.stderr
 assert "staged build output contains symlink: assets/linked-secret.txt" in symlink_build_result.stderr, symlink_build_result.stderr
 assert not frontend_worktree.joinpath("dist", "assets", "linked-secret.txt").exists()
 
+frontend_worktree.joinpath("dist").rename(frontend_worktree / "old-dist")
+frontend_worktree.joinpath("live-dist-target").mkdir()
+frontend_worktree.joinpath("dist").symlink_to(frontend_worktree / "live-dist-target", target_is_directory=True)
+live_symlink_result = subprocess.run(["bash", "-c", "set -euo pipefail; " + build_command], cwd=frontend_worktree, env=build_env, capture_output=True, text=True)
+assert live_symlink_result.returncode == 1, live_symlink_result.stderr
+assert "publish failed: live preview dist is a symlink" in live_symlink_result.stderr, live_symlink_result.stderr
+
 # Run the resolver portion only (up to subprocess.run) by patching subprocess.run to capture env.
 import textwrap as _textwrap
 resolver_probe = _textwrap.dedent(f"""
@@ -1338,6 +1345,7 @@ grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
 grep -qF "set \$secpal_csp " "$nginx_output"
+grep -qF "script-src 'self' 'unsafe-inline'" "$nginx_output"
 grep -qF "set \$secpal_permissions_policy " "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
 grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
@@ -1354,14 +1362,6 @@ grep -qF "default_type application/manifest+json;" "$nginx_output"
 grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
-for _hidden_asset_loc in "/assets/." "/_astro/." "/_next/static/."; do
-    _hidden_asset_block=$(awk "/location \^\~ ${_hidden_asset_loc//\//\\/} \{/,/^[[:space:]]*\}/" "$nginx_output")
-    if ! printf '%s\n' "$_hidden_asset_block" | grep -qF "deny all;"; then
-        echo "nginx location ^~ ${_hidden_asset_loc} must deny hidden files below immutable asset prefixes" >&2
-        exit 1
-    fi
-done
-unset _hidden_asset_loc _hidden_asset_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.
@@ -1377,15 +1377,20 @@ for _immutable_loc in "/assets/" "/_astro/" "/_next/static/"; do
         'add_header Strict-Transport-Security' \
         'add_header X-Content-Type-Options' \
         'add_header X-Frame-Options' \
-        'add_header X-Permitted-Cross-Domain-Policies' \
-        'add_header Cache-Control "public, immutable"'; do
+        'add_header X-Permitted-Cross-Domain-Policies'; do
         if ! printf '%s\n' "$_immutable_block" | grep -qF "$_immutable_header"; then
             echo "nginx location ^~ ${_immutable_loc} is missing: ${_immutable_header}" >&2
             exit 1
         fi
     done
-    if ! printf '%s\n' "$_immutable_block" | grep -qF 'if ($uri ~ \.php$) {'; then
-        echo "nginx location ^~ ${_immutable_loc} must deny PHP files below immutable asset prefixes" >&2
+    _cache_header='add_header Cache-Control "public, immutable"'
+    [ "$_immutable_loc" = "/assets/" ] && _cache_header='add_header Cache-Control "no-cache, must-revalidate"'
+    if ! printf '%s\n' "$_immutable_block" | grep -qF "$_cache_header"; then
+        echo "nginx location ^~ ${_immutable_loc} is missing: ${_cache_header}" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$_immutable_block" | grep -qF 'if ($uri ~ (?:/\.|\.php$)) {'; then
+        echo "nginx location ^~ ${_immutable_loc} must deny nested hidden files and PHP files" >&2
         exit 1
     fi
 done
