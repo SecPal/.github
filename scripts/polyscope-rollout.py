@@ -568,6 +568,8 @@ from pathlib import Path
 {build_linked_workspace_resolver_source()}
 
 def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    if src_file.is_symlink():
+        raise RuntimeError(f"staged build output contains symlink: {{src_file}}")
     dest_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
     os.close(fd)
@@ -577,6 +579,8 @@ def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
     os.replace(tmp_path, dest_file)
 
 def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
+    if src_dir.is_symlink():
+        raise RuntimeError(f"staged build output contains symlink: {{src_dir}}")
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -595,6 +599,8 @@ def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[
             continue
 
         relative = child.relative_to(stage_dir)
+        if child.is_symlink():
+            raise RuntimeError(f"staged build output contains symlink: {{relative}}")
         if child.is_dir():
             stage_dirs.add(relative)
         else:
@@ -771,6 +777,8 @@ def snapshot() -> str:
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
 def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    if src_file.is_symlink():
+        raise RuntimeError(f"staged build output contains symlink: {{src_file}}")
     dest_file.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
     os.close(fd)
@@ -780,6 +788,8 @@ def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
     os.replace(tmp_path, dest_file)
 
 def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
+    if src_dir.is_symlink():
+        raise RuntimeError(f"staged build output contains symlink: {{src_dir}}")
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -798,6 +808,8 @@ def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[
             continue
 
         relative = child.relative_to(stage_dir)
+        if child.is_symlink():
+            raise RuntimeError(f"staged build output contains symlink: {{relative}}")
         if child.is_dir():
             stage_dirs.add(relative)
         else:

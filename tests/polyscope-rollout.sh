@@ -858,6 +858,10 @@ if "run" in args and "build" in args:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "assets").mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(f"<!doctype html>build {counter}\\n")
+    if os.environ.get("FAKE_NPM_SYMLINK") == "1":
+        Path("outside-preview-stage.txt").write_text("must not publish\\n")
+        (out_dir / "assets" / "linked-secret.txt").symlink_to(Path.cwd() / "outside-preview-stage.txt")
+        sys.exit(0)
 
     if counter == 0:
         (out_dir / "sw.js").write_text("self.skipWaiting();\\n")
@@ -874,7 +878,8 @@ sys.exit(0)
 """
 )
 fake_npm.chmod(0o755)
-build_env = {**env, "PATH": str(fake_bin) + os.pathsep + "/usr/bin:/bin"}
+existing_path = env.get("PATH", "")
+build_env = {**env, "PATH": str(fake_bin) if not existing_path else str(fake_bin) + os.pathsep + existing_path}
 build_command = module.build_frontend_preview_build_command()
 build_script = shlex.split(build_command)[2]
 build_publish_source = build_script[
@@ -883,6 +888,7 @@ build_publish_source = build_script[
 assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), build_publish_source
+assert "child.is_symlink()" in build_script, build_script
 build_result = subprocess.run(
     ["bash", "-c", "set -euo pipefail; " + build_command],
     cwd=frontend_worktree,
@@ -935,6 +941,17 @@ assert frontend_worktree.joinpath("dist", "assets", "shape").is_file()
 assert frontend_worktree.joinpath("dist", "assets", "current.js").is_file()
 assert frontend_worktree.joinpath("npm-vite-api-url.log").read_text() == "https://api-azure-cheetah-165552b7.preview.secpal.dev\n"
 
+symlink_build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + build_command],
+    cwd=frontend_worktree,
+    env={**build_env, "FAKE_NPM_SYMLINK": "1"},
+    capture_output=True,
+    text=True,
+)
+assert symlink_build_result.returncode == 1, symlink_build_result.stderr
+assert "staged build output contains symlink: assets/linked-secret.txt" in symlink_build_result.stderr, symlink_build_result.stderr
+assert not frontend_worktree.joinpath("dist", "assets", "linked-secret.txt").exists()
+
 # Run the resolver portion only (up to subprocess.run) by patching subprocess.run to capture env.
 import textwrap as _textwrap
 resolver_probe = _textwrap.dedent(f"""
@@ -972,6 +989,7 @@ assert 'Path("dist")' in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
+assert "child.is_symlink()" in watch_script, watch_script
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""
