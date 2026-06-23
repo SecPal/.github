@@ -560,16 +560,118 @@ def build_frontend_preview_build_command() -> str:
     script = textwrap.dedent(
         f"""\
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 {build_linked_workspace_resolver_source()}
+
+def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
+    os.close(fd)
+    shutil.copy2(src_file, tmp_path)
+    if dest_file.is_dir() and not dest_file.is_symlink():
+        shutil.rmtree(dest_file)
+    os.replace(tmp_path, dest_file)
+
+def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
+    if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
+        dest_dir.unlink()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for child in sorted(src_dir.iterdir()):
+        dest_child = dest_dir / child.name
+        if child.is_dir():
+            merge_tree(child, dest_child, tmp_dir)
+        else:
+            replace_file(child, dest_child, tmp_dir)
+
+def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[Path]]:
+    stage_dirs = {{Path(".")}}
+    stage_files = set()
+    for child in stage_dir.rglob("*"):
+        if child == tmp_dir or tmp_dir in child.parents:
+            continue
+
+        relative = child.relative_to(stage_dir)
+        if child.is_dir():
+            stage_dirs.add(relative)
+        else:
+            stage_files.add(relative)
+    return stage_dirs, stage_files
+
+def prune_live_tree(live_root: Path, stage_dirs: set[Path], stage_files: set[Path]) -> None:
+    for child in sorted(live_root.rglob("*"), key=lambda path: len(path.relative_to(live_root).parts), reverse=True):
+        relative = child.relative_to(live_root)
+        if child.is_dir() and not child.is_symlink():
+            if relative not in stage_dirs:
+                shutil.rmtree(child)
+        elif relative not in stage_files:
+            child.unlink(missing_ok=True)
+
+def publish_preview_build(stage_dir: Path) -> None:
+    live_root = Path("dist")
+    live_root.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
+        tmp_dir = Path(_tmp)
+        stage_dirs, stage_files = collect_stage_paths(stage_dir, tmp_dir)
+
+        stage_assets = stage_dir / "assets"
+        if stage_assets.is_dir():
+            merge_tree(stage_assets, live_root / "assets", tmp_dir)
+
+        deferred_index: Path | None = None
+        for child in sorted(stage_dir.iterdir()):
+            if child.name == "assets":
+                continue
+            if child.name == tmp_dir.name:
+                continue
+            if child.name == "index.html":
+                deferred_index = child
+                continue
+            destination = live_root / child.name
+            if child.is_dir():
+                merge_tree(child, destination, tmp_dir)
+            else:
+                replace_file(child, destination, tmp_dir)
+
+        prune_live_tree(live_root, stage_dirs, stage_files)
+
+        if deferred_index is not None:
+            replace_file(deferred_index, live_root / "index.html", tmp_dir)
 
 workspace = Path.cwd().name
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
-raise SystemExit(subprocess.run(["npm", "run", "build", "--", "--mode", "preview"], env=env).returncode)
+stage_root = Path(".polyscope-preview-stage")
+stage_root.mkdir(exist_ok=True)
+stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
+try:
+    result = subprocess.run(
+        [
+            "npm",
+            "run",
+            "build",
+            "--",
+            "--mode",
+            "preview",
+            "--outDir",
+            stage_dir.as_posix(),
+        ],
+        env=env,
+    )
+    if result.returncode == 0:
+        try:
+            publish_preview_build(stage_dir)
+        except Exception as exc:
+            print(f"publish failed: {{exc}}", file=__import__("sys").stderr)
+            raise SystemExit(1) from exc
+    raise SystemExit(result.returncode)
+finally:
+    shutil.rmtree(stage_dir, ignore_errors=True)
         """
     ).strip()
 
@@ -581,8 +683,10 @@ def build_frontend_preview_build_watch_command() -> str:
         f"""\
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -666,16 +770,113 @@ def snapshot() -> str:
 
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
+def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
+    os.close(fd)
+    shutil.copy2(src_file, tmp_path)
+    if dest_file.is_dir() and not dest_file.is_symlink():
+        shutil.rmtree(dest_file)
+    os.replace(tmp_path, dest_file)
+
+def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
+    if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
+        dest_dir.unlink()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for child in sorted(src_dir.iterdir()):
+        dest_child = dest_dir / child.name
+        if child.is_dir():
+            merge_tree(child, dest_child, tmp_dir)
+        else:
+            replace_file(child, dest_child, tmp_dir)
+
+def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[Path]]:
+    stage_dirs = {{Path(".")}}
+    stage_files = set()
+    for child in stage_dir.rglob("*"):
+        if child == tmp_dir or tmp_dir in child.parents:
+            continue
+
+        relative = child.relative_to(stage_dir)
+        if child.is_dir():
+            stage_dirs.add(relative)
+        else:
+            stage_files.add(relative)
+    return stage_dirs, stage_files
+
+def prune_live_tree(live_root: Path, stage_dirs: set[Path], stage_files: set[Path]) -> None:
+    for child in sorted(live_root.rglob("*"), key=lambda path: len(path.relative_to(live_root).parts), reverse=True):
+        relative = child.relative_to(live_root)
+        if child.is_dir() and not child.is_symlink():
+            if relative not in stage_dirs:
+                shutil.rmtree(child)
+        elif relative not in stage_files:
+            child.unlink(missing_ok=True)
+
+def publish_preview_build(stage_dir: Path) -> None:
+    live_root = Path("dist")
+    live_root.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
+        tmp_dir = Path(_tmp)
+        stage_dirs, stage_files = collect_stage_paths(stage_dir, tmp_dir)
+
+        stage_assets = stage_dir / "assets"
+        if stage_assets.is_dir():
+            merge_tree(stage_assets, live_root / "assets", tmp_dir)
+
+        deferred_index = None
+        for child in sorted(stage_dir.iterdir()):
+            if child.name == "assets":
+                continue
+            if child.name == tmp_dir.name:
+                continue
+            if child.name == "index.html":
+                deferred_index = child
+                continue
+            destination = live_root / child.name
+            if child.is_dir():
+                merge_tree(child, destination, tmp_dir)
+            else:
+                replace_file(child, destination, tmp_dir)
+
+        prune_live_tree(live_root, stage_dirs, stage_files)
+
+        if deferred_index is not None:
+            replace_file(deferred_index, live_root / "index.html", tmp_dir)
+
 def run_build() -> int:
     api_workspace = resolve_linked_workspace("SecPal/api", Path.cwd().name)
     env = os.environ.copy()
     env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
+    stage_root = Path(".polyscope-preview-stage")
+    stage_root.mkdir(exist_ok=True)
+    stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
 
-    return subprocess.run(
-        ["npm", "run", "build", "--", "--mode", "preview"],
-        check=False,
-        env=env,
-    ).returncode
+    try:
+        result = subprocess.run(
+            [
+                "npm",
+                "run",
+                "build",
+                "--",
+                "--mode",
+                "preview",
+                "--outDir",
+                stage_dir.as_posix(),
+            ],
+            check=False,
+            env=env,
+        )
+        if result.returncode == 0:
+            try:
+                publish_preview_build(stage_dir)
+            except Exception as exc:
+                print(f"publish failed: {{exc}}", file=sys.stderr)
+                return 1
+        return result.returncode
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
 
 print("Watching frontend preview sources for changes...", flush=True)
 previous_snapshot = None
@@ -2360,6 +2561,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         server {{
             listen 443 ssl;
             listen [::]:443 ssl;
+            http2 on;
             server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
@@ -2388,6 +2590,8 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
+            set $secpal_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;
@@ -2448,6 +2652,8 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             root $preview_docroot;
 
+            add_header Content-Security-Policy $secpal_csp always;
+            add_header Permissions-Policy $secpal_permissions_policy always;
             add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
             add_header X-Content-Type-Options "nosniff" always;
             add_header X-XSS-Protection "0" always;
@@ -2468,6 +2674,132 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             location / {{
                 try_files $uri @preview_router;
+            }}
+
+            location = / {{
+                if ($route_mode = api) {{
+                    rewrite ^ /index.php last;
+                }}
+
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+                add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+                try_files /index.html =404;
+            }}
+
+            location = /index.html {{
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+                add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+                try_files $uri =404;
+            }}
+
+            location = /sw.js {{
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+                add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+                add_header Service-Worker-Allowed "/" always;
+                try_files $uri =404;
+            }}
+
+            location = /manifest.webmanifest {{
+                default_type application/manifest+json;
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+                add_header Cache-Control "no-cache, must-revalidate" always;
+                try_files $uri =404;
+            }}
+
+            location ^~ /assets/ {{
+                try_files $uri =404;
+                expires 1y;
+                add_header Cache-Control "public, immutable" always;
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+            }}
+
+            location ^~ /_astro/ {{
+                try_files $uri =404;
+                expires 1y;
+                add_header Cache-Control "public, immutable" always;
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+            }}
+
+            location ^~ /_next/static/ {{
+                try_files $uri =404;
+                expires 1y;
+                add_header Cache-Control "public, immutable" always;
+                add_header Content-Security-Policy $secpal_csp always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+            }}
+
+            location ~* \\.(?:svg|ico|png|jpg|jpeg|webp|avif|woff|woff2|ttf|otf|xml|txt)$ {{
+                try_files $uri =404;
+                expires 1d;
             }}
 
             location @preview_router {{

@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-23 - Harden Polyscope Preview Publishing
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so staged frontend preview publishes remove stale files from `dist/`, handle file/directory shape changes, and still publish `index.html` last after assets are reconciled
+- fixed the nginx header regression assertions in `tests/polyscope-rollout.sh` so each immutable asset location block is parsed independently instead of accidentally scanning into following location blocks
+- added Python bytecode ignore rules to `.gitignore` so generated `__pycache__/` artifacts do not enter future rollout diffs
+
+**Added:**
+
+- extended `tests/polyscope-rollout.sh` to run the generated frontend preview build command through a fake `npm` and prove linked API env propagation, stale output deletion, and asset path type changes
+
+---
+
 ## 2026-06-21 - Standardize Site Terminology For Customer Locations
 
 **Added:**
