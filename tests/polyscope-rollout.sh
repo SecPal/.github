@@ -736,6 +736,8 @@ frontend_worktree.mkdir(parents=True)
 api_worktree.mkdir(parents=True)
 relinked_api_worktree.mkdir(parents=True)
 source_api.mkdir(parents=True)
+fake_bin = fixture / "fake-bin"
+fake_bin.mkdir()
 
 source_api.joinpath(".env").write_text(
     "\n".join(
@@ -832,14 +834,131 @@ with sqlite3.connect(db_path) as connection:
     )
 
 # build_frontend_preview_build_command: assert linked API workspace is used in VITE_API_URL
-build_result = subprocess.run(
-    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_build_command()],
-    cwd=frontend_worktree,
-    env={**env, "PATH": "/usr/bin:/bin", "VITE_BUILD_CAPTURE": "1"},
-    capture_output=True,
+fake_npm = fake_bin / "npm"
+fake_npm.write_text(
+    """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out_dir = Path("dist")
+for index, arg in enumerate(args[:-1]):
+    if arg == "--outDir":
+        out_dir = Path(args[index + 1])
+        break
+
+Path("npm-vite-api-url.log").write_text(os.environ.get("VITE_API_URL", "") + "\\n")
+
+if "run" in args and "build" in args:
+    counter_path = Path(".fake-npm-build-count")
+    counter = int(counter_path.read_text()) if counter_path.exists() else 0
+    counter_path.write_text(str(counter + 1))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "assets").mkdir(parents=True, exist_ok=True)
+    (out_dir / "index.html").write_text(f"<!doctype html>build {counter}\\n")
+    if os.environ.get("FAKE_NPM_SYMLINK") == "1":
+        Path("outside-preview-stage.txt").write_text("must not publish\\n")
+        (out_dir / "assets" / "linked-secret.txt").symlink_to(Path.cwd() / "outside-preview-stage.txt")
+        sys.exit(0)
+
+    if counter == 0:
+        (out_dir / "sw.js").write_text("self.skipWaiting();\\n")
+        (out_dir / ".well-known").mkdir(parents=True, exist_ok=True)
+        (out_dir / ".well-known" / "assetlinks.json").write_text("{}\\n")
+        (out_dir / "assets" / "removed.js").write_text("console.log('removed');\\n")
+        (out_dir / "assets" / "shape").mkdir(parents=True, exist_ok=True)
+        (out_dir / "assets" / "shape" / "chunk.js").write_text("console.log('old shape');\\n")
+    else:
+        (out_dir / "assets" / "shape").write_text("console.log('new shape');\\n")
+        (out_dir / "assets" / "current.js").write_text("console.log('current');\\n")
+
+sys.exit(0)
+"""
 )
-# The command calls npm run build which won't exist in the fixture; what we test is that
-# the generated script resolves the correct api_workspace before invoking npm.
+fake_npm.chmod(0o755)
+existing_path = env.get("PATH", "")
+build_env = {**env, "PATH": str(fake_bin) if not existing_path else str(fake_bin) + os.pathsep + existing_path}
+build_command = module.build_frontend_preview_build_command()
+build_script = shlex.split(build_command)[2]
+build_publish_source = build_script[
+    build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = Path.cwd().name")
+]
+assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
+    "prune_live_tree(live_root, stage_dirs, stage_files)"
+), build_publish_source
+assert "child.is_symlink()" in build_script, build_script
+build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + build_command],
+    cwd=frontend_worktree,
+    env=build_env,
+    capture_output=True,
+    text=True,
+)
+assert build_result.returncode == 0, build_result.stderr
+assert frontend_worktree.joinpath("dist", "index.html").is_file()
+assert frontend_worktree.joinpath("dist", "sw.js").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "removed.js").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "shape").is_dir()
+
+failing_build_script = build_script.replace(
+    "def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:\n",
+    """def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    if src_file.name == "index.html" and dest_file.name == "index.html" and os.environ.get("FAIL_INDEX_SWAP") == "1":
+        raise RuntimeError("simulated index replace failure")
+""",
+    1,
+)
+failed_build_result = subprocess.run(
+    ["python3", "-c", failing_build_script],
+    cwd=frontend_worktree,
+    env={**build_env, "FAIL_INDEX_SWAP": "1"},
+    capture_output=True,
+    text=True,
+)
+assert failed_build_result.returncode == 1, failed_build_result.stderr
+assert "publish failed: simulated index replace failure" in failed_build_result.stderr, failed_build_result.stderr
+assert "build 0" in frontend_worktree.joinpath("dist", "index.html").read_text()
+assert frontend_worktree.joinpath("dist", "sw.js").is_file()
+assert frontend_worktree.joinpath("dist", ".well-known", "assetlinks.json").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "removed.js").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "current.js").is_file()
+
+recovery_build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + build_command],
+    cwd=frontend_worktree,
+    env=build_env,
+    capture_output=True,
+    text=True,
+)
+assert recovery_build_result.returncode == 0, recovery_build_result.stderr
+assert "build 2" in frontend_worktree.joinpath("dist", "index.html").read_text()
+assert not frontend_worktree.joinpath("dist", "sw.js").exists()
+assert not frontend_worktree.joinpath("dist", ".well-known", "assetlinks.json").exists()
+assert not frontend_worktree.joinpath("dist", "assets", "removed.js").exists()
+assert frontend_worktree.joinpath("dist", "assets", "shape").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "current.js").is_file()
+assert frontend_worktree.joinpath("npm-vite-api-url.log").read_text() == "https://api-azure-cheetah-165552b7.preview.secpal.dev\n"
+
+symlink_build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + build_command],
+    cwd=frontend_worktree,
+    env={**build_env, "FAKE_NPM_SYMLINK": "1"},
+    capture_output=True,
+    text=True,
+)
+assert symlink_build_result.returncode == 1, symlink_build_result.stderr
+assert "staged build output contains symlink: assets/linked-secret.txt" in symlink_build_result.stderr, symlink_build_result.stderr
+assert not frontend_worktree.joinpath("dist", "assets", "linked-secret.txt").exists()
+
+frontend_worktree.joinpath("dist").rename(frontend_worktree / "old-dist")
+frontend_worktree.joinpath("live-dist-target").mkdir()
+frontend_worktree.joinpath("dist").symlink_to(frontend_worktree / "live-dist-target", target_is_directory=True)
+live_symlink_result = subprocess.run(["bash", "-c", "set -euo pipefail; " + build_command], cwd=frontend_worktree, env=build_env, capture_output=True, text=True)
+assert live_symlink_result.returncode == 1, live_symlink_result.stderr
+assert "publish failed: live preview dist is a symlink" in live_symlink_result.stderr, live_symlink_result.stderr
+
 # Run the resolver portion only (up to subprocess.run) by patching subprocess.run to capture env.
 import textwrap as _textwrap
 resolver_probe = _textwrap.dedent(f"""
@@ -865,9 +984,19 @@ assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in p
 
 watch_command = module.build_frontend_preview_build_watch_command()
 watch_script = shlex.split(watch_command)[2]
+watch_publish_source = watch_script[
+    watch_script.index("def publish_preview_build(stage_dir: Path) -> None:") : watch_script.index("def run_build()")
+]
 run_build_source = watch_script[watch_script.index("def run_build()") :]
 assert 'api_url = f"https://api-' not in watch_script, watch_script
 assert 'resolve_linked_workspace("SecPal/api", Path.cwd().name)' in run_build_source, run_build_source
+assert '--outDir' in run_build_source, run_build_source
+assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
+assert 'Path("dist")' in watch_script, watch_script
+assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
+    "prune_live_tree(live_root, stage_dirs, stage_files)"
+), watch_publish_source
+assert "child.is_symlink()" in watch_script, watch_script
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""
@@ -1201,6 +1330,12 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
 fi
 
 grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
+grep -qF "listen 443 ssl http2;" "$nginx_output"
+grep -qF "listen [::]:443 ssl http2;" "$nginx_output"
+if grep -qF "http2 on;" "$nginx_output"; then
+    echo "preview nginx config must use listen-level http2 syntax for nginx 1.24 compatibility" >&2
+    exit 1
+fi
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
 grep -qF "if (\$repo = guardguide) {" "$nginx_output"
@@ -1209,12 +1344,57 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
+grep -qF "set \$secpal_csp " "$nginx_output"
+grep -qF "script-src 'self' 'unsafe-inline'" "$nginx_output"
+grep -qF "set \$secpal_permissions_policy " "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
 grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
 grep -qF "fastcgi_buffer_size 32k;" "$nginx_output"
 grep -qF "fastcgi_buffers 16 16k;" "$nginx_output"
 grep -qF "fastcgi_param SCRIPT_FILENAME \$php_root/index.php;" "$nginx_output"
 grep -qF "fastcgi_param DOCUMENT_ROOT \$php_root;" "$nginx_output"
+grep -qF "location = / {" "$nginx_output"
+grep -qF 'add_header Cache-Control "no-cache, no-store, must-revalidate" always;' "$nginx_output"
+grep -qF "location = /sw.js {" "$nginx_output"
+grep -qF 'add_header Service-Worker-Allowed "/" always;' "$nginx_output"
+grep -qF "location = /manifest.webmanifest {" "$nginx_output"
+grep -qF "default_type application/manifest+json;" "$nginx_output"
+grep -qF "location ^~ /assets/ {" "$nginx_output"
+grep -qF "location ^~ /_astro/ {" "$nginx_output"
+grep -qF "location ^~ /_next/static/ {" "$nginx_output"
+# Immutable-asset location blocks must carry the full security header set; nginx add_header
+# inheritance is blocked whenever a location defines its own add_header directives, so each
+# block must repeat every header explicitly rather than relying on the parent server block.
+for _immutable_loc in "/assets/" "/_astro/" "/_next/static/"; do
+    _immutable_block=$(awk "/location \^\~ ${_immutable_loc//\//\\/} \{/,/^[[:space:]]*\}/" "$nginx_output")
+    if printf '%s\n' "$_immutable_block" | tail -n +2 | grep -qE '^[[:space:]]*location '; then
+        echo "nginx location ^~ ${_immutable_loc} block parser captured a following location" >&2
+        exit 1
+    fi
+    for _immutable_header in \
+        'add_header Content-Security-Policy' \
+        'add_header Permissions-Policy' \
+        'add_header Strict-Transport-Security' \
+        'add_header X-Content-Type-Options' \
+        'add_header X-Frame-Options' \
+        'add_header X-Permitted-Cross-Domain-Policies'; do
+        if ! printf '%s\n' "$_immutable_block" | grep -qF "$_immutable_header"; then
+            echo "nginx location ^~ ${_immutable_loc} is missing: ${_immutable_header}" >&2
+            exit 1
+        fi
+    done
+    _cache_header='add_header Cache-Control "public, immutable"'
+    [ "$_immutable_loc" = "/assets/" ] && _cache_header='add_header Cache-Control "no-cache, must-revalidate"'
+    if ! printf '%s\n' "$_immutable_block" | grep -qF "$_cache_header"; then
+        echo "nginx location ^~ ${_immutable_loc} is missing: ${_cache_header}" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$_immutable_block" | grep -qF 'if ($uri ~ (?:/\.|\.php$)) {'; then
+        echo "nginx location ^~ ${_immutable_loc} must deny nested hidden files and PHP files" >&2
+        exit 1
+    fi
+done
+unset _immutable_loc _immutable_block _immutable_header
 
 if grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-api.sock;" "$nginx_output"; then
     echo "preview nginx config must not route shared preview PHP traffic through the API-specific FPM pool" >&2
@@ -1411,8 +1591,21 @@ if [[ "$*" == *" ci"* || "$1" == "ci" ]]; then
     mkdir -p node_modules
 fi
 if [[ "$*" == *"run build"* ]]; then
-    mkdir -p dist
-    printf '<!doctype html>\n' > dist/index.html
+    out_dir="dist"
+    prev=""
+    for arg in "$@"; do
+        if [[ "$prev" == "--outDir" ]]; then
+            out_dir="$arg"
+            break
+        fi
+        prev="$arg"
+    done
+    mkdir -p "$out_dir/assets" "$out_dir/.well-known"
+    printf '<!doctype html>\n' > "$out_dir/index.html"
+    printf 'self.skipWaiting();\n' > "$out_dir/sw.js"
+    printf '{}\n' > "$out_dir/manifest.webmanifest"
+    printf 'console.log("chunk");\n' > "$out_dir/assets/index-abc123.js"
+    printf '{}\n' > "$out_dir/.well-known/assetlinks.json"
 fi
 exit 0
 STUB
