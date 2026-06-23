@@ -875,8 +875,16 @@ sys.exit(0)
 )
 fake_npm.chmod(0o755)
 build_env = {**env, "PATH": str(fake_bin) + os.pathsep + "/usr/bin:/bin"}
+build_command = module.build_frontend_preview_build_command()
+build_script = shlex.split(build_command)[2]
+build_publish_source = build_script[
+    build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = Path.cwd().name")
+]
+assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
+    "prune_live_tree(live_root, stage_dirs, stage_files)"
+), build_publish_source
 build_result = subprocess.run(
-    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_build_command()],
+    ["bash", "-c", "set -euo pipefail; " + build_command],
     cwd=frontend_worktree,
     env=build_env,
     capture_output=True,
@@ -888,15 +896,38 @@ assert frontend_worktree.joinpath("dist", "sw.js").is_file()
 assert frontend_worktree.joinpath("dist", "assets", "removed.js").is_file()
 assert frontend_worktree.joinpath("dist", "assets", "shape").is_dir()
 
-second_build_result = subprocess.run(
-    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_build_command()],
+failing_build_script = build_script.replace(
+    "def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:\n",
+    """def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    if src_file.name == "index.html" and dest_file.name == "index.html" and os.environ.get("FAIL_INDEX_SWAP") == "1":
+        raise RuntimeError("simulated index replace failure")
+""",
+    1,
+)
+failed_build_result = subprocess.run(
+    ["python3", "-c", failing_build_script],
+    cwd=frontend_worktree,
+    env={**build_env, "FAIL_INDEX_SWAP": "1"},
+    capture_output=True,
+    text=True,
+)
+assert failed_build_result.returncode == 1, failed_build_result.stderr
+assert "publish failed: simulated index replace failure" in failed_build_result.stderr, failed_build_result.stderr
+assert "build 0" in frontend_worktree.joinpath("dist", "index.html").read_text()
+assert frontend_worktree.joinpath("dist", "sw.js").is_file()
+assert frontend_worktree.joinpath("dist", ".well-known", "assetlinks.json").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "removed.js").is_file()
+assert frontend_worktree.joinpath("dist", "assets", "current.js").is_file()
+
+recovery_build_result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + build_command],
     cwd=frontend_worktree,
     env=build_env,
     capture_output=True,
     text=True,
 )
-assert second_build_result.returncode == 0, second_build_result.stderr
-assert "build 1" in frontend_worktree.joinpath("dist", "index.html").read_text()
+assert recovery_build_result.returncode == 0, recovery_build_result.stderr
+assert "build 2" in frontend_worktree.joinpath("dist", "index.html").read_text()
 assert not frontend_worktree.joinpath("dist", "sw.js").exists()
 assert not frontend_worktree.joinpath("dist", ".well-known", "assetlinks.json").exists()
 assert not frontend_worktree.joinpath("dist", "assets", "removed.js").exists()
@@ -929,12 +960,18 @@ assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in p
 
 watch_command = module.build_frontend_preview_build_watch_command()
 watch_script = shlex.split(watch_command)[2]
+watch_publish_source = watch_script[
+    watch_script.index("def publish_preview_build(stage_dir: Path) -> None:") : watch_script.index("def run_build()")
+]
 run_build_source = watch_script[watch_script.index("def run_build()") :]
 assert 'api_url = f"https://api-' not in watch_script, watch_script
 assert 'resolve_linked_workspace("SecPal/api", Path.cwd().name)' in run_build_source, run_build_source
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
+assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
+    "prune_live_tree(live_root, stage_dirs, stage_files)"
+), watch_publish_source
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""

@@ -637,10 +637,10 @@ def publish_preview_build(stage_dir: Path) -> None:
             else:
                 replace_file(child, destination, tmp_dir)
 
-        prune_live_tree(live_root, stage_dirs, stage_files)
-
         if deferred_index is not None:
             replace_file(deferred_index, live_root / "index.html", tmp_dir)
+
+        prune_live_tree(live_root, stage_dirs, stage_files)
 
 workspace = Path.cwd().name
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
@@ -840,10 +840,10 @@ def publish_preview_build(stage_dir: Path) -> None:
             else:
                 replace_file(child, destination, tmp_dir)
 
-        prune_live_tree(live_root, stage_dirs, stage_files)
-
         if deferred_index is not None:
             replace_file(deferred_index, live_root / "index.html", tmp_dir)
+
+        prune_live_tree(live_root, stage_dirs, stage_files)
 
 def run_build() -> int:
     api_workspace = resolve_linked_workspace("SecPal/api", Path.cwd().name)
