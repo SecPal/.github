@@ -548,6 +548,8 @@ Schema::create('customer_organizational_unit_assignments', function (Blueprint $
 
 #### 3. Sites (Locations)
 
+**Technical identifier note:** The schema example keeps the current `objects` table name for site records.
+
 ```php
 Schema::create('objects', function (Blueprint $table) {
     $table->uuid('id')->primary();
@@ -565,6 +567,8 @@ Schema::create('objects', function (Blueprint $table) {
 ````
 
 #### 4. Site Areas (Optional Segmentation)
+
+**Technical identifier note:** The schema example keeps the current `object_areas` table name for site area records.
 
 ```php
 Schema::create('object_areas', function (Blueprint $table) {
