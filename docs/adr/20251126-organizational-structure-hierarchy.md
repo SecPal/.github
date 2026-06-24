@@ -13,7 +13,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Deciders:** @kevalyq
 
-**Editorial Note:** This ADR preserves parts of the original ADR-007 proposal for historical context. Where older sections use `object` or `objects` for customer locations, the current implementation and repository terminology standardize on `site` and `sites`. See [Terminology](../brand/terminology.md).
+**Editorial Note:** This ADR preserves parts of the original ADR-007 proposal for historical context, along with intentionally retained German `Objekt`/`Objekte` references and technical identifiers such as `customer_user_object_accesses`. Current English repository terminology standardizes on `site` and `sites` for customer locations. See [Terminology](../brand/terminology.md).
 
 ## Summary
 
@@ -77,11 +77,11 @@ organizational_units: [none - flat, all employees report directly]
 Internal Employees & RBAC:
 ├─ User: Inhaber Schmidt
 │  Access: Explicit permissions + root `manage` scope
-│  Scope: All customers/objects within the assigned root unit
+│  Scope: All customers/sites within the assigned root unit
 │
 ├─ User: Einsatzleiter Müller
 │  Role: Manager
-│  Scope: All customers/objects
+│  Scope: All customers/sites
 │
 └─ Guards (3x)
    Role: Guard
@@ -108,14 +108,14 @@ SecureGuard GmbH (company)
 │  │  Scope: user_internal_organizational_scopes
 │  │         → organizational_unit_id = Niederlassung Berlin
 │  │         → access_level = 'full'
-│  │         → Can see ALL customers/objects of Berlin branch
+│  │         → Can see ALL customers/sites of Berlin branch
 │  │
 │  ├─ User: Objektleiter Objekt A (fine-grained!)
 │  │  Role: Custom "Objektleiter"
 │  │  Scope: user_object_scopes
 │  │         → object_id = Objekt A (specific)
 │  │         → Can manage ONLY Objekt A (all areas, all shifts)
-│  │         → CANNOT see other objects
+│  │         → CANNOT see other sites
 │  │
 │  ├─ User: Schichtführer Nachtschicht (even more fine-grained!)
 │  │  Role: Custom "Schichtführer"
@@ -154,7 +154,7 @@ ProSec Holding (holding)
 │  │  ├─ Niederlassung Berlin (branch)
 │  │  │  Fine-Grained RBAC Examples:
 │  │  │  ├─ Niederlassungsleiter Berlin
-│  │  │  │  → Sees all Berlin customers/objects
+│  │  │  │  → Sees all Berlin customers/sites
 │  │  │  │
 │  │  │  ├─ Objektleiter Flughafen Terminal 2
 │  │  │  │  → Sees ONLY Flughafen (all areas)
@@ -188,7 +188,7 @@ These scenarios show **customer hierarchies** and how external customer users (C
 **Important:** Customer users have access to the **same RBAC system** as internal employees, but with **restricted permissions**:
 
 - ✅ Same Role/Permission infrastructure (Spatie Laravel-Permission)
-- ✅ Same hierarchical access patterns (corporate_wide → regional → specific objects)
+- ✅ Same hierarchical access patterns (corporate_wide → regional → specific sites)
 - ✅ Same scope-based access control
 - ❌ **But:** Typically **read-only** permissions only
 - ❌ **No write access:** Cannot create/edit guard book entries, shifts, employees, etc.
@@ -204,7 +204,7 @@ $clientRole->syncPermissions([
     'reports.read',             // Read reports
     'reports.export',           // Export/download reports
     'shifts.read',              // See scheduled shifts
-    'work_instructions.read',   // Read work instructions for their objects
+    'work_instructions.read',   // Read work instructions for their sites
 
     // NO write permissions:
     // 'guard_book.create' ❌
@@ -250,7 +250,7 @@ customers:
   - Müller GmbH (type: 'local', parent: null)
     → Managed by: Niederlassung Berlin (internal assignment)
 
-objects:
+sites:
   - Bürogebäude Musterstraße 1
     → Guard Book: WB-2025-001
 
@@ -266,7 +266,7 @@ Customer Users (Client Role - READ-ONLY):
    Access: customer_user_object_accesses
            → object_id = Bürogebäude Musterstraße 1
            → allowed_actions = ["read_guard_book"]
-           → Can READ ONLY this object's guard book
+           → Can READ ONLY this site's guard book
 
 NOTE: Customer users do NOT see which internal branch manages them!
 ```
@@ -284,18 +284,18 @@ Rewe Group (type: 'corporate', parent: null)
 ├─ Rewe Region Nord (type: 'regional', parent: Rewe Group)
 │  ├─ Rewe Markt Hamburg Altona (type: 'local')
 │  │  → Managed by: Niederlassung Hamburg (internal, invisible to customer)
-│  │  → Object: Rewe Markt Hamburg Altona
+│  │  → Site: Rewe Markt Hamburg Altona
 │  │     → Guard Book: WB-REWE-HH-001
 │  │
 │  └─ Rewe Markt Berlin Prenzlauer Berg (type: 'local')
 │     → Managed by: Niederlassung Berlin (internal, invisible)
-│     → Object: Rewe Markt Berlin Prenzlauer Berg
+│     → Site: Rewe Markt Berlin Prenzlauer Berg
 │        → Guard Book: WB-REWE-BE-001
 │
 └─ Rewe Region Süd (type: 'regional', parent: Rewe Group)
    └─ Rewe Markt München Schwabing (type: 'local')
       → Managed by: Niederlassung München (internal, invisible)
-      → Object: Rewe Markt München Schwabing
+      → Site: Rewe Markt München Schwabing
          → Guard Book: WB-REWE-MUC-001
 
 Customer Users (Client Role - READ-ONLY):
@@ -304,15 +304,15 @@ Customer Users (Client Role - READ-ONLY):
 │          → customer_id = Rewe Group
 │          → access_level = 'corporate_wide'
 │          → Can READ all Rewe guard books nationwide
-│          → Uses customer_closures to find all descendant objects
+│          → Uses customer_closures to find all descendant sites
 │          → NO write access
 │
 ├─ User: Rewe Regional-Koordinator Nord
 │  Access: customer_user_accesses
 │          → customer_id = Rewe Region Nord
 │          → access_level = 'regional'
-│          → Can READ Rewe Nord objects (Hamburg, Berlin)
-│          → CANNOT see Rewe Süd objects
+│          → Can READ Rewe Nord sites (Hamburg, Berlin)
+│          → CANNOT see Rewe Süd sites
 │
 └─ User: Marktleiter Hamburg Altona
    Access: customer_user_object_accesses
@@ -331,14 +331,14 @@ They only see their own customer hierarchy.
 ### Technical Challenges
 
 1. **Arbitrary Depth:** How to model hierarchies without hardcoded levels (e.g., "branch" → "region" → "holding")?
-2. **Efficient Queries:** How to quickly find "all objects under Regional Manager X's scope"?
+2. **Efficient Queries:** How to quickly find "all sites under Regional Manager X's scope"?
 3. **Flexible Types:** How to support custom organizational unit types beyond predefined ones?
 4. **RBAC Integration:** How to grant permissions based on organizational hierarchy position?
-5. **Multiple Wachbücher:** Should large objects support multiple guard books per area?
+5. **Multiple Wachbücher:** Should large sites support multiple guard books per area?
 
 ## Decision
 
-We will implement a **Closure Table Pattern** for organizational hierarchies combined with flexible object area segmentation and event-based guard books.
+We will implement a **Closure Table Pattern** for organizational hierarchies combined with flexible site area segmentation and event-based guard books.
 
 ### Key Architectural Principle: Separation of Internal & External Hierarchies
 
@@ -359,7 +359,7 @@ We will implement a **Closure Table Pattern** for organizational hierarchies com
 │              │  Role: Manager                                   │
 │              │  Scope: user_internal_organizational_scopes      │
 │              │         → Access to Niederlassung Berlin +       │
-│              │           all customers/objects managed by it    │
+│              │           all customers/sites managed by it      │
 │              │                                                  │
 │              └─ User: Guard Max Mustermann                      │
 │                 Role: Guard                                     │
@@ -379,12 +379,12 @@ We will implement a **Closure Table Pattern** for organizational hierarchies com
 │                                                                 │
 │  Rewe Group (customer, managed by Niederlassung Berlin)         │
 │  └─ Rewe Region Nord                                            │
-│     └─ Rewe Markt Hamburg Altona (object)                       │
+│     └─ Rewe Markt Hamburg Altona (site)                         │
 │        └─ [CUSTOMER USERS: Client Role]                         │
 │           ├─ User: Rewe Corporate Security Manager              │
 │           │  Role: Client                                       │
 │           │  Scope: customer_user_accesses                      │
-│           │         → Access to ALL Rewe objects nationwide     │
+│           │         → Access to ALL Rewe sites nationwide       │
 │           │         → Read-only: guard books, reports           │
 │           │         → NO write access                           │
 │           │                                                     │
@@ -392,13 +392,13 @@ We will implement a **Closure Table Pattern** for organizational hierarchies com
 │              Role: Client                                       │
 │              Scope: customer_user_object_accesses               │
 │                     → Access ONLY to this specific store        │
-│                     → Read-only: guard book for this object     │
+│                     → Read-only: guard book for this site       │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
 KEY DIFFERENCES:
 - Internal employees (Guards, Managers): Full CRUD access within their scope
-- Customer users (Clients): Typically read-only access to their objects
+- Customer users (Clients): Typically read-only access to their sites
 - Internal org structure is INVISIBLE to customer users
 - Customer hierarchy is VISIBLE to internal employees (for management)
 
@@ -546,7 +546,7 @@ Schema::create('customer_organizational_unit_assignments', function (Blueprint $
 
 ````
 
-#### 3. Objects (Locations)
+#### 3. Sites (Locations)
 
 ```php
 Schema::create('objects', function (Blueprint $table) {
@@ -564,7 +564,7 @@ Schema::create('objects', function (Blueprint $table) {
 });
 ````
 
-#### 4. Object Areas (Optional Segmentation)
+#### 4. Site Areas (Optional Segmentation)
 
 ```php
 Schema::create('object_areas', function (Blueprint $table) {
@@ -595,7 +595,7 @@ Schema::create('guard_books', function (Blueprint $table) {
     $table->uuid('id')->primary();
     $table->foreignUuid('tenant_id')->constrained('tenant_keys');
 
-    // EITHER entire object OR specific area (mutually exclusive)
+    // EITHER entire site OR specific area (mutually exclusive)
     $table->foreignUuid('object_id')->nullable()
         ->references('id')->on('objects')->cascadeOnDelete();
     $table->foreignUuid('object_area_id')->nullable()
@@ -607,7 +607,7 @@ Schema::create('guard_books', function (Blueprint $table) {
 
     $table->string('name'); // "Wachbuch Haupteingang", "Wachbuch Gesamtobjekt"
     $table->enum('scope_type', [
-        'object_wide',      // Entire object (default)
+        'object_wide',      // Entire site (default)
         'area_specific',    // Specific area only
         'custom'            // User-defined
     ])->default('object_wide');
@@ -691,10 +691,10 @@ Schema::create('user_object_scopes', function (Blueprint $table) {
     $table->primary(['user_id', 'object_id']);
     $table->timestamps();
 
-    $table->comment('Fine-grained: User access to specific objects (e.g., Objektleiter)');
+    $table->comment('Fine-grained: User access to specific sites (e.g., Objektleiter)');
 });
 
-// Even more fine-grained: Access to specific areas within objects
+// Even more fine-grained: Access to specific areas within sites
 Schema::create('user_object_area_scopes', function (Blueprint $table) {
     $table->foreignUuid('user_id')->references('id')->on('users')->cascadeOnDelete();
     $table->foreignUuid('object_area_id')->references('id')->on('object_areas')->cascadeOnDelete();
@@ -711,7 +711,7 @@ Schema::create('user_object_area_scopes', function (Blueprint $table) {
 **Access Control Query Example (Internal Employees):**
 
 ```php
-// Find all objects accessible to internal user X based on organizational scope
+// Find all sites accessible to internal user X based on organizational scope
 $accessibleObjects = Object::query()
     ->whereHas('customerAssignments.organizationalUnit.descendants', function($q) use ($userId) {
         $q->whereIn('organizational_units.id', function($subQ) use ($userId) {
@@ -730,13 +730,13 @@ $accessibleObjects = Object::query()
     })
     ->get();
 
-// Example: Regional Manager Berlin sees all objects managed by Niederlassung Berlin + sub-units
+// Example: Regional Manager Berlin sees all sites managed by Niederlassung Berlin + sub-units
 ```
 
 **Access Control Query Example (Customer Users):**
 
 ```php
-// Find all objects accessible to customer user X
+// Find all sites accessible to customer user X
 $accessibleObjects = Object::query()
     ->where('customer_id', function($q) use ($userId) {
         // Get customer(s) this user has access to
@@ -753,12 +753,12 @@ $accessibleObjects = Object::query()
         });
     })
     ->orWhereHas('customerObjectAccesses', function($q) use ($userId) {
-        // Or specific object access
+        // Or specific site access
         $q->where('user_id', $userId);
     })
     ->get();
 
-// Example: Rewe Corporate Security Manager sees ALL Rewe objects nationwide
+// Example: Rewe Corporate Security Manager sees ALL Rewe sites nationwide
 // Example: Rewe Store Manager Hamburg sees ONLY their specific store
 
 // IMPORTANT: Apply permission checks after scope filtering
@@ -779,7 +779,7 @@ if (!$user->hasPermissionTo('guard_book.read')) {
 **Key Difference:**
 
 - **Internal RBAC:** Guards, Managers, explicitly scoped operators → Access based on organizational_units
-- **Customer Access:** Client users → Access based on customer hierarchy + specific objects
+- **Customer Access:** Client users → Access based on customer hierarchy + specific sites
 
 ```php
 Schema::create('customer_user_accesses', function (Blueprint $table) {
@@ -787,9 +787,9 @@ Schema::create('customer_user_accesses', function (Blueprint $table) {
     $table->foreignUuid('customer_id')->references('id')->on('customers')->cascadeOnDelete();
 
     $table->enum('access_level', [
-        'corporate_wide',    // Access to all sub-customers and objects (e.g., Rewe Corporate Security Manager)
+        'corporate_wide',    // Access to all sub-customers and sites (e.g., Rewe Corporate Security Manager)
         'regional',          // Only specific region (e.g., Rewe Regional Coordinator Nord)
-        'specific_objects'   // Only specific objects (e.g., Store Manager)
+        'specific_objects'   // Only specific sites (e.g., Store Manager)
     ]);
 
     $table->primary(['user_id', 'customer_id']);
@@ -810,7 +810,7 @@ Schema::create('customer_user_object_accesses', function (Blueprint $table) {
     $table->primary(['user_id', 'object_id']);
     $table->timestamps();
 
-    $table->comment('Object-specific access for customer users - read-only, limited scope');
+    $table->comment('Site-specific access for customer users - read-only, limited scope');
 });
 ```
 
@@ -879,9 +879,9 @@ Schema::create('customer_user_object_accesses', function (Blueprint $table) {
 - Corporate-wide access vs. location-specific access
 - Flexible permission levels (corporate_wide, regional, specific_objects)
 
-✅ **Object Segmentation:**
+✅ **Site Segmentation:**
 
-- Large objects can be divided into areas
+- Large sites can be divided into areas
 - Each area can have separate guard book (optional)
 - Supports complex facilities (airports, industrial sites, shopping centers)
 
@@ -995,21 +995,21 @@ DB::transaction(function () use ($unit, $newParent) {
 - [ ] Write tests for hierarchy operations (insert, move, delete)
 - [ ] Add API endpoints for CRUD operations
 
-### Phase 2: Customers & Objects
+### Phase 2: Customers & Sites
 
 - [ ] Create migrations for `customers`, `objects`, `object_areas`
 - [ ] Implement models with relationships to organizational units
 - [ ] Add customer hierarchy support (optional `parent_customer_id`)
-- [ ] Write tests for customer-object relationships
+- [ ] Write tests for customer-site relationships
 - [ ] Add API endpoints
 
 ### Phase 3: Guard Books & Reports
 
 - [ ] Create migrations for `guard_books` and `guard_book_reports`
 - [ ] Implement guard book as event stream container (not closed book)
-- [ ] Add object area segmentation support
+- [ ] Add site area segmentation support
 - [ ] Implement report generation service (filter events by criteria)
-- [ ] Write tests for multi-area objects
+- [ ] Write tests for multi-area sites
 - [ ] Add API endpoints
 
 ### Phase 4: RBAC Integration
@@ -1025,7 +1025,7 @@ DB::transaction(function () use ($unit, $newParent) {
 - [ ] Update feature requirements with detailed use cases
 - [ ] Create user documentation for organizational structure management
 - [ ] Implement UI for org unit hierarchy visualization
-- [ ] Add UI for object area management
+- [ ] Add UI for site area management
 - [ ] Create guide for hierarchical access control setup
 
 ## References
@@ -1121,7 +1121,7 @@ The Phase 6 implementation (Epic #210) has delivered a **more flexible and pragm
 - ❌ No `parent_customer_id` field
 - **Rationale:** YAGNI - None of the initial use cases (small security firms, event security, large corporations) required customer hierarchies. Flat structure is sufficient for MVP.
 
-**Object Areas Segmentation:**
+**Site Area Segmentation:**
 
 - ❌ No `object_areas` table
 - **Rationale:** Premature optimization. Sites are sufficient; segmentation can be added later if needed.
@@ -1221,7 +1221,7 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
   });
   ```
 
-#### No Object Areas Segmentation
+#### No Site Area Segmentation
 
 **Reasoning:**
 
@@ -1267,7 +1267,7 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
 3. Add `CustomerHierarchyService` to manage closure table
 4. Update queries to use hierarchical scopes
 
-#### Add Object Areas When:
+#### Add Site Areas When:
 
 - Tenant has sites with >5 distinct zones requiring separate guard assignments
 - Different insurance policies per area within site
@@ -1333,7 +1333,7 @@ $table->enum('type', ['permanent', 'temporary'])->default('permanent');
 
 1. **M:N > 1:1:** Flexible assignment relationships provide more value than rigid 1:1 mappings
 2. **Temporal Validity Everywhere:** Consistent `valid_from`/`valid_until` pattern simplifies time-based queries
-3. **YAGNI Works:** Deferring customer hierarchies & object areas reduced complexity without limiting functionality
+3. **YAGNI Works:** Deferring customer hierarchies & site areas reduced complexity without limiting functionality
 4. **Gradual Evolution:** Database schema allows non-breaking additions of hierarchies/segmentation later
 5. **Tenant-Specific Roles:** String-based roles (not enums) enable customization per tenant
 
