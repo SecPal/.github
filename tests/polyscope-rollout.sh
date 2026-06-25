@@ -99,6 +99,7 @@ package_scripts = {
         "test:run:all": "vitest run --coverage",
         "test:watch": "vitest",
         "test:e2e:ci": "cross-env CI=true playwright test",
+        "test:preview:pwa-headers": "node ./scripts/check-workspace-preview-pwa-headers.mjs",
         "test:e2e:staging": "cross-env PLAYWRIGHT_BASE_URL=https://app.secpal.dev playwright test",
     },
     "contracts": {
@@ -644,6 +645,9 @@ python3 "$PYTHON_SCRIPT" \
     --summary-output "$summary_output" \
     > /dev/null
 
+grep -qF "set \$csp_nonce \$request_id;" "$nginx_output"
+grep -qF "style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
+
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
     'composer run analyse' \
@@ -685,6 +689,8 @@ grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/fro
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"label": "Workspace Preview CSP Smoke"' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"command": "npm run test:preview:pwa-headers"' "$workspace_root/frontend/polyscope.local.json"
 if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope config must not rely on Vite watch mode for preview rebuilds" >&2
     exit 1
@@ -1344,8 +1350,14 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
-grep -qF "set \$secpal_csp " "$nginx_output"
-grep -qF "script-src 'self' 'unsafe-inline'" "$nginx_output"
+grep -qF "set \$preview_relaxed_csp " "$nginx_output"
+grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self';" "$nginx_output"
+grep -qF "set \$preview_frontend_csp " "$nginx_output"
+grep -qF "script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
+grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
+grep -qF "set \$secpal_csp \$preview_frontend_csp;" "$nginx_output"
+grep -qF "set \$preview_uses_ssi 0;" "$nginx_output"
+grep -qF "set \$preview_uses_ssi 1;" "$nginx_output"
 grep -qF "set \$secpal_permissions_policy " "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
 grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
@@ -1362,6 +1374,120 @@ grep -qF "default_type application/manifest+json;" "$nginx_output"
 grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
+extract_https_server_prefix() {
+    awk '
+    /^[[:space:]]*server \{/ {
+        in_server=1
+        is_https=0
+        block=$0 ORS
+        next
+    }
+    in_server && /^[[:space:]]*listen 443 ssl http2;/ { is_https=1 }
+    in_server && is_https && /^[[:space:]]*location / {
+        printf "%s", block
+        exit
+    }
+    in_server { block = block $0 ORS }
+    in_server && /^[[:space:]]*}/ {
+        if (is_https) {
+            printf "%s", block
+            exit
+        }
+        in_server=0
+        is_https=0
+        block=""
+    }
+' "$1"
+}
+extract_nginx_block() {
+    awk -v start="$1" '
+        index($0, start) { in_block=1 }
+        in_block {
+            print
+            opens = gsub(/\{/, "{")
+            closes = gsub(/\}/, "}")
+            depth += opens - closes
+            if (depth <= 0) {
+                exit
+            }
+        }
+    ' "$2"
+}
+server_ssi_fixture="$workspace/nginx-server-ssi.conf"
+awk '
+    /^[[:space:]]*listen 443 ssl http2;/ && ! inserted {
+        print
+        print "            ssi on;"
+        inserted=1
+        next
+    }
+    { print }
+    END {
+        if (! inserted) {
+            exit 42
+        }
+    }
+' "$nginx_output" > "$server_ssi_fixture"
+if ! extract_https_server_prefix "$server_ssi_fixture" | grep -qF "ssi on;"; then
+    echo "preview nginx server-level SSI regression check must inspect the HTTPS preview server" >&2
+    exit 1
+fi
+https_server_prefix="$(extract_https_server_prefix "$nginx_output")"
+if [ -z "$https_server_prefix" ]; then
+    echo "preview nginx config must contain an HTTPS preview server block" >&2
+    exit 1
+fi
+if printf '%s\n' "$https_server_prefix" | grep -qF "ssi on;"; then
+    echo "preview nginx config must not enable SSI for the entire preview server" >&2
+    exit 1
+fi
+if printf '%s\n' "$https_server_prefix" | grep -qF "error_page 418"; then
+    echo "preview nginx config must not remap SSI handoff statuses for the entire preview server" >&2
+    exit 1
+fi
+for _shared_loc in "location = / {" "location = /index.html {" "location @preview_router {"; do
+    _shared_block="$(extract_nginx_block "$_shared_loc" "$nginx_output")"
+    if printf '%s\n' "$_shared_block" | grep -qF "ssi on;"; then
+        echo "nginx ${_shared_loc} must not enable SSI for every static preview" >&2
+        exit 1
+    fi
+    case "$_shared_loc" in
+        "location @preview_router {")
+            if ! printf '%s\n' "$_shared_block" | grep -qF "error_page 419 = @preview_router_ssi;"; then
+                echo "nginx ${_shared_loc} must scope router SSI handoff to the router location" >&2
+                exit 1
+            fi
+            if ! printf '%s\n' "$_shared_block" | grep -qF "return 419;"; then
+                echo "nginx ${_shared_loc} must route only frontend preview router fallbacks through SSI" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            if ! printf '%s\n' "$_shared_block" | grep -qF "error_page 418 = @preview_index_ssi;"; then
+                echo "nginx ${_shared_loc} must scope index SSI handoff to the index location" >&2
+                exit 1
+            fi
+            if ! printf '%s\n' "$_shared_block" | grep -qF "return 418;"; then
+                echo "nginx ${_shared_loc} must route only frontend preview index responses through SSI" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+for _ssi_loc in "location @preview_index_ssi {" "location @preview_router_ssi {"; do
+    _ssi_block="$(extract_nginx_block "$_ssi_loc" "$nginx_output")"
+    if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi on;"; then
+        echo "nginx ${_ssi_loc} must enable SSI for nonce expansion" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi_types text/html;"; then
+        echo "nginx ${_ssi_loc} must scope SSI to text/html responses" >&2
+        exit 1
+    fi
+done
+unset -f extract_https_server_prefix
+unset -f extract_nginx_block
+unset server_ssi_fixture https_server_prefix _shared_loc _shared_block _ssi_loc _ssi_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.
@@ -1389,7 +1515,7 @@ for _immutable_loc in "/assets/" "/_astro/" "/_next/static/"; do
         echo "nginx location ^~ ${_immutable_loc} is missing: ${_cache_header}" >&2
         exit 1
     fi
-    if ! printf '%s\n' "$_immutable_block" | grep -qF 'if ($uri ~ (?:/\.|\.php$)) {'; then
+    if ! printf '%s\n' "$_immutable_block" | grep -qF "if (\$uri ~ (?:/\\.|\\.php$)) {"; then
         echo "nginx location ^~ ${_immutable_loc} must deny nested hidden files and PHP files" >&2
         exit 1
     fi
