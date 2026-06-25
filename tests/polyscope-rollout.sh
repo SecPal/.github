@@ -1372,14 +1372,15 @@ grep -qF "default_type application/manifest+json;" "$nginx_output"
 grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
-server_prefix="$(awk '
-    /server \{/ {
+extract_https_server_prefix() {
+    awk '
+    /^[[:space:]]*server \{/ {
         in_server=1
         is_https=0
         block=$0 ORS
         next
     }
-    in_server && /listen 443 ssl http2;/ { is_https=1 }
+    in_server && /^[[:space:]]*listen 443 ssl http2;/ { is_https=1 }
     in_server && is_https && /^[[:space:]]*location / {
         printf "%s", block
         exit
@@ -1394,8 +1395,33 @@ server_prefix="$(awk '
         is_https=0
         block=""
     }
-' "$nginx_output")"
-if printf '%s\n' "$server_prefix" | grep -qF "ssi on;"; then
+' "$1"
+}
+server_ssi_fixture="$workspace/nginx-server-ssi.conf"
+awk '
+    /^[[:space:]]*listen 443 ssl http2;/ && ! inserted {
+        print
+        print "            ssi on;"
+        inserted=1
+        next
+    }
+    { print }
+    END {
+        if (! inserted) {
+            exit 42
+        }
+    }
+' "$nginx_output" > "$server_ssi_fixture"
+if ! extract_https_server_prefix "$server_ssi_fixture" | grep -qF "ssi on;"; then
+    echo "preview nginx server-level SSI regression check must inspect the HTTPS preview server" >&2
+    exit 1
+fi
+https_server_prefix="$(extract_https_server_prefix "$nginx_output")"
+if [ -z "$https_server_prefix" ]; then
+    echo "preview nginx config must contain an HTTPS preview server block" >&2
+    exit 1
+fi
+if printf '%s\n' "$https_server_prefix" | grep -qF "ssi on;"; then
     echo "preview nginx config must not enable SSI for the entire preview server" >&2
     exit 1
 fi
@@ -1414,7 +1440,8 @@ for _ssi_loc in "location = / {" "location = /index.html {" "location @preview_r
         exit 1
     fi
 done
-unset server_prefix _ssi_loc _ssi_block
+unset -f extract_https_server_prefix
+unset server_ssi_fixture https_server_prefix _ssi_loc _ssi_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.
