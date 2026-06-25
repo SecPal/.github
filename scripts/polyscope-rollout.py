@@ -2572,8 +2572,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         }}
 
         server {{
-            listen 443 ssl http2;
-            listen [::]:443 ssl http2;
+            listen 443 ssl;
+            listen [::]:443 ssl;
+            http2 on;
             server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
@@ -2763,7 +2764,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             location @preview_index_ssi {{
                 ssi on;
-                ssi_types text/html;
 
                 add_header Content-Security-Policy $secpal_csp always;
                 add_header Permissions-Policy $secpal_permissions_policy always;
@@ -2895,7 +2895,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             location @preview_router_ssi {{
                 ssi on;
-                ssi_types text/html;
 
                 try_files $uri/index.html /index.html =404;
             }}

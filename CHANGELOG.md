@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-25 - Drop Preview Nginx Deprecation Warnings
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so generated preview nginx config now uses `http2 on;` with plain `listen ... ssl;` directives instead of the deprecated `listen ... http2` syntax
+- removed redundant `ssi_types text/html;` from the generated SSI-only preview locations because `text/html` is already enabled by default, eliminating the duplicate MIME-type warning during `nginx -t`
+- extended `tests/polyscope-rollout.sh` so preview rollout regressions now fail if deprecated `http2` listen syntax or the redundant SSI MIME override reappear
+
+---
+
 ## 2026-06-25 - Harden Polyscope Preview CSP Rollout
 
 **Fixed:**

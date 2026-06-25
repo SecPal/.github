@@ -1336,10 +1336,15 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
 fi
 
 grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
-grep -qF "listen 443 ssl http2;" "$nginx_output"
-grep -qF "listen [::]:443 ssl http2;" "$nginx_output"
-if grep -qF "http2 on;" "$nginx_output"; then
-    echo "preview nginx config must use listen-level http2 syntax for nginx 1.24 compatibility" >&2
+grep -qF "listen 443 ssl;" "$nginx_output"
+grep -qF "listen [::]:443 ssl;" "$nginx_output"
+grep -qF "http2 on;" "$nginx_output"
+if grep -qF "listen 443 ssl http2;" "$nginx_output" || grep -qF "listen [::]:443 ssl http2;" "$nginx_output"; then
+    echo "preview nginx config must not use deprecated listen-level http2 syntax" >&2
+    exit 1
+fi
+if grep -qF "ssi_types text/html;" "$nginx_output"; then
+    echo "preview nginx config must not redundantly restate the default text/html SSI type" >&2
     exit 1
 fi
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
@@ -1379,10 +1384,12 @@ extract_https_server_prefix() {
     /^[[:space:]]*server \{/ {
         in_server=1
         is_https=0
+        saw_https_listen=0
         block=$0 ORS
         next
     }
-    in_server && /^[[:space:]]*listen 443 ssl http2;/ { is_https=1 }
+    in_server && /^[[:space:]]*listen 443 ssl;/ { saw_https_listen=1 }
+    in_server && saw_https_listen && /^[[:space:]]*http2 on;/ { is_https=1 }
     in_server && is_https && /^[[:space:]]*location / {
         printf "%s", block
         exit
@@ -1395,6 +1402,7 @@ extract_https_server_prefix() {
         }
         in_server=0
         is_https=0
+        saw_https_listen=0
         block=""
     }
 ' "$1"
@@ -1415,7 +1423,7 @@ extract_nginx_block() {
 }
 server_ssi_fixture="$workspace/nginx-server-ssi.conf"
 awk '
-    /^[[:space:]]*listen 443 ssl http2;/ && ! inserted {
+    /^[[:space:]]*http2 on;/ && ! inserted {
         print
         print "            ssi on;"
         inserted=1
@@ -1480,8 +1488,8 @@ for _ssi_loc in "location @preview_index_ssi {" "location @preview_router_ssi {"
         echo "nginx ${_ssi_loc} must enable SSI for nonce expansion" >&2
         exit 1
     fi
-    if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi_types text/html;"; then
-        echo "nginx ${_ssi_loc} must scope SSI to text/html responses" >&2
+    if printf '%s\n' "$_ssi_block" | grep -qF "ssi_types text/html;"; then
+        echo "nginx ${_ssi_loc} must not restate the default text/html SSI type" >&2
         exit 1
     fi
 done
