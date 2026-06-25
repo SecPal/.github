@@ -1373,9 +1373,27 @@ grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
 server_prefix="$(awk '
-    /server \{/ { in_server=1 }
-    in_server && /^[[:space:]]*location / { exit }
-    in_server { print }
+    /server \{/ {
+        in_server=1
+        is_https=0
+        block=$0 ORS
+        next
+    }
+    in_server && /listen 443 ssl http2;/ { is_https=1 }
+    in_server && is_https && /^[[:space:]]*location / {
+        printf "%s", block
+        exit
+    }
+    in_server { block = block $0 ORS }
+    in_server && /^[[:space:]]*}/ {
+        if (is_https) {
+            printf "%s", block
+            exit
+        }
+        in_server=0
+        is_https=0
+        block=""
+    }
 ' "$nginx_output")"
 if printf '%s\n' "$server_prefix" | grep -qF "ssi on;"; then
     echo "preview nginx config must not enable SSI for the entire preview server" >&2
