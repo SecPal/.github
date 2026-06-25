@@ -1347,6 +1347,48 @@ if grep -qF "ssi_types text/html;" "$nginx_output"; then
     echo "preview nginx config must not redundantly restate the default text/html SSI type" >&2
     exit 1
 fi
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$repos_json" "$workspace/preview-legacy-nginx.conf"
+import importlib.util
+import json
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+repos_json = pathlib.Path(sys.argv[2])
+legacy_output = pathlib.Path(sys.argv[3])
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+assert module.parse_nginx_version("nginx version: nginx/1.24.0") == (1, 24, 0)
+assert module.parse_nginx_version("nginx version: nginx/1.25.1") == (1, 25, 1)
+assert module.parse_nginx_version("nginx version: nginx/1.27.4 (Ubuntu)") == (1, 27, 4)
+assert module.select_nginx_http2_syntax((1, 24, 0)) == "legacy"
+assert module.select_nginx_http2_syntax((1, 25, 0)) == "legacy"
+assert module.select_nginx_http2_syntax((1, 25, 1)) == "modern"
+
+repo_state = json.loads(repos_json.read_text())
+legacy_config = module.render_nginx_config(repo_state, nginx_http2_syntax="legacy")
+legacy_output.write_text(legacy_config)
+
+if "listen 443 ssl http2;" not in legacy_config:
+    raise SystemExit("legacy nginx render must preserve listen-level http2 for nginx 1.24")
+if "listen [::]:443 ssl http2;" not in legacy_config:
+    raise SystemExit("legacy nginx render must preserve IPv6 listen-level http2 for nginx 1.24")
+if "http2 on;" in legacy_config:
+    raise SystemExit("legacy nginx render must not emit the nginx >= 1.25.1 http2 directive")
+if "ssi_types text/html;" in legacy_config:
+    raise SystemExit("legacy nginx render must not restate the default text/html SSI type")
+
+try:
+    module.render_nginx_config(repo_state, nginx_http2_syntax="invalid")
+except ValueError:
+    pass
+else:
+    raise SystemExit("unsupported nginx HTTP/2 syntax must fail before rendering")
+PY
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
 grep -qF "if (\$repo = guardguide) {" "$nginx_output"
@@ -1385,11 +1427,13 @@ extract_https_server_prefix() {
         in_server=1
         is_https=0
         saw_https_listen=0
+        saw_http2=0
         block=$0 ORS
         next
     }
     in_server && /^[[:space:]]*listen 443 ssl;/ { saw_https_listen=1 }
-    in_server && saw_https_listen && /^[[:space:]]*http2 on;/ { is_https=1 }
+    in_server && /^[[:space:]]*http2 on;/ { saw_http2=1 }
+    in_server && saw_https_listen && saw_http2 { is_https=1 }
     in_server && is_https && /^[[:space:]]*location / {
         printf "%s", block
         exit
@@ -1403,6 +1447,7 @@ extract_https_server_prefix() {
         in_server=0
         is_https=0
         saw_https_listen=0
+        saw_http2=0
         block=""
     }
 ' "$1"

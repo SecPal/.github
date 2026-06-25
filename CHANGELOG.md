@@ -13,9 +13,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- updated `scripts/polyscope-rollout.py` so generated preview nginx config now uses `http2 on;` with plain `listen ... ssl;` directives instead of the deprecated `listen ... http2` syntax
+- updated `scripts/polyscope-rollout.py` so generated preview nginx config now uses `http2 on;` with plain `listen ... ssl;` directives by default instead of the deprecated `listen ... http2` syntax, while `--install-nginx` auto-detects the local nginx version and keeps the legacy listen-level fallback for nginx older than 1.25.1
 - removed redundant `ssi_types text/html;` from the generated SSI-only preview locations because `text/html` is already enabled by default, eliminating the duplicate MIME-type warning during `nginx -t`
-- extended `tests/polyscope-rollout.sh` so preview rollout regressions now fail if deprecated `http2` listen syntax or the redundant SSI MIME override reappear
+- extended `tests/polyscope-rollout.sh` so preview rollout regressions now fail if the modern render path reintroduces deprecated `http2` listen syntax, the nginx 1.24 fallback drops listen-level HTTP/2, or the redundant SSI MIME override reappears
 
 ---
 
