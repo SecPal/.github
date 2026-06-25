@@ -645,7 +645,6 @@ python3 "$PYTHON_SCRIPT" \
     --summary-output "$summary_output" \
     > /dev/null
 
-grep -qF "ssi on;" "$nginx_output"
 grep -qF "set \$csp_nonce \$request_id;" "$nginx_output"
 grep -qF "style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
 
@@ -1373,6 +1372,31 @@ grep -qF "default_type application/manifest+json;" "$nginx_output"
 grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
+server_prefix="$(awk '
+    /server \{/ { in_server=1 }
+    in_server && /^[[:space:]]*location / { exit }
+    in_server { print }
+' "$nginx_output")"
+if printf '%s\n' "$server_prefix" | grep -qF "ssi on;"; then
+    echo "preview nginx config must not enable SSI for the entire preview server" >&2
+    exit 1
+fi
+for _ssi_loc in "location = / {" "location = /index.html {" "location @preview_router {"; do
+    _ssi_block="$(awk -v start="$_ssi_loc" '
+        index($0, start) { in_block=1 }
+        in_block { print }
+        in_block && /^[[:space:]]*}/ { exit }
+    ' "$nginx_output")"
+    if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi on;"; then
+        echo "nginx ${_ssi_loc} must enable SSI for nonce expansion" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi_types text/html;"; then
+        echo "nginx ${_ssi_loc} must scope SSI to text/html responses" >&2
+        exit 1
+    fi
+done
+unset server_prefix _ssi_loc _ssi_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.
