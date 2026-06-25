@@ -37,6 +37,8 @@ NO_AI_ATTRIBUTION_RULE = (
     "`[codex]` prefixes, or AI `Co-authored-by` trailers to commits, branches, pull request "
     "titles or bodies, issues, comments, or any other GitHub-facing content."
 )
+MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
+NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -2546,17 +2548,44 @@ def sync_repository_metadata(
     return backup_path
 
 
-def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
+def parse_nginx_version(version_output: str) -> tuple[int, int, int] | None:
+    match = re.search(r"nginx/(\d+)\.(\d+)\.(\d+)", version_output)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def select_nginx_http2_syntax(nginx_version: tuple[int, int, int]) -> str:
+    if nginx_version >= MODERN_NGINX_HTTP2_VERSION:
+        return "modern"
+    return "legacy"
+
+
+def detect_nginx_http2_syntax() -> str:
+    nginx_bin = shutil.which("nginx") or "/usr/sbin/nginx"
+    result = subprocess.run([nginx_bin, "-v"], check=True, capture_output=True, text=True)
+    nginx_version = parse_nginx_version(result.stdout + result.stderr)
+    if nginx_version is None:
+        raise RuntimeError("could not parse nginx version from `nginx -v` output")
+    return select_nginx_http2_syntax(nginx_version)
+
+
+def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_syntax: str = "modern") -> str:
+    if nginx_http2_syntax not in {"modern", "legacy"}:
+        raise ValueError(f"unsupported nginx HTTP/2 syntax: {nginx_http2_syntax}")
     api_id = repo_state["api"]["id"]
     frontend_id = repo_state["frontend"]["id"]
     guardguide_id = repo_state["GuardGuide"]["id"]
     secpal_app_id = repo_state["secpal.app"]["id"]
     guardguide_de_id = repo_state["guardguide.de"]["id"]
     changelog_id = repo_state["changelog"]["id"]
+    http2_listen_suffix = "" if nginx_http2_syntax == "modern" else " http2"
+    http2_directive = "\n            http2 on;" if nginx_http2_syntax == "modern" else ""
     # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-, secpal-app-, or changelog- are
     # reserved for legacy per-repo routing (e.g. api-WORKSPACE.preview.secpal.dev).
     # Generic workspaces must not use those prefixes; the regex will treat them as legacy
     # hosts and route them to the wrong backend.
+    # `http2 on;` requires nginx >= 1.25.1, so install mode version-gates this render option.
     return textwrap.dedent(
         f"""
         server {{
@@ -2572,8 +2601,8 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
         }}
 
         server {{
-            listen 443 ssl http2;
-            listen [::]:443 ssl http2;
+            listen 443 ssl{http2_listen_suffix};
+            listen [::]:443 ssl{http2_listen_suffix};{http2_directive}
             server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
@@ -2763,7 +2792,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             location @preview_index_ssi {{
                 ssi on;
-                ssi_types text/html;
 
                 add_header Content-Security-Policy $secpal_csp always;
                 add_header Permissions-Policy $secpal_permissions_policy always;
@@ -2895,7 +2923,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
 
             location @preview_router_ssi {{
                 ssi on;
-                ssi_types text/html;
 
                 try_files $uri/index.html /index.html =404;
             }}
@@ -2972,6 +2999,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--polyscope-api-base", default="http://127.0.0.1:4321/api")
     parser.add_argument("--repo-state-file", type=pathlib.Path)
     parser.add_argument("--nginx-output", type=pathlib.Path, default=pathlib.Path.home() / "copilot-preview-secpal-dev.nginx.conf")
+    parser.add_argument(
+        "--nginx-http2-syntax",
+        choices=NGINX_HTTP2_SYNTAX_CHOICES,
+        default="modern",
+        help="HTTP/2 syntax for rendered nginx config; install mode always auto-detects the host-safe syntax.",
+    )
     parser.add_argument("--summary-output", type=pathlib.Path)
     parser.add_argument("--skip-local-configs", action="store_true")
     parser.add_argument("--skip-db-sync", action="store_true")
@@ -3009,7 +3042,11 @@ def main() -> int:
     if not args.skip_db_sync:
         db_backup = sync_repository_metadata(args.db_path, repo_state, repo_specs)
 
-    args.nginx_output.write_text(render_nginx_config(repo_state))
+    nginx_http2_syntax = args.nginx_http2_syntax
+    if args.install_nginx or nginx_http2_syntax == "auto":
+        nginx_http2_syntax = detect_nginx_http2_syntax()
+
+    args.nginx_output.write_text(render_nginx_config(repo_state, nginx_http2_syntax=nginx_http2_syntax))
 
     if args.install_nginx:
         install_nginx_config(args.nginx_output)
