@@ -2605,7 +2605,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             ssi on;
             ssi_types text/html;
             set $csp_nonce $request_id;
-            set $secpal_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-$csp_nonce'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            set $preview_frontend_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-$csp_nonce'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            set $secpal_csp $preview_relaxed_csp;
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{
@@ -2616,53 +2618,63 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             if (-f $frontend_dist/index.html) {{
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
+                set $secpal_csp $preview_frontend_csp;
             }}
 
             if (-f $secpal_app_dist/index.html) {{
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $guardguide_de_dist/index.html) {{
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $changelog_out/index.html) {{
                 set $preview_docroot $changelog_out;
                 set $route_mode static;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = changelog) {{
                 set $preview_docroot $changelog_out;
                 set $route_mode static;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = secpal-app) {{
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = guardguide-de) {{
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = frontend) {{
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
+                set $secpal_csp $preview_frontend_csp;
             }}
 
             if ($repo = guardguide) {{
                 set $preview_docroot $guardguide_public;
                 set $php_root $guardguide_public;
                 set $route_mode api;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = api) {{
                 set $preview_docroot $api_public;
                 set $php_root $api_public;
                 set $route_mode api;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             root $preview_docroot;
