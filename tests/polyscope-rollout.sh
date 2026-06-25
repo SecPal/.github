@@ -1356,6 +1356,8 @@ grep -qF "set \$preview_frontend_csp " "$nginx_output"
 grep -qF "script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_frontend_csp;" "$nginx_output"
+grep -qF "set \$preview_uses_ssi 0;" "$nginx_output"
+grep -qF "set \$preview_uses_ssi 1;" "$nginx_output"
 grep -qF "set \$secpal_permissions_policy " "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
 grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
@@ -1397,6 +1399,20 @@ extract_https_server_prefix() {
     }
 ' "$1"
 }
+extract_nginx_block() {
+    awk -v start="$1" '
+        index($0, start) { in_block=1 }
+        in_block {
+            print
+            opens = gsub(/\{/, "{")
+            closes = gsub(/\}/, "}")
+            depth += opens - closes
+            if (depth <= 0) {
+                exit
+            }
+        }
+    ' "$2"
+}
 server_ssi_fixture="$workspace/nginx-server-ssi.conf"
 awk '
     /^[[:space:]]*listen 443 ssl http2;/ && ! inserted {
@@ -1425,12 +1441,41 @@ if printf '%s\n' "$https_server_prefix" | grep -qF "ssi on;"; then
     echo "preview nginx config must not enable SSI for the entire preview server" >&2
     exit 1
 fi
-for _ssi_loc in "location = / {" "location = /index.html {" "location @preview_router {"; do
-    _ssi_block="$(awk -v start="$_ssi_loc" '
-        index($0, start) { in_block=1 }
-        in_block { print }
-        in_block && /^[[:space:]]*}/ { exit }
-    ' "$nginx_output")"
+if printf '%s\n' "$https_server_prefix" | grep -qF "error_page 418"; then
+    echo "preview nginx config must not remap SSI handoff statuses for the entire preview server" >&2
+    exit 1
+fi
+for _shared_loc in "location = / {" "location = /index.html {" "location @preview_router {"; do
+    _shared_block="$(extract_nginx_block "$_shared_loc" "$nginx_output")"
+    if printf '%s\n' "$_shared_block" | grep -qF "ssi on;"; then
+        echo "nginx ${_shared_loc} must not enable SSI for every static preview" >&2
+        exit 1
+    fi
+    case "$_shared_loc" in
+        "location @preview_router {")
+            if ! printf '%s\n' "$_shared_block" | grep -qF "error_page 419 = @preview_router_ssi;"; then
+                echo "nginx ${_shared_loc} must scope router SSI handoff to the router location" >&2
+                exit 1
+            fi
+            if ! printf '%s\n' "$_shared_block" | grep -qF "return 419;"; then
+                echo "nginx ${_shared_loc} must route only frontend preview router fallbacks through SSI" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            if ! printf '%s\n' "$_shared_block" | grep -qF "error_page 418 = @preview_index_ssi;"; then
+                echo "nginx ${_shared_loc} must scope index SSI handoff to the index location" >&2
+                exit 1
+            fi
+            if ! printf '%s\n' "$_shared_block" | grep -qF "return 418;"; then
+                echo "nginx ${_shared_loc} must route only frontend preview index responses through SSI" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+for _ssi_loc in "location @preview_index_ssi {" "location @preview_router_ssi {"; do
+    _ssi_block="$(extract_nginx_block "$_ssi_loc" "$nginx_output")"
     if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi on;"; then
         echo "nginx ${_ssi_loc} must enable SSI for nonce expansion" >&2
         exit 1
@@ -1441,7 +1486,8 @@ for _ssi_loc in "location = / {" "location = /index.html {" "location @preview_r
     fi
 done
 unset -f extract_https_server_prefix
-unset server_ssi_fixture https_server_prefix _ssi_loc _ssi_block
+unset -f extract_nginx_block
+unset server_ssi_fixture https_server_prefix _shared_loc _shared_block _ssi_loc _ssi_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.

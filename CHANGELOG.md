@@ -14,7 +14,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - updated `scripts/polyscope-rollout.py` so generated frontend Polyscope workspaces now expose a dedicated `npm run test:preview:pwa-headers` smoke command, making the live preview CSP contract easy to verify immediately after rollout
-- tightened generated preview nginx config to enable SSI nonce expansion, derive a per-request preview nonce, and emit the nonce-aware `style-src-elem` policy current frontend workspaces require instead of the older inline-style preview CSP
+- tightened generated preview nginx config to derive a per-request preview nonce, scope SSI nonce expansion to frontend preview HTML routes, and emit the nonce-aware `style-src-elem` policy current frontend workspaces require instead of the older inline-style preview CSP
 - aligned `tests/polyscope-rollout.sh` with the hardened preview CSP contract so rollout regressions now fail if generated nginx or generated frontend workspace metadata drifts back to the older preview policy
 
 ---
