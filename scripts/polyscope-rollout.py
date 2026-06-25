@@ -1380,6 +1380,11 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
                     {"label": "Vitest", "command": "npm run test:watch", "runMode": "replace"},
                     {
+                        "label": "Workspace Preview CSP Smoke",
+                        "command": "npm run test:preview:pwa-headers",
+                        "runMode": "preserve",
+                    },
+                    {
                         "label": "Playwright Local Preview Smoke",
                         "command": "npm run test:e2e:ci",
                         "runMode": "preserve",
@@ -2597,7 +2602,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]]) -> str:
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
-            set $secpal_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            ssi on;
+            ssi_types text/html;
+            set $csp_nonce $request_id;
+            set $secpal_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-$csp_nonce'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{

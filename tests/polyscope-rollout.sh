@@ -99,6 +99,7 @@ package_scripts = {
         "test:run:all": "vitest run --coverage",
         "test:watch": "vitest",
         "test:e2e:ci": "cross-env CI=true playwright test",
+        "test:preview:pwa-headers": "node ./scripts/check-workspace-preview-pwa-headers.mjs",
         "test:e2e:staging": "cross-env PLAYWRIGHT_BASE_URL=https://app.secpal.dev playwright test",
     },
     "contracts": {
@@ -644,6 +645,10 @@ python3 "$PYTHON_SCRIPT" \
     --summary-output "$summary_output" \
     > /dev/null
 
+grep -qF "ssi on;" "$nginx_output"
+grep -qF "set \$csp_nonce \$request_id;" "$nginx_output"
+grep -qF "style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
+
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
     'composer run analyse' \
@@ -685,6 +690,8 @@ grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/fro
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"label": "Workspace Preview CSP Smoke"' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '"command": "npm run test:preview:pwa-headers"' "$workspace_root/frontend/polyscope.local.json"
 if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope config must not rely on Vite watch mode for preview rebuilds" >&2
     exit 1
@@ -1345,7 +1352,7 @@ grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
 grep -qF "set \$secpal_csp " "$nginx_output"
-grep -qF "script-src 'self' 'unsafe-inline'" "$nginx_output"
+grep -qF "script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
 grep -qF "set \$secpal_permissions_policy " "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
 grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
@@ -1389,7 +1396,7 @@ for _immutable_loc in "/assets/" "/_astro/" "/_next/static/"; do
         echo "nginx location ^~ ${_immutable_loc} is missing: ${_cache_header}" >&2
         exit 1
     fi
-    if ! printf '%s\n' "$_immutable_block" | grep -qF 'if ($uri ~ (?:/\.|\.php$)) {'; then
+    if ! printf '%s\n' "$_immutable_block" | grep -qF "if (\$uri ~ (?:/\\.|\\.php$)) {"; then
         echo "nginx location ^~ ${_immutable_loc} must deny nested hidden files and PHP files" >&2
         exit 1
     fi
