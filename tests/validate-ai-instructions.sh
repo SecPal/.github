@@ -427,10 +427,9 @@ if [ "$android_exit" -ne 0 ]; then
 fi
 grep -q 'Repository Type: android' "$android_output"
 
-guardguide_repo="$workspace/GuardGuide"
+guardguide_repo="$workspace/monolith-fixture"
 mkdir -p "$guardguide_repo"
-touch "$guardguide_repo/composer.json"
-cat >"$guardguide_repo/package.json" <<'EOF'
+cat >"$guardguide_repo/composer.json" <<'EOF'
 {
   "name": "secpal/guardguide"
 }
