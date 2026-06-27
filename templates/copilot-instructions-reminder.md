@@ -51,7 +51,7 @@ When adding this reminder to a new or existing repository:
 This reminder is no longer required for all SecPal repositories. Current validation focuses on `AGENTS.md` as the authoritative baseline plus a valid `.github/copilot-instructions.md` mirror when present.
 
 ```bash
-grep -q "🚨 AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md
+bash scripts/validate-ai-instructions.sh
 ```
 
 See: `.github/workflows/validate-ai-instructions.yml`

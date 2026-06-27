@@ -70,14 +70,23 @@ from pathlib import Path
 
 workspace_root = Path(sys.argv[1])
 
+
+def strip_html_comment_header(text: str) -> str:
+    stripped = text.lstrip()
+    if stripped.startswith("<!--"):
+        parts = stripped.split("-->\n", 1)
+        if len(parts) == 2:
+            return parts[1].lstrip()
+    return text
+
+
 for repo_dir in workspace_root.iterdir():
     if not repo_dir.is_dir():
         continue
     copilot_path = repo_dir / ".github" / "copilot-instructions.md"
     if not copilot_path.exists():
         continue
-    copilot_text = copilot_path.read_text()
-    body = copilot_text.split("\n", 5)[5]
+    body = strip_html_comment_header(copilot_path.read_text()).lstrip()
     overlay_lines = []
     for overlay_path in sorted((repo_dir / ".github" / "instructions").glob("*.instructions.md")):
         if overlay_path.name == "org-shared.instructions.md":
