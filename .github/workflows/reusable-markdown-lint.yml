@@ -63,4 +63,4 @@ jobs:
           fi
 
       - name: Run markdownlint
-        run: markdownlint-cli2 --config "${{ inputs.config-file }}" "**/*.md" "#node_modules" "#vendor" "#storage" "#build" "#.git"
+        run: markdownlint-cli2 --config "${{ inputs.config-file }}" "**/*.md" "#node_modules" "#vendor" "#storage" "#build" "#.git" "#.secpal-governance"

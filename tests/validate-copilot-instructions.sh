@@ -102,6 +102,31 @@ valid_output="$workspace/valid-output.txt"
 )
 grep -q 'copilot-instructions.md has REUSE license' "$valid_output"
 
+local_markdownlint_repo="$workspace/local-markdownlint"
+mkdir -p "$local_markdownlint_repo/node_modules/.bin"
+touch "$local_markdownlint_repo/composer.json"
+write_common_instruction_file "$local_markdownlint_repo" "$valid_api_extra_ai_lines"
+cat >"$local_markdownlint_repo/node_modules/.bin/markdownlint-cli2" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$local_markdownlint_repo/node_modules/.bin/markdownlint-cli2"
+
+local_markdownlint_output="$workspace/local-markdownlint-output.txt"
+set +e
+(
+    cd "$local_markdownlint_repo"
+    run_validator api "$local_markdownlint_output"
+)
+local_markdownlint_exit=$?
+set -e
+if [ "$local_markdownlint_exit" -eq 0 ]; then
+    cat "$local_markdownlint_output"
+    echo "validator unexpectedly skipped repo-local markdownlint-cli2" >&2
+    exit 1
+fi
+grep -q 'Run: ./node_modules/.bin/markdownlint-cli2 .github/copilot-instructions.md --fix' "$local_markdownlint_output"
+
 missing_generic_repo="$workspace/missing-generic"
 mkdir -p "$missing_generic_repo/.github"
 touch "$missing_generic_repo/composer.json"
