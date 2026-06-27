@@ -166,6 +166,30 @@ grep -q 'AGENTS.md stays under runtime discovery size limit' "$valid_output"
 grep -q 'instructions contain provider-neutral review guidelines' "$valid_output"
 grep -q 'copilot instructions mirror AGENTS.md' "$valid_output"
 
+normalized_mirror_repo="$workspace/normalized-mirror"
+mkdir -p "$normalized_mirror_repo"
+touch "$normalized_mirror_repo/composer.json"
+write_common_instruction_file "$normalized_mirror_repo" "$valid_api_extra_ai_lines"
+python3 - <<'PY' "$normalized_mirror_repo/AGENTS.md"
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.replace("\n\n## Review guidelines", "\n\n\n## Review guidelines", 1))
+PY
+
+normalized_mirror_output="$workspace/normalized-mirror-output.txt"
+if ! (
+    cd "$normalized_mirror_repo"
+    run_validator api "$normalized_mirror_output"
+); then
+    cat "$normalized_mirror_output"
+    echo "validator unexpectedly failed when AGENTS.md only adds extra blank lines before a mirrored section" >&2
+    exit 1
+fi
+grep -q 'copilot instructions mirror AGENTS.md' "$normalized_mirror_output"
+
 stale_mirror_repo="$workspace/stale-mirror"
 mkdir -p "$stale_mirror_repo"
 touch "$stale_mirror_repo/composer.json"

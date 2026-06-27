@@ -15,6 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - flipped the SecPal AI-governance model so each managed repository now treats its root `AGENTS.md` as the authoritative, provider-neutral runtime baseline for AI-assisted development and review tooling
 - updated `scripts/polyscope-rollout.py` so generated Polyscope task prompts and rollout summaries now point at repo-local `AGENTS.md`, while `.github/copilot-instructions.md` is regenerated as a compatibility mirror for tooling that auto-loads the Copilot path
+- normalized blank-line runs when `scripts/validate-ai-instructions.sh` compares `.github/copilot-instructions.md` against authoritative `AGENTS.md`, so regenerated mirrors no longer fail on formatting-only newline collapse
 - introduced `scripts/validate-ai-instructions.sh` as the canonical validator, kept `scripts/validate-copilot-instructions.sh` as a compatibility wrapper, and extended regression coverage so repositories now fail governance validation when `AGENTS.md` is missing or weak, or when `.github/copilot-instructions.md` stops clearly mirroring the authoritative `AGENTS.md`
 - added provider-neutral `Review guidelines` and no-attribution/no-self-promotion rules to each managed `AGENTS.md`, so AI review output focuses on evidence, impact, and fix paths instead of tool identity
 - extended `scripts/validate-ai-instructions.sh` and regression coverage to enforce provider-neutral review guidance and keep `AGENTS.md` below the default runtime discovery size limit

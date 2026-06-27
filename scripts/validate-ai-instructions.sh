@@ -253,9 +253,18 @@ def extract_mirror_body(text: str) -> str:
     return body[start:].strip()
 
 
+def normalize_mirrored_body(text: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
 agents = pathlib.Path("AGENTS.md").read_text()
 mirror = pathlib.Path(".github/copilot-instructions.md").read_text()
-sys.exit(0 if extract_agents_body(agents) == extract_mirror_body(mirror) else 1)
+sys.exit(
+    0
+    if normalize_mirrored_body(extract_agents_body(agents))
+    == normalize_mirrored_body(extract_mirror_body(mirror))
+    else 1
+)
 PY
 }
 
