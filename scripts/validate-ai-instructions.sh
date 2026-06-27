@@ -44,7 +44,7 @@ detect_repo_type() {
     fi
 
     if [ "$(basename "$PWD")" = "GuardGuide" ] \
-        || grep -qiE '"name"[[:space:]]*:[[:space:]]*"[^"]*guardguide' composer.json package.json 2>/dev/null; then
+        || grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"]*/)?guardguide"' composer.json package.json 2>/dev/null; then
         echo "guardguide"
         return
     fi

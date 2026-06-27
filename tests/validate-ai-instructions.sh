@@ -454,3 +454,29 @@ if [ "$guardguide_exit" -ne 0 ]; then
     exit 1
 fi
 grep -q 'Repository Type: guardguide' "$guardguide_output"
+
+guardguide_de_repo="$workspace/guardguide.de"
+mkdir -p "$guardguide_de_repo"
+touch "$guardguide_de_repo/astro.config.mjs"
+cat >"$guardguide_de_repo/package.json" <<'EOF'
+{
+  "name": "guardguide-de"
+}
+EOF
+write_common_instruction_file "$guardguide_de_repo" '- Reject AI-generated static rendering or accessibility changes that weaken metadata, structured data, keyboard navigation, or semantic landmark coverage.
+- Reject AI-generated page, asset, or build-pipeline changes that break deterministic static output, localized content parity, or deploy-time verification.'
+
+guardguide_de_output="$workspace/guardguide-de-output.txt"
+set +e
+(
+    cd "$guardguide_de_repo"
+    PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" >"$guardguide_de_output" 2>&1
+)
+guardguide_de_exit=$?
+set -e
+if [ "$guardguide_de_exit" -ne 0 ]; then
+    cat "$guardguide_de_output"
+    echo "validator failed for valid guardguide.de website fixture" >&2
+    exit 1
+fi
+grep -q 'Repository Type: website' "$guardguide_de_output"
