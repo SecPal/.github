@@ -135,20 +135,17 @@ test_yaml_config_reuse() {
 }
 
 test_markdown_lint() {
-    local markdownlint_cli=""
+    local markdownlint_cli="./node_modules/.bin/markdownlint"
 
-    if [ -x "./node_modules/.bin/markdownlint" ]; then
-        markdownlint_cli="./node_modules/.bin/markdownlint"
-    elif command -v markdownlint >/dev/null 2>&1; then
-        markdownlint_cli="markdownlint"
+    if [ ! -x "$markdownlint_cli" ]; then
+        print_result "copilot-instructions.md passes markdown lint" "PASS" "Skipped (run npm ci in the repo root to install markdownlint-cli)"
+        return
     fi
 
-    if [ -n "$markdownlint_cli" ] && "$markdownlint_cli" --config .markdownlint.json .github/copilot-instructions.md >/dev/null 2>&1; then
+    if "$markdownlint_cli" --config .markdownlint.json .github/copilot-instructions.md >/dev/null 2>&1; then
         print_result "copilot-instructions.md passes markdown lint" "PASS"
-    elif [ -n "$markdownlint_cli" ]; then
-        print_result "copilot-instructions.md passes markdown lint" "FAIL" "Run: $markdownlint_cli --config .markdownlint.json .github/copilot-instructions.md --fix"
     else
-        print_result "copilot-instructions.md passes markdown lint" "PASS" "Skipped (run npm ci in the repo root to install markdownlint-cli)"
+        print_result "copilot-instructions.md passes markdown lint" "FAIL" "Run: $markdownlint_cli --config .markdownlint.json .github/copilot-instructions.md --fix"
     fi
 }
 
