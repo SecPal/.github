@@ -45,7 +45,13 @@ EOF
   LOG_FILE="$log_file" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null
 )
 
-if ! grep -F 'markdownlint-cli2' "$log_file" | grep -Eq '(^|[[:space:]])#\.git($|[[:space:]])'; then
+if ! grep -Eq '(^|[[:space:]])markdownlint-cli($|[[:space:]])|(^|[[:space:]])markdownlint($|[[:space:]])' "$log_file"; then
+  echo "Expected preflight to invoke markdownlint" >&2
+  cat "$log_file" >&2
+  exit 1
+fi
+
+if ! grep -Eq '(^|[[:space:]])--ignore($|[[:space:]])' "$log_file" || ! grep -Eq '(^|[[:space:]])\.git($|[[:space:]])' "$log_file"; then
   echo "Expected preflight markdownlint invocation to exclude .git paths" >&2
   cat "$log_file" >&2
   exit 1

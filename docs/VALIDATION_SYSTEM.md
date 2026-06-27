@@ -120,7 +120,7 @@ This test always skips.
 
 **Purpose:** Ensure markdown quality standards
 
-**Tool:** markdownlint-cli2
+**Tool:** markdownlint-cli
 
 **Config:** `.markdownlint.json` (repo-specific)
 
@@ -133,24 +133,14 @@ This test always skips.
 
 **Failure Impact:** MEDIUM - Quality standards
 
-**Auto-fix:** `npx markdownlint-cli2 .github/copilot-instructions.md --fix`
+**Auto-fix:** `npx markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix`
 
-### Known Advisory State
+### Audit Status
 
-`SecPal/.github` now pins `markdownlint-cli2@0.22.1` locally so markdown
-linting runs reproducibly after `npm ci` instead of depending on global
-installs or interactive `npx` downloads.
-
-`npm audit` still reports 3 moderate vulnerabilities through the current
-`markdownlint-cli2` dependency graph:
-
-- `js-yaml@4.1.1` via `markdownlint-cli2` (`GHSA-h67p-54hq-rp68`)
-- `markdown-it@14.1.1` via `markdownlint-cli2` (`GHSA-6v5v-wf23-fmfq`)
-- direct audit attribution to `markdownlint-cli2@0.22.1`
-
-There is no in-repo mitigation short of replacing the lint tool or carrying a
-downstream override. Re-evaluate when `markdownlint-cli2` releases a dependency
-update that clears these advisories.
+`SecPal/.github` now pins `markdownlint-cli@0.49.0` locally so markdown
+linting stays reproducible after `npm ci` without depending on the
+`markdownlint-cli2` package graph that kept the remaining `npm audit` findings
+open.
 
 ### 6. YAML Syntax Validation
 
@@ -271,10 +261,10 @@ EOF
 
 ```bash
 # Auto-fix markdown issues
-npx markdownlint-cli2 .github/copilot-instructions.md --fix
+npx markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix
 
 # Manual review
-npx markdownlint-cli2 .github/copilot-instructions.md
+npx markdownlint --config .markdownlint.json .github/copilot-instructions.md
 ```
 
 ### Test 6 Failed: YAML Syntax
@@ -349,7 +339,7 @@ EOF
 chmod +x scripts/validate-copilot-instructions.sh
 ```
 
-### markdownlint-cli2 Not Found
+### markdownlint-cli Not Found
 
 ```bash
 npm ci

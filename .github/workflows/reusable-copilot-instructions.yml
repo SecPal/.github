@@ -16,7 +16,7 @@ on:
         type: string
         default: "main"
       node-version:
-        description: "Node.js version used for markdownlint-cli2"
+        description: "Node.js version used for markdownlint-cli"
         required: false
         type: string
         default: "22"

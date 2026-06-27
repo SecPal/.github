@@ -13,7 +13,7 @@ on:
         default: ".markdownlint.json"
       governance-ref:
         description: >
-          Ref of SecPal/.github to use for the pinned markdownlint-cli2 dependency.
+          Ref of SecPal/.github to use for the pinned markdownlint-cli dependency.
           Defaults to 'main' (always tracks the latest governance HEAD). Pin to a
           specific commit SHA for reproducible, supply-chain-safe runs, because this
           ref controls the actual lint binary — not just configuration.
@@ -21,7 +21,7 @@ on:
         type: string
         default: "main"
       node-version:
-        description: "Node.js version used for markdownlint-cli2"
+        description: "Node.js version used for markdownlint-cli"
         required: false
         type: string
         default: "22"
@@ -51,7 +51,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Install pinned markdownlint-cli2
+      - name: Install pinned markdownlint-cli
         run: |
           if [ "${{ github.repository }}" = "SecPal/.github" ]; then
             npm ci
@@ -63,4 +63,4 @@ jobs:
           fi
 
       - name: Run markdownlint
-        run: markdownlint-cli2 --config "${{ inputs.config-file }}" "**/*.md" "#node_modules" "#vendor" "#storage" "#build" "#.git" "#.secpal-governance"
+        run: markdownlint --config "${{ inputs.config-file }}" --dot "**/*.md" --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git --ignore .secpal-governance

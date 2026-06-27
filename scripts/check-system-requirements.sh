@@ -132,7 +132,7 @@ check_npx_tool() {
   fi
 }
 
-check_npx_tool "markdownlint-cli2"
+check_npx_tool "markdownlint-cli"
 check_npx_tool "prettier"
 
 check_command "shellcheck" "ShellCheck" "critical" "Install: sudo apt install shellcheck / brew install shellcheck"
