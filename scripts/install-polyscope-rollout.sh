@@ -297,20 +297,31 @@ cat >"$PATH_UNIT" <<EOF
 Description=Watch SecPal instruction files for Polyscope sync
 
 [Path]
+PathChanged=$WORKSPACE_ROOT/api/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/api/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/api/.github/instructions
+PathChanged=$WORKSPACE_ROOT/frontend/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/frontend/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/frontend/.github/instructions
+PathChanged=$WORKSPACE_ROOT/contracts/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/contracts/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/contracts/.github/instructions
+PathChanged=$WORKSPACE_ROOT/android/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/android/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/android/.github/instructions
+PathChanged=$WORKSPACE_ROOT/secpal.app/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/secpal.app/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/secpal.app/.github/instructions
+PathChanged=$WORKSPACE_ROOT/guardguide.de/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/instructions
+PathChanged=$WORKSPACE_ROOT/GuardGuide/AGENTS.md
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/copilot-instructions.md
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/instructions
+PathChanged=$WORKSPACE_ROOT/changelog/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/changelog/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/changelog/.github/instructions
+PathChanged=$WORKSPACE_ROOT/.github/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/instructions
 PathChanged=$SOURCE_SCRIPT

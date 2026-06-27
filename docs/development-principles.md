@@ -5,9 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Development Principles & Best Practices
 
-> **Note:** This is the **human-readable** version of our development principles. The runtime baseline for each repository is its own `copilot-instructions.md` and `.github/instructions/*.instructions.md` files.
+> **Note:** This is the **human-readable** version of our development principles. Each repository's authoritative AI baseline lives in its root `AGENTS.md`; `.github/copilot-instructions.md` is a compatibility mirror for tooling that auto-loads that path, and `.github/instructions/*.instructions.md` remain focused overlays where supported.
 
-This document explains the design principles and best practices that guide all SecPal projects (api, frontend, contracts).
+This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `api`, `frontend`, `contracts`, `android`, `secpal.app`, `changelog`, `GuardGuide`, and `guardguide.de`.
 
 ## Quick Navigation
 
@@ -88,15 +88,16 @@ function getUserPublishedPosts(user: User): Post[] {
 
 ### 4. Clean Before Quick
 
-**Principle:** Refactor existing code when you touch it, even if unrelated to your task.
+**Principle:** Leave touched code cleaner than you found it, but keep cleanup inside the same topic and acceptance scope.
 
 **In Practice:**
 
-- ✅ Fix poor naming when you encounter it
-- ✅ Extract long methods into smaller ones
-- ✅ Remove dead code
-- ✅ Add type hints if missing
+- ✅ Fix nearby poor naming when it directly improves the touched code
+- ✅ Extract long methods when that refactor is required for the current change
+- ✅ Remove dead code that is part of the touched area or blocks the current change
+- ✅ Add missing type hints when they are needed to make the current change correct and maintainable
 - ❌ Don't leave "broken windows"
+- ❌ Don't mix unrelated cleanup into a topic branch just because you noticed it
 
 ---
 
@@ -615,7 +616,8 @@ npm run lint
 
 ### Organization-Wide (`.github` repo)
 
-- [copilot-instructions.md](../.github/copilot-instructions.md) - Runtime baseline (org-wide)
+- `AGENTS.md` - Authoritative agent-facing runtime baseline in each repository root
+- [copilot-instructions.md](../.github/copilot-instructions.md) - Compatibility mirror for tooling that auto-loads GitHub Copilot instructions
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - How to contribute
 - [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) - Community standards
 
@@ -647,4 +649,4 @@ npm run lint
 
 **Last Updated:** April 11, 2026
 **Maintained by:** SecPal Organization
-**Source of Truth:** [`.github/copilot-instructions.md`](../.github/copilot-instructions.md) and per-repo `.github/instructions/*.instructions.md` files
+**Source of Truth:** root `AGENTS.md` in each repository, plus per-repo `.github/instructions/*.instructions.md` overlays where stack- or path-specific rules need to stay separate

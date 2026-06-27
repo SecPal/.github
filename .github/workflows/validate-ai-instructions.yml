@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: AI Instructions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "AGENTS.md"
+      - "AGENTS.md.license"
+      - ".github/copilot-instructions.md"
+      - ".github/copilot-instructions.md.license"
+      - ".github/instructions/**"
+      - ".github/workflows/reusable-ai-instructions.yml"
+      - ".github/workflows/validate-ai-instructions.yml"
+      - "scripts/validate-ai-instructions.sh"
+  pull_request:
+    branches: [main]
+    paths:
+      - "AGENTS.md"
+      - "AGENTS.md.license"
+      - ".github/copilot-instructions.md"
+      - ".github/copilot-instructions.md.license"
+      - ".github/instructions/**"
+      - ".github/workflows/reusable-ai-instructions.yml"
+      - ".github/workflows/validate-ai-instructions.yml"
+      - "scripts/validate-ai-instructions.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate AI Instructions
+    uses: ./.github/workflows/reusable-ai-instructions.yml

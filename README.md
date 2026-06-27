@@ -22,6 +22,8 @@ SecPal is the operations software for German private security services. Everythi
 - [`changelog`](https://github.com/SecPal/changelog): Public changelog site for SecPal releases
 - [`contracts`](https://github.com/SecPal/contracts): OpenAPI 3.1 API specifications
 - [`frontend`](https://github.com/SecPal/frontend): React/TypeScript frontend application
+- [`GuardGuide`](https://github.com/SecPal/GuardGuide): Laravel/React operations platform for GuardGuide
+- [`guardguide.de`](https://github.com/SecPal/guardguide.de): Public website for GuardGuide
 - [`secpal.app`](https://github.com/SecPal/secpal.app): Astro public website
 
 ## Multi-Repository Workspace Setup
@@ -183,8 +185,8 @@ The hooks are installed as symlinks in `.git/hooks/`, ensuring they automaticall
 pre-commit run actionlint --all-files
 # or, if you need a direct run: timeout 30 actionlint
 
-# Skip checks (not recommended)
-git push --no-verify
+# Bypassing hooks is not allowed
+# Fix the failing check instead of skipping it
 ```
 
 Install `actionlint` via your package manager or a release binary if you want to run it outside pre-commit.
@@ -200,25 +202,24 @@ Install `actionlint` via your package manager or a release binary if you want to
 - Trailing whitespace
 - Line ending normalization
 
-### 🤖 Copilot Instructions & Templates
+### 🤖 AI Instructions
 
-SecPal uses a **two-tier Copilot instructions system**:
+SecPal uses a provider-neutral **AI instructions system**:
 
-1. **Organization-wide rules** (`.github/copilot-instructions.md` in this repo)
-2. **Repository-specific rules** (`.github/copilot-instructions.md` in each repo)
+1. **Authoritative repo baseline** (`AGENTS.md` in each repository)
+2. **Focused overlays** (`.github/instructions/*.instructions.md` where supported)
+3. **Copilot compatibility mirror** (`.github/copilot-instructions.md`, generated or maintained as a mirror where tooling expects that path)
 
-**All repository-specific instruction files MUST include a reminder** to read the org-wide instructions first.
+**All repository-specific runtime baselines MUST keep `AGENTS.md` authoritative.**
 
-#### Using the Template
+#### Setup Model
 
-When setting up Copilot instructions in a new repository:
+When setting up AI instructions in a new repository:
 
-1. **Copy the reminder block** from `templates/copilot-instructions-reminder.md`
-2. **Place it at the top** of `.github/copilot-instructions.md` (after SPDX headers)
-3. **Add repo-specific rules** below the reminder
-4. **Create a PR** with title pattern: `docs: add org-wide instructions reminder`
-
-**Template Location:** [`templates/copilot-instructions-reminder.md`](templates/copilot-instructions-reminder.md)
+1. **Create or update** `AGENTS.md` as the authoritative baseline
+2. **Add focused overlays** under `.github/instructions/` only when path- or stack-specific rules need to stay separate
+3. **Keep `.github/copilot-instructions.md` aligned** as a compatibility mirror for tools that auto-load that path
+4. **Create a PR** with title pattern: `docs: align ai instructions`
 
 **Example Implementations:**
 
@@ -228,25 +229,24 @@ When setting up Copilot instructions in a new repository:
 
 #### Validation
 
-The reminder is **required** in all repositories. CI validates its presence:
+The AI runtime baseline is validated in CI:
 
 ```bash
-# Check for reminder marker
-grep -q "🚨 AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md
+bash .github/scripts/validate-ai-instructions.sh
 ```
 
-See: [`.github/workflows/validate-copilot-instructions.yml`](.github/workflows/validate-copilot-instructions.yml)
+See: [`.github/workflows/validate-ai-instructions.yml`](.github/workflows/validate-ai-instructions.yml)
 
 #### Why This Matters
 
-**Without the reminder:** AI assistants might read repo-specific rules without seeing critical org-wide policies, leading to:
+**Without a clear authoritative baseline:** AI assistants might read a compatibility mirror or a partial overlay without the full repo runtime policy, leading to:
 
 - Quality gate bypasses
-- Missing Copilot PR reviews
+- Missing review or governance expectations
 - TDD policy violations
 - Security requirement oversights
 
-**With the reminder:** AI **always** reads organization-wide rules (Copilot Review Protocol, Quality Gates, TDD Policy, Security) before processing repo-specific instructions.
+**With `AGENTS.md` as source of truth:** AI tooling gets one stable runtime baseline first, with overlays and compatibility mirrors only extending or reflecting it.
 
 ## Build & Test Commands
 

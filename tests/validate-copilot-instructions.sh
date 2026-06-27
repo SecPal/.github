@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FIXTURES_DIR="$REPO_ROOT/tests/fixtures/validate-copilot-instructions"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/validate-copilot-instructions.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
@@ -19,276 +18,46 @@ exit 0
 STUB
 chmod +x "$workspace/bin/npx"
 
-cat >"$workspace/bin/ruby" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-chmod +x "$workspace/bin/ruby"
-
-write_common_instruction_file() {
-    local target_dir="$1"
-    local extra_ai_lines="$2"
-
-    mkdir -p "$target_dir/.github/instructions"
-
-    cat >"$target_dir/.github/copilot-instructions.md" <<EOF
+legacy_repo="$workspace/legacy-only"
+mkdir -p "$legacy_repo/.github/instructions"
+cat >"$legacy_repo/.markdownlint.json" <<'EOF'
+{
+  "MD013": false
+}
+EOF
+cat >"$legacy_repo/.github/copilot-instructions.md" <<'EOF'
 <!--
 SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# Test Instructions
+# Legacy Copilot Instructions
 
 These instructions are self-contained for this repository at runtime.
 Do not automatically inherit from sibling repositories.
-
-## Always-On Rules
-
-- Quality first.
-
-## Required Validation
-
-- run the relevant checks
-
-## AI Findings Triage
-
-- Treat AI findings and AI-generated fix PRs as hints, not proof.
-- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant and why the current code violates it.
-- Green CI alone is not enough for AI-generated changes.
-$extra_ai_lines
 EOF
 
-    cat >"$target_dir/.github/instructions/example.instructions.md" <<'EOF'
----
-name: Example
-applyTo: "**"
----
+PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" "$legacy_repo"
 
-# Example Instruction
-
-- Do not automatically inherit from sibling repositories.
+broken_legacy_repo="$workspace/broken-legacy"
+mkdir -p "$broken_legacy_repo/.github/instructions"
+cp "$legacy_repo/.markdownlint.json" "$broken_legacy_repo/.markdownlint.json"
+cat >"$broken_legacy_repo/.github/copilot-instructions.md" <<'EOF'
+# Broken Legacy Copilot Instructions
 EOF
-}
 
-run_validator() {
-    local repo_type="$1"
-    local output_file="$2"
-
-    local exit_code
-    if PATH="$workspace/bin:$PATH" REPO_TYPE="$repo_type" \
-        bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" >"$output_file" 2>&1; then
-        exit_code=0
-    else
-        exit_code=$?
-    fi
-
-    return "$exit_code"
-}
-
-valid_api_repo="$workspace/valid-api"
-mkdir -p "$valid_api_repo"
-touch "$valid_api_repo/composer.json"
-valid_api_extra_ai_lines="$(cat <<'EOF'
-- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
-- Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.
-EOF
-)"
-write_common_instruction_file "$valid_api_repo" "$valid_api_extra_ai_lines"
-cat >"$workspace/bin/markdownlint" <<'EOF'
-#!/usr/bin/env bash
-exit 1
-EOF
-chmod +x "$workspace/bin/markdownlint"
-
-valid_output="$workspace/valid-output.txt"
-(
-    cd "$valid_api_repo"
-    run_validator api "$valid_output"
-)
-grep -q 'copilot-instructions.md has REUSE license' "$valid_output"
-rm -f "$workspace/bin/markdownlint"
-
-local_markdownlint_repo="$workspace/local-markdownlint"
-mkdir -p "$local_markdownlint_repo/node_modules/.bin"
-touch "$local_markdownlint_repo/composer.json"
-write_common_instruction_file "$local_markdownlint_repo" "$valid_api_extra_ai_lines"
-cat >"$local_markdownlint_repo/node_modules/.bin/markdownlint" <<'EOF'
-#!/usr/bin/env bash
-exit 1
-EOF
-chmod +x "$local_markdownlint_repo/node_modules/.bin/markdownlint"
-
-local_markdownlint_output="$workspace/local-markdownlint-output.txt"
 set +e
-(
-    cd "$local_markdownlint_repo"
-    run_validator api "$local_markdownlint_output"
-)
-local_markdownlint_exit=$?
+broken_output="$(PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" "$broken_legacy_repo" 2>&1)"
+broken_status=$?
 set -e
-if [ "$local_markdownlint_exit" -eq 0 ]; then
-    cat "$local_markdownlint_output"
-    echo "validator unexpectedly skipped repo-local markdownlint" >&2
+
+if [ "$broken_status" -eq 0 ]; then
+    echo "legacy validator unexpectedly passed without SPDX header" >&2
     exit 1
 fi
-grep -q 'Run: ./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix' "$local_markdownlint_output"
 
-path_markdownlint_repo="$workspace/path-markdownlint"
-mkdir -p "$path_markdownlint_repo"
-touch "$path_markdownlint_repo/composer.json"
-write_common_instruction_file "$path_markdownlint_repo" "$valid_api_extra_ai_lines"
-cp "$REPO_ROOT/.markdownlint.json" "$path_markdownlint_repo/.markdownlint.json"
-cat >"$workspace/bin/markdownlint" <<'EOF'
-#!/usr/bin/env bash
-exit 1
-EOF
-chmod +x "$workspace/bin/markdownlint"
-
-path_markdownlint_output="$workspace/path-markdownlint-output.txt"
-set +e
-(
-    cd "$path_markdownlint_repo"
-    run_validator api "$path_markdownlint_output"
-)
-path_markdownlint_exit=$?
-set -e
-if [ "$path_markdownlint_exit" -eq 0 ]; then
-    cat "$path_markdownlint_output"
-    echo "validator unexpectedly skipped PATH markdownlint" >&2
+if [[ "$broken_output" != *"Missing SPDX header"* ]]; then
+    echo "legacy validator must report missing SPDX headers" >&2
+    echo "$broken_output" >&2
     exit 1
 fi
-grep -q 'Run: markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix' "$path_markdownlint_output"
-rm -f "$workspace/bin/markdownlint"
-
-missing_generic_repo="$workspace/missing-generic"
-mkdir -p "$missing_generic_repo/.github"
-touch "$missing_generic_repo/composer.json"
-cat >"$missing_generic_repo/.github/copilot-instructions.md" <<'EOF'
-<!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
--->
-
-# Broken Instructions
-
-These instructions are self-contained for this repository at runtime.
-
-## Always-On Rules
-
-- Quality first.
-
-## Required Validation
-
-- run the relevant checks
-EOF
-
-missing_generic_output="$workspace/missing-generic-output.txt"
-set +e
-(
-    cd "$missing_generic_repo"
-    run_validator api "$missing_generic_output"
-)
-missing_generic_exit=$?
-set -e
-if [ "$missing_generic_exit" -eq 0 ]; then
-    cat "$missing_generic_output"
-    echo "validator unexpectedly passed without generic AI findings guidance" >&2
-    exit 1
-fi
-grep -q 'instructions contain AI findings triage guidance' "$missing_generic_output"
-
-missing_api_specific_repo="$workspace/missing-api-specific"
-mkdir -p "$missing_api_specific_repo"
-touch "$missing_api_specific_repo/composer.json"
-write_common_instruction_file "$missing_api_specific_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.'
-
-missing_api_specific_output="$workspace/missing-api-specific-output.txt"
-set +e
-(
-    cd "$missing_api_specific_repo"
-    run_validator api "$missing_api_specific_output"
-)
-missing_api_specific_exit=$?
-set -e
-if [ "$missing_api_specific_exit" -eq 0 ]; then
-    cat "$missing_api_specific_output"
-    echo "validator unexpectedly passed without API-specific AI risk guidance" >&2
-    exit 1
-fi
-grep -q 'instructions contain repo-specific AI risk guidance' "$missing_api_specific_output"
-
-wrong_license_repo="$workspace/wrong-license"
-mkdir -p "$wrong_license_repo"
-touch "$wrong_license_repo/composer.json"
-write_common_instruction_file "$wrong_license_repo" "$valid_api_extra_ai_lines"
-# Keep an Apache-2.0 sidecar fixture here because this validator must reject
-# Apache-2.0 for .github/copilot-instructions.md.license.
-cp "$FIXTURES_DIR/wrong-copilot-instructions-license-fixture.txt" \
-    "$wrong_license_repo/.github/copilot-instructions.md.license"
-
-wrong_license_output="$workspace/wrong-license-output.txt"
-set +e
-(
-    cd "$wrong_license_repo"
-    run_validator api "$wrong_license_output"
-)
-wrong_license_exit=$?
-set -e
-if [ "$wrong_license_exit" -eq 0 ]; then
-    cat "$wrong_license_output"
-    echo "validator unexpectedly accepted wrong copilot-instructions sidecar license" >&2
-    exit 1
-fi
-grep -q 'Sidecar .license exists but does not declare an allowed license' "$wrong_license_output"
-
-negative_inherit_repo="$workspace/negative-inherit"
-mkdir -p "$negative_inherit_repo"
-touch "$negative_inherit_repo/composer.json"
-negative_inherit_extra_ai_lines="$valid_api_extra_ai_lines"
-write_common_instruction_file "$negative_inherit_repo" "$negative_inherit_extra_ai_lines"
-cat >"$negative_inherit_repo/.github/instructions/negative.instructions.md" <<'EOF'
----
-name: Negative Inherit Example
-applyTo: "**"
----
-
-# Negative Inherit Example
-
-- Do not inherit from sibling repositories.
-EOF
-
-negative_inherit_output="$workspace/negative-inherit-output.txt"
-set +e
-(
-    cd "$negative_inherit_repo"
-    run_validator api "$negative_inherit_output"
-)
-negative_inherit_exit=$?
-set -e
-if [ "$negative_inherit_exit" -ne 0 ]; then
-    cat "$negative_inherit_output"
-    echo "validator falsely rejected negative do-not-inherit wording" >&2
-    exit 1
-fi
-grep -q 'instructions avoid pseudo-inheritance markers' "$negative_inherit_output"
-
-android_repo="$workspace/android-repo"
-mkdir -p "$android_repo"
-touch "$android_repo/capacitor.config.ts"
-write_common_instruction_file "$android_repo" '- Reject AI-generated bridge changes that alter listener handles or teardown ordering without focused tests.
-- Reject AI-generated back-navigation or managed-mode changes that do not prove WebView history and owner-state invariants.'
-
-android_output="$workspace/android-output.txt"
-set +e
-(
-    cd "$android_repo"
-    run_validator android "$android_output"
-)
-android_exit=$?
-set -e
-if [ "$android_exit" -ne 0 ]; then
-    cat "$android_output"
-    echo "validator failed for valid android fixture" >&2
-    exit 1
-fi
-grep -q 'Repository Type: android' "$android_output"

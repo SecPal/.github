@@ -42,7 +42,7 @@ host, so callers cannot reintroduce it as an active host.
   script invokes `git ls-files` on `.context/` and exits non-zero if any
   path under `.context/` is actually tracked by git. Because `--exclude-dir`
   is git-tracking-unaware, this guard closes the `git add --force` bypass
-  Codex flagged on this PR — force-tracked `.context/` files would
+  review flagged on this PR — force-tracked `.context/` files would
   otherwise be visible to CI but silently ignored locally. The guard is a
   no-op outside a git working tree (e.g. in the throwaway `mktemp`
   workspaces the regression tests use), so it does not interfere with
@@ -110,27 +110,30 @@ node scripts/check-openapi-verified-endpoints.mjs <path-to-openapi.yaml>
 - `1`: One or more required operations are missing
 - `2`: Usage or file-read error
 
-### `validate-copilot-instructions.sh`
+### `validate-ai-instructions.sh`
 
-Validates Copilot instructions and configuration files across all repositories.
+Validates the authoritative `AGENTS.md` baseline, the Copilot compatibility
+mirror, and focused instruction overlays across all repositories.
 
 **Usage:**
 
 ```bash
 # In any repository (.github, api, frontend, contracts)
-./scripts/validate-copilot-instructions.sh
+./scripts/validate-ai-instructions.sh
 ```
 
 **Tests Performed:**
 
 1. **File Existence**
 
-   - Checks for `copilot-instructions.md`
+   - Checks for `AGENTS.md`
+   - Checks for `.github/copilot-instructions.md` as compatibility mirror
    - `copilot-config.yaml` check always skips (file removed 2026-04-11)
 
 2. **REUSE Compliance**
 
-   - Validates `copilot-instructions.md.license` exists
+   - Validates `AGENTS.md` REUSE metadata
+   - Validates `copilot-instructions.md.license` exists when a sidecar is used
    - `copilot-config.yaml.license` check always skips (file removed 2026-04-11)
    - Verifies CC0-1.0 license
 
@@ -140,20 +143,21 @@ Validates Copilot instructions and configuration files across all repositories.
    - Uses the repo-pinned `markdownlint-cli` installed by `npm ci`
    - Suggests auto-fix command on failure
 
-4. **YAML Syntax**
+4. **Legacy YAML Syntax**
 
-   - Validates YAML syntax using yq
-   - Skips if yq not installed
+   - Legacy `copilot-config.yaml` syntax check always skips
 
-5. **Inheritance Check**
+5. **Runtime Model Check**
 
-   - Verifies `@EXTENDS` reference in repo-specific instructions
-   - Skips for org-level instructions
+   - Verifies `AGENTS.md` is the self-contained authoritative baseline
+   - Verifies the Copilot file mirrors `AGENTS.md`
 
 6. **Content Validation**
    - Ensures critical rules/principles section exists
+   - Ensures `AGENTS.md` stays below the runtime discovery size limit
    - Ensures AI findings triage guidance exists
-   - Validates core content presence
+   - Ensures provider-neutral review guidelines and no-attribution guidance exist
+   - Validates repo-specific risk guardrails and overlay frontmatter
 
 **Exit Codes:**
 
@@ -164,18 +168,21 @@ Validates Copilot instructions and configuration files across all repositories.
 
 ```
 =========================================
-Copilot Instructions Validation
+SecPal AI Instructions Validation
 =========================================
 
 Repository Type: api
 
+✓ AGENTS.md exists
 ✓ copilot-instructions.md exists
 ✓ copilot-config.yaml exists (Skipped - removed 2026-04-11)
+✓ AGENTS.md has REUSE license
 ✓ copilot-instructions.md has REUSE license
 ✓ copilot-config.yaml has REUSE license (Skipped - removed 2026-04-11)
+✓ AGENTS.md passes markdown lint
 ✓ copilot-instructions.md passes markdown lint
 ✓ copilot-config.yaml has valid syntax (Skipped - removed 2026-04-11)
-✓ repo-specific instructions use @EXTENDS
+✓ repo instructions are self-contained
 ✓ instructions contain critical rules
 
 =========================================
@@ -196,14 +203,14 @@ Automatically runs in GitHub Actions:
 - On pull requests (when instruction files change)
 - Manual trigger via `workflow_dispatch`
 
-See `.github/workflows/validate-copilot-instructions.yml`
+See `.github/workflows/validate-ai-instructions.yml`
 
 **Dependencies:**
 
 - `bash` (required)
 - `grep` (required)
 - `npm ci` in `SecPal/.github` (installs the pinned `markdownlint-cli` and `prettier` CLIs)
-- `yq` (optional, for YAML validation)
+- `ruby` (optional, only for the legacy YAML syntax check)
 
 **Repository Detection:**
 
