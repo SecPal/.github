@@ -9,6 +9,67 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-27 - Replace markdownlint-cli2 With markdownlint-cli
+
+**Changed:**
+
+- replaced `markdownlint-cli2` with `markdownlint-cli@0.49.0` in the local
+  Node toolchain so the repository keeps the same markdownlint rule set while
+  dropping the dependency path that triggered the remaining moderate
+  `npm audit` findings
+- updated `scripts/preflight.sh`, `scripts/validate-copilot-instructions.sh`,
+  `.github/workflows/quality.yml`, and `reusable-markdown-lint.yml` to invoke
+  `markdownlint-cli` with explicit `--ignore` exclusions and `.markdownlint`
+  config handling
+- updated markdown lint documentation, system requirements guidance, and the
+  focused preflight regression test to match the new CLI path
+
+**Fixed:**
+
+- `npm audit` now returns zero vulnerabilities for the local `.github`
+  markdown lint toolchain after removing `markdownlint-cli2`
+
+---
+
+## 2026-06-27 - Fix Review Findings from markdownlint-cli2 Audit Migration
+
+**Fixed:**
+
+- added missing `permissions: contents: read` to `reusable-markdown-lint.yml`
+  so the reusable job no longer inherits elevated permissions from calling
+  workflows (least-privilege compliance)
+- restored `--yes` fallback in `scripts/preflight.sh`: the script now prefers
+  the local `node_modules/.bin/markdownlint-cli2` when available, and falls
+  back to `npx --yes` with an explanatory message when `npm ci` has not been
+  run, preventing a hang or silent failure in pre-push hooks
+- documented the `governance-ref` supply-chain risk in both
+  `reusable-markdown-lint.yml` and `reusable-copilot-instructions.yml` input
+  descriptions: callers can pin to a commit SHA to prevent the `main`-tracking
+  default from pulling an updated binary unexpectedly
+
+---
+
+## 2026-06-27 - Track Remaining markdownlint-cli2 Audit Findings
+
+**Added:**
+
+- pinned `markdownlint-cli2@0.22.1` in `package.json` and `package-lock.json`
+  so local markdown linting now runs from repo-owned dependencies after
+  `npm ci`
+
+**Changed:**
+
+- updated `scripts/preflight.sh`, `scripts/validate-copilot-instructions.sh`,
+  `.github/workflows/quality.yml`, and the reusable markdown/Copilot workflows
+  to use the pinned local `markdownlint-cli2` instead of global installs or
+  interactive `npx --yes` downloads
+- documented the remaining `npm audit` state in `docs/VALIDATION_SYSTEM.md` and
+  `scripts/README.md`: 3 moderate findings still flow through
+  `markdownlint-cli2` (`js-yaml@4.1.1` and `markdown-it@14.1.1`) and must be
+  revisited when upstream updates its dependency graph
+
+---
+
 ## 2026-06-25 - Drop Preview Nginx Deprecation Warnings
 
 **Fixed:**

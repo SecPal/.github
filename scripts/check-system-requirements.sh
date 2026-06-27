@@ -117,8 +117,10 @@ check_command "npx" "npx (Node Package Runner)" "critical" "Comes with npm (inst
 # Helper function to check npx-based tools (DRY principle)
 check_npx_tool() {
   local tool_name="$1"
+  local package_name="${2:-$tool_name}"
+  local executable_name="${3:-$tool_name}"
   if command -v npx >/dev/null 2>&1; then
-    if npx --yes "$tool_name" --version >/dev/null 2>&1; then
+    if npx --yes --package "$package_name" "$executable_name" --version >/dev/null 2>&1; then
       echo -e "${GREEN}✓${NC} $tool_name (via npx)"
       OK_COUNT=$((OK_COUNT + 1))
     else
@@ -132,7 +134,7 @@ check_npx_tool() {
   fi
 }
 
-check_npx_tool "markdownlint-cli2"
+check_npx_tool "markdownlint-cli" "markdownlint-cli" "markdownlint"
 check_npx_tool "prettier"
 
 check_command "shellcheck" "ShellCheck" "critical" "Install: sudo apt install shellcheck / brew install shellcheck"

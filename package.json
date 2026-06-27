@@ -4,6 +4,9 @@
   "description": "SecPal organization-wide documentation and settings",
   "private": true,
   "scripts": {
+    "lint:markdown": "markdownlint --config .markdownlint.json --dot '**/*.md' --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git",
+    "lint:markdown:fix": "markdownlint --config .markdownlint.json --dot '**/*.md' --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git --fix",
+    "lint:markdown:copilot": "markdownlint --config .markdownlint.json .github/copilot-instructions.md",
     "test": "npm run test:openapi-verified-presence",
     "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh",
     "copilot:review:threads": "./scripts/copilot-review-tool.sh threads",
@@ -25,6 +28,7 @@
   "license": "CC0-1.0",
   "devDependencies": {
     "js-yaml": "^4.2.0",
+    "markdownlint-cli": "0.49.0",
     "prettier": "3.5.3"
   }
 }

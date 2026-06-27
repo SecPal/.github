@@ -7,12 +7,16 @@ on:
   workflow_call:
     inputs:
       governance-ref:
-        description: "Ref of SecPal/.github to use when validating sibling repositories"
+        description: >
+          Ref of SecPal/.github to use when validating sibling repositories.
+          Defaults to 'main' (always tracks the latest governance HEAD). Pin to a
+          specific commit SHA for reproducible, supply-chain-safe runs, because this
+          ref controls the validator script and lint binary — not just configuration.
         required: false
         type: string
         default: "main"
       node-version:
-        description: "Node.js version used for markdownlint-cli2"
+        description: "Node.js version used for markdownlint-cli"
         required: false
         type: string
         default: "22"
@@ -42,8 +46,16 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Install markdownlint-cli2
-        run: npm install -g markdownlint-cli2
+      - name: Install governance Node dependencies
+        run: |
+          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
+            npm ci
+            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          else
+            cd .secpal-governance
+            npm ci
+            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Select validator path
         id: validator

@@ -65,7 +65,7 @@ repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
 
 1. Checkout the caller repository
 2. Checkout `SecPal/.github` when the caller is a sibling repository
-3. Setup Node.js 22 and install `markdownlint-cli2`
+3. Setup Node.js 22 and run `npm ci` in `SecPal/.github`
 4. Run `scripts/validate-copilot-instructions.sh`
 5. Fail the caller workflow when required guidance is missing
 
@@ -120,7 +120,7 @@ This test always skips.
 
 **Purpose:** Ensure markdown quality standards
 
-**Tool:** markdownlint-cli2
+**Tool:** markdownlint-cli
 
 **Config:** `.markdownlint.json` (repo-specific)
 
@@ -133,7 +133,14 @@ This test always skips.
 
 **Failure Impact:** MEDIUM - Quality standards
 
-**Auto-fix:** `npx markdownlint-cli2 .github/copilot-instructions.md --fix`
+**Auto-fix:** `./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix`
+
+### Audit Status
+
+`SecPal/.github` now pins `markdownlint-cli@0.49.0` locally so markdown
+linting stays reproducible after `npm ci` without depending on the
+`markdownlint-cli2` package graph that kept the remaining `npm audit` findings
+open.
 
 ### 6. YAML Syntax Validation
 
@@ -254,10 +261,10 @@ EOF
 
 ```bash
 # Auto-fix markdown issues
-npx markdownlint-cli2 .github/copilot-instructions.md --fix
+./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix
 
 # Manual review
-npx markdownlint-cli2 .github/copilot-instructions.md
+./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md
 ```
 
 ### Test 6 Failed: YAML Syntax
@@ -332,10 +339,10 @@ EOF
 chmod +x scripts/validate-copilot-instructions.sh
 ```
 
-### markdownlint-cli2 Not Found
+### markdownlint-cli Not Found
 
 ```bash
-npm install -g markdownlint-cli2
+npm ci
 ```
 
 ### Ruby Not Found
