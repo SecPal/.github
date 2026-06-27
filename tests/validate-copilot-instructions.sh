@@ -106,11 +106,11 @@ local_markdownlint_repo="$workspace/local-markdownlint"
 mkdir -p "$local_markdownlint_repo/node_modules/.bin"
 touch "$local_markdownlint_repo/composer.json"
 write_common_instruction_file "$local_markdownlint_repo" "$valid_api_extra_ai_lines"
-cat >"$local_markdownlint_repo/node_modules/.bin/markdownlint-cli2" <<'EOF'
+cat >"$local_markdownlint_repo/node_modules/.bin/markdownlint" <<'EOF'
 #!/usr/bin/env bash
 exit 1
 EOF
-chmod +x "$local_markdownlint_repo/node_modules/.bin/markdownlint-cli2"
+chmod +x "$local_markdownlint_repo/node_modules/.bin/markdownlint"
 
 local_markdownlint_output="$workspace/local-markdownlint-output.txt"
 set +e
@@ -122,10 +122,10 @@ local_markdownlint_exit=$?
 set -e
 if [ "$local_markdownlint_exit" -eq 0 ]; then
     cat "$local_markdownlint_output"
-    echo "validator unexpectedly skipped repo-local markdownlint-cli2" >&2
+    echo "validator unexpectedly skipped repo-local markdownlint" >&2
     exit 1
 fi
-grep -q 'Run: ./node_modules/.bin/markdownlint-cli2 .github/copilot-instructions.md --fix' "$local_markdownlint_output"
+grep -q 'Run: ./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix' "$local_markdownlint_output"
 
 missing_generic_repo="$workspace/missing-generic"
 mkdir -p "$missing_generic_repo/.github"
