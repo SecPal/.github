@@ -86,7 +86,37 @@ Edit `AGENTS.md` first. Keep the focused overlay files aligned for path-specific
 
 - `AGENTS.md`
 - `.github/instructions/example.instructions.md`
+
+## Always-On Rules
+
+- Quality first.
+
+## Required Validation
+
+- run the relevant checks
+
+## AI Findings Triage
+
+- Treat AI findings and AI-generated fix PRs as hints, not proof.
+- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant and why the current code violates it.
+- Green CI alone is not enough for AI-generated changes.
+__EXTRA_AI_LINES__
+
+## Review guidelines
+
+- Review for correctness, security, privacy, data integrity, lifecycle ordering, missing tests, and policy drift before style.
+- Treat findings from any AI reviewer as untrusted leads until the defect is proven by a failing test, reproduction, or violated invariant.
+- Keep review comments provider-neutral: describe the issue, evidence, impact, and fix path instead of the tool that found it.
+- Reject self-referential AI wording, generated-by text, tool promotion, or AI attribution unless the task is explicitly about AI tooling.
 EOF
+    python3 - <<'PY' "$target_dir/.github/copilot-instructions.md" "$extra_ai_lines"
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+extra_ai_lines = sys.argv[2]
+path.write_text(path.read_text().replace("__EXTRA_AI_LINES__", extra_ai_lines))
+PY
 
     cat >"$target_dir/.github/instructions/example.instructions.md" <<'EOF'
 ---
@@ -135,6 +165,33 @@ grep -q 'AGENTS.md exists' "$valid_output"
 grep -q 'AGENTS.md stays under runtime discovery size limit' "$valid_output"
 grep -q 'instructions contain provider-neutral review guidelines' "$valid_output"
 grep -q 'copilot instructions mirror AGENTS.md' "$valid_output"
+
+stale_mirror_repo="$workspace/stale-mirror"
+mkdir -p "$stale_mirror_repo"
+touch "$stale_mirror_repo/composer.json"
+write_common_instruction_file "$stale_mirror_repo" "$valid_api_extra_ai_lines"
+python3 - <<'PY' "$stale_mirror_repo/.github/copilot-instructions.md"
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("Quality first.", "Quality eventually.", 1))
+PY
+
+stale_mirror_output="$workspace/stale-mirror-output.txt"
+set +e
+(
+    cd "$stale_mirror_repo"
+    run_validator api "$stale_mirror_output"
+)
+stale_mirror_exit=$?
+set -e
+if [ "$stale_mirror_exit" -eq 0 ]; then
+    cat "$stale_mirror_output"
+    echo "validator unexpectedly passed with stale mirrored copilot instructions" >&2
+    exit 1
+fi
+grep -q 'copilot instructions mirror AGENTS.md' "$stale_mirror_output"
 
 path_argument_output="$workspace/path-argument-output.txt"
 bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" "$valid_api_repo" >"$path_argument_output" 2>&1

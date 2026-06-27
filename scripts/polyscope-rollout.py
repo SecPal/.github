@@ -1735,6 +1735,13 @@ def strip_html_comment_header(text: str) -> str:
     return text
 
 
+def write_text_if_changed(path: pathlib.Path, content: str) -> bool:
+    if path.exists() and path.read_text() == content:
+        return False
+    path.write_text(content)
+    return True
+
+
 def extract_bullets_from_lines(lines: list[str]) -> list[str]:
     bullets: list[str] = []
     current: list[str] = []
@@ -1828,10 +1835,20 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
 
 
 def instruction_reference(spec: dict[str, Any]) -> str:
-    return str(spec["agent_instructions"])
+    if spec["agent_instructions"].exists():
+        return str(spec["agent_instructions"])
+    return str(spec["copilot_instructions"])
+
+
+def load_runtime_instructions_text(spec: dict[str, Any]) -> str:
+    if spec["agent_instructions"].exists():
+        return spec["agent_instructions"].read_text()
+    return spec["copilot_instructions"].read_text()
 
 
 def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
+    if not spec["agent_instructions"].exists():
+        raise FileNotFoundError(spec["agent_instructions"])
     agents_text = strip_html_comment_header(spec["agent_instructions"].read_text())
     core_index = agents_text.find("## Core Runtime Baseline")
     if core_index == -1:
@@ -1867,11 +1884,13 @@ def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
 
 def write_copilot_compat_instructions(repo_specs: dict[str, dict[str, Any]]) -> None:
     for spec in repo_specs.values():
-        spec["copilot_instructions"].write_text(render_copilot_compat_instructions(spec))
+        if not spec["agent_instructions"].exists():
+            continue
+        write_text_if_changed(spec["copilot_instructions"], render_copilot_compat_instructions(spec))
 
 
 def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
-    agents_text = pathlib.Path(spec["agent_instructions"]).read_text()
+    agents_text = load_runtime_instructions_text(spec)
     sections = parse_sections(agents_text)
     focus_bullets: list[str] = []
     for focus_path in spec["focus_instruction_paths"]:

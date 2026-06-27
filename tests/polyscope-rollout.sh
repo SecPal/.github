@@ -415,6 +415,8 @@ applyTo: '**/*.php'
 - Use vendor/bin/pint --dirty after changes.
 " > "$workspace_root/GuardGuide/.github/instructions/php-laravel.instructions.md"
 
+rm -f "$workspace_root/GuardGuide/AGENTS.md"
+
 create_repo "contracts" "$common_header
 
 # Contracts Instructions
@@ -1734,6 +1736,7 @@ PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
 initial_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
+initial_guardguide_mirror_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
 
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
@@ -1745,6 +1748,7 @@ python3 "$PYTHON_SCRIPT" \
 
 repeat_db_hash="$(file_sha256 "$db_path")"
 repeat_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
+repeat_guardguide_mirror_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
 
 if [ "$repeat_backup_count" -ne "$initial_backup_count" ]; then
     echo "repeat metadata sync must not create another DB backup when repository metadata is unchanged" >&2
@@ -1753,6 +1757,11 @@ fi
 
 if [ "$repeat_db_hash" != "$initial_db_hash" ]; then
     echo "repeat metadata sync must leave polyscope.db unchanged when repository metadata is already up to date" >&2
+    exit 1
+fi
+
+if [ "$repeat_guardguide_mirror_hash" != "$initial_guardguide_mirror_hash" ]; then
+    echo "repeat metadata sync must not rewrite legacy copilot mirrors when AGENTS.md is still missing" >&2
     exit 1
 fi
 
@@ -2852,6 +2861,7 @@ grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"

@@ -12,6 +12,7 @@ on:
       - ".github/copilot-instructions.md"
       - ".github/copilot-instructions.md.license"
       - ".github/instructions/**"
+      - ".github/workflows/reusable-ai-instructions.yml"
       - ".github/workflows/validate-ai-instructions.yml"
       - "scripts/validate-ai-instructions.sh"
   pull_request:
@@ -22,6 +23,7 @@ on:
       - ".github/copilot-instructions.md"
       - ".github/copilot-instructions.md.license"
       - ".github/instructions/**"
+      - ".github/workflows/reusable-ai-instructions.yml"
       - ".github/workflows/validate-ai-instructions.yml"
       - "scripts/validate-ai-instructions.sh"
   workflow_dispatch:

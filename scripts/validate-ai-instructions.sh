@@ -213,6 +213,52 @@ markdownlint_available() {
     [ -x "$SCRIPT_DIR/../node_modules/.bin/markdownlint" ] || command -v markdownlint >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
 }
 
+mirror_matches_agents() {
+    python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+
+def strip_html_comment_header(text: str) -> str:
+    stripped = text.lstrip()
+    if stripped.startswith("<!--"):
+        parts = stripped.split("-->\n", 1)
+        if len(parts) == 2:
+            return parts[1].lstrip()
+    return text
+
+
+def extract_agents_body(text: str) -> str:
+    body = strip_html_comment_header(text)
+    core_index = body.find("## Core Runtime Baseline")
+    if core_index != -1:
+        return body[core_index:].strip()
+    heading = re.search(r"^##\s+", body, re.MULTILINE)
+    if heading is None:
+        raise SystemExit(1)
+    return body[heading.start():].strip()
+
+
+def extract_mirror_body(text: str) -> str:
+    body = strip_html_comment_header(text)
+    marker = body.find("## Authoritative Sources")
+    if marker == -1:
+        raise SystemExit(1)
+    remaining = body[marker + len("## Authoritative Sources"):]
+    heading = re.search(r"^##\s+", remaining, re.MULTILINE)
+    if heading is None:
+        raise SystemExit(1)
+    start = marker + len("## Authoritative Sources") + heading.start()
+    return body[start:].strip()
+
+
+agents = pathlib.Path("AGENTS.md").read_text()
+mirror = pathlib.Path(".github/copilot-instructions.md").read_text()
+sys.exit(0 if extract_agents_body(agents) == extract_mirror_body(mirror) else 1)
+PY
+}
+
 test_yaml_syntax() {
     if [ ! -f ".github/copilot-config.yaml" ]; then
         print_result "copilot-config.yaml has valid syntax" "PASS" "Skipped (YAML config not present)"
@@ -484,10 +530,11 @@ test_copilot_compat_contract() {
     # shellcheck disable=SC2016
     if grep -q 'mirrors the authoritative root `AGENTS.md`' .github/copilot-instructions.md \
         && grep -q 'Edit `AGENTS.md` first' .github/copilot-instructions.md \
-        && grep -q '## Authoritative Sources' .github/copilot-instructions.md; then
+        && grep -q '## Authoritative Sources' .github/copilot-instructions.md \
+        && mirror_matches_agents; then
         print_result "copilot instructions mirror AGENTS.md" "PASS"
     else
-        print_result "copilot instructions mirror AGENTS.md" "FAIL" "Missing AGENTS compatibility notice or authoritative-source section"
+        print_result "copilot instructions mirror AGENTS.md" "FAIL" "Missing AGENTS compatibility notice, authoritative-source section, or mirrored AGENTS body"
     fi
 }
 
