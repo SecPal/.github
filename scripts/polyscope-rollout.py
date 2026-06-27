@@ -33,9 +33,10 @@ POSTGRES_PREVIEW_DATABASE_SEPARATOR = "__preview__"
 POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z0-9_]+)=(.*)$")
 NO_AI_ATTRIBUTION_RULE = (
-    "Do not add AI agent attribution, AI tool labels such as Codex, Copilot, or Cursor, "
-    "`[codex]` prefixes, or AI `Co-authored-by` trailers to commits, branches, pull request "
-    "titles or bodies, issues, comments, or any other GitHub-facing content."
+    "Do not add AI agent attribution, AI self-references, generated-by text, "
+    "tool-specific labels or prefixes, promotional AI wording, or AI `Co-authored-by` "
+    "trailers to commits, branches, pull request titles or bodies, issues, comments, "
+    "documentation, code comments, UI copy, release notes, or any other project content."
 )
 MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
 NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
@@ -1695,7 +1696,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 "setup": ["npm ci"],
                 "run": [
                     {"label": "Preflight", "command": "./scripts/preflight.sh", "runMode": "preserve"},
-                    {"label": "Copilot Review Scan", "command": "npm run copilot:review:scan", "runMode": "preserve"},
+                    {"label": "AI Review Scan", "command": "npm run copilot:review:scan", "runMode": "preserve"},
                 ],
             },
             "tasks": [
@@ -1722,6 +1723,15 @@ def strip_frontmatter(text: str) -> str:
         parts = text.split("\n---\n", 1)
         if len(parts) == 2:
             return parts[1]
+    return text
+
+
+def strip_html_comment_header(text: str) -> str:
+    stripped = text.lstrip()
+    if stripped.startswith("<!--"):
+        parts = stripped.split("-->\n", 1)
+        if len(parts) == 2:
+            return parts[1].lstrip()
     return text
 
 
@@ -1808,6 +1818,7 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         spec = copy.deepcopy(settings)
         repo_path = workspace_root / repo_name
         spec["path"] = repo_path
+        spec["agent_instructions"] = repo_path / "AGENTS.md"
         spec["copilot_instructions"] = repo_path / settings["copilot_instructions"]
         spec["focus_instruction_paths"] = [repo_path / path for path in settings["focus_instruction_paths"]]
         if repo_name == "api":
@@ -1817,14 +1828,51 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
 
 
 def instruction_reference(spec: dict[str, Any]) -> str:
-    refs = [str(spec["copilot_instructions"])]
-    refs.extend(str(path) for path in spec["focus_instruction_paths"])
-    return "; ".join(refs)
+    return str(spec["agent_instructions"])
+
+
+def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
+    agents_text = strip_html_comment_header(spec["agent_instructions"].read_text())
+    core_index = agents_text.find("## Core Runtime Baseline")
+    if core_index == -1:
+        raise SystemExit(f"AGENTS.md is missing '## Core Runtime Baseline' in {spec['path']}")
+    body = agents_text[core_index:].strip()
+    focus_lines = "\n".join(
+        f"- `{path.relative_to(spec['path']).as_posix()}`" for path in spec["focus_instruction_paths"]
+    )
+    rendered = "\n".join(
+        [
+            "<!--",
+            "SPDX-FileCopyrightText: 2026 SecPal",
+            "SPDX-License" "-Identifier: AGPL-3.0-or-later",
+            "-->",
+            "",
+            f"# {spec['display_name']} Copilot Instructions",
+            "",
+            "This file mirrors the authoritative root `AGENTS.md` for tooling",
+            "that automatically loads `.github/copilot-instructions.md`.",
+            "Edit `AGENTS.md` first. Keep the focused overlay files aligned",
+            "for path-specific or stack-specific rules.",
+            "",
+            "## Authoritative Sources",
+            "",
+            "- `AGENTS.md`",
+            *([focus_lines] if focus_lines else []),
+            "",
+            body,
+        ]
+    ).rstrip() + "\n"
+    return re.sub(r"\n{3,}", "\n\n", rendered)
+
+
+def write_copilot_compat_instructions(repo_specs: dict[str, dict[str, Any]]) -> None:
+    for spec in repo_specs.values():
+        spec["copilot_instructions"].write_text(render_copilot_compat_instructions(spec))
 
 
 def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
-    copilot_text = pathlib.Path(spec["copilot_instructions"]).read_text()
-    sections = parse_sections(copilot_text)
+    agents_text = pathlib.Path(spec["agent_instructions"]).read_text()
+    sections = parse_sections(agents_text)
     focus_bullets: list[str] = []
     for focus_path in spec["focus_instruction_paths"]:
         focus_bullets.extend(extract_all_bullets(pathlib.Path(focus_path).read_text()))
@@ -2971,6 +3019,7 @@ def build_summary(
         summary["repositories"][repo_name] = {
             "id": repo_state[repo_name]["id"],
             "path": str(spec["path"]),
+            "agent_instructions": str(spec["agent_instructions"]),
             "copilot_instructions": str(spec["copilot_instructions"]),
             "focus_instruction_paths": [str(path) for path in spec["focus_instruction_paths"]],
             "linked_repositories": spec["link_names"],
@@ -3029,6 +3078,7 @@ def main() -> int:
     repo_specs = build_repo_specs(args.workspace_root)
 
     validate_repo_local_configs(repo_specs)
+    write_copilot_compat_instructions(repo_specs)
 
     if not args.skip_local_configs:
         write_local_configs(repo_specs)

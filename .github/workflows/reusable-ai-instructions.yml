@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Reusable - Validate AI Instructions
+
+on:
+  workflow_call:
+    inputs:
+      governance-ref:
+        description: >
+          Ref of SecPal/.github to use when validating sibling repositories.
+          Defaults to 'main' (always tracks the latest governance HEAD). Pin to a
+          specific commit SHA for reproducible, supply-chain-safe runs, because this
+          ref controls the validator script and lint binary, not just configuration.
+        required: false
+        type: string
+        default: "main"
+      node-version:
+        description: "Node.js version used for markdownlint-cli"
+        required: false
+        type: string
+        default: "22"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate AI Instructions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v7
+
+      - name: Checkout governance repository
+        if: ${{ github.repository != 'SecPal/.github' }}
+        uses: actions/checkout@v7
+        with:
+          repository: SecPal/.github
+          ref: ${{ inputs.governance-ref }}
+          path: .secpal-governance
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install governance Node dependencies
+        run: |
+          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
+            npm ci
+            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          else
+            cd .secpal-governance
+            npm ci
+            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Select validator path
+        id: validator
+        run: |
+          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
+            echo "path=./scripts/validate-ai-instructions.sh" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=./.secpal-governance/scripts/validate-ai-instructions.sh" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run validation script
+        env:
+          VALIDATOR_PATH: ${{ steps.validator.outputs.path }}
+        run: "$VALIDATOR_PATH"

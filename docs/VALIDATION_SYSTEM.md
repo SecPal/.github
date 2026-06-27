@@ -3,14 +3,14 @@ SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# Validation System for Copilot Instructions
+# Validation System for AI Instructions
 
 ## Overview
 
-The validation system ensures that Copilot instructions maintain quality,
-consistency, and repository-specific AI-risk guidance across all SecPal
-repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
-`secpal.app`, and `changelog`.
+The validation system ensures that AI instructions maintain quality,
+consistency, and repository-specific AI-risk guidance across all managed
+SecPal repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
+`secpal.app`, `changelog`, `GuardGuide`, and `guardguide.de`.
 
 ## Architecture
 
@@ -19,31 +19,32 @@ repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
 ```
 .github/
 ├── scripts/
-│   ├── validate-copilot-instructions.sh  # Main validation script
+│   ├── validate-ai-instructions.sh  # Main validation script
 │   └── README.md                          # Script documentation
 ├── tests/
-│   └── validate-copilot-instructions.sh   # Validator regression coverage
+│   └── validate-ai-instructions.sh   # Validator regression coverage
 ├── .github/
-│   ├── copilot-instructions.md            # Markdown instructions (authoritative)
+│   ├── AGENTS.md                          # Authoritative runtime baseline
+│   ├── copilot-instructions.md            # Compatibility mirror
 │   └── workflows/
-│       ├── reusable-copilot-instructions.yml  # Shared CI workflow
-│       └── validate-copilot-instructions.yml  # .github repo caller workflow
+│       ├── reusable-ai-instructions.yml  # Shared CI workflow
+│       └── validate-ai-instructions.yml  # .github repo caller workflow
 └── docs/
     └── VALIDATION_SYSTEM.md               # This document
 
 > **Note:** `.github/copilot-config.yaml` was permanently removed on 2026-04-11.
-> Governance baseline is now fully in `copilot-instructions.md` and per-repo instruction files.
+> Each repository's authoritative AI baseline lives in `AGENTS.md`. The `.github/copilot-instructions.md` file is a compatibility mirror for tooling that auto-loads that path, and per-repo `.github/instructions/*.instructions.md` files remain focused overlays where needed.
 ```
 
 ### Validation Script
 
-**Location:** `scripts/validate-copilot-instructions.sh`
+**Location:** `scripts/validate-ai-instructions.sh`
 
-**Purpose:** Automated testing of Copilot instructions quality and required AI-risk guidance
+**Purpose:** Automated testing of AI-instruction quality and required AI-risk guidance
 
 **Features:**
 
-- Repository-aware (detects `.github`, `api`, `frontend`, `contracts`, `android`, `secpal.app`, and `changelog`)
+- Repository-aware (detects `.github`, `api`, `frontend`, `contracts`, `android`, `secpal.app`, `changelog`, `GuardGuide`, and `guardguide.de`)
 - generic AI triage validation plus repository-specific known-risk checks
 - regression coverage for validator guardrails and repo detection
 - Color-coded output
@@ -52,7 +53,7 @@ repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
 
 ### CI Workflow
 
-**Locations:** `.github/workflows/reusable-copilot-instructions.yml` and `.github/workflows/validate-copilot-instructions.yml`
+**Locations:** `.github/workflows/reusable-ai-instructions.yml` and `.github/workflows/validate-ai-instructions.yml`
 
 **Triggers:**
 
@@ -66,15 +67,15 @@ repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
 1. Checkout the caller repository
 2. Checkout `SecPal/.github` when the caller is a sibling repository
 3. Setup Node.js 22 and run `npm ci` in `SecPal/.github`
-4. Run `scripts/validate-copilot-instructions.sh`
+4. Run `scripts/validate-ai-instructions.sh`
 5. Fail the caller workflow when required guidance is missing
 
 ## Test Cases
 
 The validator enforces file presence, REUSE compliance, markdown quality,
-runtime-model guidance, generic AI-triage guardrails, repository-specific
-known-risk patterns, and required frontmatter for file-based instruction
-overlays.
+runtime-model guidance, `AGENTS.md` size limits, generic AI-triage guardrails,
+provider-neutral review guidelines, repository-specific known-risk patterns,
+and required frontmatter for file-based instruction overlays.
 
 ### 1. File Existence
 
@@ -82,7 +83,8 @@ overlays.
 
 **Files Checked:**
 
-- `.github/copilot-instructions.md` (required)
+- `AGENTS.md` (required authoritative runtime baseline)
+- `.github/copilot-instructions.md` (required compatibility mirror)
 
 **Failure Impact:** CRITICAL - Instructions missing
 
@@ -91,7 +93,7 @@ overlays.
 **Purpose:** Check for YAML configuration (removed as of 2026-04-11)
 
 **Note:** `.github/copilot-config.yaml` has been permanently removed. No Copilot mechanism reads this file;
-governance baseline is in `copilot-instructions.md` and per-repo instruction files. This test
+governance baseline is in `AGENTS.md`, with `.github/copilot-instructions.md` mirroring it for Copilot-compatible tooling and `.github/instructions/*.instructions.md` providing focused overlays where supported. This test
 always skips.
 
 **Failure Impact:** N/A - File removed
@@ -102,7 +104,8 @@ always skips.
 
 **Files Checked:**
 
-- `.github/copilot-instructions.md.license`
+- `AGENTS.md` and `.github/copilot-instructions.md`
+- REUSE metadata may be provided via inline SPDX headers or companion `.license` sidecars
 - Allowed license identifiers: `CC0-1.0` or `AGPL-3.0-or-later`
 
 **Failure Impact:** CRITICAL - REUSE compliance required
@@ -133,16 +136,16 @@ This test always skips.
 
 **Failure Impact:** MEDIUM - Quality standards
 
-**Auto-fix:** `./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix`
+**Auto-fix:** `./node_modules/.bin/markdownlint --config .markdownlint.json AGENTS.md .github/copilot-instructions.md --fix`
 
 ### Audit Status
 
 `SecPal/.github` now pins `markdownlint-cli@0.49.0` locally so markdown
 linting stays reproducible after `npm ci` without depending on the
-`markdownlint-cli2` package graph that kept the remaining `npm audit` findings
-open.
+`markdownlint-cli2` package graph that kept the remaining moderate
+`npm audit` findings open.
 
-### 6. YAML Syntax Validation
+### 6. Legacy YAML Syntax Validation
 
 **Purpose:** Ensure YAML is parseable (removed as of 2026-04-11)
 
@@ -150,16 +153,17 @@ open.
 
 **Failure Impact:** N/A - File removed
 
-### 7. @EXTENDS Reference
+### 7. Runtime Model Validation
 
-**Purpose:** Verify inheritance structure
+**Purpose:** Verify that `AGENTS.md` is the authoritative runtime baseline and
+that `.github/copilot-instructions.md` remains a compatibility mirror.
 
 **Logic:**
 
-- Org-level (.github): Skip test
-- Repo-level (api/frontend/contracts): Check for `@EXTENDS`
+- Org-level (.github): require authoritative runtime wording
+- Repo-level: require self-contained `AGENTS.md` guidance plus mirror contract
 
-**Failure Impact:** MEDIUM - Best practice for DRY
+**Failure Impact:** HIGH - runtime model drift
 
 ### 8. Critical Rules Presence
 
@@ -169,6 +173,31 @@ open.
 
 **Failure Impact:** HIGH - Missing essential content
 
+### 9. `AGENTS.md` Size Limit
+
+**Purpose:** Keep the authoritative runtime baseline below the default
+project-instruction discovery budget used by current AI tooling.
+
+**Limit:** 32768 bytes
+
+**Failure Impact:** HIGH - Instructions may be truncated at runtime
+
+### 10. AI Findings Triage
+
+**Purpose:** Ensure AI-generated findings remain hints until proven by a test,
+reproduction, or violated invariant.
+
+**Failure Impact:** HIGH - AI output could be merged without proof
+
+### 11. Provider-Neutral Review Guidelines
+
+**Purpose:** Ensure every repository has explicit review guidance that works
+for any AI reviewer and rejects AI self-reference, generated-by text, tool
+promotion, and attribution.
+
+**Failure Impact:** HIGH - AI reviews may drift into provider-specific or
+self-promotional behavior
+
 ## Repository-Specific Behavior
 
 ### .github Repository (Org-Level)
@@ -176,13 +205,16 @@ open.
 ```bash
 Repository Type: org
 
+✓ AGENTS.md exists
 ✓ copilot-instructions.md exists
 ✓ copilot-config.yaml exists (Skipped - removed 2026-04-11)
+✓ AGENTS.md has REUSE license
 ✓ copilot-instructions.md has REUSE license
 ✓ copilot-config.yaml has REUSE license (Skipped - removed 2026-04-11)
+✓ AGENTS.md passes markdown lint
 ✓ copilot-instructions.md passes markdown lint
 ✓ copilot-config.yaml has valid syntax (Skipped - removed 2026-04-11)
-✓ repo-specific instructions use @EXTENDS (Skipped - org-level)
+✓ org instructions define runtime model
 ✓ instructions contain critical rules
 ```
 
@@ -191,13 +223,16 @@ Repository Type: org
 ```bash
 Repository Type: api
 
+✓ AGENTS.md exists
 ✓ copilot-instructions.md exists
 ✓ copilot-config.yaml exists (Skipped - optional)
+✓ AGENTS.md has REUSE license
 ✓ copilot-instructions.md has REUSE license
 ✓ copilot-config.yaml has REUSE license (Skipped - not present)
+✓ AGENTS.md passes markdown lint
 ✓ copilot-instructions.md passes markdown lint
 ✓ copilot-config.yaml has valid syntax (Skipped - not present)
-✓ repo-specific instructions use @EXTENDS
+✓ repo instructions are self-contained
 ✓ instructions contain critical rules
 ```
 
@@ -229,7 +264,7 @@ Similar to api, detects via `package.json` with `openapi` or `docs/openapi.yaml`
 
 ```bash
 # Run in any repository
-./scripts/validate-copilot-instructions.sh
+./scripts/validate-ai-instructions.sh
 
 # Exit code 0 = success, 1 = failure
 ```
@@ -239,21 +274,34 @@ Similar to api, detects via `package.json` with `openapi` or `docs/openapi.yaml`
 ### Test 1 Failed: Instructions Missing
 
 ```bash
-# Create instructions file with license
-touch .github/copilot-instructions.md
-cat > .github/copilot-instructions.md.license << 'EOF'
-SPDX-FileCopyrightText: 2025 SecPal
-SPDX-License-Identifier: CC0-1.0
+# Create the authoritative baseline first
+cat > AGENTS.md << 'EOF'
+<!--
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+# Repository Agent Instructions
+
+This file is the authoritative, provider-neutral runtime baseline for this repository.
 EOF
+
+# Then create or regenerate the compatibility mirror
+cp AGENTS.md .github/copilot-instructions.md
 ```
 
 ### Test 3/4 Failed: REUSE Compliance
 
 ```bash
-# Create license file with SPDX headers
+# Add inline SPDX headers or create matching .license sidecars
+cat > AGENTS.md.license << 'EOF'
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: AGPL-3.0-or-later
+EOF
+
 cat > .github/copilot-instructions.md.license << 'EOF'
-SPDX-FileCopyrightText: 2025 SecPal
-SPDX-License-Identifier: CC0-1.0
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: AGPL-3.0-or-later
 EOF
 ```
 
@@ -261,10 +309,10 @@ EOF
 
 ```bash
 # Auto-fix markdown issues
-./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix
+./node_modules/.bin/markdownlint --config .markdownlint.json AGENTS.md .github/copilot-instructions.md --fix
 
 # Manual review
-./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md
+./node_modules/.bin/markdownlint --config .markdownlint.json AGENTS.md .github/copilot-instructions.md
 ```
 
 ### Test 6 Failed: YAML Syntax
@@ -286,14 +334,14 @@ EOF
 
 ```bash
 # Add critical rules section to instructions
-# See .github/copilot-instructions.md for template
+# Start from AGENTS.md as the authoritative template
 ```
 
 ## Metrics
 
 ### Success Criteria
 
-- All 8 tests pass
+- All 18 tests pass
 - Exit code 0
 - Green CI status
 
@@ -304,9 +352,9 @@ EOF
 
 ### Coverage
 
-- 4 repositories (.github, api, frontend, contracts)
-- 2 file formats (Markdown, YAML)
-- 3 quality dimensions (existence, licensing, syntax)
+- 9 managed repositories (`.github`, `api`, `frontend`, `contracts`, `android`, `secpal.app`, `changelog`, `GuardGuide`, `guardguide.de`)
+- 2 instruction surfaces (authoritative `AGENTS.md` plus compatibility mirror)
+- 6 quality dimensions (existence, REUSE compliance, markdown quality, runtime-model integrity, size safety, content guardrails)
 
 ## Future Enhancements
 
@@ -319,9 +367,9 @@ EOF
 
 ### Phase 2 (Planned)
 
-- Content validation (check for required sections)
-- YAML schema validation (validate structure)
-- Cross-repo consistency checks
+- Deeper semantic validation for repo-specific instruction drift
+- Cross-repo consistency checks beyond required baseline guardrails
+- Additional automated checks for overlay-to-baseline alignment
 - Automated fix suggestions
 
 ### Phase 3 (Future)
@@ -336,7 +384,7 @@ EOF
 ### Script Not Executable
 
 ```bash
-chmod +x scripts/validate-copilot-instructions.sh
+chmod +x scripts/validate-ai-instructions.sh
 ```
 
 ### markdownlint-cli Not Found
@@ -367,14 +415,14 @@ Manual override:
 
 ```bash
 # Force repository type
-REPO_TYPE=api ./scripts/validate-copilot-instructions.sh
+REPO_TYPE=api ./scripts/validate-ai-instructions.sh
 ```
 
 ## Maintenance
 
 ### Adding New Tests
 
-1. Add test function to `validate-copilot-instructions.sh`
+1. Add test function to `validate-ai-instructions.sh`
 2. Call function in `main()`
 3. Update test count expectations
 4. Document in this file
@@ -404,4 +452,4 @@ guidance does not trigger false positives.
 ## License
 
 This validation system is licensed under MIT.
-See `scripts/validate-copilot-instructions.sh.license` for details.
+See `scripts/validate-ai-instructions.sh.license` for details.

@@ -3,16 +3,13 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# SecPal/.github Copilot Instructions
+# SecPal/.github Agent Instructions
 
-This file mirrors the authoritative root `AGENTS.md` for tooling
-that automatically loads `.github/copilot-instructions.md`.
-Edit `AGENTS.md` first. Keep the focused overlay files aligned
-for path-specific or stack-specific rules.
+This file is the authoritative, provider-neutral runtime baseline for this repository.
+Edit this file first. Keep the focused overlay files below aligned when a rule also needs path-specific or stack-specific enforcement.
 
-## Authoritative Sources
+## Focused Overlays
 
-- `AGENTS.md`
 - `.github/instructions/github-workflows.instructions.md`
 
 ## Core Runtime Baseline

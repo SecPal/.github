@@ -51,13 +51,13 @@ if ! grep -Fq 'sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX' "$SYNC_
 fi
 
 api_payload="$(bash "$SYNC_SCRIPT" --repo api --print-payload)"
-assert_payload_has_context "$api_payload" "Copilot Instructions / Validate Copilot Instructions"
+assert_payload_has_context "$api_payload" "AI Instructions / Validate AI Instructions"
 assert_payload_has_context "$api_payload" "PEST Tests"
 
 android_payload="$(bash "$SYNC_SCRIPT" --repo android --print-payload)"
 assert_payload_has_context "$android_payload" "Check PR Size / Check PR Size"
 assert_payload_has_context "$android_payload" "Markdown Lint / Lint Markdown Files"
-assert_payload_has_context "$android_payload" "Copilot Instructions / Validate Copilot Instructions"
+assert_payload_has_context "$android_payload" "AI Instructions / Validate AI Instructions"
 
 guardguide_payload="$(bash "$SYNC_SCRIPT" --repo GuardGuide --print-payload)"
 assert_payload_has_context "$guardguide_payload" "Pest Tests (PostgreSQL)"
@@ -82,7 +82,7 @@ assert_payload_has_context "$frontend_payload" "Vitest Tests"
 
 contracts_payload="$(bash "$SYNC_SCRIPT" --repo contracts --print-payload)"
 assert_payload_has_context "$contracts_payload" "OpenAPI Lint / Validate OpenAPI Specification"
-assert_payload_has_context "$contracts_payload" "Copilot Instructions / Validate Copilot Instructions"
+assert_payload_has_context "$contracts_payload" "AI Instructions / Validate AI Instructions"
 
 # The bare 'CodeQL' context is only emitted by .github (its CodeQL Applicability
 # Guardrail workflow names its job exactly 'CodeQL'). For every other repo the

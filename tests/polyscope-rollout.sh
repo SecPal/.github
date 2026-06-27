@@ -70,6 +70,36 @@ from pathlib import Path
 
 workspace_root = Path(sys.argv[1])
 
+for repo_dir in workspace_root.iterdir():
+    if not repo_dir.is_dir():
+        continue
+    copilot_path = repo_dir / ".github" / "copilot-instructions.md"
+    if not copilot_path.exists():
+        continue
+    copilot_text = copilot_path.read_text()
+    body = copilot_text.split("\n", 5)[5]
+    overlay_lines = []
+    for overlay_path in sorted((repo_dir / ".github" / "instructions").glob("*.instructions.md")):
+        if overlay_path.name == "org-shared.instructions.md":
+            overlay_lines.append(f"- `.github/instructions/{overlay_path.name}`")
+        else:
+            overlay_lines.append(f"- `.github/instructions/{overlay_path.name}`")
+    overlays = "\n".join(overlay_lines)
+    agents_text = (
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
+        "-->\n\n"
+        f"# {repo_dir.name} Agent Instructions\n\n"
+        "This file is the authoritative, provider-neutral runtime baseline for this repository.\n"
+        "Edit this file first. Keep the focused overlay files below aligned when a rule also needs path-specific or stack-specific enforcement.\n\n"
+        "## Focused Overlays\n\n"
+        f"{overlays}\n\n"
+        "## Core Runtime Baseline\n\n"
+        f"{body.lstrip()}"
+    )
+    (repo_dir / "AGENTS.md").write_text(agents_text)
+
 (workspace_root / "api" / "composer.json").write_text("{}\n")
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
@@ -656,7 +686,7 @@ assert_rollout_rejects_invalid_local_config \
 
 grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
-grep -q 'org-shared.instructions.md' "$workspace_root/api/polyscope.local.json"
+grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan config:clear && php artisan migrate --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
@@ -676,7 +706,7 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
     echo "preview API refresh command must use the hardened reseed flow and not raw migrate:fresh --seed" >&2
     exit 1
 fi
-grep -q 'react-typescript.instructions.md before taking action' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
@@ -1282,7 +1312,7 @@ for required_input in ("tailwind.config.js", "tailwind.config.ts", ".png", ".jpg
         )
 PY
 
-grep -q 'react-shadcn.instructions.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'GuardGuide/AGENTS.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'php artisan db:seed --class=Database.*GuardGuideAccessSeeder --force && php artisan tinker --execute=' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -1638,11 +1668,10 @@ prompt_rows = cur.execute(
 ).fetchall()
 links = cur.execute('select repo_id, linked_repo_id from repository_links order by repo_id, linked_repo_id').fetchall()
 
-assert 'api/.github/copilot-instructions.md' in api_prompt
-assert 'org-shared.instructions.md' in api_prompt
-assert 'php-laravel.instructions.md' in api_prompt
+assert 'api/AGENTS.md' in api_prompt
 assert 'Do not add AI agent attribution' in api_prompt
-assert '`[codex]` prefixes' in frontend_prompt
+assert 'generated-by text' in frontend_prompt
+assert 'tool-specific labels or prefixes' in frontend_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
@@ -1650,7 +1679,8 @@ assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
 for row in prompt_rows:
     for prompt in row:
         assert 'Do not add AI agent attribution' in prompt
-        assert '`[codex]` prefixes' in prompt
+        assert 'generated-by text' in prompt
+        assert 'tool-specific labels or prefixes' in prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
@@ -1669,6 +1699,7 @@ assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
 assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
 assert summary['repositories']['changelog']['preview_prefix'] == 'changelog'
 assert summary['repositories']['contracts']['preview_prefix'] is None
+assert summary['repositories']['api']['agent_instructions'].endswith('/api/AGENTS.md')
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
@@ -1688,7 +1719,8 @@ for config_path in config_paths:
     for task in payload.get("tasks", []):
         prompt = task.get("prompt", "")
         assert "Do not add AI agent attribution" in prompt, (config_path, task.get("label"), prompt)
-        assert "`[codex]` prefixes" in prompt, (config_path, task.get("label"), prompt)
+        assert "generated-by text" in prompt, (config_path, task.get("label"), prompt)
+        assert "tool-specific labels or prefixes" in prompt, (config_path, task.get("label"), prompt)
 PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
@@ -2810,7 +2842,7 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q '/api/.github/copilot-instructions.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"

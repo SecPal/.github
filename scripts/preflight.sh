@@ -193,6 +193,15 @@ if [ -f tests/markdownlint-precommit-config.sh ]; then
   }
 fi
 
+if [ -f tests/reusable-markdown-lint-scope.sh ]; then
+  bash tests/reusable-markdown-lint-scope.sh || {
+    echo "" >&2
+    echo "❌ Reusable markdown lint scope regression test failed!" >&2
+    echo "Exclude governance checkout paths from reusable markdown lint before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/mktemp-portability.sh ]; then
   bash tests/mktemp-portability.sh || {
     echo "" >&2
@@ -211,11 +220,11 @@ if [ -f tests/prettier-version-alignment.sh ]; then
   }
 fi
 
-if [ -f tests/validate-copilot-instructions.sh ]; then
-  bash tests/validate-copilot-instructions.sh || {
+if [ -f tests/validate-ai-instructions.sh ]; then
+  bash tests/validate-ai-instructions.sh || {
     echo "" >&2
-    echo "❌ Copilot-instructions validator regression test failed!" >&2
-    echo "Fix scripts/validate-copilot-instructions.sh and .github/workflows/reusable-copilot-instructions.yml before continuing." >&2
+    echo "❌ AI-instructions validator regression test failed!" >&2
+    echo "Fix scripts/validate-ai-instructions.sh and .github/workflows/reusable-ai-instructions.yml before continuing." >&2
     exit 1
   }
 fi

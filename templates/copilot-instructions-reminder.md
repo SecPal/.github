@@ -3,11 +3,11 @@ SPDX-FileCopyrightText: 2025 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-# Copilot Instructions Reminder Template
+# Copilot Compatibility Reminder Template
 
-**Purpose:** Standardized reminder block for all SecPal repository-specific `copilot-instructions.md` files.
+**Purpose:** Historical reminder block for repositories that still maintain a human-written `.github/copilot-instructions.md` compatibility file.
 
-**Usage:** Copy this block to the top of `.github/copilot-instructions.md` in each repository (after SPDX headers, before content).
+**Status:** `AGENTS.md` is now the authoritative runtime baseline. Prefer updating `AGENTS.md` and keeping `.github/copilot-instructions.md` as a compatibility mirror instead of copying this block into new repositories.
 
 ---
 
@@ -33,7 +33,7 @@ SPDX-License-Identifier: CC0-1.0
 
 ---
 
-## Integration Checklist
+## Compatibility Checklist
 
 When adding this reminder to a new or existing repository:
 
@@ -48,26 +48,26 @@ When adding this reminder to a new or existing repository:
 
 ## Validation
 
-This reminder is **required** in all SecPal repositories. The validation script checks for presence of the marker text:
+This reminder is no longer required for all SecPal repositories. Current validation focuses on `AGENTS.md` as the authoritative baseline plus a valid `.github/copilot-instructions.md` mirror when present.
 
 ```bash
 grep -q "🚨 AI MUST READ ORGANIZATION-WIDE INSTRUCTIONS FIRST" .github/copilot-instructions.md
 ```
 
-See: `.github/workflows/validate-copilot-instructions.yml`
+See: `.github/workflows/validate-ai-instructions.yml`
 
 ---
 
 ## Rationale
 
-**Problem:** AI assistants might read repo-specific instructions without seeing critical org-wide policies, leading to:
+**Historical problem:** AI assistants could read repo-specific instructions without seeing critical org-wide policies, leading to:
 
 - Quality gate bypasses
 - Missing Copilot PR reviews
 - TDD policy violations
 - Security requirement oversights
 
-**Solution:** Visual reminder block ensures AI **always** reads organization-wide instructions first, before processing repo-specific rules.
+**Current solution:** Use `AGENTS.md` as the primary runtime surface. Keep this reminder only where a manual Copilot compatibility file still benefits from it.
 
 **Design Choices:**
 
@@ -80,8 +80,9 @@ See: `.github/workflows/validate-copilot-instructions.yml`
 
 ## Related
 
-- **Organization-wide Instructions:** `.github/copilot-instructions.md`
-- **Validation Workflow:** `.github/workflows/validate-copilot-instructions.yml`
+- **Authoritative Runtime Baseline:** `AGENTS.md`
+- **Copilot Compatibility Mirror:** `.github/copilot-instructions.md`
+- **Validation Workflow:** `.github/workflows/validate-ai-instructions.yml`
 - **Example Implementations:**
   - `SecPal/api` - [PR #76](https://github.com/SecPal/api/pull/76)
   - `SecPal/frontend` - [PR #54](https://github.com/SecPal/frontend/pull/54)

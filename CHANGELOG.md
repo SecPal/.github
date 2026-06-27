@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-06-27 - Make AGENTS The Authoritative AI Runtime Baseline
+
+**Fixed:**
+
+- flipped the SecPal AI-governance model so each managed repository now treats its root `AGENTS.md` as the authoritative, provider-neutral runtime baseline for AI-assisted development and review tooling
+- updated `scripts/polyscope-rollout.py` so generated Polyscope task prompts and rollout summaries now point at repo-local `AGENTS.md`, while `.github/copilot-instructions.md` is regenerated as a compatibility mirror for tooling that auto-loads the Copilot path
+- introduced `scripts/validate-ai-instructions.sh` as the canonical validator, kept `scripts/validate-copilot-instructions.sh` as a compatibility wrapper, and extended regression coverage so repositories now fail governance validation when `AGENTS.md` is missing or weak, or when `.github/copilot-instructions.md` stops clearly mirroring the authoritative `AGENTS.md`
+- added provider-neutral `Review guidelines` and no-attribution/no-self-promotion rules to each managed `AGENTS.md`, so AI review output focuses on evidence, impact, and fix paths instead of tool identity
+- extended `scripts/validate-ai-instructions.sh` and regression coverage to enforce provider-neutral review guidance and keep `AGENTS.md` below the default runtime discovery size limit
+- aligned the AGENTS rollout with the merged `markdownlint-cli@0.49.0` toolchain from PR 506 instead of reintroducing `markdownlint-cli2`
+- documented the new split between authoritative `AGENTS.md`, Copilot compatibility mirrors, and focused `.github/instructions/*.instructions.md` overlays in `docs/development-principles.md` and `docs/VALIDATION_SYSTEM.md`
+
+---
+
 ## 2026-06-27 - Replace markdownlint-cli2 With markdownlint-cli
 
 **Changed:**
