@@ -637,6 +637,14 @@ applyTo: '.github/workflows/**/*.yml'
 
 write_repo_runtime_files
 
+python3 - <<'PY' "$workspace_root/frontend/AGENTS.md"
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("## Core Runtime Baseline\n\n", "", 1))
+PY
+
 db_path="$workspace/polyscope.db"
 repos_json="$workspace/repos.json"
 nginx_output="$workspace/preview.secpal.dev.conf"
@@ -719,6 +727,7 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
 grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
 grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"

@@ -43,6 +43,12 @@ detect_repo_type() {
         return
     fi
 
+    if [ "$(basename "$PWD")" = "GuardGuide" ] \
+        || grep -qiE '"name"[[:space:]]*:[[:space:]]*"[^"]*guardguide' composer.json package.json 2>/dev/null; then
+        echo "guardguide"
+        return
+    fi
+
     if [ -f "artisan" ] || [ -f "composer.json" ]; then
         echo "api"
         return
@@ -479,6 +485,11 @@ test_repo_specific_ai_risk_guidance() {
             first_pattern='listener-handle|listener handle|teardown|bridge'
             second_pattern='WebView history|back behavior|back-navigation|managed-mode|owner-state'
             message='Missing android AI guardrails for bridge teardown or managed/back-navigation behavior'
+            ;;
+        guardguide)
+            first_pattern='shadcn/ui|Lingui|localization|application-layer encryption|QR|magic-link|supervised fallback'
+            second_pattern='MariaDB|PostgreSQL|tenant-scoped|mutable display name|IP addresses|user-agent strings'
+            message='Missing GuardGuide AI guardrails for localization, sensitive-data handling, or dual-database acknowledgement flows'
             ;;
         website)
             first_pattern='static|client-only|route|build'
