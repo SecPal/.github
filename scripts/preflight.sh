@@ -48,7 +48,12 @@ git fetch origin "$BASE" 2>/dev/null || true
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   npx --yes prettier@3.5.3 --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
-  npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' '#.git' || FORMAT_EXIT=1
+  if [ -x node_modules/.bin/markdownlint-cli2 ]; then
+    node_modules/.bin/markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' '#.git' || FORMAT_EXIT=1
+  else
+    echo "ℹ️  markdownlint-cli2 not found in node_modules — run 'npm ci' first for reproducible linting." >&2
+    npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#vendor' '#storage' '#build' '#.git' || FORMAT_EXIT=1
+  fi
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.
 # Local preflight keeps this as guidance only because direct actionlint runs

@@ -11,6 +11,23 @@ on:
         required: false
         type: string
         default: ".markdownlint.json"
+      governance-ref:
+        description: >
+          Ref of SecPal/.github to use for the pinned markdownlint-cli2 dependency.
+          Defaults to 'main' (always tracks the latest governance HEAD). Pin to a
+          specific commit SHA for reproducible, supply-chain-safe runs, because this
+          ref controls the actual lint binary — not just configuration.
+        required: false
+        type: string
+        default: "main"
+      node-version:
+        description: "Node.js version used for markdownlint-cli2"
+        required: false
+        type: string
+        default: "22"
+
+permissions:
+  contents: read
 
 jobs:
   markdown-lint:
@@ -21,8 +38,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Run markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v23
+      - name: Checkout governance repository
+        if: ${{ github.repository != 'SecPal/.github' }}
+        uses: actions/checkout@v7
         with:
-          globs: "**/*.md"
-          config: ${{ inputs.config-file }}
+          repository: SecPal/.github
+          ref: ${{ inputs.governance-ref }}
+          path: .secpal-governance
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install pinned markdownlint-cli2
+        run: |
+          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
+            npm ci
+            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          else
+            cd .secpal-governance
+            npm ci
+            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Run markdownlint
+        run: markdownlint-cli2 --config "${{ inputs.config-file }}" "**/*.md" "#node_modules" "#vendor" "#storage" "#build" "#.git"

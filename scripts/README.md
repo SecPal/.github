@@ -137,6 +137,7 @@ Validates Copilot instructions and configuration files across all repositories.
 3. **Markdown Linting**
 
    - Runs markdownlint-cli2 on instructions
+   - Uses the repo-pinned `markdownlint-cli2` installed by `npm ci`
    - Suggests auto-fix command on failure
 
 4. **YAML Syntax**
@@ -201,8 +202,13 @@ See `.github/workflows/validate-copilot-instructions.yml`
 
 - `bash` (required)
 - `grep` (required)
-- `npx markdownlint-cli2` (optional, for markdown linting)
+- `npm ci` in `SecPal/.github` (installs the pinned `markdownlint-cli2` and `prettier` CLIs)
 - `yq` (optional, for YAML validation)
+
+**Known audit note:** `npm audit` still reports 3 moderate vulnerabilities
+through `markdownlint-cli2@0.22.1` (`GHSA-h67p-54hq-rp68` in `js-yaml@4.1.1`
+and `GHSA-6v5v-wf23-fmfq` in `markdown-it@14.1.1`). Re-evaluate when upstream
+ships updated dependencies.
 
 **Repository Detection:**
 

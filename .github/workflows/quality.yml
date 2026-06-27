@@ -49,8 +49,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Run markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v23
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          globs: "**/*.md"
-          config: ".markdownlint.json"
+          node-version: "22.x"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run markdownlint
+        run: npx markdownlint-cli2 --config .markdownlint.json "**/*.md" "#node_modules" "#vendor" "#storage" "#build" "#.git"

@@ -65,7 +65,7 @@ repositories: `.github`, `api`, `frontend`, `contracts`, `android`,
 
 1. Checkout the caller repository
 2. Checkout `SecPal/.github` when the caller is a sibling repository
-3. Setup Node.js 22 and install `markdownlint-cli2`
+3. Setup Node.js 22 and run `npm ci` in `SecPal/.github`
 4. Run `scripts/validate-copilot-instructions.sh`
 5. Fail the caller workflow when required guidance is missing
 
@@ -134,6 +134,23 @@ This test always skips.
 **Failure Impact:** MEDIUM - Quality standards
 
 **Auto-fix:** `npx markdownlint-cli2 .github/copilot-instructions.md --fix`
+
+### Known Advisory State
+
+`SecPal/.github` now pins `markdownlint-cli2@0.22.1` locally so markdown
+linting runs reproducibly after `npm ci` instead of depending on global
+installs or interactive `npx` downloads.
+
+`npm audit` still reports 3 moderate vulnerabilities through the current
+`markdownlint-cli2` dependency graph:
+
+- `js-yaml@4.1.1` via `markdownlint-cli2` (`GHSA-h67p-54hq-rp68`)
+- `markdown-it@14.1.1` via `markdownlint-cli2` (`GHSA-6v5v-wf23-fmfq`)
+- direct audit attribution to `markdownlint-cli2@0.22.1`
+
+There is no in-repo mitigation short of replacing the lint tool or carrying a
+downstream override. Re-evaluate when `markdownlint-cli2` releases a dependency
+update that clears these advisories.
 
 ### 6. YAML Syntax Validation
 
@@ -335,7 +352,7 @@ chmod +x scripts/validate-copilot-instructions.sh
 ### markdownlint-cli2 Not Found
 
 ```bash
-npm install -g markdownlint-cli2
+npm ci
 ```
 
 ### Ruby Not Found
