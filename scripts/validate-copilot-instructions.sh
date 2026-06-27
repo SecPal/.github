@@ -139,7 +139,7 @@ test_markdown_lint() {
 
     if [ -x "./node_modules/.bin/markdownlint" ]; then
         markdownlint_cli="./node_modules/.bin/markdownlint"
-    elif command -v markdownlint >/dev/null 2>&1; then
+    elif [ -f ".markdownlint.json" ] && command -v markdownlint >/dev/null 2>&1; then
         markdownlint_cli="markdownlint"
     fi
 

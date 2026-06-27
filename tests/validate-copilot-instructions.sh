@@ -94,6 +94,11 @@ valid_api_extra_ai_lines="$(cat <<'EOF'
 EOF
 )"
 write_common_instruction_file "$valid_api_repo" "$valid_api_extra_ai_lines"
+cat >"$workspace/bin/markdownlint" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$workspace/bin/markdownlint"
 
 valid_output="$workspace/valid-output.txt"
 (
@@ -101,6 +106,7 @@ valid_output="$workspace/valid-output.txt"
     run_validator api "$valid_output"
 )
 grep -q 'copilot-instructions.md has REUSE license' "$valid_output"
+rm -f "$workspace/bin/markdownlint"
 
 local_markdownlint_repo="$workspace/local-markdownlint"
 mkdir -p "$local_markdownlint_repo/node_modules/.bin"
@@ -131,6 +137,7 @@ path_markdownlint_repo="$workspace/path-markdownlint"
 mkdir -p "$path_markdownlint_repo"
 touch "$path_markdownlint_repo/composer.json"
 write_common_instruction_file "$path_markdownlint_repo" "$valid_api_extra_ai_lines"
+cp "$REPO_ROOT/.markdownlint.json" "$path_markdownlint_repo/.markdownlint.json"
 cat >"$workspace/bin/markdownlint" <<'EOF'
 #!/usr/bin/env bash
 exit 1
