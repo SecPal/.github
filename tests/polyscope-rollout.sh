@@ -88,7 +88,7 @@ for repo_dir in workspace_root.iterdir():
     agents_text = (
         "<!--\n"
         "SPDX-FileCopyrightText: 2026 SecPal\n"
-        "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
+        "SPDX-License" + "-Identifier: AGPL-3.0-or-later\n"
         "-->\n\n"
         f"# {repo_dir.name} Agent Instructions\n\n"
         "This file is the authoritative, provider-neutral runtime baseline for this repository.\n"

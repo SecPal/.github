@@ -1844,7 +1844,7 @@ def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
         [
             "<!--",
             "SPDX-FileCopyrightText: 2026 SecPal",
-            "SPDX-License" "-Identifier: AGPL-3.0-or-later",
+            "SPDX-License" + "-Identifier: AGPL-3.0-or-later",
             "-->",
             "",
             f"# {spec['display_name']} Copilot Instructions",
