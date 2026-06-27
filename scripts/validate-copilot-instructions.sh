@@ -135,9 +135,15 @@ test_yaml_config_reuse() {
 }
 
 test_markdown_lint() {
-    local markdownlint_cli="./node_modules/.bin/markdownlint"
+    local markdownlint_cli=""
 
-    if [ ! -x "$markdownlint_cli" ]; then
+    if [ -x "./node_modules/.bin/markdownlint" ]; then
+        markdownlint_cli="./node_modules/.bin/markdownlint"
+    elif command -v markdownlint >/dev/null 2>&1; then
+        markdownlint_cli="markdownlint"
+    fi
+
+    if [ -z "$markdownlint_cli" ]; then
         print_result "copilot-instructions.md passes markdown lint" "PASS" "Skipped (run npm ci in the repo root to install markdownlint-cli)"
         return
     fi

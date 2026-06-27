@@ -127,6 +127,32 @@ if [ "$local_markdownlint_exit" -eq 0 ]; then
 fi
 grep -q 'Run: ./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix' "$local_markdownlint_output"
 
+path_markdownlint_repo="$workspace/path-markdownlint"
+mkdir -p "$path_markdownlint_repo"
+touch "$path_markdownlint_repo/composer.json"
+write_common_instruction_file "$path_markdownlint_repo" "$valid_api_extra_ai_lines"
+cat >"$workspace/bin/markdownlint" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$workspace/bin/markdownlint"
+
+path_markdownlint_output="$workspace/path-markdownlint-output.txt"
+set +e
+(
+    cd "$path_markdownlint_repo"
+    run_validator api "$path_markdownlint_output"
+)
+path_markdownlint_exit=$?
+set -e
+if [ "$path_markdownlint_exit" -eq 0 ]; then
+    cat "$path_markdownlint_output"
+    echo "validator unexpectedly skipped PATH markdownlint" >&2
+    exit 1
+fi
+grep -q 'Run: markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix' "$path_markdownlint_output"
+rm -f "$workspace/bin/markdownlint"
+
 missing_generic_repo="$workspace/missing-generic"
 mkdir -p "$missing_generic_repo/.github"
 touch "$missing_generic_repo/composer.json"
