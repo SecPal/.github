@@ -184,6 +184,15 @@ if [ -f tests/preflight-markdownlint-scope.sh ]; then
   }
 fi
 
+if [ -f tests/markdownlint-precommit-config.sh ]; then
+  bash tests/markdownlint-precommit-config.sh || {
+    echo "" >&2
+    echo "❌ Markdownlint pre-commit config regression test failed!" >&2
+    echo "Keep .pre-commit-config.yaml aligned with the pinned markdownlint-cli path before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/mktemp-portability.sh ]; then
   bash tests/mktemp-portability.sh || {
     echo "" >&2

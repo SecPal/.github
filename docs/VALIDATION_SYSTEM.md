@@ -133,7 +133,7 @@ This test always skips.
 
 **Failure Impact:** MEDIUM - Quality standards
 
-**Auto-fix:** `npx markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix`
+**Auto-fix:** `./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix`
 
 ### Audit Status
 
@@ -261,10 +261,10 @@ EOF
 
 ```bash
 # Auto-fix markdown issues
-npx markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix
+./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md --fix
 
 # Manual review
-npx markdownlint --config .markdownlint.json .github/copilot-instructions.md
+./node_modules/.bin/markdownlint --config .markdownlint.json .github/copilot-instructions.md
 ```
 
 ### Test 6 Failed: YAML Syntax
