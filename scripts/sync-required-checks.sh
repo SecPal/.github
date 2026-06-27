@@ -23,7 +23,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "check-conflicts / Detect Git Conflict Markers",
     "Check PR Size / Check PR Size",
     "Detect repository manifests",
-    "Copilot Instructions / Validate Copilot Instructions",
+    "AI Instructions / Validate AI Instructions",
     "Check REUSE Compliance / Check REUSE Compliance",
     "Detect JavaScript manifest",
     "Detect PHP manifest",
@@ -49,7 +49,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Vitest Tests",
     "Analyze with CodeQL (javascript-typescript)",
     "Check PR Size / Check PR Size",
-    "Copilot Instructions / Validate Copilot Instructions",
+    "AI Instructions / Validate AI Instructions",
     "Markdown Lint / Lint Markdown Files"
   ],
   "api": [
@@ -62,7 +62,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "PEST Tests",
     "check-conflicts / Detect Git Conflict Markers",
-    "Copilot Instructions / Validate Copilot Instructions"
+    "AI Instructions / Validate AI Instructions"
   ],
   "changelog": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -75,7 +75,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "check-conflicts / Detect Git Conflict Markers",
     "TypeScript Check / Build Project",
     "Analyze Code (javascript-typescript)",
-    "Copilot Instructions / Validate Copilot Instructions"
+    "AI Instructions / Validate AI Instructions"
   ],
   "guardguide.de": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -88,7 +88,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "check-conflicts / Detect Git Conflict Markers",
     "Analyze Code (javascript-typescript)",
-    "Copilot Instructions / Validate Copilot Instructions",
+    "AI Instructions / Validate AI Instructions",
     "Node Tests / Run Tests"
   ],
   "contracts": [
@@ -100,7 +100,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "License Compatibility / Check License Compatibility",
     "Markdown Lint / Lint Markdown Files",
     "check-conflicts / Detect Git Conflict Markers",
-    "Copilot Instructions / Validate Copilot Instructions"
+    "AI Instructions / Validate AI Instructions"
   ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -113,7 +113,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "Vitest Tests",
     "check-conflicts / Detect Git Conflict Markers",
-    "Copilot Instructions / Validate Copilot Instructions"
+    "AI Instructions / Validate AI Instructions"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -126,7 +126,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "check-conflicts / Detect Git Conflict Markers",
     "Analyze Code (javascript-typescript)",
-    "Copilot Instructions / Validate Copilot Instructions",
+    "AI Instructions / Validate AI Instructions",
     "Node Tests / Run Tests"
   ]
 }

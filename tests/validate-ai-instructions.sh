@@ -170,6 +170,12 @@ normalized_mirror_repo="$workspace/normalized-mirror"
 mkdir -p "$normalized_mirror_repo"
 touch "$normalized_mirror_repo/composer.json"
 write_common_instruction_file "$normalized_mirror_repo" "$valid_api_extra_ai_lines"
+cat >"$normalized_mirror_repo/.markdownlint.json" <<'EOF'
+{
+  "MD012": false,
+  "MD013": false
+}
+EOF
 python3 - <<'PY' "$normalized_mirror_repo/AGENTS.md"
 from pathlib import Path
 import sys
@@ -420,3 +426,56 @@ if [ "$android_exit" -ne 0 ]; then
     exit 1
 fi
 grep -q 'Repository Type: android' "$android_output"
+
+guardguide_repo="$workspace/monolith-fixture"
+mkdir -p "$guardguide_repo"
+cat >"$guardguide_repo/composer.json" <<'EOF'
+{
+  "name": "secpal/guardguide"
+}
+EOF
+write_common_instruction_file "$guardguide_repo" '- Reject AI-generated UI refactors that drift away from shadcn/ui, weaken Lingui localization coverage, or reduce accessibility semantics.
+- Reject AI-generated persistence or auth changes that bypass application-layer encryption, store unhashed acknowledgement tokens, persist IP addresses or user-agent strings, or couple standard paths to only one database engine.
+- Reject AI-generated identifier or tenancy changes that derive stable keys from mutable display names or ignore tenant-scoped uniqueness constraints.
+- Reject AI-generated acknowledgement flow changes that weaken QR, magic-link, or supervised fallback auditability across MariaDB and PostgreSQL.'
+
+guardguide_output="$workspace/guardguide-output.txt"
+set +e
+(
+    cd "$guardguide_repo"
+    PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" >"$guardguide_output" 2>&1
+)
+guardguide_exit=$?
+set -e
+if [ "$guardguide_exit" -ne 0 ]; then
+    cat "$guardguide_output"
+    echo "validator failed for valid GuardGuide fixture" >&2
+    exit 1
+fi
+grep -q 'Repository Type: guardguide' "$guardguide_output"
+
+guardguide_de_repo="$workspace/guardguide.de"
+mkdir -p "$guardguide_de_repo"
+touch "$guardguide_de_repo/astro.config.mjs"
+cat >"$guardguide_de_repo/package.json" <<'EOF'
+{
+  "name": "guardguide-de"
+}
+EOF
+write_common_instruction_file "$guardguide_de_repo" '- Reject AI-generated static rendering or accessibility changes that weaken metadata, structured data, keyboard navigation, or semantic landmark coverage.
+- Reject AI-generated page, asset, or build-pipeline changes that break deterministic static output, localized content parity, or deploy-time verification.'
+
+guardguide_de_output="$workspace/guardguide-de-output.txt"
+set +e
+(
+    cd "$guardguide_de_repo"
+    PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" >"$guardguide_de_output" 2>&1
+)
+guardguide_de_exit=$?
+set -e
+if [ "$guardguide_de_exit" -ne 0 ]; then
+    cat "$guardguide_de_output"
+    echo "validator failed for valid guardguide.de website fixture" >&2
+    exit 1
+fi
+grep -q 'Repository Type: website' "$guardguide_de_output"

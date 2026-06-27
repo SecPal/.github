@@ -229,6 +229,15 @@ if [ -f tests/validate-ai-instructions.sh ]; then
   }
 fi
 
+if [ -f tests/validate-copilot-instructions.sh ]; then
+  bash tests/validate-copilot-instructions.sh || {
+    echo "" >&2
+    echo "❌ Copilot-instructions compatibility regression test failed!" >&2
+    echo "Fix scripts/validate-copilot-instructions.sh and the legacy reusable workflow compatibility path before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/sync-required-checks.sh ]; then
   bash tests/sync-required-checks.sh || {
     echo "" >&2

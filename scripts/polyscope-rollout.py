@@ -1846,14 +1846,21 @@ def load_runtime_instructions_text(spec: dict[str, Any]) -> str:
     return spec["copilot_instructions"].read_text()
 
 
+def extract_agents_runtime_body(text: str) -> str:
+    body = strip_html_comment_header(text)
+    core_index = body.find("## Core Runtime Baseline")
+    if core_index != -1:
+        return body[core_index:].strip()
+    heading = re.search(r"^##\s+", body, re.MULTILINE)
+    if heading is None:
+        raise SystemExit("AGENTS.md is missing a section heading after the repository preamble")
+    return body[heading.start() :].strip()
+
+
 def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
     if not spec["agent_instructions"].exists():
         raise FileNotFoundError(spec["agent_instructions"])
-    agents_text = strip_html_comment_header(spec["agent_instructions"].read_text())
-    core_index = agents_text.find("## Core Runtime Baseline")
-    if core_index == -1:
-        raise SystemExit(f"AGENTS.md is missing '## Core Runtime Baseline' in {spec['path']}")
-    body = agents_text[core_index:].strip()
+    body = extract_agents_runtime_body(spec["agent_instructions"].read_text())
     focus_lines = "\n".join(
         f"- `{path.relative_to(spec['path']).as_posix()}`" for path in spec["focus_instruction_paths"]
     )
