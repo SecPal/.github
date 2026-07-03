@@ -85,7 +85,7 @@ check_command() {
       echo -e "${RED}✗${NC} $name ${RED}(REQUIRED)${NC}"
       [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
       increment_critical_missing
-      return 1
+      return 0
     else
       echo -e "${YELLOW}⚠${NC} $name ${YELLOW}(optional but recommended)${NC}"
       [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
@@ -495,12 +495,14 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   check_command "adb" "Android SDK Platform-Tools (adb)" "critical" "Install Android platform-tools so debug builds and device validation can use adb"
 
   android_sdk_dir="${POLYSCOPE_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}}"
-  if [ -d "$android_sdk_dir" ]; then
+  if [ -d "$android_sdk_dir" ] \
+    && [ -d "$android_sdk_dir/platform-tools" ] \
+    && [ -d "$android_sdk_dir/cmdline-tools/latest" ]; then
     echo -e "${GREEN}✓${NC} Android SDK directory exists ($android_sdk_dir)"
     OK_COUNT=$((OK_COUNT + 1))
   else
-    echo -e "${RED}✗${NC} Android SDK directory ${RED}(not found)${NC}"
-    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir or export POLYSCOPE_ANDROID_SDK_ROOT/ANDROID_SDK_ROOT/ANDROID_HOME"
+    echo -e "${RED}✗${NC} Android SDK directory ${RED}(incomplete or not found)${NC}"
+    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir with platform-tools and cmdline-tools/latest, or export POLYSCOPE_ANDROID_SDK_ROOT/ANDROID_SDK_ROOT/ANDROID_HOME"
     CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
   fi
 

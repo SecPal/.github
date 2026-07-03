@@ -21,6 +21,8 @@ mkdir -p \
   "$workspace/contracts/node_modules/.bin" \
   "$workspace/frontend/node_modules/.bin" \
   "$workspace/bin" \
+  "$sdk_root/platform-tools" \
+  "$sdk_root/cmdline-tools/latest" \
   "$sdk_root" \
   "$test_home"
 
@@ -229,5 +231,9 @@ if run_check "$failure_output" --repo=android; then
 fi
 
 grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$failure_output"
+grep -Fq 'Android SDK Platform-Tools (adb)' "$failure_output"
+grep -Fq "Android SDK directory exists ($sdk_root)" "$failure_output"
+grep -Fq 'Native Android project directory exists' "$failure_output"
+grep -Fq 'TypeScript installed' "$failure_output"
 
 echo "tests/check-system-requirements.sh: android happy and missing-sdkmanager paths verified."

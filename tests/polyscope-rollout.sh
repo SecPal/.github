@@ -1996,8 +1996,11 @@ EOF
 chmod +x "$frontend_clone/scripts/preflight.sh"
 
 provision_summary_json="$workspace/provision-summary.json"
+shared_android_sdk_root="$workspace/shared-android-sdk"
+mkdir -p "$shared_android_sdk_root/platform-tools" "$shared_android_sdk_root/cmdline-tools/latest"
 env HOME="$home_dir" \
     PATH="$service_path" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$shared_android_sdk_root" \
     PROVISION_LOG="$provision_log" \
     FAKE_PSQL_LOG="$fake_psql_log" \
     FAKE_PSQL_STATE="$fake_pg_state" \
@@ -2038,7 +2041,7 @@ grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clon
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.production.local"
 cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
 cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
-cmp -s "$workspace_root/android/android/local.properties" "$android_clone/android/local.properties"
+grep -q '^sdk\.dir='"$shared_android_sdk_root"'$' "$android_clone/android/local.properties"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
 grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
 test -x "$api_clone/.git/hooks/pre-commit"
