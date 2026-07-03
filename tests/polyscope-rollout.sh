@@ -1126,7 +1126,7 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/contracts/polyscope.
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify"' "$workspace_root/android/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/android/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.local.json"
-grep -q '^sdk.dir=' "$workspace_root/android/android/local.properties"
+grep -q '^sdk\.dir=' "$workspace_root/android/android/local.properties"
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
