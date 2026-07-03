@@ -26,6 +26,7 @@ from typing import Any
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
+DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
 PREVIEW_SCHEMA_ENV_KEY = "POLYSCOPE_PREVIEW_SCHEMA"
 PREVIEW_STORAGE_MODE_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_MODE"
@@ -1738,8 +1739,28 @@ def strip_html_comment_header(text: str) -> str:
 def write_text_if_changed(path: pathlib.Path, content: str) -> bool:
     if path.exists() and path.read_text() == content:
         return False
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return True
+
+
+def resolve_android_sdk_root() -> pathlib.Path:
+    for variable_name in ("POLYSCOPE_ANDROID_SDK_ROOT", "ANDROID_SDK_ROOT", "ANDROID_HOME"):
+        value = os.environ.get(variable_name, "").strip()
+        if value:
+            return pathlib.Path(value).expanduser()
+    return DEFAULT_ANDROID_SDK_ROOT
+
+
+def render_android_local_properties() -> str:
+    return f"sdk.dir={resolve_android_sdk_root().as_posix()}\n"
+
+
+def sync_repo_auxiliary_files(repo_name: str, repo_path: pathlib.Path) -> None:
+    if repo_name != "android":
+        return
+
+    write_text_if_changed(repo_path / "android" / "local.properties", render_android_local_properties())
 
 
 def extract_bullets_from_lines(lines: list[str]) -> list[str]:
@@ -2217,10 +2238,11 @@ def ensure_exclude(repo_path: pathlib.Path, entries: set[str] | None = None) -> 
 
 
 def write_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
-    for spec in repo_specs.values():
+    for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
         config_path = repo_path / POLYSCOPE_LOCAL_CONFIG_NAME
         config_path.write_text(render_pretty_json(render_local_config(spec)) + "\n")
+        sync_repo_auxiliary_files(repo_name, repo_path)
         ensure_exclude(repo_path)
 
 
@@ -2300,6 +2322,10 @@ def run_setup_commands(worktree_path: pathlib.Path, commands: list[str], *, db_p
 def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) -> None:
     (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
     ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
+
+
+def sync_worktree_auxiliary_files(repo_name: str, worktree_path: pathlib.Path) -> None:
+    sync_repo_auxiliary_files(repo_name, worktree_path)
 
 
 def resolve_executable(command: str) -> str | None:
@@ -2411,6 +2437,7 @@ def provision_worktrees(
                     continue
 
                 sync_worktree_local_config(worktree_path, config_text)
+                sync_worktree_auxiliary_files(repo_name, worktree_path)
                 ensure_worktree_hooks(worktree_path)
                 linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
                 setup_hash = build_setup_hash(

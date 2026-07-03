@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-03 - Provision Android SDK Metadata For Polyscope Workspaces
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so SecPal Android workspaces and provisioned Polyscope clones now receive `android/local.properties` automatically, using `POLYSCOPE_ANDROID_SDK_ROOT`, `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or `$HOME/Android/Sdk` to keep direct `./gradlew` runs from failing when the shell did not preload Android environment variables
+- extended `scripts/check-system-requirements.sh` with an Android-specific repository mode that validates Node 22, Java 21, `javac`, `sdkmanager`, `adb`, the resolved SDK directory, Android local Node dependencies, and the committed native `android/` project layout
+- documented the Android toolchain baseline and the new `--repo=android` verification path in `WORKSPACE_SETUP.md`, `docs/scripts/CHECK_SYSTEM_REQUIREMENTS.md`, and `scripts/README.md`
+- added regression coverage for both the rollout-generated Android `local.properties` contract and the Android system-requirements checks
+
+---
+
 ## 2026-06-27 - Make AGENTS The Authoritative AI Runtime Baseline
 
 **Fixed:**

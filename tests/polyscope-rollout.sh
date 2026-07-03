@@ -1124,6 +1124,7 @@ grep -qF '"label": "Fix current findings"' "$workspace_root/contracts/polyscope.
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify"' "$workspace_root/android/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/android/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.local.json"
+grep -q '^sdk.dir=' "$workspace_root/android/android/local.properties"
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
@@ -1793,7 +1794,8 @@ broken_api_clone="$home_dir/.polyscope/clones/api12345/fix"
 garbled_git_api_clone="$home_dir/.polyscope/clones/api12345/chore"
 frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
 broken_frontend_clone="$home_dir/.polyscope/clones/fe123456/feat"
-mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone"
+android_clone="$home_dir/.polyscope/clones/an123456/auto-hawk"
+mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone" "$android_clone/.git/info" "$android_clone/.git/hooks"
 printf 'not-a-git-pointer\n' > "$garbled_git_api_clone/.git"
 mkdir -p "$home_dir/.local/bin"
 
@@ -1951,6 +1953,8 @@ EOF
 
 seed_api_worktree_files "$api_clone"
 seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
+seed_node_worktree_files "$android_clone" "android-auto-hawk"
+mkdir -p "$android_clone/android"
 
 cp "$workspace_root/api/.env" "$api_clone/.env"
 : > "$broken_api_clone/.env"
@@ -2010,6 +2014,7 @@ provisioned = summary.get('provisioned_worktrees', [])
 cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
+assert 'android:auto-hawk' in provisioned, f"expected android:auto-hawk in provisioned_worktrees, got {provisioned}"
 assert 'api:fix' not in provisioned, f"did not expect api:fix in provisioned_worktrees, got {provisioned}"
 assert 'api:chore' not in provisioned, f"did not expect api:chore in provisioned_worktrees, got {provisioned}"
 assert 'frontend:feat' not in provisioned, f"did not expect frontend:feat in provisioned_worktrees, got {provisioned}"
@@ -2028,6 +2033,7 @@ grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clon
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.production.local"
 cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
 cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
+cmp -s "$workspace_root/android/android/local.properties" "$android_clone/android/local.properties"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
 grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
 test -x "$api_clone/.git/hooks/pre-commit"

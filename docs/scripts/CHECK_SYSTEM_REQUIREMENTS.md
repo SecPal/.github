@@ -21,6 +21,9 @@ The `check-system-requirements.sh` script validates that all required tools and 
 
 # Check only Contracts repository
 ./scripts/check-system-requirements.sh --repo=contracts
+
+# Check only Android repository
+./scripts/check-system-requirements.sh --repo=android
 ```
 
 ## Checked Components
@@ -100,7 +103,34 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 - @redocly/cli
 
-### 5. Optional but Recommended
+### 5. Android Repository (Capacitor + Native Android Toolchain)
+
+**Node.js & npm:**
+
+- Node.js 22.x+ - critical
+- npm - critical
+
+**Java & Android SDK:**
+
+- Java 21 runtime - critical
+- `javac` from the Java 21 development package - critical
+- Android SDK Command-Line Tools (`sdkmanager`) - critical
+- Android SDK Platform-Tools (`adb`) - critical
+- Android SDK directory under `$HOME/Android/Sdk`, or explicit
+  `ANDROID_SDK_ROOT` / `ANDROID_HOME` - critical
+
+**Local Dependencies (android/node_modules):**
+
+- TypeScript
+- Vite
+- Vitest
+- ESLint
+
+**Native Project Layout:**
+
+- committed `android/` native project directory present
+
+### 6. Optional but Recommended
 
 - GitHub CLI (`gh`)
 - pre-commit framework
@@ -169,6 +199,7 @@ SecPal is **not a monorepo**, but consists of multiple independent repositories:
 - `api/` - Laravel Backend
 - `frontend/` - React Frontend
 - `contracts/` - OpenAPI Specifications
+- `android/` - Capacitor Android app plus native Gradle project
 - `.github/` - Organization-wide Configuration
 
 Each repository has its own dependencies and quality gates.
