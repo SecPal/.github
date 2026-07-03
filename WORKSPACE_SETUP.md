@@ -53,6 +53,30 @@ pip install --user pre-commit
 ./scripts/setup-pre-push.sh
 ```
 
+## Android Toolchain
+
+For the `android/` repository, hooks alone are not enough. Local and
+Polyscope-driven Gradle runs also need a discoverable Android toolchain:
+
+- Java 21
+- `adb`
+- `sdkmanager`
+- an Android SDK under `$HOME/Android/Sdk`, or explicit `ANDROID_SDK_ROOT` /
+  `ANDROID_HOME`
+
+If you are provisioning or restoring a workspace machine, verify that baseline
+from `.github` with:
+
+```bash
+./scripts/check-system-requirements.sh --repo=android
+```
+
+Polyscope rollout now writes `android/local.properties` automatically for
+Android workspaces, using `POLYSCOPE_ANDROID_SDK_ROOT`, `ANDROID_SDK_ROOT`,
+`ANDROID_HOME`, or the default `$HOME/Android/Sdk` path in that order. That
+keeps direct `./gradlew ...` runs from failing when the shell environment was
+not preloaded explicitly.
+
 ## Hook Architecture
 
 SecPal uses two types of Git hooks:

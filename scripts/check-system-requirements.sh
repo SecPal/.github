@@ -6,7 +6,7 @@
 # SecPal System Requirements Check
 # ============================================================================
 # Validates that all required tools and dependencies are installed for
-# development across all SecPal repositories (api, frontend, contracts).
+# development across all SecPal repositories (api, frontend, contracts, android).
 #
 # Usage:
 #   ./scripts/check-system-requirements.sh [--repo=<name>]
@@ -15,6 +15,7 @@
 #   --repo=api        Check only API repository requirements
 #   --repo=frontend   Check only Frontend repository requirements
 #   --repo=contracts  Check only Contracts repository requirements
+#   --repo=android    Check only Android repository requirements
 #   (no option)       Check all repositories
 #
 # Exit codes:
@@ -61,6 +62,123 @@ print_section() {
   echo -e "${BLUE}─── $1 ───${NC}"
 }
 
+increment_warning() {
+  WARNING_COUNT=$((WARNING_COUNT + 1))
+}
+
+increment_critical_missing() {
+  CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+}
+
+resolve_java_tool() {
+  local tool_name="$1"
+
+  if [ -n "${JAVA_HOME:-}" ]; then
+    if [ -x "${JAVA_HOME%/}/bin/$tool_name" ]; then
+      printf '%s\n' "${JAVA_HOME%/}/bin/$tool_name"
+      return 0
+    fi
+
+    return 1
+  fi
+
+  if command -v "$tool_name" >/dev/null 2>&1; then
+    command -v "$tool_name"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_javac_for_java() {
+  local java_bin="$1"
+
+  if [ -n "${JAVA_HOME:-}" ] && [ "$java_bin" = "${JAVA_HOME%/}/bin/java" ]; then
+    if [ -x "${JAVA_HOME%/}/bin/javac" ]; then
+      printf '%s\n' "${JAVA_HOME%/}/bin/javac"
+      return 0
+    fi
+
+    return 1
+  fi
+
+  resolve_java_tool javac
+}
+
+is_java_21_version() {
+  local version_output="$1"
+
+  printf '%s\n' "$version_output" | grep -Eq '(^|[[:space:]])(openjdk|java)[[:space:]]+version[[:space:]]+"21(\.|"|$)'
+}
+
+check_resolved_command() {
+  local cmd_path="$1"
+  local name="$2"
+  local severity="${3:-critical}"
+  local install_hint="${4:-}"
+
+  if [ -n "$cmd_path" ] && [ -x "$cmd_path" ]; then
+    echo -e "${GREEN}✓${NC} $name"
+    OK_COUNT=$((OK_COUNT + 1))
+    return 0
+  fi
+
+  if [ "$severity" = "critical" ]; then
+    echo -e "${RED}✗${NC} $name ${RED}(REQUIRED)${NC}"
+    [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
+    increment_critical_missing
+    return 0
+  fi
+
+  echo -e "${YELLOW}⚠${NC} $name ${YELLOW}(optional but recommended)${NC}"
+  [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
+  increment_warning
+  return 0
+}
+
+resolve_android_sdk_tool() {
+  local tool_name="$1"
+  local android_sdk_dir="$2"
+  local sdk_tool_path=""
+
+  case "$tool_name" in
+    sdkmanager)
+      sdk_tool_path="$android_sdk_dir/cmdline-tools/latest/bin/sdkmanager"
+      ;;
+    adb)
+      sdk_tool_path="$android_sdk_dir/platform-tools/adb"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  if [ -x "$sdk_tool_path" ]; then
+    printf '%s\n' "$sdk_tool_path"
+    return 0
+  fi
+
+  if command -v "$tool_name" >/dev/null 2>&1; then
+    command -v "$tool_name"
+    return 0
+  fi
+
+  return 1
+}
+
+probe_version_output() {
+  local binary_path="$1"
+  shift
+  local probe_output=""
+
+  if probe_output="$("$binary_path" "$@" 2>&1)"; then
+    printf '%s' "$probe_output"
+    return 0
+  fi
+
+  return 1
+}
+
 check_command() {
   local cmd=$1
   local name=$2
@@ -75,14 +193,27 @@ check_command() {
     if [ "$severity" = "critical" ]; then
       echo -e "${RED}✗${NC} $name ${RED}(REQUIRED)${NC}"
       [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
-      CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      return 1
+      increment_critical_missing
+      return 0
     else
       echo -e "${YELLOW}⚠${NC} $name ${YELLOW}(optional but recommended)${NC}"
       [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
-      WARNING_COUNT=$((WARNING_COUNT + 1))
+      increment_warning
       return 0  # Don't stop script for optional tools
     fi
+  fi
+}
+
+check_android_dependency() {
+  local package_name="$1"
+  local display_name="$2"
+
+  if npm list "$package_name" --silent >/dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} $display_name installed"
+    OK_COUNT=$((OK_COUNT + 1))
+  else
+    echo -e "${RED}✗${NC} $display_name not installed"
+    increment_critical_missing
   fi
 }
 
@@ -411,10 +542,147 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "contracts" ]; then
 fi
 
 # ============================================================================
-# 5. Optional but Recommended Tools
+# 5. Android Repository Requirements (Capacitor + Native Android Toolchain)
 # ============================================================================
 
-print_header "5. Optional but Recommended Tools"
+if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
+  print_header "5. Android Repository (Capacitor + Native Android Toolchain)"
+
+  print_section "Node.js & npm"
+
+  if [ "$NODE_CHECKED" = false ]; then
+    if command -v node >/dev/null 2>&1; then
+      node_version=$(node --version | sed 's/v//')
+      major_version=$(echo "$node_version" | cut -d. -f1)
+
+      if [ "$major_version" -ge 22 ]; then
+        echo -e "${GREEN}✓${NC} Node.js v$node_version (>= 22.x required)"
+        OK_COUNT=$((OK_COUNT + 1))
+      else
+        echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= 22.x required)${NC}"
+        echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
+        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+      fi
+    else
+      echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
+      CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+    fi
+
+    check_command "npm" "npm" "critical" "Comes with Node.js"
+    NODE_CHECKED=true
+  elif command -v node >/dev/null 2>&1; then
+    node_version=$(node --version | sed 's/v//')
+    major_version=$(echo "$node_version" | cut -d. -f1)
+
+    if [ "$major_version" -lt 22 ]; then
+      echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= 22.x required)${NC}"
+      echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
+      increment_critical_missing
+    fi
+  fi
+
+  print_section "Java & Android SDK"
+
+  android_sdk_dir="${POLYSCOPE_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}}"
+  java_bin="$(resolve_java_tool java || true)"
+  javac_bin="$(resolve_javac_for_java "$java_bin" || true)"
+  sdkmanager_bin="$(resolve_android_sdk_tool sdkmanager "$android_sdk_dir" || true)"
+  adb_bin="$(resolve_android_sdk_tool adb "$android_sdk_dir" || true)"
+
+  if [ -n "$java_bin" ]; then
+    if java_version_output="$(probe_version_output "$java_bin" -version)"; then
+      if is_java_21_version "$java_version_output"; then
+        echo -e "${GREEN}✓${NC} Java 21"
+        OK_COUNT=$((OK_COUNT + 1))
+      else
+        echo -e "${RED}✗${NC} Java 21 ${RED}(required)${NC}"
+        echo -e "  ${YELLOW}→${NC} Install Java 21 and export JAVA_HOME if needed"
+        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+      fi
+    else
+      echo -e "${RED}✗${NC} Java 21 ${RED}(required)${NC}"
+      echo -e "  ${YELLOW}→${NC} Ensure $java_bin can execute 'java -version' successfully"
+      CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+    fi
+  else
+    echo -e "${RED}✗${NC} Java runtime ${RED}(required)${NC}"
+    echo -e "  ${YELLOW}→${NC} Install Java 21 and export JAVA_HOME if needed"
+    CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+  fi
+
+  if [ -n "$javac_bin" ]; then
+    if javac_version_output="$(probe_version_output "$javac_bin" -version)"; then
+      if printf '%s\n' "$javac_version_output" | grep -Eq '(^|[[:space:]])javac[[:space:]]+21(\.|$)'; then
+        echo -e "${GREEN}✓${NC} Java compiler (javac)"
+        OK_COUNT=$((OK_COUNT + 1))
+      else
+        echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(Java 21 required)${NC}"
+        echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+        increment_critical_missing
+      fi
+    else
+      echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(REQUIRED)${NC}"
+      echo -e "  ${YELLOW}→${NC} Ensure $javac_bin can execute 'javac -version' successfully"
+      increment_critical_missing
+    fi
+  else
+    echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(REQUIRED)${NC}"
+    echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+    increment_critical_missing
+  fi
+  check_resolved_command "$sdkmanager_bin" "Android SDK Command-Line Tools (sdkmanager)" "critical" "Install the Android command-line tools and place them under \$HOME/Android/Sdk/cmdline-tools/latest"
+  check_resolved_command "$adb_bin" "Android SDK Platform-Tools (adb)" "critical" "Install Android platform-tools so debug builds and device validation can use adb"
+
+  if [ -d "$android_sdk_dir" ] \
+    && [ -d "$android_sdk_dir/platform-tools" ] \
+    && [ -d "$android_sdk_dir/cmdline-tools/latest" ]; then
+    echo -e "${GREEN}✓${NC} Android SDK directory exists ($android_sdk_dir)"
+    OK_COUNT=$((OK_COUNT + 1))
+  else
+    echo -e "${RED}✗${NC} Android SDK directory ${RED}(incomplete or not found)${NC}"
+    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir with platform-tools and cmdline-tools/latest, or export POLYSCOPE_ANDROID_SDK_ROOT/ANDROID_SDK_ROOT/ANDROID_HOME"
+    CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+  fi
+
+  if [ -d "../android" ]; then
+    print_section "Android Repository - Local Dependencies"
+
+    if pushd "../android" >/dev/null 2>&1; then
+      if [ -d "node_modules" ]; then
+        echo -e "${GREEN}✓${NC} node_modules/ directory exists"
+        OK_COUNT=$((OK_COUNT + 1))
+        check_android_dependency "typescript" "TypeScript"
+        check_android_dependency "vite" "Vite"
+        check_android_dependency "vitest" "Vitest"
+        check_android_dependency "eslint" "ESLint"
+      else
+        echo -e "${YELLOW}⚠${NC} node_modules/ directory not found"
+        echo -e "  ${YELLOW}→${NC} Run: npm install"
+        WARNING_COUNT=$((WARNING_COUNT + 1))
+      fi
+
+      if [ -f "android/settings.gradle" ]; then
+        echo -e "${GREEN}✓${NC} Native Android Gradle project exists"
+        OK_COUNT=$((OK_COUNT + 1))
+      else
+        echo -e "${RED}✗${NC} Native Android Gradle project missing"
+        echo -e "  ${YELLOW}→${NC} Ensure the committed android/settings.gradle sentinel exists before provisioning"
+        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+      fi
+
+      popd >/dev/null 2>&1
+    else
+      echo -e "${YELLOW}⚠${NC} Cannot access ../android directory"
+      WARNING_COUNT=$((WARNING_COUNT + 1))
+    fi
+  fi
+fi
+
+# ============================================================================
+# 6. Optional but Recommended Tools
+# ============================================================================
+
+print_header "6. Optional but Recommended Tools"
 
 check_command "gh" "GitHub CLI" "optional" "Install: https://cli.github.com/"
 check_command "pre-commit" "pre-commit framework" "optional" "Install: pip3 install pre-commit"

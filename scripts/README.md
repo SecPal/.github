@@ -92,6 +92,34 @@ bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
 - `1`: One or more checklist issues found
 - `2`: Usage or dependency error
 
+### `check-system-requirements.sh`
+
+Validates the local toolchain baseline for the managed SecPal repositories,
+including the Android-specific Java/SDK requirements that direct Gradle and
+Polyscope-provisioned workspaces need.
+
+**Usage:**
+
+```bash
+bash scripts/check-system-requirements.sh
+bash scripts/check-system-requirements.sh --repo=android
+```
+
+**What It Checks For Android:**
+
+1. Node.js 22 and `npm`
+2. Java 21 plus `javac`
+3. Android command-line tools via `sdkmanager`
+4. Android platform-tools via `adb`
+5. An SDK path under `$HOME/Android/Sdk` or via `ANDROID_SDK_ROOT` / `ANDROID_HOME`
+6. Android local dependencies such as TypeScript, Vite, Vitest, and ESLint
+7. Presence of the committed native `android/` project directory
+
+**Exit Codes:**
+
+- `0`: All critical requirements met
+- `1`: One or more critical requirements missing
+
 ### `check-openapi-verified-endpoints.mjs`
 
 Regression guard that fails if `docs/openapi.yaml` in any SecPal repo omits an
