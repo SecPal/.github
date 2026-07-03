@@ -130,12 +130,12 @@ stub_command "pnpm" 'exit 0'
 # shellcheck disable=SC2016
 stub_command "java" '
 if [ "${1:-}" = "-version" ]; then
-  echo "openjdk version \"21.0.11\""
+  echo "openjdk version \"${TEST_JAVA_VERSION:-21.0.11}\""
   exit 0
 fi
 exit 0
 '
-stub_command "javac" 'echo "javac 21.0.11"'
+stub_command "javac" 'echo "javac ${TEST_JAVAC_VERSION:-21.0.11}"'
 stub_command "adb" 'echo "Android Debug Bridge version 1.0.41"'
 stub_command "sdkmanager" 'echo "25.2.0"'
 stub_command "gh" 'exit 0'
@@ -181,6 +181,46 @@ grep -Fq "Android SDK directory exists ($sdk_root)" "$success_output"
 grep -Fq 'TypeScript installed' "$success_output"
 grep -Fq 'Vitest installed' "$success_output"
 grep -Fq 'All critical requirements met!' "$success_output"
+
+java_home_dir="$workspace/jdk-21"
+mkdir -p "$java_home_dir/bin"
+cat >"$java_home_dir/bin/java" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "-version" ]; then
+  echo 'openjdk version "21.0.11"'
+  exit 0
+fi
+exit 0
+EOF
+cat >"$java_home_dir/bin/javac" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'javac 21.0.11'
+EOF
+chmod +x "$java_home_dir/bin/java" "$java_home_dir/bin/javac"
+
+java_home_output="$sandbox/java-home-success.txt"
+if ! (
+  cd "$workspace/.github"
+  PATH="$workspace/bin" \
+    HOME="$test_home" \
+    JAVA_HOME="$java_home_dir" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+    ANDROID_SDK_ROOT="" \
+    ANDROID_HOME="" \
+    TEST_JAVA_VERSION="17.0.12" \
+    TEST_JAVAC_VERSION="17.0.12" \
+    /bin/bash ./scripts/check-system-requirements.sh --repo=android
+) >"$java_home_output" 2>&1; then
+  cat "$java_home_output"
+  echo "android requirements check unexpectedly ignored JAVA_HOME when PATH java was too old" >&2
+  exit 1
+fi
+
+grep -Fq 'Java 21' "$java_home_output"
+grep -Fq 'Java compiler (javac)' "$java_home_output"
+grep -Fq 'All critical requirements met!' "$java_home_output"
 
 old_node_output="$sandbox/node-too-old.txt"
 if TEST_NODE_VERSION="v20.15.0" run_check "$old_node_output" --repo=android; then

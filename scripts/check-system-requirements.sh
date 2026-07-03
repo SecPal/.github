@@ -70,6 +70,22 @@ increment_critical_missing() {
   CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
 }
 
+resolve_java_tool() {
+  local tool_name="$1"
+
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME%/}/bin/$tool_name" ]; then
+    printf '%s\n' "${JAVA_HOME%/}/bin/$tool_name"
+    return 0
+  fi
+
+  if command -v "$tool_name" >/dev/null 2>&1; then
+    command -v "$tool_name"
+    return 0
+  fi
+
+  return 1
+}
+
 check_command() {
   local cmd=$1
   local name=$2
@@ -474,8 +490,11 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
 
   print_section "Java & Android SDK"
 
-  if command -v java >/dev/null 2>&1; then
-    java_version_output="$(java -version 2>&1 | head -n 1)"
+  java_bin="$(resolve_java_tool java || true)"
+  javac_bin="$(resolve_java_tool javac || true)"
+
+  if [ -n "$java_bin" ]; then
+    java_version_output="$("$java_bin" -version 2>&1 | head -n 1)"
     if printf '%s' "$java_version_output" | grep -Eq '"21(\.|")'; then
       echo -e "${GREEN}✓${NC} Java 21"
       OK_COUNT=$((OK_COUNT + 1))
@@ -490,7 +509,14 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
     CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
   fi
 
-  check_command "javac" "Java compiler (javac)" "critical" "Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+  if [ -n "$javac_bin" ]; then
+    echo -e "${GREEN}✓${NC} Java compiler (javac)"
+    OK_COUNT=$((OK_COUNT + 1))
+  else
+    echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(REQUIRED)${NC}"
+    echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+    increment_critical_missing
+  fi
   check_command "sdkmanager" "Android SDK Command-Line Tools (sdkmanager)" "critical" "Install the Android command-line tools and place them under \$HOME/Android/Sdk/cmdline-tools/latest"
   check_command "adb" "Android SDK Platform-Tools (adb)" "critical" "Install Android platform-tools so debug builds and device validation can use adb"
 

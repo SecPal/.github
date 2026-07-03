@@ -2044,6 +2044,7 @@ cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscop
 grep -q '^sdk\.dir='"$shared_android_sdk_root"'$' "$android_clone/android/local.properties"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
 grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
+grep -q '^android/local\.properties$' "$android_clone/.git/info/exclude"
 test -x "$api_clone/.git/hooks/pre-commit"
 test -L "$api_clone/.git/hooks/pre-push"
 test "$(readlink "$api_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'

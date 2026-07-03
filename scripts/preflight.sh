@@ -93,6 +93,15 @@ if [ -f tests/check-domains.sh ]; then
   }
 fi
 
+if [ -f tests/check-system-requirements.sh ]; then
+  bash tests/check-system-requirements.sh || {
+    echo "" >&2
+    echo "❌ System requirements regression test failed!" >&2
+    echo "Keep scripts/check-system-requirements.sh aligned with tests/check-system-requirements.sh before continuing." >&2
+    exit 1
+  }
+fi
+
 # Conflict Marker Check (prevents accidental commits of broken code)
 if [ -f scripts/check-conflict-markers.sh ]; then
   bash scripts/check-conflict-markers.sh || {
@@ -180,6 +189,15 @@ if [ -f tests/preflight-markdownlint-scope.sh ]; then
     echo "" >&2
     echo "❌ Preflight markdownlint scope regression test failed!" >&2
     echo "Exclude Git metadata from the local markdownlint scan before continuing." >&2
+    exit 1
+  }
+fi
+
+if [ -f tests/preflight-check-system-requirements.sh ]; then
+  bash tests/preflight-check-system-requirements.sh || {
+    echo "" >&2
+    echo "❌ Preflight check-system-requirements wiring regression test failed!" >&2
+    echo "Restore tests/check-system-requirements.sh in scripts/preflight.sh before continuing." >&2
     exit 1
   }
 fi
