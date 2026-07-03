@@ -1760,7 +1760,11 @@ def sync_repo_auxiliary_files(repo_name: str, repo_path: pathlib.Path) -> None:
     if repo_name != "android":
         return
 
-    write_text_if_changed(repo_path / "android" / "local.properties", render_android_local_properties())
+    android_project_dir = repo_path / "android"
+    if not android_project_dir.is_dir():
+        raise SystemExit(f"android worktree at {repo_path} is missing committed android/ project directory")
+
+    write_text_if_changed(android_project_dir / "local.properties", render_android_local_properties())
 
 
 def extract_bullets_from_lines(lines: list[str]) -> list[str]:
@@ -2189,6 +2193,9 @@ def is_provisionable_worktree(
             return skip("missing .git")
     except SystemExit:
         return skip("invalid .git pointer")
+
+    if repo_name == "android" and not (worktree_path / "android").is_dir():
+        return skip("missing committed android/ project directory")
 
     copilot_instructions_rel = REPO_SETTINGS[repo_name]["copilot_instructions"]
     copilot_instructions_path = worktree_path / copilot_instructions_rel

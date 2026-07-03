@@ -205,6 +205,8 @@ for repo_name, scripts in package_scripts.items():
     }
     (repo_dir / "package.json").write_text(json.dumps(package_json, indent=2) + "\n")
     (repo_dir / "package-lock.json").write_text(json.dumps(package_lock, indent=2) + "\n")
+
+(workspace_root / "android" / "android").mkdir(parents=True, exist_ok=True)
 PY
 }
 
@@ -1794,8 +1796,9 @@ broken_api_clone="$home_dir/.polyscope/clones/api12345/fix"
 garbled_git_api_clone="$home_dir/.polyscope/clones/api12345/chore"
 frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
 broken_frontend_clone="$home_dir/.polyscope/clones/fe123456/feat"
+broken_android_clone="$home_dir/.polyscope/clones/an123456/feat"
 android_clone="$home_dir/.polyscope/clones/an123456/auto-hawk"
-mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone" "$android_clone/.git/info" "$android_clone/.git/hooks"
+mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone" "$broken_android_clone/.git/info" "$broken_android_clone/.git/hooks" "$android_clone/.git/info" "$android_clone/.git/hooks"
 printf 'not-a-git-pointer\n' > "$garbled_git_api_clone/.git"
 mkdir -p "$home_dir/.local/bin"
 
@@ -1953,6 +1956,7 @@ EOF
 
 seed_api_worktree_files "$api_clone"
 seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
+seed_node_worktree_files "$broken_android_clone" "android-feat"
 seed_node_worktree_files "$android_clone" "android-auto-hawk"
 mkdir -p "$android_clone/android"
 
@@ -2018,6 +2022,7 @@ assert 'android:auto-hawk' in provisioned, f"expected android:auto-hawk in provi
 assert 'api:fix' not in provisioned, f"did not expect api:fix in provisioned_worktrees, got {provisioned}"
 assert 'api:chore' not in provisioned, f"did not expect api:chore in provisioned_worktrees, got {provisioned}"
 assert 'frontend:feat' not in provisioned, f"did not expect frontend:feat in provisioned_worktrees, got {provisioned}"
+assert 'android:feat' not in provisioned, f"did not expect android:feat in provisioned_worktrees, got {provisioned}"
 assert cleaned == [], f"expected no cleaned preview databases on first provisioning run, got {cleaned}"
 PY
 
@@ -2054,6 +2059,8 @@ test ! -f "$garbled_git_api_clone/polyscope.local.json"
 test ! -f "$garbled_git_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$broken_frontend_clone/polyscope.local.json"
 test ! -f "$broken_frontend_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$broken_android_clone/android/local.properties"
+test ! -f "$broken_android_clone/.polyscope-secpal-provisioned.json"
 grep -qF "composer:$api_clone:install" "$provision_log"
 grep -qF "php:$api_clone:artisan config:clear" "$provision_log"
 grep -qF "php:$api_clone:artisan migrate --force" "$provision_log"

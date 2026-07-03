@@ -15,8 +15,11 @@ sdk_root="$workspace/polyscope-android-sdk"
 test_home="$workspace/home"
 mkdir -p \
   "$workspace/.github/scripts" \
+  "$workspace/api/vendor/bin" \
   "$workspace/android/android" \
   "$workspace/android/node_modules/.bin" \
+  "$workspace/contracts/node_modules/.bin" \
+  "$workspace/frontend/node_modules/.bin" \
   "$workspace/bin" \
   "$sdk_root" \
   "$test_home"
@@ -37,6 +40,34 @@ cat >"$workspace/android/package.json" <<'JSON'
   }
 }
 JSON
+
+cat >"$workspace/frontend/package.json" <<'JSON'
+{
+  "name": "@secpal/frontend-test",
+  "private": true,
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "1.0.0",
+    "vite": "1.0.0",
+    "vitest": "1.0.0",
+    "eslint": "1.0.0"
+  }
+}
+JSON
+
+cat >"$workspace/contracts/package.json" <<'JSON'
+{
+  "name": "@secpal/contracts-test",
+  "private": true,
+  "dependencies": {},
+  "devDependencies": {
+    "@redocly/cli": "1.0.0"
+  }
+}
+JSON
+
+touch "$workspace/api/vendor/bin/pest" "$workspace/api/vendor/bin/pint" "$workspace/api/vendor/bin/phpstan"
+chmod +x "$workspace/api/vendor/bin/pest" "$workspace/api/vendor/bin/pint" "$workspace/api/vendor/bin/phpstan"
 
 stub_command() {
   local name="$1"
@@ -81,6 +112,8 @@ fi
 exit 0
 '
 stub_command "shellcheck" 'exit 0'
+stub_command "php" 'echo "8.4.0"'
+stub_command "composer" 'exit 0'
 # shellcheck disable=SC2016
 stub_command "node" 'echo "${TEST_NODE_VERSION:-v22.1.0}"'
 # shellcheck disable=SC2016
@@ -90,6 +123,8 @@ if [ "${1:-}" = "list" ]; then
 fi
 echo "10.0.0"
 '
+stub_command "yarn" 'exit 0'
+stub_command "pnpm" 'exit 0'
 # shellcheck disable=SC2016
 stub_command "java" '
 if [ "${1:-}" = "-version" ]; then
@@ -101,6 +136,9 @@ exit 0
 stub_command "javac" 'echo "javac 21.0.11"'
 stub_command "adb" 'echo "Android Debug Bridge version 1.0.41"'
 stub_command "sdkmanager" 'echo "25.2.0"'
+stub_command "gh" 'exit 0'
+stub_command "pre-commit" 'exit 0'
+stub_command "ssh" 'exit 0'
 link_system_command "grep"
 link_system_command "sed"
 link_system_command "cut"
@@ -151,6 +189,18 @@ fi
 
 grep -Fq 'Node.js v20.15.0' "$old_node_output"
 grep -Fq '>= 22.x required' "$old_node_output"
+
+all_repos_old_node_output="$sandbox/all-repos-node-too-old.txt"
+if TEST_NODE_VERSION="v20.15.0" run_check "$all_repos_old_node_output"; then
+  cat "$all_repos_old_node_output"
+  echo "all-repositories requirements check unexpectedly succeeded with Node.js 20 and sibling android repo" >&2
+  exit 1
+fi
+
+grep -Fq '3. Frontend Repository (React + TypeScript + Node)' "$all_repos_old_node_output"
+grep -Fq '5. Android Repository (Capacitor + Native Android Toolchain)' "$all_repos_old_node_output"
+grep -Fq 'Node.js v20.15.0' "$all_repos_old_node_output"
+grep -Fq '>= 22.x required' "$all_repos_old_node_output"
 
 mv "$workspace/android" "$workspace/android-hidden"
 

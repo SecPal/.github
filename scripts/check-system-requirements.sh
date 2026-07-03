@@ -461,6 +461,15 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
 
     check_command "npm" "npm" "critical" "Comes with Node.js"
     NODE_CHECKED=true
+  elif command -v node >/dev/null 2>&1; then
+    node_version=$(node --version | sed 's/v//')
+    major_version=$(echo "$node_version" | cut -d. -f1)
+
+    if [ "$major_version" -lt 22 ]; then
+      echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= 22.x required)${NC}"
+      echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
+      increment_critical_missing
+    fi
   fi
 
   print_section "Java & Android SDK"
