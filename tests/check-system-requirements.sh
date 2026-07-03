@@ -11,7 +11,15 @@ sandbox="$(mktemp -d "${TMPDIR:-/tmp}/check-system-requirements.XXXXXX")"
 trap 'rm -rf "$sandbox"' EXIT
 
 workspace="$sandbox/workspace"
-mkdir -p "$workspace/.github/scripts" "$workspace/android/android" "$workspace/android/node_modules/.bin" "$workspace/bin"
+sdk_root="$workspace/polyscope-android-sdk"
+test_home="$workspace/home"
+mkdir -p \
+  "$workspace/.github/scripts" \
+  "$workspace/android/android" \
+  "$workspace/android/node_modules/.bin" \
+  "$workspace/bin" \
+  "$sdk_root" \
+  "$test_home"
 
 cp "$REPO_ROOT/scripts/check-system-requirements.sh" "$workspace/.github/scripts/check-system-requirements.sh"
 chmod +x "$workspace/.github/scripts/check-system-requirements.sh"
@@ -73,7 +81,8 @@ fi
 exit 0
 '
 stub_command "shellcheck" 'exit 0'
-stub_command "node" 'echo "v22.1.0"'
+# shellcheck disable=SC2016
+stub_command "node" 'echo "${TEST_NODE_VERSION:-v22.1.0}"'
 # shellcheck disable=SC2016
 stub_command "npm" '
 if [ "${1:-}" = "list" ]; then
@@ -107,7 +116,13 @@ run_check() {
   shift
   (
     cd "$workspace/.github"
-    PATH="$workspace/bin" /bin/bash ./scripts/check-system-requirements.sh "$@"
+    PATH="$workspace/bin" \
+      HOME="$test_home" \
+      POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+      ANDROID_SDK_ROOT="" \
+      ANDROID_HOME="" \
+      TEST_NODE_VERSION="${TEST_NODE_VERSION:-v22.1.0}" \
+      /bin/bash ./scripts/check-system-requirements.sh "$@"
   ) >"$output_file" 2>&1
 }
 
@@ -122,9 +137,37 @@ grep -Fq '5. Android Repository (Capacitor + Native Android Toolchain)' "$succes
 grep -Fq 'Java 21' "$success_output"
 grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$success_output"
 grep -Fq 'Android SDK Platform-Tools (adb)' "$success_output"
+grep -Fq "Android SDK directory exists ($sdk_root)" "$success_output"
 grep -Fq 'TypeScript installed' "$success_output"
 grep -Fq 'Vitest installed' "$success_output"
 grep -Fq 'All critical requirements met!' "$success_output"
+
+old_node_output="$sandbox/node-too-old.txt"
+if TEST_NODE_VERSION="v20.15.0" run_check "$old_node_output" --repo=android; then
+  cat "$old_node_output"
+  echo "android requirements check unexpectedly succeeded with Node.js 20" >&2
+  exit 1
+fi
+
+grep -Fq 'Node.js v20.15.0' "$old_node_output"
+grep -Fq '>= 22.x required' "$old_node_output"
+
+mv "$workspace/android" "$workspace/android-hidden"
+
+missing_repo_output="$sandbox/missing-repo.txt"
+if ! run_check "$missing_repo_output" --repo=android; then
+  cat "$missing_repo_output"
+  echo "android requirements check unexpectedly failed without sibling android repo" >&2
+  exit 1
+fi
+
+if grep -Fq 'Android Repository - Local Dependencies' "$missing_repo_output"; then
+  cat "$missing_repo_output"
+  echo "android requirements check unexpectedly printed local dependencies header without sibling repo" >&2
+  exit 1
+fi
+
+mv "$workspace/android-hidden" "$workspace/android"
 
 rm -f "$workspace/bin/sdkmanager"
 

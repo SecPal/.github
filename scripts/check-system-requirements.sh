@@ -450,9 +450,9 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
         echo -e "${GREEN}✓${NC} Node.js v$node_version (>= 22.x required)"
         OK_COUNT=$((OK_COUNT + 1))
       else
-        echo -e "${YELLOW}⚠${NC} Node.js v$node_version ${YELLOW}(>= 22.x recommended)${NC}"
+        echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= 22.x required)${NC}"
         echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
+        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
       fi
     else
       echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
@@ -485,19 +485,19 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   check_command "sdkmanager" "Android SDK Command-Line Tools (sdkmanager)" "critical" "Install the Android command-line tools and place them under \$HOME/Android/Sdk/cmdline-tools/latest"
   check_command "adb" "Android SDK Platform-Tools (adb)" "critical" "Install Android platform-tools so debug builds and device validation can use adb"
 
-  android_sdk_dir="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
+  android_sdk_dir="${POLYSCOPE_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}}"
   if [ -d "$android_sdk_dir" ]; then
     echo -e "${GREEN}✓${NC} Android SDK directory exists ($android_sdk_dir)"
     OK_COUNT=$((OK_COUNT + 1))
   else
     echo -e "${RED}✗${NC} Android SDK directory ${RED}(not found)${NC}"
-    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir or export ANDROID_SDK_ROOT/ANDROID_HOME"
+    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir or export POLYSCOPE_ANDROID_SDK_ROOT/ANDROID_SDK_ROOT/ANDROID_HOME"
     CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
   fi
 
-  print_section "Android Repository - Local Dependencies"
-
   if [ -d "../android" ]; then
+    print_section "Android Repository - Local Dependencies"
+
     if pushd "../android" >/dev/null 2>&1; then
       if [ -d "node_modules" ]; then
         echo -e "${GREEN}✓${NC} node_modules/ directory exists"
