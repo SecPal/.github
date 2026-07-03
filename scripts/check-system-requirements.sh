@@ -101,6 +101,12 @@ resolve_javac_for_java() {
   resolve_java_tool javac
 }
 
+is_java_21_version() {
+  local version_output="$1"
+
+  printf '%s' "$version_output" | grep -Eq '(^|[[:space:]\"])21(\.|"|[[:space:]]|$)'
+}
+
 check_command() {
   local cmd=$1
   local name=$2
@@ -510,7 +516,7 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
 
   if [ -n "$java_bin" ]; then
     java_version_output="$("$java_bin" -version 2>&1 | head -n 1)"
-    if printf '%s' "$java_version_output" | grep -Eq '"21(\.|")'; then
+    if is_java_21_version "$java_version_output"; then
       echo -e "${GREEN}✓${NC} Java 21"
       OK_COUNT=$((OK_COUNT + 1))
     else

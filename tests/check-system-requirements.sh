@@ -158,6 +158,7 @@ run_check() {
     cd "$workspace/.github"
     PATH="$workspace/bin" \
       HOME="$test_home" \
+      JAVA_HOME="" \
       POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
       ANDROID_SDK_ROOT="" \
       ANDROID_HOME="" \
@@ -240,6 +241,7 @@ if (
   cd "$workspace/.github"
   PATH="$workspace/bin" \
     HOME="$test_home" \
+    JAVA_HOME="$java_runtime_only_dir" \
     JAVA_HOME="$java_runtime_only_dir" \
     POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_SDK_ROOT="" \

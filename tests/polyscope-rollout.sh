@@ -1959,6 +1959,7 @@ seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
 seed_node_worktree_files "$broken_android_clone" "android-feat"
 seed_node_worktree_files "$android_clone" "android-auto-hawk"
 mkdir -p "$android_clone/android"
+touch "$android_clone/android/settings.gradle"
 
 cp "$workspace_root/api/.env" "$api_clone/.env"
 : > "$broken_api_clone/.env"

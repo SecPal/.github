@@ -2195,8 +2195,12 @@ def is_provisionable_worktree(
     except SystemExit:
         return skip("invalid .git pointer")
 
-    if repo_name == "android" and not (worktree_path / "android").is_dir():
-        return skip("missing committed android/ project directory")
+    if repo_name == "android":
+        android_project_dir = worktree_path / "android"
+        if not android_project_dir.is_dir():
+            return skip("missing committed android/ project directory")
+        if not (android_project_dir / "settings.gradle").is_file():
+            return skip("missing committed native Android Gradle project")
 
     copilot_instructions_rel = REPO_SETTINGS[repo_name]["copilot_instructions"]
     copilot_instructions_path = worktree_path / copilot_instructions_rel
