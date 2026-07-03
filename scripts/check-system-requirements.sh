@@ -86,6 +86,21 @@ resolve_java_tool() {
   return 1
 }
 
+resolve_javac_for_java() {
+  local java_bin="$1"
+
+  if [ -n "${JAVA_HOME:-}" ] && [ "$java_bin" = "${JAVA_HOME%/}/bin/java" ]; then
+    if [ -x "${JAVA_HOME%/}/bin/javac" ]; then
+      printf '%s\n' "${JAVA_HOME%/}/bin/javac"
+      return 0
+    fi
+
+    return 1
+  fi
+
+  resolve_java_tool javac
+}
+
 check_command() {
   local cmd=$1
   local name=$2
@@ -491,7 +506,7 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   print_section "Java & Android SDK"
 
   java_bin="$(resolve_java_tool java || true)"
-  javac_bin="$(resolve_java_tool javac || true)"
+  javac_bin="$(resolve_javac_for_java "$java_bin" || true)"
 
   if [ -n "$java_bin" ]; then
     java_version_output="$("$java_bin" -version 2>&1 | head -n 1)"
@@ -510,8 +525,15 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   fi
 
   if [ -n "$javac_bin" ]; then
-    echo -e "${GREEN}✓${NC} Java compiler (javac)"
-    OK_COUNT=$((OK_COUNT + 1))
+    javac_version_output="$("$javac_bin" -version 2>&1 | head -n 1)"
+    if printf '%s' "$javac_version_output" | grep -Eq 'javac 21(\.|$)'; then
+      echo -e "${GREEN}✓${NC} Java compiler (javac)"
+      OK_COUNT=$((OK_COUNT + 1))
+    else
+      echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(Java 21 required)${NC}"
+      echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+      increment_critical_missing
+    fi
   else
     echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(REQUIRED)${NC}"
     echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"

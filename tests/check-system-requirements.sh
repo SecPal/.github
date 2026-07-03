@@ -222,6 +222,41 @@ grep -Fq 'Java 21' "$java_home_output"
 grep -Fq 'Java compiler (javac)' "$java_home_output"
 grep -Fq 'All critical requirements met!' "$java_home_output"
 
+java_runtime_only_dir="$workspace/jre-21"
+mkdir -p "$java_runtime_only_dir/bin"
+cat >"$java_runtime_only_dir/bin/java" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "-version" ]; then
+  echo 'openjdk version "21.0.11"'
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$java_runtime_only_dir/bin/java"
+
+java_runtime_only_output="$sandbox/java-home-runtime-only.txt"
+if (
+  cd "$workspace/.github"
+  PATH="$workspace/bin" \
+    HOME="$test_home" \
+    JAVA_HOME="$java_runtime_only_dir" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+    ANDROID_SDK_ROOT="" \
+    ANDROID_HOME="" \
+    TEST_JAVA_VERSION="17.0.12" \
+    TEST_JAVAC_VERSION="17.0.12" \
+    /bin/bash ./scripts/check-system-requirements.sh --repo=android
+) >"$java_runtime_only_output" 2>&1; then
+  cat "$java_runtime_only_output"
+  echo "android requirements check unexpectedly succeeded with JAVA_HOME runtime but PATH javac only" >&2
+  exit 1
+fi
+
+grep -Fq 'Java 21' "$java_runtime_only_output"
+grep -Fq 'Java compiler (javac)' "$java_runtime_only_output"
+grep -Fq 'critical requirement(s) missing' "$java_runtime_only_output"
+
 old_node_output="$sandbox/node-too-old.txt"
 if TEST_NODE_VERSION="v20.15.0" run_check "$old_node_output" --repo=android; then
   cat "$old_node_output"
