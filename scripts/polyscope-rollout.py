@@ -1752,8 +1752,23 @@ def resolve_android_sdk_root() -> pathlib.Path:
     return DEFAULT_ANDROID_SDK_ROOT
 
 
-def render_android_local_properties() -> str:
-    return f"sdk.dir={resolve_android_sdk_root().as_posix()}\n"
+def render_android_local_properties(existing_text: str = "") -> str:
+    sdk_dir_line = f"sdk.dir={resolve_android_sdk_root().as_posix()}"
+    preserved_lines: list[str] = []
+    sdk_dir_written = False
+
+    for raw_line in existing_text.splitlines():
+        if raw_line.startswith("sdk.dir="):
+            if not sdk_dir_written:
+                preserved_lines.append(sdk_dir_line)
+                sdk_dir_written = True
+            continue
+        preserved_lines.append(raw_line)
+
+    if not sdk_dir_written:
+        preserved_lines.append(sdk_dir_line)
+
+    return "\n".join(preserved_lines) + "\n"
 
 
 def sync_repo_auxiliary_files(repo_name: str, repo_path: pathlib.Path) -> None:
@@ -1764,7 +1779,9 @@ def sync_repo_auxiliary_files(repo_name: str, repo_path: pathlib.Path) -> None:
     if not android_project_dir.is_dir():
         raise SystemExit(f"android worktree at {repo_path} is missing committed android/ project directory")
 
-    write_text_if_changed(android_project_dir / "local.properties", render_android_local_properties())
+    local_properties_path = android_project_dir / "local.properties"
+    existing_local_properties = local_properties_path.read_text() if local_properties_path.exists() else ""
+    write_text_if_changed(local_properties_path, render_android_local_properties(existing_local_properties))
     ensure_exclude(repo_path, {"android/local.properties"})
 
 

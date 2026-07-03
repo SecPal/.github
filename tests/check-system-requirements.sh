@@ -25,6 +25,7 @@ mkdir -p \
   "$sdk_root/cmdline-tools/latest" \
   "$sdk_root" \
   "$test_home"
+touch "$workspace/android/android/settings.gradle"
 
 cp "$REPO_ROOT/scripts/check-system-requirements.sh" "$workspace/.github/scripts/check-system-requirements.sh"
 chmod +x "$workspace/.github/scripts/check-system-requirements.sh"
@@ -130,6 +131,10 @@ stub_command "pnpm" 'exit 0'
 # shellcheck disable=SC2016
 stub_command "java" '
 if [ "${1:-}" = "-version" ]; then
+  if [ -n "${TEST_JAVA_VERSION_OUTPUT:-}" ]; then
+    printf "%s\n" "$TEST_JAVA_VERSION_OUTPUT"
+    exit 0
+  fi
   echo "openjdk version \"${TEST_JAVA_VERSION:-21.0.11}\""
   exit 0
 fi
@@ -242,7 +247,6 @@ if (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="$java_runtime_only_dir" \
-    JAVA_HOME="$java_runtime_only_dir" \
     POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_SDK_ROOT="" \
     ANDROID_HOME="" \
@@ -258,6 +262,52 @@ fi
 grep -Fq 'Java 21' "$java_runtime_only_output"
 grep -Fq 'Java compiler (javac)' "$java_runtime_only_output"
 grep -Fq 'critical requirement(s) missing' "$java_runtime_only_output"
+
+java_home_stale_dir="$workspace/jdk-missing-java"
+mkdir -p "$java_home_stale_dir/bin"
+
+stale_java_home_output="$sandbox/java-home-stale.txt"
+if (
+  cd "$workspace/.github"
+  PATH="$workspace/bin" \
+    HOME="$test_home" \
+    JAVA_HOME="$java_home_stale_dir" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+    ANDROID_SDK_ROOT="" \
+    ANDROID_HOME="" \
+    TEST_JAVA_VERSION="21.0.11" \
+    TEST_JAVAC_VERSION="21.0.11" \
+    /bin/bash ./scripts/check-system-requirements.sh --repo=android
+) >"$stale_java_home_output" 2>&1; then
+  cat "$stale_java_home_output"
+  echo "android requirements check unexpectedly fell back to PATH when JAVA_HOME was stale" >&2
+  exit 1
+fi
+
+grep -Fq 'Java runtime' "$stale_java_home_output"
+grep -Fq 'Java compiler (javac)' "$stale_java_home_output"
+grep -Fq 'critical requirement(s) missing' "$stale_java_home_output"
+
+java_banner_output="$sandbox/java-banner.txt"
+if ! (
+  cd "$workspace/.github"
+  PATH="$workspace/bin" \
+    HOME="$test_home" \
+    JAVA_HOME="" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+    ANDROID_SDK_ROOT="" \
+    ANDROID_HOME="" \
+    TEST_JAVA_VERSION_OUTPUT=$'picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8\nopenjdk version "21.0.11"' \
+    TEST_JAVAC_VERSION="21.0.11" \
+    /bin/bash ./scripts/check-system-requirements.sh --repo=android
+) >"$java_banner_output" 2>&1; then
+  cat "$java_banner_output"
+  echo "android requirements check unexpectedly failed when java -version printed a banner before the version line" >&2
+  exit 1
+fi
+
+grep -Fq 'Java 21' "$java_banner_output"
+grep -Fq 'All critical requirements met!' "$java_banner_output"
 
 old_node_output="$sandbox/node-too-old.txt"
 if TEST_NODE_VERSION="v20.15.0" run_check "$old_node_output" --repo=android; then
@@ -299,18 +349,44 @@ fi
 mv "$workspace/android-hidden" "$workspace/android"
 
 rm -f "$workspace/bin/sdkmanager"
+rm -f "$workspace/bin/adb"
+mkdir -p "$sdk_root/cmdline-tools/latest/bin"
+cat >"$sdk_root/cmdline-tools/latest/bin/sdkmanager" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo '25.2.0'
+EOF
+cat >"$sdk_root/platform-tools/adb" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'Android Debug Bridge version 1.0.41'
+EOF
+chmod +x "$sdk_root/cmdline-tools/latest/bin/sdkmanager" "$sdk_root/platform-tools/adb"
+
+sdk_root_tools_output="$sandbox/sdk-root-tools.txt"
+if ! run_check "$sdk_root_tools_output" --repo=android; then
+  cat "$sdk_root_tools_output"
+  echo "android requirements check unexpectedly failed when sdkmanager and adb were only available under the SDK root" >&2
+  exit 1
+fi
+
+grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$sdk_root_tools_output"
+grep -Fq 'Android SDK Platform-Tools (adb)' "$sdk_root_tools_output"
+grep -Fq 'All critical requirements met!' "$sdk_root_tools_output"
+
+rm -f "$workspace/android/android/settings.gradle"
 
 failure_output="$sandbox/failure.txt"
 if run_check "$failure_output" --repo=android; then
   cat "$failure_output"
-  echo "android requirements check unexpectedly succeeded without sdkmanager" >&2
+  echo "android requirements check unexpectedly succeeded without native Android Gradle sentinel" >&2
   exit 1
 fi
 
 grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$failure_output"
 grep -Fq 'Android SDK Platform-Tools (adb)' "$failure_output"
 grep -Fq "Android SDK directory exists ($sdk_root)" "$failure_output"
-grep -Fq 'Native Android project directory exists' "$failure_output"
+grep -Fq 'Native Android Gradle project missing' "$failure_output"
 grep -Fq 'TypeScript installed' "$failure_output"
 
-echo "tests/check-system-requirements.sh: android happy and missing-sdkmanager paths verified."
+echo "tests/check-system-requirements.sh: android validator paths verified."

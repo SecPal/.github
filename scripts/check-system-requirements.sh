@@ -73,9 +73,13 @@ increment_critical_missing() {
 resolve_java_tool() {
   local tool_name="$1"
 
-  if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME%/}/bin/$tool_name" ]; then
-    printf '%s\n' "${JAVA_HOME%/}/bin/$tool_name"
-    return 0
+  if [ -n "${JAVA_HOME:-}" ]; then
+    if [ -x "${JAVA_HOME%/}/bin/$tool_name" ]; then
+      printf '%s\n' "${JAVA_HOME%/}/bin/$tool_name"
+      return 0
+    fi
+
+    return 1
   fi
 
   if command -v "$tool_name" >/dev/null 2>&1; then
@@ -104,7 +108,62 @@ resolve_javac_for_java() {
 is_java_21_version() {
   local version_output="$1"
 
-  printf '%s' "$version_output" | grep -Eq '(^|[[:space:]\"])21(\.|"|[[:space:]]|$)'
+  printf '%s\n' "$version_output" | grep -Eq '(^|[[:space:]])(openjdk|java)[[:space:]]+version[[:space:]]+"21(\.|"|$)'
+}
+
+check_resolved_command() {
+  local cmd_path="$1"
+  local name="$2"
+  local severity="${3:-critical}"
+  local install_hint="${4:-}"
+
+  if [ -n "$cmd_path" ] && [ -x "$cmd_path" ]; then
+    echo -e "${GREEN}✓${NC} $name"
+    OK_COUNT=$((OK_COUNT + 1))
+    return 0
+  fi
+
+  if [ "$severity" = "critical" ]; then
+    echo -e "${RED}✗${NC} $name ${RED}(REQUIRED)${NC}"
+    [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
+    increment_critical_missing
+    return 0
+  fi
+
+  echo -e "${YELLOW}⚠${NC} $name ${YELLOW}(optional but recommended)${NC}"
+  [ -n "$install_hint" ] && echo -e "  ${YELLOW}→${NC} $install_hint"
+  increment_warning
+  return 0
+}
+
+resolve_android_sdk_tool() {
+  local tool_name="$1"
+  local android_sdk_dir="$2"
+  local sdk_tool_path=""
+
+  case "$tool_name" in
+    sdkmanager)
+      sdk_tool_path="$android_sdk_dir/cmdline-tools/latest/bin/sdkmanager"
+      ;;
+    adb)
+      sdk_tool_path="$android_sdk_dir/platform-tools/adb"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  if [ -x "$sdk_tool_path" ]; then
+    printf '%s\n' "$sdk_tool_path"
+    return 0
+  fi
+
+  if command -v "$tool_name" >/dev/null 2>&1; then
+    command -v "$tool_name"
+    return 0
+  fi
+
+  return 1
 }
 
 check_command() {
@@ -511,11 +570,14 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
 
   print_section "Java & Android SDK"
 
+  android_sdk_dir="${POLYSCOPE_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}}"
   java_bin="$(resolve_java_tool java || true)"
   javac_bin="$(resolve_javac_for_java "$java_bin" || true)"
+  sdkmanager_bin="$(resolve_android_sdk_tool sdkmanager "$android_sdk_dir" || true)"
+  adb_bin="$(resolve_android_sdk_tool adb "$android_sdk_dir" || true)"
 
   if [ -n "$java_bin" ]; then
-    java_version_output="$("$java_bin" -version 2>&1 | head -n 1)"
+    java_version_output="$("$java_bin" -version 2>&1)"
     if is_java_21_version "$java_version_output"; then
       echo -e "${GREEN}✓${NC} Java 21"
       OK_COUNT=$((OK_COUNT + 1))
@@ -531,8 +593,8 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   fi
 
   if [ -n "$javac_bin" ]; then
-    javac_version_output="$("$javac_bin" -version 2>&1 | head -n 1)"
-    if printf '%s' "$javac_version_output" | grep -Eq 'javac 21(\.|$)'; then
+    javac_version_output="$("$javac_bin" -version 2>&1)"
+    if printf '%s\n' "$javac_version_output" | grep -Eq '(^|[[:space:]])javac[[:space:]]+21(\.|$)'; then
       echo -e "${GREEN}✓${NC} Java compiler (javac)"
       OK_COUNT=$((OK_COUNT + 1))
     else
@@ -545,10 +607,9 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
     echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
     increment_critical_missing
   fi
-  check_command "sdkmanager" "Android SDK Command-Line Tools (sdkmanager)" "critical" "Install the Android command-line tools and place them under \$HOME/Android/Sdk/cmdline-tools/latest"
-  check_command "adb" "Android SDK Platform-Tools (adb)" "critical" "Install Android platform-tools so debug builds and device validation can use adb"
+  check_resolved_command "$sdkmanager_bin" "Android SDK Command-Line Tools (sdkmanager)" "critical" "Install the Android command-line tools and place them under \$HOME/Android/Sdk/cmdline-tools/latest"
+  check_resolved_command "$adb_bin" "Android SDK Platform-Tools (adb)" "critical" "Install Android platform-tools so debug builds and device validation can use adb"
 
-  android_sdk_dir="${POLYSCOPE_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}}"
   if [ -d "$android_sdk_dir" ] \
     && [ -d "$android_sdk_dir/platform-tools" ] \
     && [ -d "$android_sdk_dir/cmdline-tools/latest" ]; then
@@ -577,12 +638,12 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
         WARNING_COUNT=$((WARNING_COUNT + 1))
       fi
 
-      if [ -d "android" ]; then
-        echo -e "${GREEN}✓${NC} Native Android project directory exists"
+      if [ -f "android/settings.gradle" ]; then
+        echo -e "${GREEN}✓${NC} Native Android Gradle project exists"
         OK_COUNT=$((OK_COUNT + 1))
       else
-        echo -e "${RED}✗${NC} Native Android project directory missing"
-        echo -e "  ${YELLOW}→${NC} Run: npm run cap:add:android"
+        echo -e "${RED}✗${NC} Native Android Gradle project missing"
+        echo -e "  ${YELLOW}→${NC} Ensure the committed android/settings.gradle sentinel exists before provisioning"
         CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
       fi
 

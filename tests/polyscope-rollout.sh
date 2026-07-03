@@ -1960,6 +1960,11 @@ seed_node_worktree_files "$broken_android_clone" "android-feat"
 seed_node_worktree_files "$android_clone" "android-auto-hawk"
 mkdir -p "$android_clone/android"
 touch "$android_clone/android/settings.gradle"
+cat >"$android_clone/android/local.properties" <<'EOF'
+ndk.dir=/opt/android-ndk
+sdk.dir=/tmp/obsolete-sdk
+cmake.dir=/opt/android-cmake
+EOF
 
 cp "$workspace_root/api/.env" "$api_clone/.env"
 : > "$broken_api_clone/.env"
@@ -2043,6 +2048,8 @@ grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clon
 cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
 cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
 grep -q '^sdk\.dir='"$shared_android_sdk_root"'$' "$android_clone/android/local.properties"
+grep -q '^ndk\.dir=/opt/android-ndk$' "$android_clone/android/local.properties"
+grep -q '^cmake\.dir=/opt/android-cmake$' "$android_clone/android/local.properties"
 grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
 grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
 grep -q '^android/local\.properties$' "$android_clone/.git/info/exclude"
