@@ -166,6 +166,19 @@ resolve_android_sdk_tool() {
   return 1
 }
 
+probe_version_output() {
+  local binary_path="$1"
+  shift
+  local probe_output=""
+
+  if probe_output="$("$binary_path" "$@" 2>&1)"; then
+    printf '%s' "$probe_output"
+    return 0
+  fi
+
+  return 1
+}
+
 check_command() {
   local cmd=$1
   local name=$2
@@ -577,13 +590,18 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   adb_bin="$(resolve_android_sdk_tool adb "$android_sdk_dir" || true)"
 
   if [ -n "$java_bin" ]; then
-    java_version_output="$("$java_bin" -version 2>&1)"
-    if is_java_21_version "$java_version_output"; then
-      echo -e "${GREEN}✓${NC} Java 21"
-      OK_COUNT=$((OK_COUNT + 1))
+    if java_version_output="$(probe_version_output "$java_bin" -version)"; then
+      if is_java_21_version "$java_version_output"; then
+        echo -e "${GREEN}✓${NC} Java 21"
+        OK_COUNT=$((OK_COUNT + 1))
+      else
+        echo -e "${RED}✗${NC} Java 21 ${RED}(required)${NC}"
+        echo -e "  ${YELLOW}→${NC} Install Java 21 and export JAVA_HOME if needed"
+        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+      fi
     else
       echo -e "${RED}✗${NC} Java 21 ${RED}(required)${NC}"
-      echo -e "  ${YELLOW}→${NC} Install Java 21 and export JAVA_HOME if needed"
+      echo -e "  ${YELLOW}→${NC} Ensure $java_bin can execute 'java -version' successfully"
       CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
     fi
   else
@@ -593,13 +611,18 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   fi
 
   if [ -n "$javac_bin" ]; then
-    javac_version_output="$("$javac_bin" -version 2>&1)"
-    if printf '%s\n' "$javac_version_output" | grep -Eq '(^|[[:space:]])javac[[:space:]]+21(\.|$)'; then
-      echo -e "${GREEN}✓${NC} Java compiler (javac)"
-      OK_COUNT=$((OK_COUNT + 1))
+    if javac_version_output="$(probe_version_output "$javac_bin" -version)"; then
+      if printf '%s\n' "$javac_version_output" | grep -Eq '(^|[[:space:]])javac[[:space:]]+21(\.|$)'; then
+        echo -e "${GREEN}✓${NC} Java compiler (javac)"
+        OK_COUNT=$((OK_COUNT + 1))
+      else
+        echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(Java 21 required)${NC}"
+        echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+        increment_critical_missing
+      fi
     else
-      echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(Java 21 required)${NC}"
-      echo -e "  ${YELLOW}→${NC} Install the Java 21 development package (for example openjdk-21-jdk or java-21-openjdk-devel)"
+      echo -e "${RED}✗${NC} Java compiler (javac) ${RED}(REQUIRED)${NC}"
+      echo -e "  ${YELLOW}→${NC} Ensure $javac_bin can execute 'javac -version' successfully"
       increment_critical_missing
     fi
   else

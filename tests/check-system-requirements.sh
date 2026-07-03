@@ -131,6 +131,10 @@ stub_command "pnpm" 'exit 0'
 # shellcheck disable=SC2016
 stub_command "java" '
 if [ "${1:-}" = "-version" ]; then
+  if [ -n "${TEST_JAVA_VERSION_EXIT_CODE:-}" ]; then
+    printf "%s\n" "${TEST_JAVA_VERSION_STDERR:-broken java runtime}" >&2
+    exit "$TEST_JAVA_VERSION_EXIT_CODE"
+  fi
   if [ -n "${TEST_JAVA_VERSION_OUTPUT:-}" ]; then
     printf "%s\n" "$TEST_JAVA_VERSION_OUTPUT"
     exit 0
@@ -140,7 +144,13 @@ if [ "${1:-}" = "-version" ]; then
 fi
 exit 0
 '
-stub_command "javac" 'echo "javac ${TEST_JAVAC_VERSION:-21.0.11}"'
+stub_command "javac" '
+if [ -n "${TEST_JAVAC_VERSION_EXIT_CODE:-}" ]; then
+  printf "%s\n" "${TEST_JAVAC_VERSION_STDERR:-broken javac runtime}" >&2
+  exit "$TEST_JAVAC_VERSION_EXIT_CODE"
+fi
+echo "javac ${TEST_JAVAC_VERSION:-21.0.11}"
+'
 stub_command "adb" 'echo "Android Debug Bridge version 1.0.41"'
 stub_command "sdkmanager" 'echo "25.2.0"'
 stub_command "gh" 'exit 0'
@@ -308,6 +318,50 @@ fi
 
 grep -Fq 'Java 21' "$java_banner_output"
 grep -Fq 'All critical requirements met!' "$java_banner_output"
+
+broken_java_probe_output="$sandbox/java-probe-broken.txt"
+if (
+  cd "$workspace/.github"
+  PATH="$workspace/bin" \
+    HOME="$test_home" \
+    JAVA_HOME="" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+    ANDROID_SDK_ROOT="" \
+    ANDROID_HOME="" \
+    TEST_JAVA_VERSION_EXIT_CODE=127 \
+    /bin/bash ./scripts/check-system-requirements.sh --repo=android
+) >"$broken_java_probe_output" 2>&1; then
+  cat "$broken_java_probe_output"
+  echo "android requirements check unexpectedly succeeded when java -version failed" >&2
+  exit 1
+fi
+
+grep -Fq 'Java 21' "$broken_java_probe_output"
+grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$broken_java_probe_output"
+grep -Fq 'Android SDK Platform-Tools (adb)' "$broken_java_probe_output"
+grep -Fq 'critical requirement(s) missing' "$broken_java_probe_output"
+
+broken_javac_probe_output="$sandbox/javac-probe-broken.txt"
+if (
+  cd "$workspace/.github"
+  PATH="$workspace/bin" \
+    HOME="$test_home" \
+    JAVA_HOME="" \
+    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
+    ANDROID_SDK_ROOT="" \
+    ANDROID_HOME="" \
+    TEST_JAVAC_VERSION_EXIT_CODE=127 \
+    /bin/bash ./scripts/check-system-requirements.sh --repo=android
+) >"$broken_javac_probe_output" 2>&1; then
+  cat "$broken_javac_probe_output"
+  echo "android requirements check unexpectedly succeeded when javac -version failed" >&2
+  exit 1
+fi
+
+grep -Fq 'Java compiler (javac)' "$broken_javac_probe_output"
+grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$broken_javac_probe_output"
+grep -Fq 'Android SDK Platform-Tools (adb)' "$broken_javac_probe_output"
+grep -Fq 'critical requirement(s) missing' "$broken_javac_probe_output"
 
 old_node_output="$sandbox/node-too-old.txt"
 if TEST_NODE_VERSION="v20.15.0" run_check "$old_node_output" --repo=android; then
