@@ -36,7 +36,8 @@ done
 
 # Auto-detect default branch (fallback to main)
 # Use symbolic-ref instead of remote show to avoid network hang
-BASE="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+BASE="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || true)"
+BASE="${BASE#refs/remotes/origin/}"
 [ -z "${BASE:-}" ] && BASE="main"
 
 echo "Using base branch: $BASE"
@@ -117,6 +118,24 @@ if [ -f tests/reusable-workflow-timeouts.sh ]; then
     echo "" >&2
     echo "❌ Reusable workflow timeout validation failed!" >&2
     echo "Add timeout-minutes to every reusable workflow job before continuing." >&2
+    exit 1
+  }
+fi
+
+if [ -f tests/copilot-review-memory.sh ]; then
+  bash tests/copilot-review-memory.sh || {
+    echo "" >&2
+    echo "❌ Copilot review memory workflow regression test failed!" >&2
+    echo "Keep privileged review-event local script execution pinned to trusted base code before continuing." >&2
+    exit 1
+  }
+fi
+
+if [ -f tests/copilot-review-memory-errors.sh ]; then
+  bash tests/copilot-review-memory-errors.sh || {
+    echo "" >&2
+    echo "❌ Copilot review memory workflow diagnostics regression test failed!" >&2
+    echo "Keep missing-line failures in the privileged review-event regression explicit before continuing." >&2
     exit 1
   }
 fi
