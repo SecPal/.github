@@ -31,7 +31,9 @@ extract_allowlist() {
 # ---------------------------------------------------------------------------
 extract_allowlist_license_ids() {
   local workflow="$1"
-  extract_allowlist "$workflow" | sed 's/[[:space:]]*#.*$//' | sed -n 's/^[[:space:]]*"\([^"]\+\)".*$/\1/p'
+  extract_allowlist "$workflow" \
+    | sed 's/[[:space:]]*#.*$//' \
+    | sed -nE 's/^[[:space:]]*"([^"]+)".*$/\1/p'
 }
 
 # ---------------------------------------------------------------------------
@@ -67,8 +69,8 @@ matching_allowlists_case() {
   local reusable_allowlist
   local local_allowlist
 
-  reusable_allowlist="$(extract_allowlist_license_ids "$REUSABLE_WORKFLOW")"
-  local_allowlist="$(extract_allowlist_license_ids "$LOCAL_WORKFLOW")"
+  reusable_allowlist="$(extract_allowlist_license_ids "$REUSABLE_WORKFLOW" | sort -u)"
+  local_allowlist="$(extract_allowlist_license_ids "$LOCAL_WORKFLOW" | sort -u)"
 
   if [ "$reusable_allowlist" != "$local_allowlist" ]; then
     failures+=("FAIL [$label]: reusable and local workflow license identifiers diverged")
@@ -125,4 +127,4 @@ if [ ${#failures[@]} -gt 0 ]; then
   exit 1
 fi
 
-echo "✓ license-compatibility allowlist regression tests passed ($(extract_allowlist_license_ids "$REUSABLE_WORKFLOW" | wc -l | tr -d ' ') entries checked)"
+echo "✓ license-compatibility allowlist regression tests passed ($(extract_allowlist_license_ids "$REUSABLE_WORKFLOW" | awk 'END{print NR}') entries checked)"
