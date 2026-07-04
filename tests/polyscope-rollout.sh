@@ -1456,9 +1456,8 @@ grep -qF "set \$preview_frontend_csp " "$nginx_output"
 grep -qF "script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-\$csp_nonce';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_frontend_csp;" "$nginx_output"
-grep -qF "set \$preview_uses_ssi 0;" "$nginx_output"
-if grep -qF "set \$preview_uses_ssi 1;" "$nginx_output"; then
-    echo "frontend previews must not enable SSI for workspace-controlled HTML" >&2
+if grep -qF "preview_uses_ssi" "$nginx_output"; then
+    echo "preview nginx config must not keep the obsolete preview_uses_ssi toggle" >&2
     exit 1
 fi
 grep -qF "set \$secpal_permissions_policy " "$nginx_output"
