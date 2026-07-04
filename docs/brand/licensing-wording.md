@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -34,6 +34,7 @@ SecPal materials use different license wording and different link targets depend
 - Use `Licensed under AGPL v3+` (or, in the documented two-line footer, the standalone `AGPL v3+` label) only in public footers for AGPL-licensed surfaces.
 - Use license wording that matches the active commercial agreement on commercially licensed surfaces.
 - Use the SPDX expression `AGPL-3.0-or-later` in source file license headers for files that are licensed under the AGPL.
+- When SecPal's approved attribution addendum applies, use `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution` in SPDX/REUSE metadata and follow [`docs/licensing-policy.md`](../licensing-policy.md) for the governing rules.
 - Use the package ecosystem's SPDX-compatible license field where one exists.
 - Do not put human-readable license wording into machine-readable metadata.
 - Do not put SPDX expressions into compact public footers unless the surface is specifically about license compliance.
