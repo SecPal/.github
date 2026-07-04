@@ -16,6 +16,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added a central [`docs/licensing-policy.md`](docs/licensing-policy.md) reference for SecPal-wide CLA definitions, `SecPal Contributors` SPDX policy, `LicenseRef-SecPal-Attribution` usage, third-party notice separation, Tailwind-specific scoping, and the enforceable versus preferred SecPal attribution wording
 - added the approved [`LICENSES/LicenseRef-SecPal-Attribution.txt`](LICENSES/LicenseRef-SecPal-Attribution.txt) addendum text to this repository so shared governance docs can reference the exact attribution terms already enforced by the reusable license-compatibility workflows
 - updated [`CLA.md`](CLA.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`README.md`](README.md), and [`docs/brand/licensing-wording.md`](docs/brand/licensing-wording.md) so contributor-facing guidance now defines `SecPal`, `Project Maintainer`, and CLA recipient scope consistently and points repository owners at the central licensing policy
+- fixed the local and reusable license-compatibility workflows so their custom-license guard searches real `SPDX-License-Identifier` headers when validating `LicenseRef-SecPal-Attribution` metadata
 - cross-referenced the repository-specific rollout issues for `api`, `frontend`, and `android` so the implementation work stays tracked outside the central policy issue
 
 ---
