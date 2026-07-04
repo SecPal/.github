@@ -5,7 +5,7 @@
 # Regression checks for the Copilot review memory workflow privilege boundary.
 # pull_request_review events can be triggered by pull requests whose head tree
 # is attacker-controlled, so any local code run after minting the GitHub App
-# token must come from the trusted base commit.
+# token must come from the current trusted base ref.
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/copilot-review-memory.yml"
 # shellcheck disable=SC2016
 # Literal GitHub expression expected in workflow YAML.
-TRUSTED_REVIEW_REF='          ref: ${{ github.event_name == '\''pull_request_review'\'' && github.event.pull_request.base.sha || github.sha }}'
+TRUSTED_REVIEW_REF='          ref: ${{ github.event_name == '\''pull_request_review'\'' && github.event.pull_request.base.ref || github.sha }}'
 
 first_line_number() {
   local pattern="$1"
@@ -62,7 +62,7 @@ if awk -v start="$checkout_line" -v trusted_ref="$TRUSTED_REVIEW_REF" '
 ' "$WORKFLOW"; then
   :
 else
-  echo "Checkout before privileged local script execution must include the trusted pull_request_review base SHA ref." >&2
+  echo "Checkout before privileged local script execution must include the current trusted pull_request_review base ref." >&2
   exit 1
 fi
 
