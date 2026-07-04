@@ -98,25 +98,32 @@ preflight_guidance_case() {
 # ---------------------------------------------------------------------------
 secpal_attribution_guard_case() {
   local label="$1"
-  local reusable_workflow
+  local workflow_name
+  local workflow_path
 
-  reusable_workflow="$(cat "$REUSABLE_WORKFLOW")"
+  for workflow_name in reusable local; do
+    if [ "$workflow_name" = "reusable" ]; then
+      workflow_path="$REUSABLE_WORKFLOW"
+    else
+      workflow_path="$LOCAL_WORKFLOW"
+    fi
 
-  if ! printf '%s' "$reusable_workflow" | grep -qF "$SECPAL_ATTRIBUTION_SHA256"; then
-    failures+=("FAIL [$label]: reusable workflow does not pin the approved SecPal attribution addendum hash")
-  fi
+    if ! grep -qF "$SECPAL_ATTRIBUTION_SHA256" "$workflow_path"; then
+      failures+=("FAIL [$label]: $workflow_name workflow does not pin the approved SecPal attribution addendum hash")
+    fi
 
-  if ! printf '%s' "$reusable_workflow" | grep -qF 'LICENSES/LicenseRef-SecPal-Attribution.txt'; then
-    failures+=("FAIL [$label]: reusable workflow does not require the SecPal attribution license file")
-  fi
+    if ! grep -qF 'LICENSES/LicenseRef-SecPal-Attribution.txt' "$workflow_path"; then
+      failures+=("FAIL [$label]: $workflow_name workflow does not require the SecPal attribution license file")
+    fi
 
-  if ! printf '%s' "$reusable_workflow" | grep -qF 'must use the approved SecPal attribution addendum text'; then
-    failures+=("FAIL [$label]: reusable workflow does not reject mismatched SecPal attribution text")
-  fi
+    if ! grep -qF 'must use the approved SecPal attribution addendum text' "$workflow_path"; then
+      failures+=("FAIL [$label]: $workflow_name workflow does not reject mismatched SecPal attribution text")
+    fi
 
-  if ! printf '%s' "$reusable_workflow" | grep -qF 'is only allowed with AGPL-3.0-or-later in the same file'; then
-    failures+=("FAIL [$label]: reusable workflow does not require AGPL alongside the SecPal attribution license reference")
-  fi
+    if ! grep -qF 'is only allowed with AGPL-3.0-or-later in the same file' "$workflow_path"; then
+      failures+=("FAIL [$label]: $workflow_name workflow does not require AGPL alongside the SecPal attribution license reference")
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------
