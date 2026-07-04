@@ -54,6 +54,7 @@ jobs:
             local expected_sha256="$4"
             local reference_label="$5"
             local actual_sha256
+            local invalid_reuse_files
             local matching_expressions
             local invalid_expressions
 
@@ -72,6 +73,40 @@ jobs:
               fi
             fi
 
+            invalid_reuse_files="$(
+              awk -v ref="$license_ref" -v required="$required_license" '
+                /^FileName:/ {
+                  if (file != "" && has_ref && !has_required) {
+                    print file
+                  }
+                  file = substr($0, index($0, ":") + 2)
+                  has_ref = 0
+                  has_required = 0
+                  next
+                }
+                /^LicenseInfoInFile:/ {
+                  license = substr($0, index($0, ":") + 2)
+                  if (license == ref) {
+                    has_ref = 1
+                  }
+                  if (license == required) {
+                    has_required = 1
+                  }
+                }
+                END {
+                  if (file != "" && has_ref && !has_required) {
+                    print file
+                  }
+                }
+              ' reuse.spdx
+            )"
+            if [ -n "$invalid_reuse_files" ]; then
+              echo "ERROR: $license_ref is only allowed in files that also declare" \
+                "$required_license in REUSE metadata:"
+              printf '%s\n' "$invalid_reuse_files"
+              incompatible_found=1
+            fi
+
             matching_expressions="$(
               git grep -n "SPDX-License-Identifier.*$license_ref" -- . ':(exclude)LICENSES/*' || true
             )"
@@ -82,8 +117,14 @@ jobs:
             fi
 
             invalid_expressions="$(
-              printf '%s\n' "$matching_expressions" | awk -F: -v required="$required_license" '
-                index($0, " OR ") || index($0, required) == 0 { print }
+              printf '%s\n' "$matching_expressions" | awk -v required="$required_license" '
+                {
+                  expression = $0
+                  sub(/^[^:][^:]*:[0-9][0-9]*:/, "", expression)
+                  if (index(expression, " OR ") || index(expression, required) == 0) {
+                    print
+                  }
+                }
               '
             )"
             if [ -n "$invalid_expressions" ]; then

@@ -139,6 +139,190 @@ custom_license_ref_guard_case() {
       || ! printf '%s' "$workflow" | grep -qF 'in the same SPDX-License-Identifier expression:'; then
       failures+=("FAIL [$label]: $workflow_label does not reject OR-paired or non-AGPL custom license expressions")
     fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'sub(/^[^:][^:]*:[0-9][0-9]*:/, "", expression)'; then
+      failures+=("FAIL [$label]: $workflow_label does not strip git grep path prefixes before checking SPDX expressions")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'has_ref && !has_required'; then
+      failures+=("FAIL [$label]: $workflow_label does not reject REUSE file blocks that pair the custom license reference without AGPL")
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Helper: extract the "Check AGPL compatibility" shell block from a workflow.
+# ---------------------------------------------------------------------------
+extract_agpl_compatibility_script() {
+  local workflow="$1"
+  awk '
+    /^      - name: Check AGPL compatibility$/ { in_step=1; next }
+    in_step && /^        run: \|$/ { in_run=1; next }
+    in_run {
+      if ($0 ~ /^      - name:/) {
+        exit
+      }
+      sub(/^          /, "")
+      print
+    }
+  ' "$workflow"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: create approved custom-license files and a stub sha256sum command.
+# ---------------------------------------------------------------------------
+setup_custom_license_fixture_tools() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir/LICENSES" "$repo_dir/bin"
+
+  printf 'fixture\n' > "$repo_dir/LICENSES/LicenseRef-SecPal-Attribution.txt"
+  printf 'fixture\n' > "$repo_dir/LICENSES/LicenseRef-TailwindPlus.txt"
+
+  cat <<EOF > "$repo_dir/bin/sha256sum"
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "\$1" in
+  LICENSES/LicenseRef-SecPal-Attribution.txt)
+    printf '%s  %s\n' "$SECPAL_ATTRIBUTION_SHA256" "\$1"
+    ;;
+  LICENSES/LicenseRef-TailwindPlus.txt)
+    printf '%s  %s\n' "$TAILWIND_PLUS_SHA256" "\$1"
+    ;;
+  *)
+    exec /usr/bin/sha256sum "\$@"
+    ;;
+esac
+EOF
+  chmod +x "$repo_dir/bin/sha256sum"
+}
+
+# ---------------------------------------------------------------------------
+# Helpers: build temp repos that simulate valid and invalid custom-license use.
+# ---------------------------------------------------------------------------
+build_valid_custom_license_fixture() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir/docs"
+
+  cat <<'EOF' > "$repo_dir/docs/valid.md"
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+EOF
+
+  cat <<'EOF' > "$repo_dir/reuse.spdx"
+FileName: ./docs/valid.md
+LicenseInfoInFile: AGPL-3.0-or-later
+LicenseInfoInFile: LicenseRef-SecPal-Attribution
+EOF
+}
+
+build_path_leak_fixture() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir/docs/AGPL-3.0-or-later"
+
+  cat <<'EOF' > "$repo_dir/docs/AGPL-3.0-or-later/guide.md"
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: LicenseRef-SecPal-Attribution
+EOF
+
+  cat <<'EOF' > "$repo_dir/reuse.spdx"
+FileName: ./docs/AGPL-3.0-or-later/guide.md
+LicenseInfoInFile: AGPL-3.0-or-later
+LicenseInfoInFile: LicenseRef-SecPal-Attribution
+EOF
+}
+
+build_sidecar_pairing_fixture() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir/docs"
+
+  cat <<'EOF' > "$repo_dir/docs/good.md"
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+EOF
+
+  cat <<'EOF' > "$repo_dir/docs/sidecar-only.md"
+This file relies on REUSE metadata only.
+EOF
+
+  cat <<'EOF' > "$repo_dir/reuse.spdx"
+FileName: ./docs/good.md
+LicenseInfoInFile: AGPL-3.0-or-later
+LicenseInfoInFile: LicenseRef-SecPal-Attribution
+
+FileName: ./docs/sidecar-only.md
+LicenseInfoInFile: LicenseRef-SecPal-Attribution
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Helper: execute a workflow's AGPL guard against a temp fixture repository.
+# ---------------------------------------------------------------------------
+run_custom_license_guard_fixture() {
+  local workflow_path="$1"
+  local fixture_builder="$2"
+  local tmp_dir
+  local repo_dir
+  local script_path
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/license-compatibility.XXXXXX")"
+  repo_dir="$tmp_dir/repo"
+  script_path="$tmp_dir/check-agpl-compatibility.sh"
+  mkdir -p "$repo_dir"
+
+  setup_custom_license_fixture_tools "$repo_dir"
+  "$fixture_builder" "$repo_dir"
+  extract_agpl_compatibility_script "$workflow_path" > "$script_path"
+  chmod +x "$script_path"
+
+  (
+    cd "$repo_dir"
+    git init -q
+    git config user.email test@example.com
+    git config user.name "SecPal Test"
+    git add .
+    git commit -qm "fixture"
+    PATH="$repo_dir/bin:$PATH" bash "$script_path" >/dev/null 2>&1
+  )
+  local status=$?
+
+  rm -rf "$tmp_dir"
+  return "$status"
+}
+
+# ---------------------------------------------------------------------------
+# positive_guard_case LABEL FIXTURE
+#   Assert both workflow files accept a compliant custom-license pairing.
+# ---------------------------------------------------------------------------
+positive_guard_case() {
+  local label="$1"
+  local fixture_builder="$2"
+  local workflow_path
+  local workflow_label
+
+  for workflow_path in "$REUSABLE_WORKFLOW" "$LOCAL_WORKFLOW"; do
+    workflow_label="$(basename "$workflow_path")"
+    if ! run_custom_license_guard_fixture "$workflow_path" "$fixture_builder"; then
+      failures+=("FAIL [$label]: $workflow_label rejected a compliant custom-license pairing")
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# negative_guard_case LABEL FIXTURE
+#   Assert both workflow files reject a specific invalid custom-license fixture.
+# ---------------------------------------------------------------------------
+negative_guard_case() {
+  local label="$1"
+  local fixture_builder="$2"
+  local workflow_path
+  local workflow_label
+
+  for workflow_path in "$REUSABLE_WORKFLOW" "$LOCAL_WORKFLOW"; do
+    workflow_label="$(basename "$workflow_path")"
+    if run_custom_license_guard_fixture "$workflow_path" "$fixture_builder"; then
+      failures+=("FAIL [$label]: $workflow_label accepted an invalid custom-license fixture")
+    fi
   done
 }
 
@@ -167,6 +351,9 @@ negative_case "proprietary rejected"   "LicenseRef-Proprietary"
 matching_allowlists_case "reusable and local workflow allowlists aligned"
 preflight_guidance_case "preflight guidance covers allowlist alignment"
 custom_license_ref_guard_case "custom license reference guards cover both workflow files"
+positive_guard_case "compliant custom-license fixtures stay accepted" build_valid_custom_license_fixture
+negative_guard_case "path substrings cannot satisfy AGPL SPDX pairing" build_path_leak_fixture
+negative_guard_case "REUSE file blocks must keep custom-license AGPL pairing per file" build_sidecar_pairing_fixture
 
 # ---------------------------------------------------------------------------
 # Report
