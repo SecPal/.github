@@ -1448,7 +1448,7 @@ grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
 grep -qF "set \$preview_relaxed_csp " "$nginx_output"
-grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self';" "$nginx_output"
+grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
 if grep -qF "preview_frontend_csp" "$nginx_output" || grep -qF "csp_nonce" "$nginx_output" || grep -qF "nonce-\$csp_nonce" "$nginx_output"; then
     echo "preview nginx config must not advertise nonce-based frontend CSP after SSI removal" >&2
