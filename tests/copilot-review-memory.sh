@@ -12,7 +12,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKFLOW="$REPO_ROOT/.github/workflows/copilot-review-memory.yml"
+# shellcheck disable=SC2016
+# Literal GitHub expression expected in workflow YAML.
 TRUSTED_REVIEW_REF='          ref: ${{ github.event_name == '\''pull_request_review'\'' && github.event.pull_request.base.sha || github.sha }}'
+
+first_line_number() {
+  local pattern="$1"
+  local match
+
+  match="$(grep -n -m1 "$pattern" "$WORKFLOW" || true)"
+  if [ -z "$match" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "${match%%:*}"
+}
 
 if [ ! -f "$WORKFLOW" ]; then
   echo "Expected workflow was not found: $WORKFLOW" >&2
@@ -32,8 +46,8 @@ grep -q '^        uses: actions/create-github-app-token@v3$' "$WORKFLOW" || {
 # The privileged job runs local repository scripts with GH_TOKEN set to the App
 # token. Guard against regressing to the default checkout for review events,
 # where the script path can be supplied by the pull request head tree.
-checkout_line=$(grep -n '^      - name: Checkout repository$' "$WORKFLOW" | cut -d: -f1 | head -n1)
-first_script_line=$(grep -n '^          ./scripts/copilot-review-tool\.sh scan \\$' "$WORKFLOW" | cut -d: -f1 | head -n1)
+checkout_line="$(first_line_number '^      - name: Checkout repository$' || true)"
+first_script_line="$(first_line_number '^          ./scripts/copilot-review-tool\.sh scan \\$' || true)"
 if [ -z "$checkout_line" ] || [ -z "$first_script_line" ] || [ "$checkout_line" -ge "$first_script_line" ]; then
   echo "Copilot review memory workflow must checkout trusted code before running copilot-review-tool.sh." >&2
   exit 1

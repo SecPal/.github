@@ -16,6 +16,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - pinned the Copilot Review Memory workflow checkout to the trusted pull request base SHA for `pull_request_review` events before running local scripts with the GitHub App token
 - added regression coverage so the workflow cannot silently return to the default review-event checkout when executing repository scripts with privileged credentials
 - tightened the Copilot review memory regression so it now anchors the trusted review-event checkout `ref` to the active `actions/checkout` step instead of accepting commented or unsafe `ref` lines
+- hardened the Copilot review memory regression diagnostics so missing checkout or script lines now fail with the dedicated privilege-boundary message instead of exiting early under `set -euo pipefail`
 - kept local preflight usable in checkouts without `origin/HEAD` so the required workflow validation can fall back to `main` instead of exiting early
 
 ---

@@ -131,6 +131,15 @@ if [ -f tests/copilot-review-memory.sh ]; then
   }
 fi
 
+if [ -f tests/copilot-review-memory-errors.sh ]; then
+  bash tests/copilot-review-memory-errors.sh || {
+    echo "" >&2
+    echo "❌ Copilot review memory workflow diagnostics regression test failed!" >&2
+    echo "Keep missing-line failures in the privileged review-event regression explicit before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/codeql-applicability.sh ]; then
   bash tests/codeql-applicability.sh || {
     echo "" >&2
