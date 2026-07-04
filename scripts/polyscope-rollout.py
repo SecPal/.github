@@ -429,13 +429,16 @@ def ensure_api_worktree_ready(
     env_path = worktree_path / ".env"
     if not env_path.exists():
         source_env_path = source_repo_path / ".env"
-        if not source_env_path.exists():
-            print(
-                f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
-                f".env missing and source preview env not found at {source_env_path}"
-            )
-            return False, None
-        shutil.copy2(source_env_path, env_path)
+        source_hint = (
+            f"; source .env exists at {source_env_path} but is not copied into worktrees"
+            if source_env_path.exists()
+            else f"; source preview env not found at {source_env_path}"
+        )
+        print(
+            f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
+            f".env missing{source_hint}"
+        )
+        return False, None
 
     env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
@@ -1318,7 +1321,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         "review_focus": "Laravel 13, Pest 4, Request -> Controller -> Service -> Repository -> Model, Sanctum session versus bearer-token flows, and encrypted data handling via *_plain/*_idx without direct *_enc reads.",
         "link_names": ["frontend", "contracts", "android"],
         "local_config": {
-            "copyGitignored": True,
+            "copyGitignored": False,
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("api")},
             "scripts": {
