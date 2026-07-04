@@ -40,6 +40,10 @@ jobs:
 
       - name: Check AGPL compatibility
         run: |
+          secpal_attribution_license_ref="LicenseRef-SecPal-Attribution"
+          secpal_attribution_license_file="LICENSES/LicenseRef-SecPal-Attribution.txt"
+          secpal_attribution_license_sha256="0483f138e65753a0c8a3ba718d8ca9bdcba8633be8262c346d17c3a0b711b638"
+
           # Extract all licenses from the SPDX file
           licenses=$(grep "LicenseInfoInFile" reuse.spdx | cut -d':' -f2 | sort -u | tr -d ' ')
 
@@ -93,6 +97,44 @@ jobs:
               incompatible_found=1
             fi
           done
+
+          if printf '%s\n' "$licenses" | grep -qxF "$secpal_attribution_license_ref"; then
+            if [ ! -f "$secpal_attribution_license_file" ]; then
+              echo "ERROR: $secpal_attribution_license_ref requires $secpal_attribution_license_file"
+              incompatible_found=1
+            else
+              actual_sha256="$(sha256sum "$secpal_attribution_license_file" | awk '{print $1}')"
+              if [ "$actual_sha256" != "$secpal_attribution_license_sha256" ]; then
+                echo "ERROR: $secpal_attribution_license_ref must use the approved SecPal attribution addendum text"
+                incompatible_found=1
+              fi
+            fi
+
+            files_missing_agpl="$(
+              awk -v attr="$secpal_attribution_license_ref" '
+                function flush_file() {
+                  if (current_file != "" && saw_attr && !saw_agpl) {
+                    print current_file
+                  }
+                }
+                /^FileName: / {
+                  flush_file()
+                  current_file = substr($0, 11)
+                  saw_attr = 0
+                  saw_agpl = 0
+                  next
+                }
+                $0 == "LicenseInfoInFile: " attr { saw_attr = 1; next }
+                $0 == "LicenseInfoInFile: AGPL-3.0-or-later" { saw_agpl = 1; next }
+                END { flush_file() }
+              ' reuse.spdx
+            )"
+            if [ -n "$files_missing_agpl" ]; then
+              echo "ERROR: $secpal_attribution_license_ref is only allowed with AGPL-3.0-or-later in the same file:"
+              printf '%s\n' "$files_missing_agpl"
+              incompatible_found=1
+            fi
+          fi
 
           if [ $incompatible_found -eq 1 ]; then
             echo "ERROR: Found licenses incompatible with AGPL-3.0-or-later"

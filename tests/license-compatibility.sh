@@ -14,6 +14,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-license-compatibility.yml"
 LOCAL_WORKFLOW="$REPO_ROOT/.github/workflows/license-compatibility.yml"
 PREFLIGHT_SCRIPT="$REPO_ROOT/scripts/preflight.sh"
+SECPAL_ATTRIBUTION_SHA256="0483f138e65753a0c8a3ba718d8ca9bdcba8633be8262c346d17c3a0b711b638"
 
 failures=()
 
@@ -91,6 +92,34 @@ preflight_guidance_case() {
 }
 
 # ---------------------------------------------------------------------------
+# secpal_attribution_guard_case LABEL
+#   Assert that the workflow validates the SecPal attribution addendum content
+#   and requires AGPL in every file that uses the license reference.
+# ---------------------------------------------------------------------------
+secpal_attribution_guard_case() {
+  local label="$1"
+  local reusable_workflow
+
+  reusable_workflow="$(cat "$REUSABLE_WORKFLOW")"
+
+  if ! printf '%s' "$reusable_workflow" | grep -qF "$SECPAL_ATTRIBUTION_SHA256"; then
+    failures+=("FAIL [$label]: reusable workflow does not pin the approved SecPal attribution addendum hash")
+  fi
+
+  if ! printf '%s' "$reusable_workflow" | grep -qF 'LICENSES/LicenseRef-SecPal-Attribution.txt'; then
+    failures+=("FAIL [$label]: reusable workflow does not require the SecPal attribution license file")
+  fi
+
+  if ! printf '%s' "$reusable_workflow" | grep -qF 'must use the approved SecPal attribution addendum text'; then
+    failures+=("FAIL [$label]: reusable workflow does not reject mismatched SecPal attribution text")
+  fi
+
+  if ! printf '%s' "$reusable_workflow" | grep -qF 'is only allowed with AGPL-3.0-or-later in the same file'; then
+    failures+=("FAIL [$label]: reusable workflow does not require AGPL alongside the SecPal attribution license reference")
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -114,6 +143,7 @@ negative_case "BUSL-1.1 rejected"      "BUSL-1.1"
 negative_case "proprietary rejected"   "LicenseRef-Proprietary"
 matching_allowlists_case "reusable and local workflow allowlists aligned"
 preflight_guidance_case "preflight guidance covers allowlist alignment"
+secpal_attribution_guard_case "SecPal attribution guard covers file content and AGPL pairing"
 
 # ---------------------------------------------------------------------------
 # Report
