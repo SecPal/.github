@@ -13,7 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- disabled nginx SSI processing for Polyscope frontend preview `index.html` and SPA fallback responses, preventing workspace-controlled HTML from reflecting request headers such as cookies while preserving the frontend preview CSP
+- disabled nginx SSI processing for Polyscope frontend preview `index.html` and SPA fallback responses, preventing workspace-controlled HTML from reflecting request headers such as cookies and reverting frontend preview HTML to the safe relaxed static CSP once nonce expansion was removed
 - removed the obsolete preview-only `$preview_uses_ssi` nginx toggle after SSI enablement paths were deleted, so the rendered config no longer carries dead state that could mislead future changes
 - updated the Polyscope rollout regression test to reject SSI handoff locations and any `ssi on;` directive in rendered preview nginx configuration
 
