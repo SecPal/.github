@@ -1,5 +1,5 @@
 ---
-# SPDX-FileCopyrightText: 2025-2026 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: License Compatibility
@@ -56,7 +56,9 @@ jobs:
             local invalid_reuse_files
             local matching_expressions
             local invalid_expressions
-            local spdx_identifier_prefix='SPDX-License'"'"'-Identifier:'
+            local spdx_identifier_prefix
+            spdx_identifier_prefix="SPDX-License"
+            spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"
 
             collect_matching_expressions() {
               local ref="$1"

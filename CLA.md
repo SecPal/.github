@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 
 SPDX-License-Identifier: CC0-1.0
 
@@ -12,12 +12,18 @@ for legal clarity in the Individual and Corporate CLA sections. The markdownlint
 
 Thank you for your interest in contributing to SecPal projects! This Contributor License Agreement ("Agreement") documents the rights granted by contributors to SecPal.
 
+## Defined Terms
+
+- **SecPal** means the SecPal open source project maintained by the Project Maintainer.
+- **Project Maintainer** means the person or legal entity designated in SecPal governance documentation as responsible for accepting contributions, administering contributor agreements, and granting commercial licenses for the SecPal project, including any legal successor or entity to which those rights are assigned.
+- **CLA rights recipient** means SecPal acting through the Project Maintainer unless and until SecPal publicly designates a successor legal entity in its governance documentation.
+
 ## Purpose
 
 This Agreement enables SecPal to maintain a **dual-licensing model**:
 
 - **Open Source License**: All contributions are licensed under the [AGPL-3.0-or-later](https://www.gnu.org/licenses/agpl-3.0.html) license
-- **Commercial License**: SecPal may offer commercial licenses to third parties for use cases incompatible with AGPL
+- **Commercial License**: SecPal, acting through the Project Maintainer, may offer commercial licenses to third parties for use cases incompatible with AGPL
 
 By signing this CLA, you retain full copyright ownership of your contributions while granting SecPal the necessary rights to distribute your work under both licensing models.
 
@@ -51,7 +57,7 @@ Subject to the terms and conditions of this Agreement, You hereby grant to SecPa
 
 - Reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute Your Contributions and such derivative works
 - Distribute Your Contributions under the [AGPL-3.0-or-later](https://www.gnu.org/licenses/agpl-3.0.html) license
-- **Grant commercial licenses** to third parties for Your Contributions as part of SecPal's dual-licensing business model
+- **Grant commercial licenses** to third parties for Your Contributions as part of SecPal's dual-licensing business model, with SecPal acting through the Project Maintainer as the CLA rights recipient
 
 ### 3. Grant of Patent License
 
@@ -101,7 +107,7 @@ Subject to the terms and conditions of this Agreement, You hereby grant to SecPa
 
 - Reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute Your Contributions and such derivative works
 - Distribute Your Contributions under the [AGPL-3.0-or-later](https://www.gnu.org/licenses/agpl-3.0.html) license
-- **Grant commercial licenses** to third parties for Your Contributions as part of SecPal's dual-licensing business model
+- **Grant commercial licenses** to third parties for Your Contributions as part of SecPal's dual-licensing business model, with SecPal acting through the Project Maintainer as the CLA rights recipient
 
 ### 3. Grant of Patent License
 
@@ -192,4 +198,4 @@ If you have questions about this CLA, please contact us:
 This CLA is adapted from the [Apache Software Foundation](https://www.apache.org/licenses/contributor-agreements.html) and [Google's Individual and Corporate CLAs](https://cla.developers.google.com/), modified for SecPal's dual-licensing model.
 
 **Version**: 1.0
-**Last Updated**: October 25, 2025
+**Last Updated**: July 4, 2026

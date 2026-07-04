@@ -1,6 +1,6 @@
 <!--
-SPDX-FileCopyrightText: 2025-2026 SecPal
-SPDX-License-Identifier: AGPL-3.0-or-later
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
 -->
 
 # SecPal Organization
@@ -317,7 +317,7 @@ pip install reuse
 reuse lint
 
 # Add missing headers
-reuse annotate --copyright "SecPal" --license "AGPL-3.0-or-later" <file>
+reuse annotate --copyright "SecPal Contributors" --license "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution" <file>
 ```
 
 ## License
@@ -340,6 +340,7 @@ All projects are licensed under the [AGPL-3.0-or-later](LICENSES/AGPL-3.0-or-lat
 - Distribute source code to users (including network users)
 - Share modifications under AGPL
 - Preserve copyright and license notices
+- Preserve the required SecPal attribution notice when the project uses the SecPal attribution addendum
 
 #### 2. Commercial License
 
@@ -353,6 +354,8 @@ For use cases **incompatible with AGPL**, we offer commercial licenses that allo
 
 **Interested in a commercial license?** Contact us at [legal@secpal.app](mailto:legal@secpal.app)
 
+The central SecPal policy for SPDX headers, CLA definitions, attribution terms, and `LicenseRef-SecPal-Attribution` lives in [docs/licensing-policy.md](docs/licensing-policy.md).
+
 ---
 
 ### Contributing
@@ -362,6 +365,7 @@ By contributing to SecPal projects, you agree to our [Contributor License Agreem
 - Grants us rights to distribute your contributions under **both** licensing models
 - Allows you to **retain copyright** ownership
 - Ensures your work can benefit both open source and commercial users
+- Defines SecPal and the Project Maintainer clearly enough for contributor license grants without turning the CLA into a copyright assignment
 
 **CLA Signing Process:**
 

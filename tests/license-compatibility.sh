@@ -140,8 +140,9 @@ custom_license_ref_guard_case() {
       failures+=("FAIL [$label]: $workflow_label does not reject OR-paired or non-AGPL custom license expressions")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF "spdx_identifier_prefix='SPDX-License'"; then
-      failures+=("FAIL [$label]: $workflow_label does not build SPDX header lookups without literal SPDX marker false positives")
+    if ! printf '%s' "$workflow" | grep -qF 'spdx_identifier_prefix="SPDX-License"' \
+      || ! printf '%s' "$workflow" | grep -qF 'spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"'; then
+      failures+=("FAIL [$label]: $workflow_label does not search real SPDX-License-Identifier headers")
     fi
 
     if ! printf '%s' "$workflow" | grep -qF 'git grep -h "$spdx_identifier_prefix.*$ref"'; then
@@ -223,9 +224,11 @@ EOF
 write_spdx_fixture() {
   local target_file="$1"
   local expression="$2"
-  local spdx_identifier_prefix='SPDX-License'"'"'-Identifier:'
+  local spdx_identifier_prefix
+  spdx_identifier_prefix="SPDX-License"
+  spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"
 
-  printf '# SPDX-FileCopyrightText: 2026 SecPal\n' > "$target_file"
+  printf '# SPDX-FileCopyrightText: 2026 SecPal Contributors\n' > "$target_file"
   printf '# %s %s\n' "$spdx_identifier_prefix" "$expression" >> "$target_file"
 }
 
@@ -233,7 +236,7 @@ write_reuse_toml_annotation() {
   local target_file="$1"
   local path_value="$2"
   local expression="$3"
-  local spdx_identifier_key='SPDX-License'"'"'-Identifier'
+  local spdx_identifier_key="SPDX-License-Identifier"
 
   cat <<'EOF' > "$target_file"
 version = 1
@@ -241,7 +244,7 @@ version = 1
 [[annotations]]
 EOF
   printf 'path = "%s"\n' "$path_value" >> "$target_file"
-  printf 'SPDX-FileCopyrightText = "2026 SecPal"\n' >> "$target_file"
+  printf 'SPDX-FileCopyrightText = "2026 SecPal Contributors"\n' >> "$target_file"
   printf '%s = "%s"\n' "$spdx_identifier_key" "$expression" >> "$target_file"
 }
 
@@ -318,7 +321,7 @@ EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 
 Files: docs/dep5-only.md
-Copyright: 2026 SecPal
+Copyright: 2026 SecPal Contributors
 License: LicenseRef-SecPal-Attribution
 EOF
 
