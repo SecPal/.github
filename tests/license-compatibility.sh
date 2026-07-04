@@ -15,6 +15,7 @@ REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-license-compatibility.y
 LOCAL_WORKFLOW="$REPO_ROOT/.github/workflows/license-compatibility.yml"
 PREFLIGHT_SCRIPT="$REPO_ROOT/scripts/preflight.sh"
 SECPAL_ATTRIBUTION_SHA256="0483f138e65753a0c8a3ba718d8ca9bdcba8633be8262c346d17c3a0b711b638"
+TAILWIND_PLUS_SHA256="f34dfb2ffa166cb60cf0aa4b9cedca33ab8caee1438ef81e14399e24bdadac3c"
 
 failures=()
 
@@ -92,36 +93,51 @@ preflight_guidance_case() {
 }
 
 # ---------------------------------------------------------------------------
-# secpal_attribution_guard_case LABEL
-#   Assert that the workflow validates the SecPal attribution addendum content
-#   and requires AGPL in every file that uses the license reference.
+# custom_license_ref_guard_case LABEL
+#   Assert that both workflow files validate approved custom license text and
+#   reject SPDX expressions that are missing AGPL or use OR-pairing.
 # ---------------------------------------------------------------------------
-secpal_attribution_guard_case() {
+custom_license_ref_guard_case() {
   local label="$1"
-  local workflow_name
+  local workflow
   local workflow_path
+  local workflow_label
 
-  for workflow_name in reusable local; do
-    if [ "$workflow_name" = "reusable" ]; then
-      workflow_path="$REUSABLE_WORKFLOW"
-    else
-      workflow_path="$LOCAL_WORKFLOW"
+  for workflow_path in "$REUSABLE_WORKFLOW" "$LOCAL_WORKFLOW"; do
+    workflow="$(cat "$workflow_path")"
+    workflow_label="$(basename "$workflow_path")"
+
+    if ! printf '%s' "$workflow" | grep -qF "$SECPAL_ATTRIBUTION_SHA256"; then
+      failures+=("FAIL [$label]: $workflow_label does not pin the approved SecPal attribution addendum hash")
     fi
 
-    if ! grep -qF "$SECPAL_ATTRIBUTION_SHA256" "$workflow_path"; then
-      failures+=("FAIL [$label]: $workflow_name workflow does not pin the approved SecPal attribution addendum hash")
+    if ! printf '%s' "$workflow" | grep -qF 'LICENSES/LicenseRef-SecPal-Attribution.txt'; then
+      failures+=("FAIL [$label]: $workflow_label does not require the SecPal attribution license file")
     fi
 
-    if ! grep -qF 'LICENSES/LicenseRef-SecPal-Attribution.txt' "$workflow_path"; then
-      failures+=("FAIL [$label]: $workflow_name workflow does not require the SecPal attribution license file")
+    if ! printf '%s' "$workflow" | grep -qF "$TAILWIND_PLUS_SHA256"; then
+      failures+=("FAIL [$label]: $workflow_label does not pin the approved Tailwind Plus license text hash")
     fi
 
-    if ! grep -qF 'must use the approved SecPal attribution addendum text' "$workflow_path"; then
-      failures+=("FAIL [$label]: $workflow_name workflow does not reject mismatched SecPal attribution text")
+    if ! printf '%s' "$workflow" | grep -qF 'LICENSES/LicenseRef-TailwindPlus.txt'; then
+      failures+=("FAIL [$label]: $workflow_label does not require the Tailwind Plus license file")
     fi
 
-    if ! grep -qF 'is only allowed with AGPL-3.0-or-later in the same file' "$workflow_path"; then
-      failures+=("FAIL [$label]: $workflow_name workflow does not require AGPL alongside the SecPal attribution license reference")
+    if ! printf '%s' "$workflow" | grep -qF 'must use the approved $reference_label text'; then
+      failures+=("FAIL [$label]: $workflow_label does not reject mismatched SecPal attribution text")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'reference_label="$5"'; then
+      failures+=("FAIL [$label]: $workflow_label does not reject mismatched Tailwind Plus text")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'must appear in a tracked SPDX-License-Identifier expression'; then
+      failures+=("FAIL [$label]: $workflow_label does not require tracked SPDX expressions for custom license references")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'is only allowed with $required_license' \
+      || ! printf '%s' "$workflow" | grep -qF 'in the same SPDX-License-Identifier expression:'; then
+      failures+=("FAIL [$label]: $workflow_label does not reject OR-paired or non-AGPL custom license expressions")
     fi
   done
 }
@@ -150,7 +166,7 @@ negative_case "BUSL-1.1 rejected"      "BUSL-1.1"
 negative_case "proprietary rejected"   "LicenseRef-Proprietary"
 matching_allowlists_case "reusable and local workflow allowlists aligned"
 preflight_guidance_case "preflight guidance covers allowlist alignment"
-secpal_attribution_guard_case "SecPal attribution guard covers file content and AGPL pairing"
+custom_license_ref_guard_case "custom license reference guards cover both workflow files"
 
 # ---------------------------------------------------------------------------
 # Report
