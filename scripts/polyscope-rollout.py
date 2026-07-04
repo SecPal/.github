@@ -2761,73 +2761,61 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
-            set $csp_nonce $request_id;
-            set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
-            set $preview_frontend_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'nonce-$csp_nonce'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
+            set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_csp $preview_relaxed_csp;
-            set $preview_uses_ssi 0;
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;
                 set $route_mode api;
-                set $preview_uses_ssi 0;
             }}
 
             if (-f $frontend_dist/index.html) {{
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
-                set $secpal_csp $preview_frontend_csp;
-                set $preview_uses_ssi 1;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $secpal_app_dist/index.html) {{
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if (-f $guardguide_de_dist/index.html) {{
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if (-f $changelog_out/index.html) {{
                 set $preview_docroot $changelog_out;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if ($repo = changelog) {{
                 set $preview_docroot $changelog_out;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if ($repo = secpal-app) {{
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if ($repo = guardguide-de) {{
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if ($repo = frontend) {{
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
-                set $secpal_csp $preview_frontend_csp;
-                set $preview_uses_ssi 1;
+                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = guardguide) {{
@@ -2835,7 +2823,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
                 set $php_root $guardguide_public;
                 set $route_mode api;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             if ($repo = api) {{
@@ -2843,7 +2830,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
                 set $php_root $api_public;
                 set $route_mode api;
                 set $secpal_csp $preview_relaxed_csp;
-                set $preview_uses_ssi 0;
             }}
 
             root $preview_docroot;
@@ -2873,14 +2859,8 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             location = / {{
-                error_page 418 = @preview_index_ssi;
-
                 if ($route_mode = api) {{
                     rewrite ^ /index.php last;
-                }}
-
-                if ($preview_uses_ssi = 1) {{
-                    return 418;
                 }}
 
                 add_header Content-Security-Policy $secpal_csp always;
@@ -2899,12 +2879,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             location = /index.html {{
-                error_page 418 = @preview_index_ssi;
-
-                if ($preview_uses_ssi = 1) {{
-                    return 418;
-                }}
-
                 add_header Content-Security-Policy $secpal_csp always;
                 add_header Permissions-Policy $secpal_permissions_policy always;
                 add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
@@ -2918,24 +2892,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
                 add_header Cache-Control "no-cache, no-store, must-revalidate" always;
                 try_files $uri =404;
-            }}
-
-            location @preview_index_ssi {{
-                ssi on;
-
-                add_header Content-Security-Policy $secpal_csp always;
-                add_header Permissions-Policy $secpal_permissions_policy always;
-                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-                add_header X-Content-Type-Options "nosniff" always;
-                add_header X-XSS-Protection "0" always;
-                add_header X-Frame-Options "DENY" always;
-                add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-                add_header Cross-Origin-Opener-Policy "same-origin" always;
-                add_header Cross-Origin-Resource-Policy "same-origin" always;
-                add_header Origin-Agent-Cluster "?1" always;
-                add_header X-Permitted-Cross-Domain-Policies "none" always;
-                add_header Cache-Control "no-cache, no-store, must-revalidate" always;
-                try_files /index.html =404;
             }}
 
             location = /sw.js {{
@@ -3038,21 +2994,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             location @preview_router {{
-                error_page 419 = @preview_router_ssi;
-
                 if ($route_mode = api) {{
                     rewrite ^ /index.php last;
                 }}
-
-                if ($preview_uses_ssi = 1) {{
-                    return 419;
-                }}
-
-                try_files $uri/index.html /index.html =404;
-            }}
-
-            location @preview_router_ssi {{
-                ssi on;
 
                 try_files $uri/index.html /index.html =404;
             }}

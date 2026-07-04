@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-04 - Disable SSI For Frontend Preview HTML
+
+**Fixed:**
+
+- disabled nginx SSI processing for Polyscope frontend preview `index.html` and SPA fallback responses, preventing workspace-controlled HTML from reflecting request headers such as cookies and reverting frontend preview HTML to the safe relaxed static CSP once nonce expansion was removed
+- widened the relaxed static preview CSP so inline `<style>` elements remain allowed after SSI and nonce expansion were removed from frontend preview HTML delivery
+- removed the obsolete preview-only `$preview_uses_ssi` nginx toggle after SSI enablement paths were deleted, so the rendered config no longer carries dead state that could mislead future changes
+- updated the Polyscope rollout regression test to reject SSI handoff locations and any `ssi on;` directive in rendered preview nginx configuration
+
+---
+
 ## 2026-07-04 - Pin Copilot Review Memory Checkout
 
 **Fixed:**
