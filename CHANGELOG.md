@@ -30,6 +30,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - hardened the Copilot review memory regression diagnostics so missing checkout or script lines now fail with the dedicated privilege-boundary message instead of exiting early under `set -euo pipefail`
 - kept local preflight usable in checkouts without `origin/HEAD` so the required workflow validation can fall back to `main` instead of exiting early
 
+## 2026-07-04 - Harden Polyscope API Preview Env Handling
+
+**Fixed:**
+
+- stopped Polyscope API worktree preparation from copying the source API `.env` into worktrees that do not already have their own preview `.env`, keeping source secrets and database credentials out of untrusted or external-branch preview setup commands
+- disabled gitignored-file copying in generated API `polyscope.local.json` configs so Polyscope no longer pre-populates new API worktrees with the source checkout `.env` before the fail-closed preview setup guard runs
+- added regression coverage to ensure missing API worktree `.env` files fail closed without inheriting source checkout secrets
+
 ---
 
 ## 2026-07-03 - Provision Android SDK Metadata For Polyscope Workspaces

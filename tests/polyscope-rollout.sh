@@ -720,6 +720,7 @@ grep -qF '"command": "php artisan test && vendor/bin/pint --dirty && vendor/bin/
 grep -qF '"label": "Preflight"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/api/polyscope.local.json"
+grep -qF '"copyGitignored": false' "$workspace_root/api/polyscope.local.json"
 if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API refresh command must use the hardened reseed flow and not raw migrate:fresh --seed" >&2
     exit 1
@@ -1076,6 +1077,38 @@ playwright_probe_result = subprocess.run(
 )
 assert "PLAYWRIGHT_BASE_URL=https://frontend-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
 assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
+PY
+
+# ensure_api_worktree_ready must not copy source .env secrets into missing API worktree envs.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "source-env-secret-fixture" / "source-api"
+api_worktree = workspace / "source-env-secret-fixture" / "clones" / "api12345" / "attacker-pr"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=prod-secret-password\n"
+    "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+ready, preview_storage_target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is False
+assert preview_storage_target is None
+assert not api_worktree.joinpath(".env").exists(), "missing worktree .env must fail closed without copying source secrets"
 PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
@@ -2062,6 +2095,7 @@ grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__fix" WITH (FORCE)' "$fake_ps
 stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
 mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
 seed_api_worktree_files "$stale_api_clone"
+cp "$workspace_root/api/.env" "$stale_api_clone/.env"
 
 cat >"$stale_api_clone/.pre-commit-config.yaml" <<'EOF'
 repos: []
@@ -2206,6 +2240,7 @@ seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibi
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
 seed_api_worktree_files "$guardguide_clone"
 seed_node_worktree_files "$guardguide_clone" "guardguide-steady-otter"
+cp "$workspace_root/api/.env" "$failing_api_clone/.env"
 printf '{\n  "packages": []\n}\n' > "$guardguide_clone/composer.lock"
 printf '{"scripts": ' > "$failing_api_cleanup_clone/composer.json"
 printf '{"scripts": ' > "$failing_frontend_manifest_clone/package.json"
