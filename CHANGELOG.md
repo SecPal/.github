@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-04 - Allow SecPal Attribution LicenseRef In Compatibility Checks
+
+**Fixed:**
+
+- added `LicenseRef-SecPal-Attribution` to the shared AGPL compatibility allowlist so SecPal repositories using the central attribution policy no longer fail reusable license-compatibility checks
+- constrained `LicenseRef-SecPal-Attribution` in the shared license-compatibility workflows so callers must ship the approved SecPal attribution addendum text and may only pair that license reference with files that also declare `AGPL-3.0-or-later`
+- hardened both license-compatibility workflows to validate tracked SPDX expressions for `LicenseRef-SecPal-Attribution` and `LicenseRef-TailwindPlus`, rejecting `OR`-paired custom-license expressions and mismatched license-file text
+- restored per-file REUSE metadata enforcement for custom license references and stripped `git grep` path prefixes before checking SPDX expressions, closing false passes where `AGPL-3.0-or-later` appeared only in a file path or only on a different file's SPDX metadata
+- aligned the repository-local `license-compatibility.yml` allowlist with the reusable workflow so SecPal-specific approvals such as `ODbL-1.0`, `LicenseRef-TailwindPlus`, and `LicenseRef-SecPal-Attribution` cannot drift between the two definitions
+- extended the license-compatibility regression test to cover the SecPal attribution LicenseRef, compare local and reusable allowlist license identifiers, and keep the preflight failure guidance aligned with both workflow allowlists
+- extended the same regression to verify the SecPal attribution guard block in both license-compatibility workflows so local and reusable enforcement cannot silently drift
+
+---
+
 ## 2026-07-04 - Disable SSI For Frontend Preview HTML
 
 **Fixed:**

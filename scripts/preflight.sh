@@ -306,7 +306,7 @@ if [ -f tests/license-compatibility.sh ]; then
   bash tests/license-compatibility.sh || {
     echo "" >&2
     echo "❌ License-compatibility allowlist regression test failed!" >&2
-    echo "Restore the ODbL-1.0 entry or fix the incompatible-license check in .github/workflows/reusable-license-compatibility.yml before continuing." >&2
+    echo "Restore missing approved license entries, keep the local and reusable allowlists aligned, or fix the incompatible-license checks in .github/workflows/reusable-license-compatibility.yml and .github/workflows/license-compatibility.yml before continuing." >&2
     exit 1
   }
 fi

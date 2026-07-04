@@ -1,3 +1,4 @@
+---
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -38,6 +39,117 @@ jobs:
 
       - name: Check AGPL compatibility
         run: |
+          secpal_attribution_license_ref="LicenseRef-SecPal-Attribution"
+          secpal_attribution_license_file="LICENSES/LicenseRef-SecPal-Attribution.txt"
+          secpal_attribution_license_sha256="0483f138e65753a0c8a3ba718d8ca9bdcba8633be8262c346d17c3a0b711b638"
+          tailwind_plus_license_ref="LicenseRef-TailwindPlus"
+          tailwind_plus_license_file="LICENSES/LicenseRef-TailwindPlus.txt"
+          tailwind_plus_license_sha256="f34dfb2ffa166cb60cf0aa4b9cedca33ab8caee1438ef81e14399e24bdadac3c"
+
+          validate_custom_license_ref() {
+            local license_ref="$1"
+            local required_license="$2"
+            local license_file="$3"
+            local expected_sha256="$4"
+            local reference_label="$5"
+            local actual_sha256
+            local invalid_reuse_files
+            local matching_expressions
+            local invalid_expressions
+            local spdx_identifier_prefix='SPDX-License'"'"'-Identifier:'
+
+            collect_matching_expressions() {
+              local ref="$1"
+
+              {
+                git grep -h "$spdx_identifier_prefix.*$ref" -- . ':(exclude)LICENSES/*' \
+                  | sed -nE "s/.*${spdx_identifier_prefix}[[:space:]]*(.*)$/\\1/p" || true
+
+                if [ -f REUSE.toml ]; then
+                  python -c 'import pathlib, sys, tomllib; spdx_license_identifier = "SPDX-License" + "-Identifier"; reuse_toml = pathlib.Path("REUSE.toml"); document = tomllib.loads(reuse_toml.read_text()) if reuse_toml.exists() else {"annotations": []}; [print(expression) for annotation in document.get("annotations", []) for expression in [annotation.get(spdx_license_identifier)] if isinstance(expression, str) and sys.argv[1] in expression]' "$ref"
+                fi
+
+                if [ -f .reuse/dep5 ]; then
+                  awk -F': ' -v ref="$ref" '$1 == "License" && index($2, ref) { print $2 }' .reuse/dep5
+                fi
+              } | sed '/^[[:space:]]*$/d'
+            }
+
+            if ! printf '%s\n' "$licenses" | grep -qxF "$license_ref"; then
+              return
+            fi
+
+            if [ ! -f "$license_file" ]; then
+              echo "ERROR: $license_ref requires $license_file"
+              incompatible_found=1
+            else
+              actual_sha256="$(sha256sum "$license_file" | awk '{print $1}')"
+              if [ "$actual_sha256" != "$expected_sha256" ]; then
+                echo "ERROR: $license_ref must use the approved $reference_label text"
+                incompatible_found=1
+              fi
+            fi
+
+            invalid_reuse_files="$(
+              awk -v ref="$license_ref" -v required="$required_license" '
+                /^FileName:/ {
+                  if (file != "" && has_ref && !has_required) {
+                    print file
+                  }
+                  file = substr($0, index($0, ":") + 2)
+                  has_ref = 0
+                  has_required = 0
+                  next
+                }
+                /^LicenseInfoInFile:/ {
+                  license = substr($0, index($0, ":") + 2)
+                  if (license == ref) {
+                    has_ref = 1
+                  }
+                  if (license == required) {
+                    has_required = 1
+                  }
+                }
+                END {
+                  if (file != "" && has_ref && !has_required) {
+                    print file
+                  }
+                }
+              ' reuse.spdx
+            )"
+            if [ -n "$invalid_reuse_files" ]; then
+              echo "ERROR: $license_ref is only allowed in files that also declare" \
+                "$required_license in REUSE metadata:"
+              printf '%s\n' "$invalid_reuse_files"
+              incompatible_found=1
+            fi
+
+            matching_expressions="$(collect_matching_expressions "$license_ref")"
+            if [ -z "$matching_expressions" ]; then
+              echo "ERROR: $license_ref must appear in tracked REUSE metadata"
+              incompatible_found=1
+              return
+            fi
+
+            invalid_expressions="$(
+              printf '%s\n' "$matching_expressions" | awk -v required="$required_license" '
+                {
+                  expression = $0
+                  gsub(/[[:space:]]+/, " ", expression)
+                  if (expression ~ /(^|[[:space:]\(\)])OR([[:space:]\(\)]|$)/ || index(expression, required) == 0) {
+                    print
+                  }
+                }
+              '
+            )"
+            if [ -n "$invalid_expressions" ]; then
+              echo "ERROR: $license_ref is only allowed with $required_license" \
+                "in the same SPDX-License-Identifier expression:"
+              printf '%s\n' "$invalid_expressions"
+              incompatible_found=1
+            fi
+          }
+
           # Extract all licenses from the SPDX file
           licenses=$(grep "LicenseInfoInFile" reuse.spdx | cut -d':' -f2 | sort -u | tr -d ' ')
 
@@ -51,6 +163,11 @@ jobs:
           # - CC0-1.0 (public domain)
           # - OFL-1.1 (SIL Open Font License: permits embedding in software/websites;
           #   font files remain under OFL but their use in AGPL projects is allowed)
+          # - LicenseRef-TailwindPlus (Catalyst UI Kit: explicitly permits use in open source
+          #   projects, components remain under original license but usage is allowed)
+          # - LicenseRef-SecPal-Attribution (accepted only for files that declare
+          #   the approved SecPal attribution addendum for AGPL-licensed SecPal
+          #   repositories; this does not approve arbitrary attribution terms)
 
           compatible_licenses=(
             "AGPL-3.0-or-later"
@@ -63,6 +180,13 @@ jobs:
             "CC0-1.0"
             "ISC"
             "OFL-1.1"
+            "ODbL-1.0"   # Open Database License: accepted for bundled geo-data,
+                          # reference datasets, and similar data-only artifacts
+                          # (e.g. OpenPLZ); appropriate file-level usage is a
+                          # code-review concern - this check only verifies
+                          # AGPL compatibility
+            "LicenseRef-TailwindPlus"
+            "LicenseRef-SecPal-Attribution"
           )
 
           incompatible_found=0
@@ -79,6 +203,19 @@ jobs:
               incompatible_found=1
             fi
           done
+
+          validate_custom_license_ref \
+            "$tailwind_plus_license_ref" \
+            "AGPL-3.0-or-later" \
+            "$tailwind_plus_license_file" \
+            "$tailwind_plus_license_sha256" \
+            "Tailwind Plus license text"
+          validate_custom_license_ref \
+            "$secpal_attribution_license_ref" \
+            "AGPL-3.0-or-later" \
+            "$secpal_attribution_license_file" \
+            "$secpal_attribution_license_sha256" \
+            "SecPal attribution addendum text"
 
           if [ $incompatible_found -eq 1 ]; then
             echo "ERROR: Found licenses incompatible with AGPL-3.0-or-later"
