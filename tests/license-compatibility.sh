@@ -228,7 +228,7 @@ write_spdx_fixture() {
   spdx_identifier_prefix="SPDX-License"
   spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"
 
-  printf '# SPDX-FileCopyrightText: 2026 SecPal\n' > "$target_file"
+  printf '# SPDX-FileCopyrightText: 2026 SecPal Contributors\n' > "$target_file"
   printf '# %s %s\n' "$spdx_identifier_prefix" "$expression" >> "$target_file"
 }
 
@@ -244,7 +244,7 @@ version = 1
 [[annotations]]
 EOF
   printf 'path = "%s"\n' "$path_value" >> "$target_file"
-  printf 'SPDX-FileCopyrightText = "2026 SecPal"\n' >> "$target_file"
+  printf 'SPDX-FileCopyrightText = "2026 SecPal Contributors"\n' >> "$target_file"
   printf '%s = "%s"\n' "$spdx_identifier_key" "$expression" >> "$target_file"
 }
 
@@ -321,7 +321,7 @@ EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 
 Files: docs/dep5-only.md
-Copyright: 2026 SecPal
+Copyright: 2026 SecPal Contributors
 License: LicenseRef-SecPal-Attribution
 EOF
 
