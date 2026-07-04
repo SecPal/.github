@@ -1457,7 +1457,10 @@ grep -qF "script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_frontend_csp;" "$nginx_output"
 grep -qF "set \$preview_uses_ssi 0;" "$nginx_output"
-grep -qF "set \$preview_uses_ssi 1;" "$nginx_output"
+if grep -qF "set \$preview_uses_ssi 1;" "$nginx_output"; then
+    echo "frontend previews must not enable SSI for workspace-controlled HTML" >&2
+    exit 1
+fi
 grep -qF "set \$secpal_permissions_policy " "$nginx_output"
 grep -qF "if (!-f \$php_root/index.php) {" "$nginx_output"
 grep -qF "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" "$nginx_output"
@@ -1474,37 +1477,6 @@ grep -qF "default_type application/manifest+json;" "$nginx_output"
 grep -qF "location ^~ /assets/ {" "$nginx_output"
 grep -qF "location ^~ /_astro/ {" "$nginx_output"
 grep -qF "location ^~ /_next/static/ {" "$nginx_output"
-extract_https_server_prefix() {
-    awk '
-    /^[[:space:]]*server \{/ {
-        in_server=1
-        is_https=0
-        saw_https_listen=0
-        saw_http2=0
-        block=$0 ORS
-        next
-    }
-    in_server && /^[[:space:]]*listen 443 ssl;/ { saw_https_listen=1 }
-    in_server && /^[[:space:]]*http2 on;/ { saw_http2=1 }
-    in_server && saw_https_listen && saw_http2 { is_https=1 }
-    in_server && is_https && /^[[:space:]]*location / {
-        printf "%s", block
-        exit
-    }
-    in_server { block = block $0 ORS }
-    in_server && /^[[:space:]]*}/ {
-        if (is_https) {
-            printf "%s", block
-            exit
-        }
-        in_server=0
-        is_https=0
-        saw_https_listen=0
-        saw_http2=0
-        block=""
-    }
-' "$1"
-}
 extract_nginx_block() {
     awk -v start="$1" '
         index($0, start) { in_block=1 }
@@ -1519,81 +1491,23 @@ extract_nginx_block() {
         }
     ' "$2"
 }
-server_ssi_fixture="$workspace/nginx-server-ssi.conf"
-awk '
-    /^[[:space:]]*http2 on;/ && ! inserted {
-        print
-        print "            ssi on;"
-        inserted=1
-        next
-    }
-    { print }
-    END {
-        if (! inserted) {
-            exit 42
-        }
-    }
-' "$nginx_output" > "$server_ssi_fixture"
-if ! extract_https_server_prefix "$server_ssi_fixture" | grep -qF "ssi on;"; then
-    echo "preview nginx server-level SSI regression check must inspect the HTTPS preview server" >&2
+if grep -qF "ssi on;" "$nginx_output"; then
+    echo "preview nginx config must not enable SSI for workspace-controlled preview HTML" >&2
     exit 1
 fi
-https_server_prefix="$(extract_https_server_prefix "$nginx_output")"
-if [ -z "$https_server_prefix" ]; then
-    echo "preview nginx config must contain an HTTPS preview server block" >&2
-    exit 1
-fi
-if printf '%s\n' "$https_server_prefix" | grep -qF "ssi on;"; then
-    echo "preview nginx config must not enable SSI for the entire preview server" >&2
-    exit 1
-fi
-if printf '%s\n' "$https_server_prefix" | grep -qF "error_page 418"; then
-    echo "preview nginx config must not remap SSI handoff statuses for the entire preview server" >&2
+if grep -qF "@preview_index_ssi" "$nginx_output" || grep -qF "@preview_router_ssi" "$nginx_output"; then
+    echo "preview nginx config must not route preview HTML through SSI named locations" >&2
     exit 1
 fi
 for _shared_loc in "location = / {" "location = /index.html {" "location @preview_router {"; do
     _shared_block="$(extract_nginx_block "$_shared_loc" "$nginx_output")"
-    if printf '%s\n' "$_shared_block" | grep -qF "ssi on;"; then
-        echo "nginx ${_shared_loc} must not enable SSI for every static preview" >&2
-        exit 1
-    fi
-    case "$_shared_loc" in
-        "location @preview_router {")
-            if ! printf '%s\n' "$_shared_block" | grep -qF "error_page 419 = @preview_router_ssi;"; then
-                echo "nginx ${_shared_loc} must scope router SSI handoff to the router location" >&2
-                exit 1
-            fi
-            if ! printf '%s\n' "$_shared_block" | grep -qF "return 419;"; then
-                echo "nginx ${_shared_loc} must route only frontend preview router fallbacks through SSI" >&2
-                exit 1
-            fi
-            ;;
-        *)
-            if ! printf '%s\n' "$_shared_block" | grep -qF "error_page 418 = @preview_index_ssi;"; then
-                echo "nginx ${_shared_loc} must scope index SSI handoff to the index location" >&2
-                exit 1
-            fi
-            if ! printf '%s\n' "$_shared_block" | grep -qF "return 418;"; then
-                echo "nginx ${_shared_loc} must route only frontend preview index responses through SSI" >&2
-                exit 1
-            fi
-            ;;
-    esac
-done
-for _ssi_loc in "location @preview_index_ssi {" "location @preview_router_ssi {"; do
-    _ssi_block="$(extract_nginx_block "$_ssi_loc" "$nginx_output")"
-    if ! printf '%s\n' "$_ssi_block" | grep -qF "ssi on;"; then
-        echo "nginx ${_ssi_loc} must enable SSI for nonce expansion" >&2
-        exit 1
-    fi
-    if printf '%s\n' "$_ssi_block" | grep -qF "ssi_types text/html;"; then
-        echo "nginx ${_ssi_loc} must not restate the default text/html SSI type" >&2
+    if printf '%s\n' "$_shared_block" | grep -qF "error_page 418" || printf '%s\n' "$_shared_block" | grep -qF "error_page 419"; then
+        echo "nginx ${_shared_loc} must not remap requests into SSI handoff locations" >&2
         exit 1
     fi
 done
-unset -f extract_https_server_prefix
 unset -f extract_nginx_block
-unset server_ssi_fixture https_server_prefix _shared_loc _shared_block _ssi_loc _ssi_block
+unset _shared_loc _shared_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.

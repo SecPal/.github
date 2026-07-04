@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-04 - Disable SSI For Frontend Preview HTML
+
+**Fixed:**
+
+- disabled nginx SSI processing for Polyscope frontend preview `index.html` and SPA fallback responses, preventing workspace-controlled HTML from reflecting request headers such as cookies while preserving the frontend preview CSP
+- updated the Polyscope rollout regression test to reject SSI handoff locations and any `ssi on;` directive in rendered preview nginx configuration
+
+---
+
 ## 2026-07-03 - Provision Android SDK Metadata For Polyscope Workspaces
 
 **Fixed:**
