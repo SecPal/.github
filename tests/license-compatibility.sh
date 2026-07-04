@@ -131,8 +131,8 @@ custom_license_ref_guard_case() {
       failures+=("FAIL [$label]: $workflow_label does not reject mismatched Tailwind Plus text")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'must appear in a tracked SPDX-License-Identifier expression'; then
-      failures+=("FAIL [$label]: $workflow_label does not require tracked SPDX expressions for custom license references")
+    if ! printf '%s' "$workflow" | grep -qF 'must appear in tracked REUSE metadata'; then
+      failures+=("FAIL [$label]: $workflow_label does not require tracked REUSE metadata for custom license references")
     fi
 
     if ! printf '%s' "$workflow" | grep -qF 'is only allowed with $required_license' \
@@ -140,8 +140,28 @@ custom_license_ref_guard_case() {
       failures+=("FAIL [$label]: $workflow_label does not reject OR-paired or non-AGPL custom license expressions")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'sub(/^[^:][^:]*:[0-9][0-9]*:/, "", expression)'; then
-      failures+=("FAIL [$label]: $workflow_label does not strip git grep path prefixes before checking SPDX expressions")
+    if ! printf '%s' "$workflow" | grep -qF "spdx_identifier_prefix='SPDX-License'"; then
+      failures+=("FAIL [$label]: $workflow_label does not build SPDX header lookups without literal SPDX marker false positives")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'git grep -h "$spdx_identifier_prefix.*$ref"'; then
+      failures+=("FAIL [$label]: $workflow_label does not extract SPDX header expressions without git grep path prefixes")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'tomllib'; then
+      failures+=("FAIL [$label]: $workflow_label does not inspect REUSE.toml expressions for custom license references")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF 'spdx_license_identifier = "SPDX-License" + "-Identifier"'; then
+      failures+=("FAIL [$label]: $workflow_label does not inspect REUSE.toml with the SPDX key reconstructed safely")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -qF '$1 == "License" && index($2, ref)'; then
+      failures+=("FAIL [$label]: $workflow_label does not inspect DEP5 license expressions for custom license references")
+    fi
+
+    if ! printf '%s' "$workflow" | grep -Fq 'expression ~ /(^|[[:space:]\(\)])OR([[:space:]\(\)]|$)/'; then
+      failures+=("FAIL [$label]: $workflow_label does not reject parenthesized or whitespace-variant OR expressions")
     fi
 
     if ! printf '%s' "$workflow" | grep -qF 'has_ref && !has_required'; then
@@ -200,14 +220,38 @@ EOF
 # ---------------------------------------------------------------------------
 # Helpers: build temp repos that simulate valid and invalid custom-license use.
 # ---------------------------------------------------------------------------
+write_spdx_fixture() {
+  local target_file="$1"
+  local expression="$2"
+  local spdx_identifier_prefix='SPDX-License'"'"'-Identifier:'
+
+  printf '# SPDX-FileCopyrightText: 2026 SecPal\n' > "$target_file"
+  printf '# %s %s\n' "$spdx_identifier_prefix" "$expression" >> "$target_file"
+}
+
+write_reuse_toml_annotation() {
+  local target_file="$1"
+  local path_value="$2"
+  local expression="$3"
+  local spdx_identifier_key='SPDX-License'"'"'-Identifier'
+
+  cat <<'EOF' > "$target_file"
+version = 1
+
+[[annotations]]
+EOF
+  printf 'path = "%s"\n' "$path_value" >> "$target_file"
+  printf 'SPDX-FileCopyrightText = "2026 SecPal"\n' >> "$target_file"
+  printf '%s = "%s"\n' "$spdx_identifier_key" "$expression" >> "$target_file"
+}
+
 build_valid_custom_license_fixture() {
   local repo_dir="$1"
   mkdir -p "$repo_dir/docs"
 
-  cat <<'EOF' > "$repo_dir/docs/valid.md"
-# SPDX-FileCopyrightText: 2026 SecPal
-# SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
-EOF
+  write_spdx_fixture \
+    "$repo_dir/docs/valid.md" \
+    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/valid.md
@@ -220,10 +264,9 @@ build_path_leak_fixture() {
   local repo_dir="$1"
   mkdir -p "$repo_dir/docs/AGPL-3.0-or-later"
 
-  cat <<'EOF' > "$repo_dir/docs/AGPL-3.0-or-later/guide.md"
-# SPDX-FileCopyrightText: 2026 SecPal
-# SPDX-License-Identifier: LicenseRef-SecPal-Attribution
-EOF
+  write_spdx_fixture \
+    "$repo_dir/docs/AGPL-3.0-or-later/guide.md" \
+    "LicenseRef-SecPal-Attribution"
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/AGPL-3.0-or-later/guide.md
@@ -232,18 +275,22 @@ LicenseInfoInFile: LicenseRef-SecPal-Attribution
 EOF
 }
 
-build_sidecar_pairing_fixture() {
+build_reuse_toml_pairing_fixture() {
   local repo_dir="$1"
   mkdir -p "$repo_dir/docs"
 
-  cat <<'EOF' > "$repo_dir/docs/good.md"
-# SPDX-FileCopyrightText: 2026 SecPal
-# SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
-EOF
+  write_spdx_fixture \
+    "$repo_dir/docs/good.md" \
+    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
 
   cat <<'EOF' > "$repo_dir/docs/sidecar-only.md"
 This file relies on REUSE metadata only.
 EOF
+
+  write_reuse_toml_annotation \
+    "$repo_dir/REUSE.toml" \
+    "docs/sidecar-only.md" \
+    "LicenseRef-SecPal-Attribution"
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/good.md
@@ -251,6 +298,36 @@ LicenseInfoInFile: AGPL-3.0-or-later
 LicenseInfoInFile: LicenseRef-SecPal-Attribution
 
 FileName: ./docs/sidecar-only.md
+LicenseInfoInFile: LicenseRef-SecPal-Attribution
+EOF
+}
+
+build_dep5_pairing_fixture() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir/.reuse" "$repo_dir/docs"
+
+  write_spdx_fixture \
+    "$repo_dir/docs/good.md" \
+    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
+
+  cat <<'EOF' > "$repo_dir/docs/dep5-only.md"
+This file relies on DEP5 metadata only.
+EOF
+
+  cat <<'EOF' > "$repo_dir/.reuse/dep5"
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+
+Files: docs/dep5-only.md
+Copyright: 2026 SecPal
+License: LicenseRef-SecPal-Attribution
+EOF
+
+  cat <<'EOF' > "$repo_dir/reuse.spdx"
+FileName: ./docs/good.md
+LicenseInfoInFile: AGPL-3.0-or-later
+LicenseInfoInFile: LicenseRef-SecPal-Attribution
+
+FileName: ./docs/dep5-only.md
 LicenseInfoInFile: LicenseRef-SecPal-Attribution
 EOF
 }
@@ -275,6 +352,7 @@ run_custom_license_guard_fixture() {
   extract_agpl_compatibility_script "$workflow_path" > "$script_path"
   chmod +x "$script_path"
 
+  set +e
   (
     cd "$repo_dir"
     git init -q
@@ -285,6 +363,7 @@ run_custom_license_guard_fixture() {
     PATH="$repo_dir/bin:$PATH" bash "$script_path" >/dev/null 2>&1
   )
   local status=$?
+  set -e
 
   rm -rf "$tmp_dir"
   return "$status"
@@ -353,7 +432,8 @@ preflight_guidance_case "preflight guidance covers allowlist alignment"
 custom_license_ref_guard_case "custom license reference guards cover both workflow files"
 positive_guard_case "compliant custom-license fixtures stay accepted" build_valid_custom_license_fixture
 negative_guard_case "path substrings cannot satisfy AGPL SPDX pairing" build_path_leak_fixture
-negative_guard_case "REUSE file blocks must keep custom-license AGPL pairing per file" build_sidecar_pairing_fixture
+negative_guard_case "REUSE.toml metadata must keep custom-license AGPL pairing per file" build_reuse_toml_pairing_fixture
+negative_guard_case "DEP5 metadata must keep custom-license AGPL pairing per file" build_dep5_pairing_fixture
 
 # ---------------------------------------------------------------------------
 # Report

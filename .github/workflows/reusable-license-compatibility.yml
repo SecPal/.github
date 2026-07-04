@@ -57,6 +57,24 @@ jobs:
             local invalid_reuse_files
             local matching_expressions
             local invalid_expressions
+            local spdx_identifier_prefix='SPDX-License'"'"'-Identifier:'
+
+            collect_matching_expressions() {
+              local ref="$1"
+
+              {
+                git grep -h "$spdx_identifier_prefix.*$ref" -- . ':(exclude)LICENSES/*' \
+                  | sed -nE "s/.*${spdx_identifier_prefix}[[:space:]]*(.*)$/\\1/p" || true
+
+                if [ -f REUSE.toml ]; then
+                  python -c 'import pathlib, sys, tomllib; spdx_license_identifier = "SPDX-License" + "-Identifier"; reuse_toml = pathlib.Path("REUSE.toml"); document = tomllib.loads(reuse_toml.read_text()) if reuse_toml.exists() else {"annotations": []}; [print(expression) for annotation in document.get("annotations", []) for expression in [annotation.get(spdx_license_identifier)] if isinstance(expression, str) and sys.argv[1] in expression]' "$ref"
+                fi
+
+                if [ -f .reuse/dep5 ]; then
+                  awk -F': ' -v ref="$ref" '$1 == "License" && index($2, ref) { print $2 }' .reuse/dep5
+                fi
+              } | sed '/^[[:space:]]*$/d'
+            }
 
             if ! printf '%s\n' "$licenses" | grep -qxF "$license_ref"; then
               return
@@ -107,11 +125,9 @@ jobs:
               incompatible_found=1
             fi
 
-            matching_expressions="$(
-              git grep -n "SPDX-License-Identifier.*$license_ref" -- . ':(exclude)LICENSES/*' || true
-            )"
+            matching_expressions="$(collect_matching_expressions "$license_ref")"
             if [ -z "$matching_expressions" ]; then
-              echo "ERROR: $license_ref must appear in a tracked SPDX-License-Identifier expression"
+              echo "ERROR: $license_ref must appear in tracked REUSE metadata"
               incompatible_found=1
               return
             fi
@@ -120,8 +136,8 @@ jobs:
               printf '%s\n' "$matching_expressions" | awk -v required="$required_license" '
                 {
                   expression = $0
-                  sub(/^[^:][^:]*:[0-9][0-9]*:/, "", expression)
-                  if (index(expression, " OR ") || index(expression, required) == 0) {
+                  gsub(/[[:space:]]+/, " ", expression)
+                  if (expression ~ /(^|[[:space:]\(\)])OR([[:space:]\(\)]|$)/ || index(expression, required) == 0) {
                     print
                   }
                 }
