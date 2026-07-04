@@ -55,8 +55,9 @@ jobs:
           #   font files remain under OFL but their use in AGPL projects is allowed)
           # - LicenseRef-TailwindPlus (Catalyst UI Kit: explicitly permits use in open source
           #   projects, components remain under original license but usage is allowed)
-          # - LicenseRef-SecPal-Attribution (SecPal attribution addendum approved for
-          #   AGPL-licensed SecPal repositories under the central attribution policy)
+          # - LicenseRef-SecPal-Attribution (accepted only for files that declare
+          #   the approved SecPal attribution addendum for AGPL-licensed SecPal
+          #   repositories; this does not approve arbitrary attribution terms)
 
           compatible_licenses=(
             "AGPL-3.0-or-later"

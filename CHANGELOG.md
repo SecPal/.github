@@ -15,7 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - added `LicenseRef-SecPal-Attribution` to the shared AGPL compatibility allowlist so SecPal repositories using the central attribution policy no longer fail reusable license-compatibility checks
 - aligned the repository-local `license-compatibility.yml` allowlist with the reusable workflow so SecPal-specific approvals such as `ODbL-1.0`, `LicenseRef-TailwindPlus`, and `LicenseRef-SecPal-Attribution` cannot drift between the two definitions
-- extended the license-compatibility regression test to cover the SecPal attribution LicenseRef and fail if the local and reusable allowlists diverge again
+- extended the license-compatibility regression test to cover the SecPal attribution LicenseRef, compare local and reusable allowlist license identifiers, and keep the preflight failure guidance aligned with both workflow allowlists
 
 ---
 

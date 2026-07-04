@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-license-compatibility.yml"
 LOCAL_WORKFLOW="$REPO_ROOT/.github/workflows/license-compatibility.yml"
+PREFLIGHT_SCRIPT="$REPO_ROOT/scripts/preflight.sh"
 
 failures=()
 
@@ -26,13 +27,21 @@ extract_allowlist() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: extract only quoted license identifiers from a workflow allowlist.
+# ---------------------------------------------------------------------------
+extract_allowlist_license_ids() {
+  local workflow="$1"
+  extract_allowlist "$workflow" | sed 's/[[:space:]]*#.*$//' | sed -n 's/^[[:space:]]*"\([^"]\+\)".*$/\1/p'
+}
+
+# ---------------------------------------------------------------------------
 # positive_case LABEL LICENSE
 #   Assert that LICENSE appears in the compatible_licenses array.
 # ---------------------------------------------------------------------------
 positive_case() {
   local label="$1"
   local license="$2"
-  if ! extract_allowlist "$REUSABLE_WORKFLOW" | grep -qF "\"$license\""; then
+  if ! extract_allowlist_license_ids "$REUSABLE_WORKFLOW" | grep -qxF "$license"; then
     failures+=("FAIL [$label]: expected '$license' to be in compatible_licenses but it was not found")
   fi
 }
@@ -44,25 +53,38 @@ positive_case() {
 negative_case() {
   local label="$1"
   local license="$2"
-  if extract_allowlist "$REUSABLE_WORKFLOW" | grep -qF "\"$license\""; then
+  if extract_allowlist_license_ids "$REUSABLE_WORKFLOW" | grep -qxF "$license"; then
     failures+=("FAIL [$label]: '$license' must NOT be in compatible_licenses but it was found")
   fi
 }
 
 # ---------------------------------------------------------------------------
 # matching_allowlists_case LABEL
-#   Assert that both workflow allowlists remain identical to avoid drift.
+#   Assert that both workflow allowlist identifiers remain identical to avoid drift.
 # ---------------------------------------------------------------------------
 matching_allowlists_case() {
   local label="$1"
   local reusable_allowlist
   local local_allowlist
 
-  reusable_allowlist="$(extract_allowlist "$REUSABLE_WORKFLOW")"
-  local_allowlist="$(extract_allowlist "$LOCAL_WORKFLOW")"
+  reusable_allowlist="$(extract_allowlist_license_ids "$REUSABLE_WORKFLOW")"
+  local_allowlist="$(extract_allowlist_license_ids "$LOCAL_WORKFLOW")"
 
   if [ "$reusable_allowlist" != "$local_allowlist" ]; then
-    failures+=("FAIL [$label]: reusable and local workflow allowlists diverged")
+    failures+=("FAIL [$label]: reusable and local workflow license identifiers diverged")
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# preflight_guidance_case LABEL
+#   Assert that preflight remediation names the full allowlist drift scope.
+# ---------------------------------------------------------------------------
+preflight_guidance_case() {
+  local label="$1"
+  local expected_guidance="Restore missing approved license entries, keep the local and reusable allowlists aligned, or fix the incompatible-license checks in .github/workflows/reusable-license-compatibility.yml and .github/workflows/license-compatibility.yml before continuing."
+
+  if ! grep -qF "$expected_guidance" "$PREFLIGHT_SCRIPT"; then
+    failures+=("FAIL [$label]: preflight guidance does not describe both workflow allowlists and alignment")
   fi
 }
 
@@ -89,6 +111,7 @@ negative_case "SSPL-1.0 rejected"      "SSPL-1.0"
 negative_case "BUSL-1.1 rejected"      "BUSL-1.1"
 negative_case "proprietary rejected"   "LicenseRef-Proprietary"
 matching_allowlists_case "reusable and local workflow allowlists aligned"
+preflight_guidance_case "preflight guidance covers allowlist alignment"
 
 # ---------------------------------------------------------------------------
 # Report
@@ -102,4 +125,4 @@ if [ ${#failures[@]} -gt 0 ]; then
   exit 1
 fi
 
-echo "✓ license-compatibility allowlist regression tests passed ($(extract_allowlist "$REUSABLE_WORKFLOW" | grep -c '"' || true) entries checked)"
+echo "✓ license-compatibility allowlist regression tests passed ($(extract_allowlist_license_ids "$REUSABLE_WORKFLOW" | wc -l | tr -d ' ') entries checked)"
