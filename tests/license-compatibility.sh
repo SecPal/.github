@@ -11,7 +11,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORKFLOW="$REPO_ROOT/.github/workflows/reusable-license-compatibility.yml"
+REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-license-compatibility.yml"
+LOCAL_WORKFLOW="$REPO_ROOT/.github/workflows/license-compatibility.yml"
 
 failures=()
 
@@ -20,7 +21,8 @@ failures=()
 # Returns the raw YAML lines between the array open/close.
 # ---------------------------------------------------------------------------
 extract_allowlist() {
-  awk '/compatible_licenses=\(/{found=1; next} found && /^[[:space:]]*\)[[:space:]]*$/{exit} found{print}' "$WORKFLOW"
+  local workflow="$1"
+  awk '/compatible_licenses=\(/{found=1; next} found && /^[[:space:]]*\)[[:space:]]*$/{exit} found{print}' "$workflow"
 }
 
 # ---------------------------------------------------------------------------
@@ -30,7 +32,7 @@ extract_allowlist() {
 positive_case() {
   local label="$1"
   local license="$2"
-  if ! extract_allowlist | grep -qF "\"$license\""; then
+  if ! extract_allowlist "$REUSABLE_WORKFLOW" | grep -qF "\"$license\""; then
     failures+=("FAIL [$label]: expected '$license' to be in compatible_licenses but it was not found")
   fi
 }
@@ -42,8 +44,25 @@ positive_case() {
 negative_case() {
   local label="$1"
   local license="$2"
-  if extract_allowlist | grep -qF "\"$license\""; then
+  if extract_allowlist "$REUSABLE_WORKFLOW" | grep -qF "\"$license\""; then
     failures+=("FAIL [$label]: '$license' must NOT be in compatible_licenses but it was found")
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# matching_allowlists_case LABEL
+#   Assert that both workflow allowlists remain identical to avoid drift.
+# ---------------------------------------------------------------------------
+matching_allowlists_case() {
+  local label="$1"
+  local reusable_allowlist
+  local local_allowlist
+
+  reusable_allowlist="$(extract_allowlist "$REUSABLE_WORKFLOW")"
+  local_allowlist="$(extract_allowlist "$LOCAL_WORKFLOW")"
+
+  if [ "$reusable_allowlist" != "$local_allowlist" ]; then
+    failures+=("FAIL [$label]: reusable and local workflow allowlists diverged")
   fi
 }
 
@@ -58,6 +77,7 @@ positive_case "MIT accepted"                      "MIT"
 positive_case "Apache-2.0 accepted"               "Apache-2.0"
 positive_case "OFL-1.1 accepted"                  "OFL-1.1"
 positive_case "LicenseRef-TailwindPlus accepted"  "LicenseRef-TailwindPlus"
+positive_case "LicenseRef-SecPal-Attribution accepted" "LicenseRef-SecPal-Attribution"
 
 # ODbL-1.0 must be in the allowlist (OpenPLZ geo-data and similar datasets).
 positive_case "ODbL-1.0 accepted for data files" "ODbL-1.0"
@@ -68,6 +88,7 @@ negative_case "GPL-2.0-or-later rejected" "GPL-2.0-or-later"
 negative_case "SSPL-1.0 rejected"      "SSPL-1.0"
 negative_case "BUSL-1.1 rejected"      "BUSL-1.1"
 negative_case "proprietary rejected"   "LicenseRef-Proprietary"
+matching_allowlists_case "reusable and local workflow allowlists aligned"
 
 # ---------------------------------------------------------------------------
 # Report
@@ -81,4 +102,4 @@ if [ ${#failures[@]} -gt 0 ]; then
   exit 1
 fi
 
-echo "✓ license-compatibility allowlist regression tests passed ($(extract_allowlist | grep -c '"' || true) entries checked)"
+echo "✓ license-compatibility allowlist regression tests passed ($(extract_allowlist "$REUSABLE_WORKFLOW" | grep -c '"' || true) entries checked)"

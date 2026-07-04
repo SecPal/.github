@@ -1,3 +1,4 @@
+---
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -54,6 +55,8 @@ jobs:
           #   font files remain under OFL but their use in AGPL projects is allowed)
           # - LicenseRef-TailwindPlus (Catalyst UI Kit: explicitly permits use in open source
           #   projects, components remain under original license but usage is allowed)
+          # - LicenseRef-SecPal-Attribution (SecPal attribution addendum approved for
+          #   AGPL-licensed SecPal repositories under the central attribution policy)
 
           compatible_licenses=(
             "AGPL-3.0-or-later"
@@ -66,8 +69,13 @@ jobs:
             "CC0-1.0"
             "ISC"
             "OFL-1.1"
-            "ODbL-1.0"   # Open Database License: accepted for bundled geo-data, reference datasets, and similar data-only artifacts (e.g. OpenPLZ); appropriate file-level usage is a code-review concern — this check only verifies AGPL compatibility
+            "ODbL-1.0"   # Open Database License: accepted for bundled geo-data,
+                          # reference datasets, and similar data-only artifacts
+                          # (e.g. OpenPLZ); appropriate file-level usage is a
+                          # code-review concern - this check only verifies
+                          # AGPL compatibility
             "LicenseRef-TailwindPlus"
+            "LicenseRef-SecPal-Attribution"
           )
 
           incompatible_found=0

@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-04 - Allow SecPal Attribution LicenseRef In Compatibility Checks
+
+**Fixed:**
+
+- added `LicenseRef-SecPal-Attribution` to the shared AGPL compatibility allowlist so SecPal repositories using the central attribution policy no longer fail reusable license-compatibility checks
+- aligned the repository-local `license-compatibility.yml` allowlist with the reusable workflow so SecPal-specific approvals such as `ODbL-1.0`, `LicenseRef-TailwindPlus`, and `LicenseRef-SecPal-Attribution` cannot drift between the two definitions
+- extended the license-compatibility regression test to cover the SecPal attribution LicenseRef and fail if the local and reusable allowlists diverge again
+
+---
+
 ## 2026-07-04 - Disable SSI For Frontend Preview HTML
 
 **Fixed:**
