@@ -836,7 +836,7 @@ def ensure_api_worktree_ready(
         else:
             ensure_postgres_preview_schema(runtime_env_values, base_database, preview_target)
             updated_values["DB_DATABASE"] = base_database
-            updated_values["DB_URL"] = build_postgres_url(runtime_env_values, base_database, preview_target)
+            updated_values["DB_URL"] = build_postgres_url(env_values, base_database, preview_target)
             updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "schema"
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = preview_target
         updated_values[PREVIEW_DATABASE_BASE_ENV_KEY] = base_database

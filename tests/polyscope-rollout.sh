@@ -1776,6 +1776,68 @@ assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
 assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 PY
 
+# ensure_api_worktree_ready must not persist a source-only PostgreSQL password
+# into schema-mode DB_URL values when the role cannot create databases.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "schema-password-leak-fixture" / "source-api"
+api_worktree = workspace / "schema-password-leak-fixture" / "clones" / "api12345" / "careful-otter"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-only-password\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_postgres_role_can_create_databases(env_values, base_database):
+    calls.append(("role", env_values["DB_PASSWORD"], base_database))
+    return False
+
+def fake_ensure_postgres_preview_schema(env_values, base_database, preview_schema):
+    calls.append(("schema", env_values["DB_PASSWORD"], base_database, preview_schema))
+
+module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
+module.ensure_postgres_preview_schema = fake_ensure_postgres_preview_schema
+
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "schema:secpal:secpal__preview__careful_otter", target
+assert calls == [
+    ("role", "source-only-password", "secpal"),
+    ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "source-only-password@" not in worktree_env, worktree_env
+assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
+PY
+
 # refresh_api_worktree must reuse the transient runtime DB password injection
 # when the worktree keeps DB_PASSWORD blank but the source checkout does not.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
