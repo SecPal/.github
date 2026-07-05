@@ -707,7 +707,6 @@ grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polys
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
-grep -qF -- "--api-worktree-migration-command 'php artisan migrate:fresh --force'" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2

@@ -26,6 +26,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - routed generated API setup through the rollout bootstrap command so new preview worktrees can borrow source PostgreSQL credentials transiently for database provisioning, migrations, and seeding without persisting those credentials into the generated worktree
 - routed the destructive `Preview Only: Refresh DB + E2E User` Polyscope action through the same rollout bootstrap path so PostgreSQL-backed preview refreshes keep borrowing source-only DB credentials transiently instead of failing once the worktree `.env` leaves `DB_PASSWORD` blank
 - aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for path-derived preview hostnames
+- removed an impossible rollout assertion for a nonexistent `--api-worktree-migration-command` flag so the API preview config regression test matches the generated refresh command it actually validates
 
 ---
 
