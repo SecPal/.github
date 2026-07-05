@@ -942,7 +942,7 @@ build_env = {**env, "PATH": str(fake_bin) if not existing_path else str(fake_bin
 build_command = module.build_frontend_preview_build_command()
 build_script = shlex.split(build_command)[2]
 build_publish_source = build_script[
-    build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = resolve_current_workspace(Path.cwd().name)")
+    build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = resolve_current_workspace(Path.cwd())")
 ]
 assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
@@ -1027,7 +1027,7 @@ from pathlib import Path
 
 {module.build_linked_workspace_resolver_source()}
 
-workspace = resolve_current_workspace(Path.cwd().name)
+workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 print(f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev")
 """).strip()
@@ -1048,7 +1048,7 @@ watch_publish_source = watch_script[
 ]
 run_build_source = watch_script[watch_script.index("def run_build()") :]
 assert 'api_url = f"https://api-' not in watch_script, watch_script
-assert 'workspace = resolve_current_workspace(Path.cwd().name)' in run_build_source, run_build_source
+assert 'workspace = resolve_current_workspace(Path.cwd())' in run_build_source, run_build_source
 assert 'api_workspace = resolve_linked_workspace("SecPal/api", workspace)' in run_build_source, run_build_source
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
@@ -1066,7 +1066,7 @@ from pathlib import Path
 
 {module.build_linked_workspace_resolver_source()}
 
-workspace = resolve_current_workspace(Path.cwd().name)
+workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 print(f"PLAYWRIGHT_BASE_URL=https://frontend-{{workspace}}.preview.secpal.dev")
 print(f"PLAYWRIGHT_API_BASE_URL=https://api-{{api_workspace}}.preview.secpal.dev")
@@ -1268,6 +1268,36 @@ module.ensure_workspace_alias(second_worktree)
 assert not (first_worktree.parent / "azure-cheetah").exists()
 PY
 
+# Distinct worktrees whose names normalize to the same slug without using the
+# legacy eight-hex suffix must still resolve to unique preview workspaces.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import hashlib
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "normalized-workspace-collision-fixture"
+first_worktree = fixture / "clones" / "api12345" / "Feature A"
+second_worktree = fixture / "clones" / "api12345" / "feature_a"
+first_worktree.mkdir(parents=True)
+second_worktree.mkdir(parents=True)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+first_workspace = module.resolve_current_workspace_name(first_worktree)
+second_workspace = module.resolve_current_workspace_name(second_worktree)
+assert first_workspace == "feature-a-" + hashlib.sha1("Feature A".encode("utf-8")).hexdigest()[:8], first_workspace
+assert second_workspace == "feature-a-" + hashlib.sha1("feature_a".encode("utf-8")).hexdigest()[:8], second_workspace
+assert first_workspace != second_workspace
+assert module.build_api_preview_env_updates(first_workspace)["APP_URL"] != module.build_api_preview_env_updates(second_workspace)["APP_URL"]
+assert module.build_preview_database_name("secpal", first_workspace) != module.build_preview_database_name("secpal", second_workspace)
+PY
+
 # Linked-workspace resolution must preserve the colliding hashed slug when the
 # Polyscope DB stores a normalized alias path for that linked worktree.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -1335,7 +1365,7 @@ env["POLYSCOPE_DB_PATH"] = str(db_path)
 resolver_probe = (
     "from pathlib import Path\n\n"
     f"{module.build_linked_workspace_resolver_source()}\n\n"
-    "workspace = resolve_current_workspace(Path.cwd().name)\n"
+    "workspace = resolve_current_workspace(Path.cwd())\n"
     'print(resolve_linked_workspace("SecPal/api", workspace))\n'
 )
 probe_result = subprocess.run(
@@ -1347,6 +1377,21 @@ probe_result = subprocess.run(
     check=True,
 )
 assert probe_result.stdout.strip() == "azure-cheetah-11111111", probe_result.stdout
+
+current_workspace_probe = (
+    "from pathlib import Path\n\n"
+    f"{module.build_linked_workspace_resolver_source()}\n\n"
+    "print(resolve_current_workspace(Path.cwd()))\n"
+)
+current_workspace_result = subprocess.run(
+    ["python3", "-c", current_workspace_probe],
+    cwd=first_api_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert current_workspace_result.stdout.strip() == "azure-cheetah-11111111", current_workspace_result.stdout
 PY
 
 # Linked-workspace resolution must stay compatible with older Polyscope DBs
@@ -1428,7 +1473,7 @@ resolver_probe = (
     "import subprocess\n"
     "from pathlib import Path\n\n"
     f"{module.build_linked_workspace_resolver_source()}\n\n"
-    "workspace = resolve_current_workspace(Path.cwd().name)\n"
+    "workspace = resolve_current_workspace(Path.cwd())\n"
     'api_workspace = resolve_linked_workspace("SecPal/api", workspace)\n'
     'print(f"VITE_API_URL=https://api-{api_workspace}.preview.secpal.dev")\n'
 )
@@ -2854,6 +2899,11 @@ failing_frontend_manifest_clone="$home_dir/.polyscope/clones/fe123456/broken-ibi
 failing_frontend_io_clone="$home_dir/.polyscope/clones/fe123456/locked-oryx"
 guardguide_clone="$home_dir/.polyscope/clones/gg123456/steady-otter"
 failure_isolation_summary_json="$workspace/failure-isolation-summary.json"
+failing_api_alias_workspace="$(python3 - <<'PY'
+import hashlib
+print("steady-otter-" + hashlib.sha1("Steady Otter".encode("utf-8")).hexdigest()[:8])
+PY
+)"
 
 mkdir -p "$failing_api_clone/.git/info" "$failing_api_clone/.git/hooks" "$failing_api_clone/scripts"
 mkdir -p "$failing_api_cleanup_clone/.git/info" "$failing_api_cleanup_clone/.git/hooks" "$failing_api_cleanup_clone/scripts"
@@ -2870,7 +2920,7 @@ seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
 seed_api_worktree_files "$guardguide_clone"
 seed_node_worktree_files "$guardguide_clone" "guardguide-steady-otter"
 cp "$workspace_root/api/.env" "$failing_api_clone/.env"
-mkdir -p "$home_dir/.polyscope/clones/api12345/steady-otter"
+mkdir -p "$home_dir/.polyscope/clones/api12345/$failing_api_alias_workspace"
 printf '{\n  "packages": []\n}\n' > "$guardguide_clone/composer.lock"
 printf '{"scripts": ' > "$failing_api_cleanup_clone/composer.json"
 printf '{"scripts": ' > "$failing_frontend_manifest_clone/package.json"

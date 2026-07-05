@@ -78,6 +78,11 @@ def strip_legacy_workspace_suffix(value: str) -> str:
     return re.sub(r"-[0-9a-f]{8}$", "", value)
 
 
+def build_colliding_workspace_name(worktree_name: str, workspace: str) -> str:
+    digest = hashlib.sha1(worktree_name.encode("utf-8")).hexdigest()[:8]
+    return f"{workspace}-{digest}"
+
+
 def workspace_slug_has_collision(worktree_path: pathlib.Path, workspace: str) -> bool:
     try:
         sibling_paths = tuple(worktree_path.parent.iterdir())
@@ -105,19 +110,27 @@ def resolve_workspace_name_from_path(worktree_path: pathlib.Path) -> str:
     normalized_name = normalize_workspace_name(worktree_path.name)
     legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(worktree_path.name))
     collision_path = worktree_path
+    collision_name = worktree_path.name
     if legacy_name == normalized_name:
         try:
             resolved_path = worktree_path.resolve()
         except OSError:
+            if workspace_slug_has_collision(worktree_path, normalized_name):
+                return build_colliding_workspace_name(worktree_path.name, normalized_name)
             return normalized_name
         resolved_normalized_name = normalize_workspace_name(resolved_path.name)
         resolved_legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(resolved_path.name))
         if resolved_legacy_name == resolved_normalized_name:
-            return normalized_name
+            if workspace_slug_has_collision(resolved_path, resolved_normalized_name):
+                return build_colliding_workspace_name(resolved_path.name, resolved_normalized_name)
+            return resolved_normalized_name
         normalized_name = resolved_normalized_name
         legacy_name = resolved_legacy_name
         collision_path = resolved_path
+        collision_name = resolved_path.name
     if workspace_slug_has_collision(collision_path, legacy_name):
+        if legacy_name == normalized_name:
+            return build_colliding_workspace_name(collision_name, legacy_name)
         return normalized_name
     return legacy_name
 
@@ -240,6 +253,7 @@ def build_linked_workspace_resolver_source() -> str:
     return textwrap.dedent(
         """
         from pathlib import Path
+        import hashlib
         import os
         import re
         import sqlite3
@@ -280,6 +294,10 @@ def build_linked_workspace_resolver_source() -> str:
         def strip_legacy_workspace_suffix(value):
             return re.sub(r"-[0-9a-f]{8}$", "", value)
 
+        def build_colliding_workspace_name(worktree_name, workspace):
+            digest = hashlib.sha1(worktree_name.encode("utf-8")).hexdigest()[:8]
+            return f"{workspace}-{digest}"
+
         def workspace_slug_has_collision(worktree_path, workspace):
             try:
                 sibling_paths = tuple(worktree_path.parent.iterdir())
@@ -306,19 +324,27 @@ def build_linked_workspace_resolver_source() -> str:
             normalized_name = normalize_workspace_name(worktree_path.name)
             legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(worktree_path.name))
             collision_path = worktree_path
+            collision_name = worktree_path.name
             if legacy_name == normalized_name:
                 try:
                     resolved_path = worktree_path.resolve()
                 except OSError:
+                    if workspace_slug_has_collision(worktree_path, normalized_name):
+                        return build_colliding_workspace_name(worktree_path.name, normalized_name)
                     return normalized_name
                 resolved_normalized_name = normalize_workspace_name(resolved_path.name)
                 resolved_legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(resolved_path.name))
                 if resolved_legacy_name == resolved_normalized_name:
-                    return normalized_name
+                    if workspace_slug_has_collision(resolved_path, resolved_normalized_name):
+                        return build_colliding_workspace_name(resolved_path.name, resolved_normalized_name)
+                    return resolved_normalized_name
                 normalized_name = resolved_normalized_name
                 legacy_name = resolved_legacy_name
                 collision_path = resolved_path
+                collision_name = resolved_path.name
             if workspace_slug_has_collision(collision_path, legacy_name):
+                if legacy_name == normalized_name:
+                    return build_colliding_workspace_name(collision_name, legacy_name)
                 return normalized_name
             return legacy_name
 
@@ -809,7 +835,7 @@ import re
 
 {build_linked_workspace_resolver_source()}
 
-workspace = resolve_current_workspace(Path.cwd().name)
+workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 pattern = re.compile(r"^VITE_API_URL=.*$", re.MULTILINE)
 replacement = f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev"
@@ -1040,7 +1066,7 @@ def publish_preview_build(stage_dir: Path) -> None:
 
         prune_live_tree(live_root, stage_dirs, stage_files)
 
-workspace = resolve_current_workspace(Path.cwd().name)
+workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
@@ -1248,7 +1274,7 @@ def publish_preview_build(stage_dir: Path) -> None:
         prune_live_tree(live_root, stage_dirs, stage_files)
 
 def run_build() -> int:
-    workspace = resolve_current_workspace(Path.cwd().name)
+    workspace = resolve_current_workspace(Path.cwd())
     api_workspace = resolve_linked_workspace("SecPal/api", workspace)
     env = os.environ.copy()
     env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
@@ -1316,7 +1342,7 @@ from pathlib import Path
 
 {build_linked_workspace_resolver_source()}
 
-workspace = resolve_current_workspace(Path.cwd().name)
+workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["PLAYWRIGHT_BASE_URL"] = f"https://frontend-{{workspace}}.preview.secpal.dev"
@@ -1546,7 +1572,7 @@ def build_guardguide_preview_env_setup_command() -> str:
             "import re",
             "",
             build_linked_workspace_resolver_source(),
-            'workspace = resolve_current_workspace(Path.cwd().name)',
+            'workspace = resolve_current_workspace(Path.cwd())',
             'env_path = Path(".env")',
             'text = env_path.read_text() if env_path.exists() else ""',
             'pattern = re.compile(r"^APP_URL=.*$", re.MULTILINE)',
