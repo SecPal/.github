@@ -56,6 +56,7 @@ NO_AI_ATTRIBUTION_RULE = (
 )
 MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
 NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
+API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -473,14 +474,11 @@ def build_api_worktree_env_template(
     for key, value in template_values.items():
         if key not in SOURCE_ENV_BASE_VALUE_KEYS:
             continue
-        if key != "DB_PASSWORD" and SENSITIVE_ENV_KEY_PATTERN.search(key):
+        if SENSITIVE_ENV_KEY_PATTERN.search(key):
             continue
         source_value = source_env_values.get(key)
         if source_value is None:
             continue
-        if key == "DB_PASSWORD":
-            if effective_db_connection != "pgsql" or source_value == "":
-                continue
         merged_values[key] = source_value
 
     return upsert_env_assignments(template_text, merged_values)
@@ -670,6 +668,12 @@ def build_api_preview_kek_path(worktree_path: pathlib.Path) -> str:
     return str((worktree_path / "storage" / "app" / "keys" / "kek.key").resolve())
 
 
+def load_optional_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
+    if not env_path.exists():
+        return {}
+    return load_env_assignments(env_path)
+
+
 def build_api_preview_env_updates(
     workspace: str,
     frontend_workspace: str | None = None,
@@ -718,6 +722,60 @@ def build_api_preview_storage_target(env_values: dict[str, str]) -> str | None:
     return None
 
 
+def build_api_worktree_runtime_env(
+    worktree_env_values: dict[str, str],
+    source_env_values: dict[str, str],
+) -> dict[str, str]:
+    runtime_env_values = dict(worktree_env_values)
+    if (
+        runtime_env_values.get("DB_CONNECTION", "").strip().lower() == "pgsql"
+        and not runtime_env_values.get("DB_PASSWORD", "").strip()
+    ):
+        source_db_password = source_env_values.get("DB_PASSWORD", "").strip()
+        if source_db_password:
+            runtime_env_values["DB_PASSWORD"] = source_db_password
+    return runtime_env_values
+
+
+def build_api_worktree_command_env(
+    worktree_env_values: dict[str, str],
+    source_env_values: dict[str, str],
+) -> dict[str, str]:
+    command_env = os.environ.copy()
+    runtime_env_values = build_api_worktree_runtime_env(worktree_env_values, source_env_values)
+    for key, value in runtime_env_values.items():
+        command_env[key] = value
+    if runtime_env_values.get("DB_PASSWORD", "").strip():
+        command_env["PGPASSWORD"] = runtime_env_values["DB_PASSWORD"]
+    return command_env
+
+
+def build_api_preview_test_user_tinker_script() -> str:
+    return textwrap.dedent(
+        r"""
+        $canonical = \App\Models\User::where('email', 'test@example.com')->first();
+        $legacy = \App\Models\User::where('email', 'test@password.com')->first();
+
+        if ($canonical !== null) {
+            if ($legacy !== null && ! $legacy->is($canonical)) {
+                $legacy->delete();
+            }
+            $user = $canonical;
+        } elseif ($legacy !== null) {
+            $user = $legacy;
+        } else {
+            throw new \RuntimeException('Preview test user missing after seeding.');
+        }
+
+        $user->forceFill([
+            'email' => 'test@example.com',
+            'password' => bcrypt('password'),
+            'email_verified_at' => now(),
+        ])->save();
+        """
+    ).strip()
+
+
 def discover_existing_api_preview_targets(env_values: dict[str, str], base_database: str) -> set[str]:
     preview_targets: set[str] = set()
     preview_prefix = build_preview_database_prefix(base_database)
@@ -740,8 +798,9 @@ def ensure_api_worktree_ready(
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
     env_path = worktree_path / ".env"
+    source_env_path = source_repo_path / ".env"
+    source_env_values = load_optional_env_assignments(source_env_path)
     if not env_path.exists():
-        source_env_path = source_repo_path / ".env"
         env_path.write_text(
             build_api_worktree_env_template(
                 source_repo_path,
@@ -755,6 +814,7 @@ def ensure_api_worktree_ready(
 
     env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
+    runtime_env_values = build_api_worktree_runtime_env(env_values, source_env_values)
     workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
     frontend_workspace = resolve_linked_workspace_name(worktree_path, "SecPal/frontend", db_path=db_path)
     updated_values = build_api_preview_env_updates(
@@ -766,20 +826,20 @@ def ensure_api_worktree_ready(
         updated_values["APP_KEY"] = generate_laravel_app_key()
 
     if env_values.get("DB_CONNECTION", "").lower() == "pgsql":
-        base_database = resolve_base_database_name(env_values, workspace)
+        base_database = resolve_base_database_name(runtime_env_values, workspace)
         if not base_database:
             raise SystemExit(f"api worktree {worktree_path} is missing DB_DATABASE in .env")
         preview_target = build_preview_database_name(base_database, workspace)
-        if postgres_role_can_create_databases(env_values, base_database):
-            ensure_postgres_preview_database(env_values, base_database, preview_target)
+        if postgres_role_can_create_databases(runtime_env_values, base_database):
+            ensure_postgres_preview_database(runtime_env_values, base_database, preview_target)
             updated_values["DB_DATABASE"] = preview_target
             updated_values["DB_URL"] = ""
             updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "database"
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = ""
         else:
-            ensure_postgres_preview_schema(env_values, base_database, preview_target)
+            ensure_postgres_preview_schema(runtime_env_values, base_database, preview_target)
             updated_values["DB_DATABASE"] = base_database
-            updated_values["DB_URL"] = build_postgres_url(env_values, base_database, preview_target)
+            updated_values["DB_URL"] = build_postgres_url(runtime_env_values, base_database, preview_target)
             updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "schema"
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = preview_target
         updated_values[PREVIEW_DATABASE_BASE_ENV_KEY] = base_database
@@ -792,6 +852,77 @@ def ensure_api_worktree_ready(
     final_env_values.update(updated_values)
 
     return True, build_api_preview_storage_target(final_env_values)
+
+
+def run_api_worktree_bootstrap_command(
+    worktree_path: pathlib.Path,
+    command: list[str],
+    *,
+    command_env: dict[str, str],
+) -> None:
+    subprocess.run(command, cwd=worktree_path, env=command_env, check=True)
+
+
+def bootstrap_api_worktree(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> tuple[bool, str | None]:
+    env_path = worktree_path / ".env"
+    preview_storage_target: str | None = None
+    if not env_path.exists():
+        ready, preview_storage_target = ensure_api_worktree_ready(
+            worktree_path,
+            source_repo_path,
+            db_path=db_path,
+        )
+        if not ready:
+            return ready, preview_storage_target
+
+    env_values = load_env_assignments(env_path)
+    if preview_storage_target is None:
+        preview_storage_target = build_api_preview_storage_target(env_values)
+    source_env_values = load_optional_env_assignments(source_repo_path / ".env")
+    command_env = build_api_worktree_command_env(env_values, source_env_values)
+    workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
+    workspace_label = os.environ.get("POLYSCOPE_WORKSPACE_LABEL", workspace)
+    prefix = f"[api:{workspace_label}]"
+
+    if env_values.get("APP_KEY", "").strip():
+        print(f"{prefix} app key already present")
+    else:
+        print(f"{prefix} generating app key")
+
+    print(f"{prefix} clearing config cache")
+    run_api_worktree_bootstrap_command(
+        worktree_path,
+        ["php", "artisan", "config:clear"],
+        command_env=command_env,
+    )
+
+    print(f"{prefix} running migrations")
+    run_api_worktree_bootstrap_command(
+        worktree_path,
+        ["php", "artisan", "migrate", "--force"],
+        command_env=command_env,
+    )
+
+    print(f"{prefix} seeding database")
+    run_api_worktree_bootstrap_command(
+        worktree_path,
+        ["php", "artisan", "db:seed", "--force"],
+        command_env=command_env,
+    )
+
+    print(f"{prefix} normalizing preview test user")
+    run_api_worktree_bootstrap_command(
+        worktree_path,
+        ["php", "artisan", "tinker", f"--execute={build_api_preview_test_user_tinker_script()}"],
+        command_env=command_env,
+    )
+
+    return True, preview_storage_target
 
 
 def cleanup_removed_api_preview_databases(
@@ -1627,36 +1758,21 @@ def build_guardguide_preview_env_setup_command() -> str:
     return f"python3 -c {shlex.quote(script)}"
 
 
+def build_api_preview_bootstrap_command(source_repo_path: pathlib.Path) -> str:
+    rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
+    source_repo = shlex.quote(str(source_repo_path))
+    return (
+        f"python3 {rollout_script} --bootstrap-api-worktree \"$PWD\" "
+        f"--source-repo-path {source_repo}"
+    )
+
+
 def build_api_preview_seed_command(migration_command: str = "php artisan migrate --force") -> str:
-    tinker_script = textwrap.dedent(
-        r"""
-        $canonical = \App\Models\User::where('email', 'test@example.com')->first();
-        $legacy = \App\Models\User::where('email', 'test@password.com')->first();
-
-        if ($canonical !== null) {
-            if ($legacy !== null && ! $legacy->is($canonical)) {
-                $legacy->delete();
-            }
-            $user = $canonical;
-        } elseif ($legacy !== null) {
-            $user = $legacy;
-        } else {
-            throw new \RuntimeException('Preview test user missing after seeding.');
-        }
-
-        $user->forceFill([
-            'email' => 'test@example.com',
-            'password' => bcrypt('password'),
-            'email_verified_at' => now(),
-        ])->save();
-        """
-    ).strip()
-
     return (
         "php artisan config:clear && "
         f"{migration_command} && "
         "php artisan db:seed --force && "
-        f"php artisan tinker --execute={shlex.quote(tinker_script)}"
+        f"php artisan tinker --execute={shlex.quote(build_api_preview_test_user_tinker_script())}"
     )
 
 
@@ -1776,7 +1892,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     "test -d vendor || composer install",
-                    build_api_preview_seed_command(),
+                    API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
                     {"label": "Queue Worker", "command": "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600", "runMode": "replace"},
@@ -2325,6 +2441,12 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         spec["focus_instruction_paths"] = [repo_path / path for path in settings["focus_instruction_paths"]]
         if repo_name == "api":
             spec["local_config"]["scripts"]["setup"].insert(0, build_api_preview_env_setup_command(repo_path))
+            spec["local_config"]["scripts"]["setup"] = [
+                build_api_preview_bootstrap_command(repo_path)
+                if command == API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER
+                else command
+                for command in spec["local_config"]["scripts"]["setup"]
+            ]
         repo_specs[repo_name] = spec
     return repo_specs
 
@@ -3619,6 +3741,7 @@ def install_nginx_config(nginx_output: pathlib.Path) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
     parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
+    parser.add_argument("--bootstrap-api-worktree", type=pathlib.Path)
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
@@ -3652,6 +3775,16 @@ def main() -> int:
             raise SystemExit("--source-repo-path is required with --prepare-api-worktree")
         ready, _preview_storage_target = ensure_api_worktree_ready(
             args.prepare_api_worktree,
+            args.source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if args.bootstrap_api_worktree is not None:
+        if args.source_repo_path is None:
+            raise SystemExit("--source-repo-path is required with --bootstrap-api-worktree")
+        ready, _preview_storage_target = bootstrap_api_worktree(
+            args.bootstrap_api_worktree,
             args.source_repo_path,
             db_path=args.db_path,
         )
