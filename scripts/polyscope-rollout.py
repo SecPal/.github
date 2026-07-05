@@ -33,6 +33,18 @@ PREVIEW_STORAGE_MODE_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_MODE"
 POSTGRES_PREVIEW_DATABASE_SEPARATOR = "__preview__"
 POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z0-9_]+)=(.*)$")
+SENSITIVE_ENV_KEY_PATTERN = re.compile(r"(?:^|_)(?:APP_KEY|KEY|SECRET|TOKEN|PASSWORD|PASS|KEK|CREDENTIAL|PRIVATE)(?:$|_)")
+SOURCE_ENV_BASE_VALUE_KEYS = {
+    "APP_ENV",
+    "APP_DEBUG",
+    "LOG_CHANNEL",
+    "LOG_LEVEL",
+    "DB_CONNECTION",
+    "DB_HOST",
+    "DB_PORT",
+    "DB_DATABASE",
+    "DB_USERNAME",
+}
 NO_AI_ATTRIBUTION_RULE = (
     "Do not add AI agent attribution, AI self-references, generated-by text, "
     "tool-specific labels or prefixes, promotional AI wording, or AI `Co-authored-by` "
@@ -54,31 +66,14 @@ def resolve_path_for_matching(path: pathlib.Path) -> str:
         return str(path)
 
 
-def resolve_git_workspace_name(worktree_path: pathlib.Path) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=worktree_path,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-    branch = result.stdout.strip()
-    if branch and branch != "HEAD":
-        return branch
-
-    return None
+def normalize_workspace_name(value: str, fallback: str = "workspace") -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    normalized = re.sub(r"-+", "-", normalized)
+    return normalized or fallback
 
 
 def resolve_workspace_name_fallback(worktree_path: pathlib.Path) -> str:
-    git_workspace = resolve_git_workspace_name(worktree_path)
-    if git_workspace:
-        return git_workspace
-
-    return re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name)
+    return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name))
 
 
 def find_current_worktree_record(
@@ -110,25 +105,7 @@ def find_current_worktree_record(
 
 
 def resolve_current_workspace_name(worktree_path: pathlib.Path, *, db_path: pathlib.Path | None = None) -> str:
-    resolved_db_path = db_path or default_polyscope_db_path()
-    fallback = resolve_workspace_name_fallback(worktree_path)
-    if not resolved_db_path.exists():
-        return fallback
-
-    try:
-        with sqlite3.connect(resolved_db_path) as connection:
-            row = find_current_worktree_record(connection, worktree_path)
-    except sqlite3.Error:
-        return fallback
-
-    if row is None:
-        return fallback
-
-    _, _, branch = row
-    if isinstance(branch, str) and branch.strip():
-        return branch
-
-    return fallback
+    return resolve_workspace_name_fallback(worktree_path)
 
 
 def resolve_linked_workspace_name(
@@ -150,7 +127,7 @@ def resolve_linked_workspace_name(
             current_worktree_id = current_worktree[0]
             row = connection.execute(
                 """
-                select linked_worktree.branch, linked_worktree.path
+                select linked_worktree.path
                 from worktree_links
                 join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
                 join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
@@ -167,11 +144,7 @@ def resolve_linked_workspace_name(
     if row is None:
         return None
 
-    branch, linked_path = row
-    if isinstance(branch, str) and branch.strip():
-        return branch
-
-    return re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(linked_path).name)
+    return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(row[0]).name))
 
 
 def collect_linked_setup_context(
@@ -192,7 +165,7 @@ def collect_linked_setup_context(
             current_worktree_id = current_worktree[0]
             rows = connection.execute(
                 """
-                select linked_repo.name, linked_worktree.branch, linked_worktree.path
+                select linked_repo.name, linked_worktree.path
                 from worktree_links
                 join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
                 join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
@@ -206,12 +179,8 @@ def collect_linked_setup_context(
         return {}
 
     context: dict[str, str] = {}
-    for repo_name, branch, linked_path in rows:
-        workspace_name = (
-            branch
-            if isinstance(branch, str) and branch.strip()
-            else re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(linked_path).name)
-        )
+    for repo_name, linked_path in rows:
+        workspace_name = normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(linked_path).name))
         context.setdefault(repo_name, workspace_name)
 
     return context
@@ -224,7 +193,6 @@ def build_linked_workspace_resolver_source() -> str:
         import os
         import re
         import sqlite3
-        import subprocess
 
         def resolve_path_for_matching(path):
             try:
@@ -254,50 +222,16 @@ def build_linked_workspace_resolver_source() -> str:
 
             return None
 
-        def resolve_git_workspace(fallback):
-            try:
-                result = subprocess.run(
-                    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-                    cwd=Path.cwd(),
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except (OSError, subprocess.CalledProcessError):
-                return fallback
-
-            branch = result.stdout.strip()
-            if branch and branch != 'HEAD':
-                return branch
-
-            return fallback
+        def normalize_workspace_name(value, fallback='workspace'):
+            normalized = re.sub(r'[^a-z0-9]+', '-', value.lower()).strip('-')
+            normalized = re.sub(r'-+', '-', normalized)
+            return normalized or fallback
 
         def resolve_workspace_fallback(fallback):
-            git_workspace = resolve_git_workspace(fallback)
-            if git_workspace != fallback:
-                return git_workspace
-            return re.sub(r"-[0-9a-f]{8}$", "", fallback)
+            return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", fallback))
 
         def resolve_current_workspace(fallback):
-            db_path = Path(os.environ.get("POLYSCOPE_DB_PATH", Path.home() / ".polyscope" / "polyscope.db"))
-            fallback = resolve_workspace_fallback(fallback)
-            if not db_path.exists():
-                return fallback
-
-            try:
-                with sqlite3.connect(db_path) as connection:
-                    row = find_current_worktree(connection)
-            except sqlite3.Error:
-                return fallback
-
-            if row is None:
-                return fallback
-
-            _, _, branch = row
-            if isinstance(branch, str) and branch.strip():
-                return branch
-
-            return fallback
+            return resolve_workspace_fallback(fallback)
 
         def resolve_linked_workspace(linked_repo_name, fallback):
             db_path = Path(os.environ.get("POLYSCOPE_DB_PATH", Path.home() / ".polyscope" / "polyscope.db"))
@@ -312,7 +246,7 @@ def build_linked_workspace_resolver_source() -> str:
                     current_worktree_id = current_worktree[0]
                     row = connection.execute(
                         '''
-                        select linked_worktree.branch, linked_worktree.path
+                        select linked_worktree.path
                         from worktree_links
                         join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
                         join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
@@ -329,11 +263,7 @@ def build_linked_workspace_resolver_source() -> str:
             if row is None:
                 return fallback
 
-            branch, linked_path = row
-            if isinstance(branch, str) and branch.strip():
-                return branch
-
-            return re.sub(r"-[0-9a-f]{8}$", "", Path(linked_path).name)
+            return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", Path(row[0]).name))
         """
     ).strip()
 
@@ -402,7 +332,9 @@ def build_api_worktree_env_template(
 
     merged_values: dict[str, str] = {}
     for key, value in template_values.items():
-        if key == "APP_KEY":
+        if key not in SOURCE_ENV_BASE_VALUE_KEYS:
+            continue
+        if SENSITIVE_ENV_KEY_PATTERN.search(key):
             continue
         if key in source_env_values:
             merged_values[key] = source_env_values[key]
@@ -824,7 +756,9 @@ if package_json.is_file():
             if isinstance(section, dict):
                 declared_packages.update(name for name in section if isinstance(name, str))
 
-required_paths = [Path("node_modules/.package-lock.json")]
+required_paths = []
+if declared_packages:
+    required_paths.append(Path("node_modules/.package-lock.json"))
 if "typescript" in declared_packages:
     required_paths.extend(
         [
@@ -2650,6 +2584,7 @@ def build_setup_hash(
     payload = {
         "commands": setup_commands,
         "inputs": collect_setup_inputs(worktree_path, setup_commands),
+        "workspace": resolve_current_workspace_name(worktree_path, db_path=db_path),
     }
     if linked_context is None:
         linked_context = collect_linked_setup_context(worktree_path, db_path=db_path)
@@ -2887,9 +2822,11 @@ def provision_worktrees(
                 sync_worktree_auxiliary_files(repo_name, worktree_path)
                 ensure_worktree_hooks(worktree_path)
                 linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
+                workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
                 setup_hash = build_setup_hash(
                     worktree_path,
                     setup_commands,
+                    db_path=db_path,
                     linked_context=linked_setup_context,
                 )
 
@@ -2911,7 +2848,8 @@ def provision_worktrees(
 
                 marker_payload: dict[str, Any] = {
                     "repo": repo_name,
-                    "workspace": worktree_path.name,
+                    "workspace": workspace,
+                    "physical_workspace": worktree_path.name,
                     "setup_hash": setup_hash,
                     "provisioned_at": datetime.now(timezone.utc).isoformat(),
                 }
@@ -2921,7 +2859,7 @@ def provision_worktrees(
                     marker_payload["linked_workspaces"] = linked_setup_context
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
-                provisioned_worktrees.append(f"{repo_name}:{worktree_path.name}")
+                provisioned_worktrees.append(f"{repo_name}:{workspace}")
             except (OSError, subprocess.CalledProcessError, SystemExit) as error:
                 error_message = str(error)
                 print(
@@ -3182,10 +3120,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_csp $preview_relaxed_csp;
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
-
-            if ($workspace ~* "^.+-[0-9a-f]{{8}}$") {{
-                return 404;
-            }}
 
             if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;

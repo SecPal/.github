@@ -9,25 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-07-05 - Normalize Polyscope Preview Workspace Aliases
+## 2026-07-05 - Fix Polyscope Preview Workspace Bootstrap
 
 **Fixed:**
 
 - updated `scripts/polyscope-rollout.py` so Polyscope path normalization now updates the matched `worktrees` row by id after resolved-path lookup, allowing preview alias rewrites to persist even when the stored database path string differs from the filesystem-resolved path
-- stripped legacy hash-suffixed fallback workspace directory names from Polyscope preview URL generation when git branch or database metadata is unavailable, keeping emitted preview hosts aligned with the nginx rule that now rejects deprecated suffixed hostnames
+- stripped legacy hash-suffixed fallback workspace directory names from Polyscope preview URL generation when git branch or database metadata is unavailable
+- normalized path-derived Polyscope workspace names into DNS-safe preview host labels before writing URLs, aliases, or local preview config, without using GitHub branch, PR, or issue metadata for hostnames
 - added rollout regression coverage for both the resolved-path database update case and the fallback preview-hostname normalization path
-
----
-
-## 2026-07-05 - Generate API Preview Env Files From Template
-
-**Fixed:**
-
 - changed Polyscope API worktree preparation to create missing worktree `.env` files from `api/.env.example` instead of copying the source checkout `.env`, so each workspace starts from the committed template rather than inheriting the source workspace verbatim
-- preserved only template-defined local base values from the source checkout when bootstrapping a missing worktree `.env`, while leaving source-only secrets out of new worktrees and avoiding reuse of the source `APP_KEY`
+- preserved only non-sensitive template-defined local base values from the source checkout when bootstrapping a missing worktree `.env`, while leaving source-only secrets and sensitive values out of new worktrees and avoiding reuse of the source `APP_KEY`
 - kept the preview rewrite step on top of the generated template so each workspace now receives its own preview-facing `APP_URL`, linked `FRONTEND_URL`, and per-workspace PostgreSQL settings without manual correction after creation
 - aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for suffix-free preview hostnames
-- fixed the local domain-policy guard so SQLite fixture paths such as `/tmp/secpal.sqlite` no longer fail unrelated preview rollout tests while unapproved `secpal.*` hosts still remain blocked
 
 ---
 

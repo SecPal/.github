@@ -829,9 +829,9 @@ with sqlite3.connect(db_path) as connection:
     connection.executemany(
         "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
         [
-            ("api-worktree", "api12345", "azure-cheetah", str(api_worktree)),
+            ("api-worktree", "api12345", "not-the-workspace", str(api_worktree)),
             ("api-worktree-relinked", "api12345", "crimson-link", str(relinked_api_worktree)),
-            ("frontend-worktree", "fe123456", "azure-cheetah", str(frontend_worktree)),
+            ("frontend-worktree", "fe123456", "not-the-workspace", str(frontend_worktree)),
         ],
     )
     connection.executemany(
@@ -857,6 +857,7 @@ subprocess.run(
 )
 frontend_env = frontend_worktree.joinpath(".env.local").read_text()
 assert "VITE_API_URL=https://api-azure-cheetah.preview.secpal.dev" in frontend_env, frontend_env
+assert "not-the-workspace" not in frontend_env, frontend_env
 
 ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api, db_path=db_path)
 assert ready
@@ -1024,7 +1025,7 @@ from pathlib import Path
 
 {module.build_linked_workspace_resolver_source()}
 
-workspace = Path.cwd().name
+workspace = resolve_current_workspace(Path.cwd().name)
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 print(f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev")
 """).strip()
@@ -1063,7 +1064,7 @@ from pathlib import Path
 
 {module.build_linked_workspace_resolver_source()}
 
-workspace = Path.cwd().name
+workspace = resolve_current_workspace(Path.cwd().name)
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 print(f"PLAYWRIGHT_BASE_URL=https://frontend-{{workspace}}.preview.secpal.dev")
 print(f"PLAYWRIGHT_API_BASE_URL=https://api-{{api_workspace}}.preview.secpal.dev")
@@ -1117,7 +1118,7 @@ with sqlite3.connect(db_path) as connection:
     )
     connection.execute(
         "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
-        ("api-worktree", "api12345", "azure-cheetah", str(registered_path)),
+        ("api-worktree", "api12345", "not-the-workspace", str(registered_path)),
     )
 
 module.normalize_registered_workspace_path(worktree_path, db_path=db_path)
@@ -1128,9 +1129,59 @@ with sqlite3.connect(db_path) as connection:
         ("api-worktree",),
     ).fetchone()[0]
 
-assert stored_path == str(normalized_path), stored_path
+assert stored_path == str(worktree_path.parent / "azure-cheetah"), stored_path
+normalized_path = worktree_path.parent / "azure-cheetah"
 assert normalized_path.is_symlink(), normalized_path
 assert normalized_path.resolve() == worktree_path.resolve(), normalized_path.resolve()
+PY
+
+# Git branch metadata must not be used as the preview workspace name; hostnames
+# and aliases are derived from the Polyscope workspace path instead.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sqlite3
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "branch-workspace-slug-fixture"
+db_path = fixture / "polyscope.db"
+worktree_path = fixture / "clones" / "api12345" / "fix-polyscope-preview-env-setup"
+worktree_path.mkdir(parents=True)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        """
+        create table worktrees (
+            id text primary key,
+            repo_id text not null,
+            branch text not null,
+            path text not null,
+            created_at text default (datetime('now')) not null
+        )
+        """
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
+        ("api-worktree", "api12345", "not-the-workspace", str(worktree_path)),
+    )
+
+workspace_name = module.resolve_current_workspace_name(worktree_path, db_path=db_path)
+assert workspace_name == "fix-polyscope-preview-env-setup", workspace_name
+updates = module.build_api_preview_env_updates(workspace_name)
+assert updates["APP_URL"] == "https://api-fix-polyscope-preview-env-setup.preview.secpal.dev", updates
+assert "not-the-workspace" not in updates["APP_URL"], updates
+module.ensure_workspace_alias(worktree_path, db_path=db_path)
+alias_path = worktree_path.parent / workspace_name
+assert alias_path.exists(), alias_path
+assert alias_path.resolve() == worktree_path.resolve(), alias_path.resolve()
+assert not (worktree_path.parent / "Codex").exists(), list(worktree_path.parent.iterdir())
 PY
 
 # Legacy hash-suffixed worktree directory names must not leak into preview hostnames
@@ -1210,7 +1261,7 @@ source_api.joinpath(".env.example").write_text(
 )
 source_api.joinpath(".env").write_text(
     "DB_CONNECTION=sqlite\n"
-    "DB_DATABASE=/tmp/secpal.sqlite\n"
+    "DB_DATABASE=/tmp/preview.sqlite\n"
     "DB_PASSWORD=prod-secret-password\n"
     "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE\n"
     "KEK_PATH=/runtime/local-kek\n"
@@ -1228,12 +1279,45 @@ assert preview_storage_target is None
 worktree_env = api_worktree.joinpath(".env").read_text()
 assert "APP_URL=https://api-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
 assert "FRONTEND_URL=https://frontend-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
-assert "DB_DATABASE=/tmp/secpal.sqlite" in worktree_env, worktree_env
-assert "DB_PASSWORD=prod-secret-password" in worktree_env, worktree_env
-assert "KEK_PATH=/runtime/local-kek" in worktree_env, worktree_env
+assert "DB_DATABASE=/tmp/preview.sqlite" in worktree_env, worktree_env
+assert "DB_PASSWORD=prod-secret-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+assert "KEK_PATH=/runtime/local-kek" not in worktree_env, worktree_env
+assert "KEK_PATH=/template/kek" in worktree_env, worktree_env
 assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in worktree_env, worktree_env
 assert "APP_KEY=\n" in worktree_env or worktree_env.endswith("APP_KEY="), worktree_env
 assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in worktree_env, worktree_env
+PY
+
+# build_verified_npm_ci_command must accept a valid locked package with no
+# dependencies; npm ci succeeds without creating node_modules in that case.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "empty-npm-package-fixture"
+fixture.mkdir()
+fixture.joinpath("package.json").write_text('{"name":"empty","version":"1.0.0"}\n')
+fixture.joinpath("package-lock.json").write_text(
+    '{"name":"empty","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"empty","version":"1.0.0"}}}\n'
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    cwd=fixture,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
 PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
@@ -1547,6 +1631,10 @@ grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-a
 grep -qF "listen 443 ssl;" "$nginx_output"
 grep -qF "listen [::]:443 ssl;" "$nginx_output"
 grep -qF "http2 on;" "$nginx_output"
+if grep -qF '[0-9a-f]{{8}}' "$nginx_output"; then
+    echo "preview nginx config must not reject legitimate branch slugs ending in eight hex characters" >&2
+    exit 1
+fi
 if grep -qF "listen 443 ssl http2;" "$nginx_output" || grep -qF "listen [::]:443 ssl http2;" "$nginx_output"; then
     echo "preview nginx config must not use deprecated listen-level http2 syntax" >&2
     exit 1
@@ -2123,6 +2211,14 @@ test -f "$frontend_clone/polyscope.local.json"
 grep -qF 'prepare-api-worktree' "$api_clone/polyscope.local.json"
 grep -qF 'source-repo-path' "$api_clone/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$frontend_clone/polyscope.local.json"
+python3 - "$api_clone/.polyscope-secpal-provisioned.json" "$frontend_clone/.polyscope-secpal-provisioned.json" <<'PY'
+import json
+import sys
+
+for marker_path in sys.argv[1:]:
+    marker = json.loads(open(marker_path).read())
+    assert marker["workspace"] == "auto-hawk", marker
+PY
 grep -q '^sdk\.dir='"$shared_android_sdk_root"'$' "$android_clone/android/local.properties"
 grep -q '^ndk\.dir=/opt/android-ndk$' "$android_clone/android/local.properties"
 grep -q '^cmake\.dir=/opt/android-cmake$' "$android_clone/android/local.properties"
