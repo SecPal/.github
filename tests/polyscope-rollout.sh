@@ -702,7 +702,7 @@ assert_rollout_rejects_invalid_local_config \
     'composer run missing-script' \
     "GuardGuide polyscope config references missing composer script 'missing-script'"
 
-grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
@@ -726,12 +726,12 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
     exit 1
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
-grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
-grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
-grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
+grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
+grep -q 'https://guardguide-de-{{worktree}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -q 'https://changelog-{{worktree}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
@@ -815,7 +815,7 @@ with sqlite3.connect(db_path) as connection:
     connection.executescript(
         """
         create table repositories (id text primary key, name text not null, path text not null);
-        create table worktrees (id text primary key, repo_id text not null, path text not null, created_at text default (datetime('now')) not null);
+        create table worktrees (id text primary key, repo_id text not null, branch text not null, path text not null, created_at text default (datetime('now')) not null);
         create table worktree_links (worktree_id text not null, linked_worktree_id text not null, created_at text default (datetime('now')) not null);
         """
     )
@@ -827,11 +827,11 @@ with sqlite3.connect(db_path) as connection:
         ],
     )
     connection.executemany(
-        "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
         [
-            ("api-worktree", "api12345", str(api_worktree)),
-            ("api-worktree-relinked", "api12345", str(relinked_api_worktree)),
-            ("frontend-worktree", "fe123456", str(frontend_worktree)),
+            ("api-worktree", "api12345", "azure-cheetah", str(api_worktree)),
+            ("api-worktree-relinked", "api12345", "crimson-link", str(relinked_api_worktree)),
+            ("frontend-worktree", "fe123456", "azure-cheetah", str(frontend_worktree)),
         ],
     )
     connection.executemany(
@@ -856,12 +856,12 @@ subprocess.run(
     check=True,
 )
 frontend_env = frontend_worktree.joinpath(".env.local").read_text()
-assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in frontend_env, frontend_env
+assert "VITE_API_URL=https://api-azure-cheetah.preview.secpal.dev" in frontend_env, frontend_env
 
 ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api, db_path=db_path)
 assert ready
 api_env = api_worktree.joinpath(".env").read_text()
-assert "APP_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in api_env, api_env
+assert "APP_URL=https://api-azure-cheetah.preview.secpal.dev" in api_env, api_env
 assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_env, api_env
 assert "SANCTUM_STATEFUL_DOMAINS=frontend-azure-cheetah.preview.secpal.dev,azure-cheetah.preview.secpal.dev,app.secpal.dev" in api_env, api_env
 assert "CORS_ALLOWED_ORIGINS=https://frontend-azure-cheetah.preview.secpal.dev,https://azure-cheetah.preview.secpal.dev,https://app.secpal.dev" in api_env, api_env
@@ -939,7 +939,7 @@ build_env = {**env, "PATH": str(fake_bin) if not existing_path else str(fake_bin
 build_command = module.build_frontend_preview_build_command()
 build_script = shlex.split(build_command)[2]
 build_publish_source = build_script[
-    build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = Path.cwd().name")
+    build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = resolve_current_workspace(Path.cwd().name)")
 ]
 assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
@@ -995,7 +995,7 @@ assert not frontend_worktree.joinpath("dist", ".well-known", "assetlinks.json").
 assert not frontend_worktree.joinpath("dist", "assets", "removed.js").exists()
 assert frontend_worktree.joinpath("dist", "assets", "shape").is_file()
 assert frontend_worktree.joinpath("dist", "assets", "current.js").is_file()
-assert frontend_worktree.joinpath("npm-vite-api-url.log").read_text() == "https://api-azure-cheetah-165552b7.preview.secpal.dev\n"
+assert frontend_worktree.joinpath("npm-vite-api-url.log").read_text() == "https://api-azure-cheetah.preview.secpal.dev\n"
 
 symlink_build_result = subprocess.run(
     ["bash", "-c", "set -euo pipefail; " + build_command],
@@ -1036,7 +1036,7 @@ probe_result = subprocess.run(
     text=True,
     check=True,
 )
-assert "VITE_API_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
+assert "VITE_API_URL=https://api-azure-cheetah.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
 
 watch_command = module.build_frontend_preview_build_watch_command()
 watch_script = shlex.split(watch_command)[2]
@@ -1045,7 +1045,8 @@ watch_publish_source = watch_script[
 ]
 run_build_source = watch_script[watch_script.index("def run_build()") :]
 assert 'api_url = f"https://api-' not in watch_script, watch_script
-assert 'resolve_linked_workspace("SecPal/api", Path.cwd().name)' in run_build_source, run_build_source
+assert 'workspace = resolve_current_workspace(Path.cwd().name)' in run_build_source, run_build_source
+assert 'api_workspace = resolve_linked_workspace("SecPal/api", workspace)' in run_build_source, run_build_source
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
@@ -1076,10 +1077,12 @@ playwright_probe_result = subprocess.run(
     check=True,
 )
 assert "PLAYWRIGHT_BASE_URL=https://frontend-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
-assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah-165552b7.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
+assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
 PY
 
-# ensure_api_worktree_ready must not copy source .env secrets into missing API worktree envs.
+# ensure_api_worktree_ready must build a missing API worktree .env from the
+# source template, carry forward local base values, and then rewrite
+# preview-facing values for the worktree.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -1091,13 +1094,22 @@ source_api = workspace / "source-env-secret-fixture" / "source-api"
 api_worktree = workspace / "source-env-secret-fixture" / "clones" / "api12345" / "attacker-pr"
 source_api.mkdir(parents=True, exist_ok=True)
 api_worktree.mkdir(parents=True, exist_ok=True)
-source_api.joinpath(".env").write_text(
+source_api.joinpath(".env.example").write_text(
     "APP_URL=https://api.secpal.dev\n"
-    "DB_CONNECTION=pgsql\n"
-    "DB_DATABASE=secpal\n"
-    "DB_USERNAME=secpal\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=sqlite\n"
+    "DB_DATABASE=/tmp/template.sqlite\n"
+    "DB_PASSWORD=\n"
+    "APP_KEY=\n"
+    "KEK_PATH=/template/kek\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=sqlite\n"
+    "DB_DATABASE=/tmp/secpal.sqlite\n"
     "DB_PASSWORD=prod-secret-password\n"
     "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE\n"
+    "KEK_PATH=/runtime/local-kek\n"
+    "EXTRA_SECRET=do-not-copy-this-source-only-value\n"
 )
 
 spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
@@ -1106,9 +1118,17 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 ready, preview_storage_target = module.ensure_api_worktree_ready(api_worktree, source_api)
-assert ready is False
+assert ready is True
 assert preview_storage_target is None
-assert not api_worktree.joinpath(".env").exists(), "missing worktree .env must fail closed without copying source secrets"
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "APP_URL=https://api-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
+assert "FRONTEND_URL=https://frontend-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
+assert "DB_DATABASE=/tmp/secpal.sqlite" in worktree_env, worktree_env
+assert "DB_PASSWORD=prod-secret-password" in worktree_env, worktree_env
+assert "KEK_PATH=/runtime/local-kek" in worktree_env, worktree_env
+assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in worktree_env, worktree_env
+assert "APP_KEY=\n" in worktree_env or worktree_env.endswith("APP_KEY="), worktree_env
+assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in worktree_env, worktree_env
 PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
@@ -1775,7 +1795,11 @@ cat >"$fake_exec_dir/npm" <<'STUB'
 #!/usr/bin/env bash
 printf 'npm:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
 if [[ "$*" == *" ci"* || "$1" == "ci" ]]; then
-    mkdir -p node_modules
+    mkdir -p node_modules/typescript/lib node_modules/@types/node
+    printf '{}\n' > node_modules/.package-lock.json
+    printf '// fake lib\n' > node_modules/typescript/lib/lib.es2020.d.ts
+    printf '// fake lib\n' > node_modules/typescript/lib/lib.dom.d.ts
+    printf '{ "name": "@types/node" }\n' > node_modules/@types/node/package.json
 fi
 if [[ "$*" == *"run build"* ]]; then
     out_dir="dist"
@@ -1989,8 +2013,11 @@ grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,htt
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.preview.local"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.production.local"
-cmp -s "$workspace_root/api/polyscope.local.json" "$api_clone/polyscope.local.json"
-cmp -s "$workspace_root/frontend/polyscope.local.json" "$frontend_clone/polyscope.local.json"
+test -f "$api_clone/polyscope.local.json"
+test -f "$frontend_clone/polyscope.local.json"
+grep -qF 'prepare-api-worktree' "$api_clone/polyscope.local.json"
+grep -qF 'source-repo-path' "$api_clone/polyscope.local.json"
+grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$frontend_clone/polyscope.local.json"
 grep -q '^sdk\.dir='"$shared_android_sdk_root"'$' "$android_clone/android/local.properties"
 grep -q '^ndk\.dir=/opt/android-ndk$' "$android_clone/android/local.properties"
 grep -q '^cmake\.dir=/opt/android-cmake$' "$android_clone/android/local.properties"

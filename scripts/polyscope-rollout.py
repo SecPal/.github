@@ -47,6 +47,82 @@ def default_polyscope_db_path() -> pathlib.Path:
     return pathlib.Path(os.environ.get("POLYSCOPE_DB_PATH", pathlib.Path.home() / ".polyscope" / "polyscope.db"))
 
 
+def resolve_path_for_matching(path: pathlib.Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
+def resolve_git_workspace_name(worktree_path: pathlib.Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+    branch = result.stdout.strip()
+    if branch and branch != "HEAD":
+        return branch
+
+    return None
+
+
+def find_current_worktree_record(
+    connection: sqlite3.Connection,
+    worktree_path: pathlib.Path,
+) -> tuple[str | None, str | None, str] | None:
+    current_path = resolve_path_for_matching(worktree_path)
+    rows = connection.execute(
+        """
+        select id, path, branch
+        from worktrees
+        order by created_at desc
+        """
+    ).fetchall()
+
+    for worktree_id, registered_path, branch in rows:
+        if not isinstance(registered_path, str) or not registered_path.strip():
+            continue
+
+        try:
+            registered_resolved_path = str(pathlib.Path(registered_path).resolve())
+        except OSError:
+            registered_resolved_path = registered_path
+
+        if registered_resolved_path == current_path:
+            return worktree_id, registered_path, branch
+
+    return None
+
+
+def resolve_current_workspace_name(worktree_path: pathlib.Path, *, db_path: pathlib.Path | None = None) -> str:
+    resolved_db_path = db_path or default_polyscope_db_path()
+    fallback = resolve_git_workspace_name(worktree_path) or worktree_path.name
+    if not resolved_db_path.exists():
+        return fallback
+
+    try:
+        with sqlite3.connect(resolved_db_path) as connection:
+            row = find_current_worktree_record(connection, worktree_path)
+    except sqlite3.Error:
+        return fallback
+
+    if row is None:
+        return fallback
+
+    _, _, branch = row
+    if isinstance(branch, str) and branch.strip():
+        return branch
+
+    return fallback
+
+
 def resolve_linked_workspace_name(
     worktree_path: pathlib.Path,
     linked_repo_name: str,
@@ -58,24 +134,24 @@ def resolve_linked_workspace_name(
         return None
 
     try:
-        current_path = str(worktree_path.resolve())
-    except OSError:
-        current_path = str(worktree_path)
-
-    try:
         with sqlite3.connect(resolved_db_path) as connection:
+            current_worktree = find_current_worktree_record(connection, worktree_path)
+            if current_worktree is None:
+                return None
+
+            current_worktree_id = current_worktree[0]
             row = connection.execute(
                 """
-                select linked_worktree.path
+                select linked_worktree.branch, linked_worktree.path
                 from worktree_links
                 join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
                 join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
                 join repositories linked_repo on linked_repo.id = linked_worktree.repo_id
-                where current_worktree.path = ? and linked_repo.name = ?
+                where current_worktree.id = ? and linked_repo.name = ?
                 order by worktree_links.created_at desc
                 limit 1
                 """,
-                (current_path, linked_repo_name),
+                (current_worktree_id, linked_repo_name),
             ).fetchone()
     except sqlite3.Error:
         return None
@@ -83,7 +159,11 @@ def resolve_linked_workspace_name(
     if row is None:
         return None
 
-    return pathlib.Path(row[0]).name
+    branch, linked_path = row
+    if isinstance(branch, str) and branch.strip():
+        return branch
+
+    return pathlib.Path(linked_path).name
 
 
 def collect_linked_setup_context(
@@ -96,30 +176,31 @@ def collect_linked_setup_context(
         return {}
 
     try:
-        current_path = str(worktree_path.resolve())
-    except OSError:
-        current_path = str(worktree_path)
-
-    try:
         with sqlite3.connect(resolved_db_path) as connection:
+            current_worktree = find_current_worktree_record(connection, worktree_path)
+            if current_worktree is None:
+                return {}
+
+            current_worktree_id = current_worktree[0]
             rows = connection.execute(
                 """
-                select linked_repo.name, linked_worktree.path
+                select linked_repo.name, linked_worktree.branch, linked_worktree.path
                 from worktree_links
                 join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
                 join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
                 join repositories linked_repo on linked_repo.id = linked_worktree.repo_id
-                where current_worktree.path = ?
+                where current_worktree.id = ?
                 order by linked_repo.name asc, worktree_links.created_at desc
                 """,
-                (current_path,),
+                (current_worktree_id,),
             ).fetchall()
     except sqlite3.Error:
         return {}
 
     context: dict[str, str] = {}
-    for repo_name, linked_path in rows:
-        context.setdefault(repo_name, pathlib.Path(linked_path).name)
+    for repo_name, branch, linked_path in rows:
+        workspace_name = branch if isinstance(branch, str) and branch.strip() else pathlib.Path(linked_path).name
+        context.setdefault(repo_name, workspace_name)
 
     return context
 
@@ -130,6 +211,74 @@ def build_linked_workspace_resolver_source() -> str:
         from pathlib import Path
         import os
         import sqlite3
+        import subprocess
+
+        def resolve_path_for_matching(path):
+            try:
+                return str(path.resolve())
+            except OSError:
+                return str(path)
+
+        def find_current_worktree(connection):
+            current_path = resolve_path_for_matching(Path.cwd())
+            rows = connection.execute(
+                '''
+                select id, path, branch
+                from worktrees
+                order by created_at desc
+                '''
+            ).fetchall()
+
+            for worktree_id, registered_path, branch in rows:
+                if not isinstance(registered_path, str) or not registered_path.strip():
+                    continue
+                try:
+                    registered_resolved_path = str(Path(registered_path).resolve())
+                except OSError:
+                    registered_resolved_path = registered_path
+                if registered_resolved_path == current_path:
+                    return worktree_id, registered_path, branch
+
+            return None
+
+        def resolve_git_workspace(fallback):
+            try:
+                result = subprocess.run(
+                    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                    cwd=Path.cwd(),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except (OSError, subprocess.CalledProcessError):
+                return fallback
+
+            branch = result.stdout.strip()
+            if branch and branch != 'HEAD':
+                return branch
+
+            return fallback
+
+        def resolve_current_workspace(fallback):
+            db_path = Path(os.environ.get("POLYSCOPE_DB_PATH", Path.home() / ".polyscope" / "polyscope.db"))
+            fallback = resolve_git_workspace(fallback)
+            if not db_path.exists():
+                return fallback
+
+            try:
+                with sqlite3.connect(db_path) as connection:
+                    row = find_current_worktree(connection)
+            except sqlite3.Error:
+                return fallback
+
+            if row is None:
+                return fallback
+
+            _, _, branch = row
+            if isinstance(branch, str) and branch.strip():
+                return branch
+
+            return fallback
 
         def resolve_linked_workspace(linked_repo_name, fallback):
             db_path = Path(os.environ.get("POLYSCOPE_DB_PATH", Path.home() / ".polyscope" / "polyscope.db"))
@@ -137,24 +286,23 @@ def build_linked_workspace_resolver_source() -> str:
                 return fallback
 
             try:
-                current_path = str(Path.cwd().resolve())
-            except OSError:
-                current_path = str(Path.cwd())
-
-            try:
                 with sqlite3.connect(db_path) as connection:
+                    current_worktree = find_current_worktree(connection)
+                    if current_worktree is None:
+                        return fallback
+                    current_worktree_id = current_worktree[0]
                     row = connection.execute(
                         '''
-                        select linked_worktree.path
+                        select linked_worktree.branch, linked_worktree.path
                         from worktree_links
                         join worktrees current_worktree on current_worktree.id = worktree_links.worktree_id
                         join worktrees linked_worktree on linked_worktree.id = worktree_links.linked_worktree_id
                         join repositories linked_repo on linked_repo.id = linked_worktree.repo_id
-                        where current_worktree.path = ? and linked_repo.name = ?
+                        where current_worktree.id = ? and linked_repo.name = ?
                         order by worktree_links.created_at desc
                         limit 1
                         ''',
-                        (current_path, linked_repo_name),
+                        (current_worktree_id, linked_repo_name),
                     ).fetchone()
             except sqlite3.Error:
                 return fallback
@@ -162,15 +310,19 @@ def build_linked_workspace_resolver_source() -> str:
             if row is None:
                 return fallback
 
-            return Path(row[0]).name
+            branch, linked_path = row
+            if isinstance(branch, str) and branch.strip():
+                return branch
+
+            return Path(linked_path).name
         """
     ).strip()
 
 
 def build_preview_url_template(preview_prefix: str | None) -> str:
     if preview_prefix:
-        return f"https://{preview_prefix}-{{{{folder}}}}.preview.secpal.dev"
-    return "https://{{folder}}.preview.secpal.dev"
+        return f"https://{preview_prefix}-{{{{worktree}}}}.preview.secpal.dev"
+    return "https://{{worktree}}.preview.secpal.dev"
 
 
 def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
@@ -210,6 +362,33 @@ def upsert_env_assignments(text: str, updates: dict[str, str]) -> str:
             text += "\n"
         text += replacement + "\n"
     return text
+
+
+def build_api_worktree_env_template(
+    source_repo_path: pathlib.Path,
+    *,
+    source_env_path: pathlib.Path | None = None,
+) -> str:
+    template_env_path = source_repo_path / ".env.example"
+    if not template_env_path.exists():
+        raise SystemExit(
+            f"api source template missing; expected .env.example at {template_env_path}"
+        )
+
+    template_text = template_env_path.read_text()
+    template_values = load_env_assignments(template_env_path)
+    source_env_values: dict[str, str] = {}
+    if source_env_path is not None and source_env_path.exists():
+        source_env_values = load_env_assignments(source_env_path)
+
+    merged_values: dict[str, str] = {}
+    for key, value in template_values.items():
+        if key == "APP_KEY":
+            continue
+        if key in source_env_values:
+            merged_values[key] = source_env_values[key]
+
+    return upsert_env_assignments(template_text, merged_values)
 
 
 def sanitize_postgres_identifier_component(value: str, fallback: str) -> str:
@@ -429,20 +608,20 @@ def ensure_api_worktree_ready(
     env_path = worktree_path / ".env"
     if not env_path.exists():
         source_env_path = source_repo_path / ".env"
-        source_hint = (
-            f"; source .env exists at {source_env_path} but is not copied into worktrees"
-            if source_env_path.exists()
-            else f"; source preview env not found at {source_env_path}"
+        env_path.write_text(
+            build_api_worktree_env_template(
+                source_repo_path,
+                source_env_path=source_env_path if source_env_path.exists() else None,
+            )
         )
         print(
-            f"Skipping api worktree {worktree_path.name} at {worktree_path}: "
-            f".env missing{source_hint}"
+            f"Healed api worktree {worktree_path.name} at {worktree_path}: "
+            f"wrote missing .env from template {source_repo_path / '.env.example'}"
         )
-        return False, None
 
     env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
-    workspace = worktree_path.name
+    workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
     frontend_workspace = resolve_linked_workspace_name(worktree_path, "SecPal/frontend", db_path=db_path)
     updated_values = build_api_preview_env_updates(workspace, frontend_workspace)
 
@@ -479,6 +658,8 @@ def cleanup_removed_api_preview_databases(
     repo_state: dict[str, dict[str, Any]],
     repo_specs: dict[str, dict[str, Any]],
     clone_root: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
 ) -> list[str]:
     api_clone_root = clone_root / repo_state["api"]["id"]
     if not api_clone_root.exists():
@@ -500,7 +681,7 @@ def cleanup_removed_api_preview_databases(
     api_validation_commands = render_local_config(api_spec).get("scripts", {}).get("setup", [])
     active_targets: set[str] = set()
     for worktree_path in api_clone_root.iterdir():
-        if not worktree_path.is_dir():
+        if not worktree_path.is_dir() or worktree_path.is_symlink():
             continue
 
         try:
@@ -514,7 +695,12 @@ def cleanup_removed_api_preview_databases(
             protects_storage_target = True
 
         if protects_storage_target:
-            active_targets.add(build_preview_database_name(base_database, worktree_path.name))
+            active_targets.add(
+                build_preview_database_name(
+                    base_database,
+                    resolve_current_workspace_name(worktree_path, db_path=db_path),
+                )
+            )
 
     cleaned_databases: list[str] = []
     if postgres_role_can_create_databases(env_values, base_database):
@@ -541,7 +727,7 @@ import re
 
 {build_linked_workspace_resolver_source()}
 
-workspace = Path.cwd().name
+workspace = resolve_current_workspace(Path.cwd().name)
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 pattern = re.compile(r"^VITE_API_URL=.*$", re.MULTILINE)
 replacement = f"VITE_API_URL=https://api-{{api_workspace}}.preview.secpal.dev"
@@ -561,6 +747,119 @@ for env_name in (".env.local", ".env.preview.local", ".env.production.local"):
     ).strip()
 
     return f"python3 -c {shlex.quote(script)}"
+
+
+def build_verified_npm_ci_command() -> str:
+    remove_node_modules_script = textwrap.dedent(
+        """\
+import os
+import shutil
+import stat
+import time
+from pathlib import Path
+
+node_modules = Path("node_modules")
+if not node_modules.exists():
+    raise SystemExit(0)
+
+def handle_remove_error(function, path, _excinfo):
+    try:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    except OSError:
+        pass
+    function(path)
+
+last_error = None
+for _ in range(5):
+    try:
+        shutil.rmtree(node_modules, onerror=handle_remove_error)
+        last_error = None
+        break
+    except FileNotFoundError:
+        last_error = None
+        break
+    except OSError as error:
+        last_error = error
+        time.sleep(1)
+
+if last_error is not None:
+    raise last_error
+        """
+    ).strip()
+
+    validate_install_script = textwrap.dedent(
+        """\
+import json
+from pathlib import Path
+
+package_json = Path("package.json")
+declared_packages = set()
+if package_json.is_file():
+    try:
+        package_data = json.loads(package_json.read_text())
+    except json.JSONDecodeError:
+        package_data = {}
+    if isinstance(package_data, dict):
+        for key in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+            section = package_data.get(key, {})
+            if isinstance(section, dict):
+                declared_packages.update(name for name in section if isinstance(name, str))
+
+required_paths = [Path("node_modules/.package-lock.json")]
+if "typescript" in declared_packages:
+    required_paths.extend(
+        [
+            Path("node_modules/typescript/lib/lib.es2020.d.ts"),
+            Path("node_modules/typescript/lib/lib.dom.d.ts"),
+        ]
+    )
+if "@types/node" in declared_packages:
+    required_paths.append(Path("node_modules/@types/node/package.json"))
+
+missing = [str(path) for path in required_paths if not path.is_file()]
+if missing:
+    raise SystemExit(1)
+        """
+    ).strip()
+
+    return textwrap.dedent(
+        f"""\
+python3 -c {shlex.quote(remove_node_modules_script)}
+for attempt in 1 2 3; do
+    if test -f package.json && python3 - <<'PY'
+import json
+from pathlib import Path
+
+for candidate in (Path("package-lock.json"), Path("npm-shrinkwrap.json")):
+    if not candidate.is_file():
+        continue
+    try:
+        data = json.loads(candidate.read_text())
+    except json.JSONDecodeError:
+        continue
+    if isinstance(data, dict) and int(data.get("lockfileVersion", 0)) >= 1:
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+    then
+        npm ci
+        install_status=$?
+        if [ "$install_status" -eq 0 ] && python3 - <<'PY'
+{validate_install_script}
+PY
+        then
+            exit 0
+        fi
+        echo "npm ci produced an incomplete install on attempt $attempt; retrying" >&2
+        rm -rf node_modules
+    fi
+    sleep 2
+done
+echo "package-lock.json or npm-shrinkwrap.json was missing, incomplete, or npm ci produced an invalid install" >&2
+exit 1
+        """
+    ).strip()
 
 
 def build_frontend_preview_build_command() -> str:
@@ -653,7 +952,7 @@ def publish_preview_build(stage_dir: Path) -> None:
 
         prune_live_tree(live_root, stage_dirs, stage_files)
 
-workspace = Path.cwd().name
+workspace = resolve_current_workspace(Path.cwd().name)
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
@@ -861,7 +1160,8 @@ def publish_preview_build(stage_dir: Path) -> None:
         prune_live_tree(live_root, stage_dirs, stage_files)
 
 def run_build() -> int:
-    api_workspace = resolve_linked_workspace("SecPal/api", Path.cwd().name)
+    workspace = resolve_current_workspace(Path.cwd().name)
+    api_workspace = resolve_linked_workspace("SecPal/api", workspace)
     env = os.environ.copy()
     env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
     stage_root = Path(".polyscope-preview-stage")
@@ -928,7 +1228,7 @@ from pathlib import Path
 
 {build_linked_workspace_resolver_source()}
 
-workspace = Path.cwd().name
+workspace = resolve_current_workspace(Path.cwd().name)
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["PLAYWRIGHT_BASE_URL"] = f"https://frontend-{{workspace}}.preview.secpal.dev"
@@ -1373,7 +1673,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     build_frontend_preview_env_setup_command(),
-                    "npm ci",
+                    build_verified_npm_ci_command(),
                     build_frontend_preview_build_command(),
                 ],
                 "run": [
@@ -1487,7 +1787,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "copyGitignored": True,
             "runMode": "replace",
             "scripts": {
-                "setup": ["npm ci"],
+                "setup": [build_verified_npm_ci_command()],
                 "run": [
                     {"label": "Validate", "command": "npm run validate", "runMode": "preserve"},
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
@@ -1521,7 +1821,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "copyGitignored": True,
             "runMode": "replace",
             "scripts": {
-                "setup": ["npm ci"],
+                "setup": [build_verified_npm_ci_command()],
                 "run": [
                     {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
                     {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
@@ -1557,7 +1857,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("secpal-app")},
             "scripts": {
-                "setup": ["npm ci", "npm run build"],
+                "setup": [build_verified_npm_ci_command(), "npm run build"],
                 "run": [
                     {
                         "label": "Build Watch",
@@ -1607,7 +1907,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("guardguide-de")},
             "scripts": {
-                "setup": ["npm ci", "npm run build"],
+                "setup": [build_verified_npm_ci_command(), "npm run build"],
                 "run": [
                     {
                         "label": "Build Watch",
@@ -1657,7 +1957,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "preview": {"url": build_preview_url_template("changelog")},
             "scripts": {
-                "setup": ["npm ci", "npm run build"],
+                "setup": [build_verified_npm_ci_command(), "npm run build"],
                 "run": [
                     {
                         "label": "Build Watch",
@@ -1697,7 +1997,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "copyGitignored": True,
             "runMode": "replace",
             "scripts": {
-                "setup": ["npm ci"],
+                "setup": [build_verified_npm_ci_command()],
                 "run": [
                     {"label": "Preflight", "command": "./scripts/preflight.sh", "runMode": "preserve"},
                     {"label": "AI Review Scan", "command": "npm run copilot:review:scan", "runMode": "preserve"},
@@ -2285,6 +2585,24 @@ def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str
     }
 
 
+def render_worktree_local_config(
+    spec: dict[str, Any],
+    worktree_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> str:
+    config = render_local_config(spec)
+    preview = config.get("preview")
+    if isinstance(preview, dict) and "url" in preview:
+        workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
+        preview_prefix = spec.get("preview_prefix")
+        if isinstance(preview_prefix, str) and preview_prefix:
+            preview["url"] = f"https://{preview_prefix}-{workspace}.preview.secpal.dev"
+        else:
+            preview["url"] = f"https://{workspace}.preview.secpal.dev"
+    return render_pretty_json(config) + "\n"
+
+
 def collect_setup_inputs(worktree_path: pathlib.Path, setup_commands: list[str]) -> dict[str, str]:
     inputs: dict[str, str] = {}
     command_text = "\n".join(setup_commands)
@@ -2354,6 +2672,72 @@ def run_setup_commands(worktree_path: pathlib.Path, commands: list[str], *, db_p
 def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) -> None:
     (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
     ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
+
+
+def normalize_registered_workspace_path(
+    worktree_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> None:
+    resolved_db_path = db_path or default_polyscope_db_path()
+    if not resolved_db_path.exists():
+        return
+
+    current_path = resolve_path_for_matching(worktree_path)
+    normalized_path = worktree_path.parent / resolve_current_workspace_name(worktree_path, db_path=resolved_db_path)
+    if normalized_path == worktree_path:
+        return
+
+    if normalized_path.exists() and not normalized_path.is_symlink():
+        return
+
+    if normalized_path.is_symlink():
+        try:
+            if normalized_path.resolve() != worktree_path.resolve():
+                return
+        except OSError:
+            return
+
+    try:
+        with sqlite3.connect(resolved_db_path) as connection:
+            connection.execute(
+                """
+                update worktrees
+                set path = ?
+                where path = ?
+                """,
+                (str(normalized_path), current_path),
+            )
+            connection.commit()
+    except sqlite3.Error:
+        return
+
+    if not normalized_path.exists():
+        normalized_path.symlink_to(worktree_path.name)
+
+
+def ensure_workspace_alias(worktree_path: pathlib.Path, *, db_path: pathlib.Path | None = None) -> None:
+    workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
+    if workspace == worktree_path.name:
+        return
+
+    alias_path = worktree_path.parent / workspace
+    if alias_path == worktree_path:
+        return
+
+    if alias_path.is_symlink():
+        try:
+            if alias_path.resolve() == worktree_path.resolve():
+                return
+        except OSError:
+            pass
+        alias_path.unlink()
+    elif alias_path.exists():
+        raise RuntimeError(
+            f"workspace alias path {alias_path} already exists and does not point to {worktree_path}"
+        )
+
+    alias_path.symlink_to(worktree_path.name)
 
 
 def sync_worktree_auxiliary_files(repo_name: str, worktree_path: pathlib.Path) -> None:
@@ -2446,9 +2830,13 @@ def provision_worktrees(
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
-    rendered_configs = render_local_configs(repo_specs)
     provisioned_worktrees: list[str] = []
-    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(repo_state, repo_specs, clone_root)
+    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
+        repo_state,
+        repo_specs,
+        clone_root,
+        db_path=db_path,
+    )
     failed_provision_worktrees: list[dict[str, str]] = []
 
     for repo_name, spec in repo_specs.items():
@@ -2461,14 +2849,16 @@ def provision_worktrees(
         setup_commands = validation_commands
         if repo_name == "api":
             setup_commands = setup_commands[1:]
-        config_text = rendered_configs[repo_name]
 
-        for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir()):
+        for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir() and not path.is_symlink()):
             try:
                 if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
                     continue
 
+                normalize_registered_workspace_path(worktree_path, db_path=db_path)
+                config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
                 sync_worktree_local_config(worktree_path, config_text)
+                ensure_workspace_alias(worktree_path, db_path=db_path)
                 sync_worktree_auxiliary_files(repo_name, worktree_path)
                 ensure_worktree_hooks(worktree_path)
                 linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
@@ -2767,6 +3157,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_csp $preview_relaxed_csp;
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
+
+            if ($workspace ~* "^.+-[0-9a-f]{{8}}$") {{
+                return 404;
+            }}
 
             if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;
@@ -3076,7 +3470,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
     parser.add_argument("--polyscope-api-base", default="http://127.0.0.1:4321/api")
     parser.add_argument("--repo-state-file", type=pathlib.Path)
-    parser.add_argument("--nginx-output", type=pathlib.Path, default=pathlib.Path.home() / "copilot-preview-secpal-dev.nginx.conf")
+    parser.add_argument(
+        "--nginx-output",
+        type=pathlib.Path,
+        default=pathlib.Path.home() / "polyscope-preview-secpal-dev.nginx.conf",
+    )
     parser.add_argument(
         "--nginx-http2-syntax",
         choices=NGINX_HTTP2_SYNTAX_CHOICES,

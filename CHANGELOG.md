@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-05 - Generate API Preview Env Files From Template
+
+**Fixed:**
+
+- changed Polyscope API worktree preparation to create missing worktree `.env` files from `api/.env.example` instead of copying the source checkout `.env`, so each workspace starts from the committed template rather than inheriting the source workspace verbatim
+- preserved only template-defined local base values from the source checkout when bootstrapping a missing worktree `.env`, while leaving source-only secrets out of new worktrees and avoiding reuse of the source `APP_KEY`
+- kept the preview rewrite step on top of the generated template so each workspace now receives its own preview-facing `APP_URL`, linked `FRONTEND_URL`, and per-workspace PostgreSQL settings without manual correction after creation
+- aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for suffix-free preview hostnames
+
+---
+
 ## 2026-07-04 - Document SecPal Licensing, CLA, And Attribution Policy
 
 **Changed:**
