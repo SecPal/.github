@@ -369,8 +369,8 @@ def generate_laravel_app_key() -> str:
 
 def build_preview_url_template(preview_prefix: str | None) -> str:
     if preview_prefix:
-        return f"https://{preview_prefix}-{{{{worktree}}}}.preview.secpal.dev"
-    return "https://{{worktree}}.preview.secpal.dev"
+        return f"https://{preview_prefix}-{{{{folder}}}}.preview.secpal.dev"
+    return "https://{{folder}}.preview.secpal.dev"
 
 
 def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
@@ -649,6 +649,21 @@ def build_api_preview_storage_target(env_values: dict[str, str]) -> str | None:
     return None
 
 
+def discover_existing_api_preview_targets(env_values: dict[str, str], base_database: str) -> set[str]:
+    preview_targets: set[str] = set()
+    preview_prefix = build_preview_database_prefix(base_database)
+
+    database_name = env_values.get("DB_DATABASE", "").strip()
+    if database_name.startswith(preview_prefix):
+        preview_targets.add(database_name)
+
+    preview_schema = env_values.get(PREVIEW_SCHEMA_ENV_KEY, "").strip()
+    if preview_schema.startswith(preview_prefix):
+        preview_targets.add(preview_schema)
+
+    return preview_targets
+
+
 def ensure_api_worktree_ready(
     worktree_path: pathlib.Path,
     source_repo_path: pathlib.Path,
@@ -753,6 +768,9 @@ def cleanup_removed_api_preview_databases(
                     resolve_current_workspace_name(worktree_path, db_path=db_path),
                 )
             )
+            env_path = worktree_path / ".env"
+            if env_path.exists():
+                active_targets.update(discover_existing_api_preview_targets(load_env_assignments(env_path), base_database))
 
     cleaned_databases: list[str] = []
     if postgres_role_can_create_databases(env_values, base_database):
@@ -1513,10 +1531,10 @@ def build_guardguide_preview_env_setup_command() -> str:
     script = "\n".join(
         [
             "from pathlib import Path",
-            "import os",
             "import re",
             "",
-            'workspace = os.environ["POLYSCOPE_WORKSPACE"]',
+            build_linked_workspace_resolver_source(),
+            'workspace = resolve_current_workspace(Path.cwd().name)',
             'env_path = Path(".env")',
             'text = env_path.read_text() if env_path.exists() else ""',
             'pattern = re.compile(r"^APP_URL=.*$", re.MULTILINE)',
@@ -1533,7 +1551,7 @@ def build_guardguide_preview_env_setup_command() -> str:
         ]
     )
 
-    return f'POLYSCOPE_WORKSPACE="${{PWD##*/}}" python3 -c {shlex.quote(script)}'
+    return f"python3 -c {shlex.quote(script)}"
 
 
 def build_api_preview_seed_command(migration_command: str = "php artisan migrate --force") -> str:

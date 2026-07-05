@@ -702,7 +702,7 @@ assert_rollout_rejects_invalid_local_config \
     'composer run missing-script' \
     "GuardGuide polyscope config references missing composer script 'missing-script'"
 
-grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
@@ -726,12 +726,12 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
     exit 1
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
-grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
-grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
-grep -q 'https://guardguide-de-{{worktree}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -q 'https://changelog-{{worktree}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
+grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
+grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
@@ -1584,6 +1584,38 @@ result = subprocess.run(
 assert result.returncode == 0, result.stderr
 PY
 
+# GuardGuide preview env setup must write APP_URL for the normalized preview
+# workspace host, not the physical worktree directory basename.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "guardguide-env-setup-fixture"
+worktree_path = fixture / "clones" / "gg123456" / "Steady Otter"
+worktree_path.mkdir(parents=True)
+worktree_path.joinpath(".env").write_text("APP_URL=https://guardguide.secpal.dev\n")
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_guardguide_preview_env_setup_command()],
+    cwd=worktree_path,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
+env_text = worktree_path.joinpath(".env").read_text()
+assert "APP_URL=https://guardguide-steady-otter.preview.secpal.dev" in env_text, env_text
+assert "APP_URL=https://guardguide-Steady Otter.preview.secpal.dev" not in env_text, env_text
+PY
+
 # build_verified_npm_ci_command must retry failed npm ci attempts even though
 # provisioning runs the generated shell under `set -euo pipefail`.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -1893,7 +1925,10 @@ for required_input in ("tailwind.config.js", "tailwind.config.ts", ".png", ".jpg
 PY
 
 grep -q 'GuardGuide/AGENTS.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"
+if grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"; then
+    echo "GuardGuide preview env setup must resolve the normalized workspace directly and not pass the physical basename via POLYSCOPE_WORKSPACE" >&2
+    exit 1
+fi
 grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'php artisan db:seed --class=Database.*GuardGuideAccessSeeder --force && php artisan tinker --execute=' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF "firstOrNew" "$workspace_root/GuardGuide/polyscope.local.json"
@@ -2638,6 +2673,40 @@ PY
 
 grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__fix" WITH (FORCE)' "$fake_psql_log"
 
+legacy_hashed_api_clone="$home_dir/.polyscope/clones/api12345/legacy-hawk-165552b7"
+mkdir -p "$legacy_hashed_api_clone/.git/info" "$legacy_hashed_api_clone/.git/hooks" "$legacy_hashed_api_clone/scripts"
+seed_api_worktree_files "$legacy_hashed_api_clone"
+cat >"$legacy_hashed_api_clone/.env" <<'EOF'
+APP_URL=https://api-legacy-hawk.preview.secpal.dev
+FRONTEND_URL=https://frontend-legacy-hawk.preview.secpal.dev
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=secpal__preview__legacy_hawk_165552b7
+DB_USERNAME=secpal
+DB_PASSWORD=
+SESSION_DOMAIN=.secpal.dev
+SANCTUM_STATEFUL_DOMAINS=frontend-legacy-hawk.preview.secpal.dev,legacy-hawk.preview.secpal.dev,app.secpal.dev
+CORS_ALLOWED_ORIGINS=https://frontend-legacy-hawk.preview.secpal.dev,https://legacy-hawk.preview.secpal.dev,https://app.secpal.dev
+EOF
+cat >"$legacy_hashed_api_clone/.pre-commit-config.yaml" <<'EOF'
+repos: []
+EOF
+cat >"$legacy_hashed_api_clone/scripts/preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$legacy_hashed_api_clone/scripts/preflight.sh"
+
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+state['databases'].append('secpal__preview__legacy_hawk_165552b7')
+open(sys.argv[1], 'w').write(json.dumps(state))
+PY
+
 stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
 mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
 seed_api_worktree_files "$stale_api_clone"
@@ -2675,6 +2744,7 @@ summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
 cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'api:stale-otter' in provisioned, f"expected api:stale-otter in provisioned_worktrees, got {provisioned}"
+assert 'api:legacy-hawk' in provisioned, f"expected legacy hashed api worktree to reprovision as api:legacy-hawk, got {provisioned}"
 assert cleaned == [], f"expected no cleaned preview databases while stale-otter still exists, got {cleaned}"
 PY
 
@@ -2682,6 +2752,8 @@ grep -qF 'APP_URL=https://api-stale-otter.preview.secpal.dev' "$stale_api_clone/
 grep -qF 'FRONTEND_URL=https://frontend-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
 grep -qF 'DB_DATABASE=secpal__preview__stale_otter' "$stale_api_clone/.env"
 grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$stale_api_clone/.env"
+grep -qF 'DB_DATABASE=secpal__preview__legacy_hawk' "$legacy_hashed_api_clone/.env"
+grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$legacy_hashed_api_clone/.env"
 test -f "$stale_api_clone/.polyscope-secpal-provisioned.json"
 grep -qF 'CREATE DATABASE "secpal__preview__stale_otter"' "$fake_psql_log"
 
@@ -2691,9 +2763,11 @@ import sys
 
 state = json.loads(open(sys.argv[1]).read())
 assert 'secpal__preview__stale_otter' in state['databases']
+assert 'secpal__preview__legacy_hawk_165552b7' in state['databases']
 PY
 
 rm -rf "$stale_api_clone"
+rm -rf "$legacy_hashed_api_clone"
 
 # Inject a stale schema alongside the stale database to verify that in database mode
 # (rolcreatedb=true) the cleanup also prunes orphaned schemas from a previous schema-mode run.
@@ -2730,9 +2804,11 @@ state = json.loads(open(sys.argv[2]).read())
 assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
 cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'secpal__preview__stale_otter' in cleaned, f"expected stale db in cleaned, got {cleaned}"
+assert 'secpal__preview__legacy_hawk_165552b7' in cleaned, f"expected migrated legacy hashed db in cleaned after worktree removal, got {cleaned}"
 assert 'secpal__preview__legacy_schema_otter' in cleaned, f"expected stale schema in cleaned even in database mode, got {cleaned}"
 assert 'secpal__preview__auto_hawk' in state['databases']
 assert 'secpal__preview__stale_otter' not in state['databases']
+assert 'secpal__preview__legacy_hawk_165552b7' not in state['databases']
 assert 'secpal__preview__legacy_schema_otter' not in state.get('schemas', [])
 PY
 
