@@ -1649,6 +1649,47 @@ assert "KEK_PATH=/template/kek" in template, template
 assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in template, template
 PY
 
+# build_api_worktree_env_template must keep a template PostgreSQL password
+# when the source checkout carries a blank local DB_PASSWORD assignment.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "source-pgsql-empty-password-fixture" / "source-api"
+source_api.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=preview-db-password\n"
+    "APP_KEY=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+template = module.build_api_worktree_env_template(
+    source_api,
+    source_env_path=source_api / ".env",
+)
+assert "DB_PASSWORD=preview-db-password" in template, template
+PY
+
 # build_verified_npm_ci_command must accept a valid locked package with no
 # dependencies; npm ci succeeds without creating node_modules in that case.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"

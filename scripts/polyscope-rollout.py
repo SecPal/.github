@@ -462,8 +462,12 @@ def build_api_worktree_env_template(
             continue
         if key != "DB_PASSWORD" and SENSITIVE_ENV_KEY_PATTERN.search(key):
             continue
-        if key in source_env_values:
-            merged_values[key] = source_env_values[key]
+        source_value = source_env_values.get(key)
+        if source_value is None:
+            continue
+        if key == "DB_PASSWORD" and source_value == "":
+            continue
+        merged_values[key] = source_value
 
     return upsert_env_assignments(template_text, merged_values)
 
