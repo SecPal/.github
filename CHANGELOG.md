@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-05 - Fix Polyscope Preview Workspace Bootstrap
+
+**Fixed:**
+
+- preserved collision-aware hashed workspace slugs when linked-worktree lookups resolve through normalized Polyscope alias paths, keeping frontend and API preview hostnames aligned even after the database stores the alias path instead of the physical directory
+- updated `scripts/polyscope-rollout.py` so Polyscope path normalization now updates the matched `worktrees` row by id after resolved-path lookup, allowing preview alias rewrites to persist even when the stored database path string differs from the filesystem-resolved path
+- stripped legacy hash-suffixed fallback workspace directory names from Polyscope preview URL generation when git branch or database metadata is unavailable, while keeping the full hashed slug whenever stripping would collide with another sibling worktree
+- normalized path-derived Polyscope workspace names into DNS-safe preview host labels before writing URLs, aliases, or local preview config, without using GitHub branch, PR, or issue metadata for hostnames
+- added rollout regression coverage for both the resolved-path database update case and the fallback preview-hostname normalization path
+- changed Polyscope API worktree preparation to create missing worktree `.env` files from `api/.env.example` instead of copying the source checkout `.env`, so each workspace starts from the committed template rather than inheriting the source workspace verbatim
+- preserved only non-sensitive template-defined local base values from the source checkout when bootstrapping a missing worktree `.env`, while leaving source-only secrets and sensitive values out of new worktrees and avoiding reuse of the source `APP_KEY`
+- kept the preview rewrite step on top of the generated template so each workspace now receives its own preview-facing `APP_URL`, linked `FRONTEND_URL`, and per-workspace PostgreSQL settings without manual correction after creation
+- aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for path-derived preview hostnames
+
+---
+
 ## 2026-07-04 - Document SecPal Licensing, CLA, And Attribution Policy
 
 **Changed:**
