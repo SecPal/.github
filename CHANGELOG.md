@@ -13,6 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
+- preserved collision-aware hashed workspace slugs when linked-worktree lookups resolve through normalized Polyscope alias paths, keeping frontend and API preview hostnames aligned even after the database stores the alias path instead of the physical directory
 - updated `scripts/polyscope-rollout.py` so Polyscope path normalization now updates the matched `worktrees` row by id after resolved-path lookup, allowing preview alias rewrites to persist even when the stored database path string differs from the filesystem-resolved path
 - stripped legacy hash-suffixed fallback workspace directory names from Polyscope preview URL generation when git branch or database metadata is unavailable, while keeping the full hashed slug whenever stripping would collide with another sibling worktree
 - normalized path-derived Polyscope workspace names into DNS-safe preview host labels before writing URLs, aliases, or local preview config, without using GitHub branch, PR, or issue metadata for hostnames

@@ -104,9 +104,20 @@ def workspace_slug_has_collision(worktree_path: pathlib.Path, workspace: str) ->
 def resolve_workspace_name_from_path(worktree_path: pathlib.Path) -> str:
     normalized_name = normalize_workspace_name(worktree_path.name)
     legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(worktree_path.name))
+    collision_path = worktree_path
     if legacy_name == normalized_name:
-        return normalized_name
-    if workspace_slug_has_collision(worktree_path, legacy_name):
+        try:
+            resolved_path = worktree_path.resolve()
+        except OSError:
+            return normalized_name
+        resolved_normalized_name = normalize_workspace_name(resolved_path.name)
+        resolved_legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(resolved_path.name))
+        if resolved_legacy_name == resolved_normalized_name:
+            return normalized_name
+        normalized_name = resolved_normalized_name
+        legacy_name = resolved_legacy_name
+        collision_path = resolved_path
+    if workspace_slug_has_collision(collision_path, legacy_name):
         return normalized_name
     return legacy_name
 
@@ -294,9 +305,20 @@ def build_linked_workspace_resolver_source() -> str:
         def resolve_workspace_name_from_path(worktree_path):
             normalized_name = normalize_workspace_name(worktree_path.name)
             legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(worktree_path.name))
+            collision_path = worktree_path
             if legacy_name == normalized_name:
-                return normalized_name
-            if workspace_slug_has_collision(worktree_path, legacy_name):
+                try:
+                    resolved_path = worktree_path.resolve()
+                except OSError:
+                    return normalized_name
+                resolved_normalized_name = normalize_workspace_name(resolved_path.name)
+                resolved_legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(resolved_path.name))
+                if resolved_legacy_name == resolved_normalized_name:
+                    return normalized_name
+                normalized_name = resolved_normalized_name
+                legacy_name = resolved_legacy_name
+                collision_path = resolved_path
+            if workspace_slug_has_collision(collision_path, legacy_name):
                 return normalized_name
             return legacy_name
 

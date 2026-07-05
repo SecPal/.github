@@ -1268,6 +1268,87 @@ module.ensure_workspace_alias(second_worktree)
 assert not (first_worktree.parent / "azure-cheetah").exists()
 PY
 
+# Linked-workspace resolution must preserve the colliding hashed slug when the
+# Polyscope DB stores a normalized alias path for that linked worktree.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "linked-workspace-collision-fixture"
+db_path = fixture / "polyscope.db"
+frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah"
+first_api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-11111111"
+second_api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-22222222"
+linked_api_alias = fixture / "clones" / "api12345" / "azure-cheetah"
+frontend_worktree.mkdir(parents=True)
+first_api_worktree.mkdir(parents=True)
+second_api_worktree.mkdir(parents=True)
+linked_api_alias.symlink_to(first_api_worktree.name)
+
+with sqlite3.connect(db_path) as connection:
+    connection.executescript(
+        """
+        create table repositories (id text primary key, name text not null, path text not null);
+        create table worktrees (id text primary key, repo_id text not null, path text not null, created_at text default (datetime('now')) not null);
+        create table worktree_links (worktree_id text not null, linked_worktree_id text not null, created_at text default (datetime('now')) not null);
+        """
+    )
+    connection.executemany(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        [
+            ("api12345", "SecPal/api", str(fixture / "source-api")),
+            ("fe123456", "SecPal/frontend", str(fixture / "source-frontend")),
+        ],
+    )
+    connection.executemany(
+        "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
+        [
+            ("frontend-worktree", "fe123456", str(frontend_worktree)),
+            ("api-worktree", "api12345", str(linked_api_alias)),
+        ],
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("frontend-worktree", "api-worktree"),
+    )
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+linked_api_workspace = module.resolve_linked_workspace_name(
+    frontend_worktree,
+    "SecPal/api",
+    db_path=db_path,
+)
+assert linked_api_workspace == "azure-cheetah-11111111", linked_api_workspace
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+resolver_probe = (
+    "from pathlib import Path\n\n"
+    f"{module.build_linked_workspace_resolver_source()}\n\n"
+    "workspace = resolve_current_workspace(Path.cwd().name)\n"
+    'print(resolve_linked_workspace("SecPal/api", workspace))\n'
+)
+probe_result = subprocess.run(
+    ["python3", "-c", resolver_probe],
+    cwd=frontend_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert probe_result.stdout.strip() == "azure-cheetah-11111111", probe_result.stdout
+PY
+
 # Linked-workspace resolution must stay compatible with older Polyscope DBs
 # whose `worktrees` table lacks an unused `branch` column.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
