@@ -702,7 +702,7 @@ assert_rollout_rejects_invalid_local_config \
     'composer run missing-script' \
     "GuardGuide polyscope config references missing composer script 'missing-script'"
 
-grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
@@ -726,12 +726,12 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
     exit 1
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
-grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
-grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
-grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
+grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
+grep -q 'https://guardguide-de-{{worktree}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -q 'https://changelog-{{worktree}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
@@ -1206,6 +1206,8 @@ assert workspace_name == "fix-polyscope-preview-env-setup", workspace_name
 updates = module.build_api_preview_env_updates(workspace_name)
 assert updates["APP_URL"] == "https://api-fix-polyscope-preview-env-setup.preview.secpal.dev", updates
 assert "not-the-workspace" not in updates["APP_URL"], updates
+preview_updates = module.build_api_preview_env_updates(workspace_name, worktree_path=worktree_path)
+assert preview_updates["KEK_PATH"] == str((worktree_path / "storage" / "app" / "keys" / "kek.key").resolve()), preview_updates
 module.ensure_workspace_alias(worktree_path, db_path=db_path)
 alias_path = worktree_path.parent / workspace_name
 assert alias_path.exists(), alias_path
@@ -1588,14 +1590,63 @@ worktree_env = api_worktree.joinpath(".env").read_text()
 assert "APP_URL=https://api-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
 assert "FRONTEND_URL=https://frontend-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
 assert "DB_DATABASE=/tmp/preview.sqlite" in worktree_env, worktree_env
-assert "DB_PASSWORD=prod-secret-password" not in worktree_env, worktree_env
-assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+assert "DB_PASSWORD=prod-secret-password" in worktree_env, worktree_env
 assert "KEK_PATH=/runtime/local-kek" not in worktree_env, worktree_env
-assert "KEK_PATH=/template/kek" in worktree_env, worktree_env
+assert f"KEK_PATH={api_worktree.joinpath('storage/app/keys/kek.key').resolve()}" in worktree_env, worktree_env
 assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in worktree_env, worktree_env
 assert "APP_KEY=\n" not in worktree_env and not worktree_env.endswith("APP_KEY="), worktree_env
 assert "APP_KEY=base64:" in worktree_env, worktree_env
 assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in worktree_env, worktree_env
+PY
+
+# build_api_worktree_env_template must preserve template-defined PostgreSQL
+# credentials from the source checkout so preview database provisioning can
+# connect before the worktree-specific database name is rewritten.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "source-pgsql-env-fixture" / "source-api"
+source_api.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+    "APP_KEY=\n"
+    "KEK_PATH=/template/kek\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=preview-db-password\n"
+    "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE\n"
+    "KEK_PATH=/runtime/local-kek\n"
+    "EXTRA_SECRET=do-not-copy-this-source-only-value\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+template = module.build_api_worktree_env_template(
+    source_api,
+    source_env_path=source_api / ".env",
+)
+assert "DB_PASSWORD=preview-db-password" in template, template
+assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in template, template
+assert "KEK_PATH=/runtime/local-kek" not in template, template
+assert "KEK_PATH=/template/kek" in template, template
+assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in template, template
 PY
 
 # build_verified_npm_ci_command must accept a valid locked package with no
@@ -2599,6 +2650,7 @@ grep -qF 'FRONTEND_URL=https://frontend-auto-hawk.preview.secpal.dev' "$api_clon
 grep -qF 'DB_CONNECTION=pgsql' "$api_clone/.env"
 grep -qF 'DB_DATABASE=secpal__preview__auto_hawk' "$api_clone/.env"
 grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$api_clone/.env"
+grep -qF "KEK_PATH=$api_clone/storage/app/keys/kek.key" "$api_clone/.env"
 grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
 grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"

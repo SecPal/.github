@@ -46,6 +46,7 @@ SOURCE_ENV_BASE_VALUE_KEYS = {
     "DB_PORT",
     "DB_DATABASE",
     "DB_USERNAME",
+    "DB_PASSWORD",
 }
 NO_AI_ATTRIBUTION_RULE = (
     "Do not add AI agent attribution, AI self-references, generated-by text, "
@@ -395,8 +396,8 @@ def generate_laravel_app_key() -> str:
 
 def build_preview_url_template(preview_prefix: str | None) -> str:
     if preview_prefix:
-        return f"https://{preview_prefix}-{{{{folder}}}}.preview.secpal.dev"
-    return "https://{{folder}}.preview.secpal.dev"
+        return f"https://{preview_prefix}-{{{{worktree}}}}.preview.secpal.dev"
+    return "https://{{worktree}}.preview.secpal.dev"
 
 
 def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
@@ -459,7 +460,7 @@ def build_api_worktree_env_template(
     for key, value in template_values.items():
         if key not in SOURCE_ENV_BASE_VALUE_KEYS:
             continue
-        if SENSITIVE_ENV_KEY_PATTERN.search(key):
+        if key != "DB_PASSWORD" and SENSITIVE_ENV_KEY_PATTERN.search(key):
             continue
         if key in source_env_values:
             merged_values[key] = source_env_values[key]
@@ -647,9 +648,18 @@ def build_postgres_url(env_values: dict[str, str], database_name: str, search_pa
     )
 
 
-def build_api_preview_env_updates(workspace: str, frontend_workspace: str | None = None) -> dict[str, str]:
+def build_api_preview_kek_path(worktree_path: pathlib.Path) -> str:
+    return str((worktree_path / "storage" / "app" / "keys" / "kek.key").resolve())
+
+
+def build_api_preview_env_updates(
+    workspace: str,
+    frontend_workspace: str | None = None,
+    *,
+    worktree_path: pathlib.Path | None = None,
+) -> dict[str, str]:
     resolved_frontend_workspace = frontend_workspace or workspace
-    return {
+    updates = {
         "APP_URL": f"https://api-{workspace}.preview.secpal.dev",
         "FRONTEND_URL": f"https://frontend-{resolved_frontend_workspace}.preview.secpal.dev",
         "SESSION_DOMAIN": ".secpal.dev",
@@ -668,6 +678,9 @@ def build_api_preview_env_updates(workspace: str, frontend_workspace: str | None
             )
         ),
     }
+    if worktree_path is not None:
+        updates["KEK_PATH"] = build_api_preview_kek_path(worktree_path)
+    return updates
 
 
 def build_api_preview_storage_target(env_values: dict[str, str]) -> str | None:
@@ -726,7 +739,11 @@ def ensure_api_worktree_ready(
     env_values = load_env_assignments(env_path)
     workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
     frontend_workspace = resolve_linked_workspace_name(worktree_path, "SecPal/frontend", db_path=db_path)
-    updated_values = build_api_preview_env_updates(workspace, frontend_workspace)
+    updated_values = build_api_preview_env_updates(
+        workspace,
+        frontend_workspace,
+        worktree_path=worktree_path,
+    )
     if not env_values.get("APP_KEY", "").strip():
         updated_values["APP_KEY"] = generate_laravel_app_key()
 
