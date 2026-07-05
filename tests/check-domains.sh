@@ -225,6 +225,36 @@ if ! grep -Fq 'secpal.xyz' "$workspace/output.txt"; then
   exit 1
 fi
 
+# 5b. Local filesystem paths that happen to include `secpal.` as part of a
+# SQLite filename must not be misclassified as a hostname. This reproduces
+# the false positive that broke `tests/polyscope-rollout.sh`.
+sqlite_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-sqlite.XXXXXX")"
+
+mkdir -p "$sqlite_workspace/scripts"
+cp "$SCRIPT" "$sqlite_workspace/scripts/check-domains.sh"
+
+cat >"$sqlite_workspace/env.md" <<'EOF'
+# SQLite fixture
+
+This is a local filesystem path, not a host:
+
+DB_DATABASE=/tmp/secpal.sqlite
+EOF
+
+set +e
+(
+  cd "$sqlite_workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+sqlite_rc=$?
+set -e
+
+if [ "$sqlite_rc" -ne 0 ] || ! grep -Fq 'Domain Policy Check PASSED' "$sqlite_workspace/output.txt"; then
+  cat "$sqlite_workspace/output.txt"
+  echo "check-domains.sh must ignore local SQLite file paths such as /tmp/secpal.sqlite" >&2
+  exit 1
+fi
+
 # 6. Behavioural check: the gitignored agent scratch directory `.context/`
 # must be skipped (positive case) while tracked content with the same
 # string still fails (negative case). Use a fresh workspace so the previous

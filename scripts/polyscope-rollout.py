@@ -2753,6 +2753,8 @@ def ensure_workspace_alias(worktree_path: pathlib.Path, *, db_path: pathlib.Path
             if alias_path.resolve() == worktree_path.resolve():
                 return
         except OSError:
+            # Broken or inaccessible symlinks are recreated below.
+            # Intentionally fall through to unlink + re-create the alias.
             pass
         alias_path.unlink()
     elif alias_path.exists():

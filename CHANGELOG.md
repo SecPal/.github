@@ -27,6 +27,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - preserved only template-defined local base values from the source checkout when bootstrapping a missing worktree `.env`, while leaving source-only secrets out of new worktrees and avoiding reuse of the source `APP_KEY`
 - kept the preview rewrite step on top of the generated template so each workspace now receives its own preview-facing `APP_URL`, linked `FRONTEND_URL`, and per-workspace PostgreSQL settings without manual correction after creation
 - aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for suffix-free preview hostnames
+- fixed the local domain-policy guard so SQLite fixture paths such as `/tmp/secpal.sqlite` no longer fail unrelated preview rollout tests while unapproved `secpal.*` hosts still remain blocked
 
 ---
 

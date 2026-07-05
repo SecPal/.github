@@ -87,6 +87,10 @@ matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     grep -v -- "Forbidden:" | \
     grep -v -- "FORBIDDEN:" | \
     grep -v -- '- "secpal\.' | \
+    # Local SQLite/database paths like `/tmp/secpal.sqlite` are filesystem
+    # fixtures, not hostnames. Keep the gate focused on actual secpal.*
+    # namespace usage instead of file basenames.
+    grep -Ev '(^|[^A-Za-z0-9._-])(\./|\.\./|(/[^[:space:]/]+)+/)secpal\.(sqlite|sqlite3|db)($|[^A-Za-z0-9._-])' | \
     grep -v -- '^[[:space:]]*- \[' || true)
 
 # Allowlist approach: flag any secpal.* domain not matching an approved pattern.
