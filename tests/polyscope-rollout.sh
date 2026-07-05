@@ -707,6 +707,7 @@ grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polys
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
+grep -qF -- "--api-worktree-migration-command 'php artisan migrate:fresh --force'" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
@@ -1692,6 +1693,26 @@ template = module.build_api_worktree_env_template(
     source_env_path=source_api / ".env",
 )
 assert "DB_PASSWORD=preview-db-password" in template, template
+PY
+
+# upsert_env_assignments must preserve backslashes in replacement values instead
+# of letting re.sub interpret them as replacement escapes.
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+updated = module.upsert_env_assignments(
+    "DB_PASSWORD=\n",
+    {"DB_PASSWORD": r"secret\path\1"},
+)
+assert r"DB_PASSWORD=secret\path\1" in updated, updated
 PY
 
 # ensure_api_worktree_ready must use a source-only PostgreSQL password

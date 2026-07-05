@@ -433,7 +433,7 @@ def upsert_env_assignments(text: str, updates: dict[str, str]) -> str:
         pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
         replacement = f"{key}={encode_env_value(value)}"
         if pattern.search(text):
-            text = pattern.sub(replacement, text)
+            text = pattern.sub(lambda _match, replacement=replacement: replacement, text)
             continue
         if text and not text.endswith("\n"):
             text += "\n"
@@ -467,10 +467,6 @@ def build_api_worktree_env_template(
     if source_env_path is not None and source_env_path.exists():
         source_env_values = load_env_assignments(source_env_path)
 
-    effective_db_connection = source_env_values.get(
-        "DB_CONNECTION",
-        template_values.get("DB_CONNECTION", ""),
-    ).strip().lower()
     merged_values: dict[str, str] = {}
     for key, value in template_values.items():
         if key not in SOURCE_ENV_BASE_VALUE_KEYS:
