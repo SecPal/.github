@@ -1590,7 +1590,8 @@ worktree_env = api_worktree.joinpath(".env").read_text()
 assert "APP_URL=https://api-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
 assert "FRONTEND_URL=https://frontend-attacker-pr.preview.secpal.dev" in worktree_env, worktree_env
 assert "DB_DATABASE=/tmp/preview.sqlite" in worktree_env, worktree_env
-assert "DB_PASSWORD=prod-secret-password" in worktree_env, worktree_env
+assert "DB_PASSWORD=prod-secret-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 assert "KEK_PATH=/runtime/local-kek" not in worktree_env, worktree_env
 assert f"KEK_PATH={api_worktree.joinpath('storage/app/keys/kek.key').resolve()}" in worktree_env, worktree_env
 assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in worktree_env, worktree_env
@@ -1690,6 +1691,38 @@ template = module.build_api_worktree_env_template(
 assert "DB_PASSWORD=preview-db-password" in template, template
 PY
 
+# ensure_api_worktree_ready must quote generated KEK paths when the worktree
+# path contains spaces so dotenv consumers can parse the value correctly.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "quoted-kek-path-fixture" / "source-api"
+api_worktree = workspace / "quoted-kek-path-fixture" / "clones" / "api12345" / "Steady Otter"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=sqlite\n"
+    "KEK_PATH=/template/kek\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+expected = api_worktree.joinpath("storage/app/keys/kek.key").resolve()
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert f'KEK_PATH="{expected}"' in worktree_env, worktree_env
+assert module.load_env_assignments(api_worktree / ".env")["KEK_PATH"] == str(expected)
+PY
 # build_verified_npm_ci_command must accept a valid locked package with no
 # dependencies; npm ci succeeds without creating node_modules in that case.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"

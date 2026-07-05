@@ -429,7 +429,7 @@ def load_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
 def upsert_env_assignments(text: str, updates: dict[str, str]) -> str:
     for key, value in updates.items():
         pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
-        replacement = f"{key}={value}"
+        replacement = f"{key}={encode_env_value(value)}"
         if pattern.search(text):
             text = pattern.sub(replacement, text)
             continue
@@ -437,6 +437,15 @@ def upsert_env_assignments(text: str, updates: dict[str, str]) -> str:
             text += "\n"
         text += replacement + "\n"
     return text
+
+
+def encode_env_value(value: str) -> str:
+    if value == "":
+        return value
+    if not re.search(r'[\s"#\']', value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def build_api_worktree_env_template(
@@ -456,6 +465,10 @@ def build_api_worktree_env_template(
     if source_env_path is not None and source_env_path.exists():
         source_env_values = load_env_assignments(source_env_path)
 
+    effective_db_connection = source_env_values.get(
+        "DB_CONNECTION",
+        template_values.get("DB_CONNECTION", ""),
+    ).strip().lower()
     merged_values: dict[str, str] = {}
     for key, value in template_values.items():
         if key not in SOURCE_ENV_BASE_VALUE_KEYS:
@@ -465,8 +478,9 @@ def build_api_worktree_env_template(
         source_value = source_env_values.get(key)
         if source_value is None:
             continue
-        if key == "DB_PASSWORD" and source_value == "":
-            continue
+        if key == "DB_PASSWORD":
+            if effective_db_connection != "pgsql" or source_value == "":
+                continue
         merged_values[key] = source_value
 
     return upsert_env_assignments(template_text, merged_values)
