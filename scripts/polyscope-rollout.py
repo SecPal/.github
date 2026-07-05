@@ -57,6 +57,7 @@ NO_AI_ATTRIBUTION_RULE = (
 MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
 NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
 API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
+API_REFRESH_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_REFRESH__"
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -868,6 +869,8 @@ def bootstrap_api_worktree(
     source_repo_path: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    migration_command: list[str] | None = None,
+    migration_label: str = "running migrations",
 ) -> tuple[bool, str | None]:
     env_path = worktree_path / ".env"
     preview_storage_target: str | None = None
@@ -888,6 +891,8 @@ def bootstrap_api_worktree(
     workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
     workspace_label = os.environ.get("POLYSCOPE_WORKSPACE_LABEL", workspace)
     prefix = f"[api:{workspace_label}]"
+    if migration_command is None:
+        migration_command = ["php", "artisan", "migrate", "--force"]
 
     if env_values.get("APP_KEY", "").strip():
         print(f"{prefix} app key already present")
@@ -901,10 +906,10 @@ def bootstrap_api_worktree(
         command_env=command_env,
     )
 
-    print(f"{prefix} running migrations")
+    print(f"{prefix} {migration_label}")
     run_api_worktree_bootstrap_command(
         worktree_path,
-        ["php", "artisan", "migrate", "--force"],
+        migration_command,
         command_env=command_env,
     )
 
@@ -923,6 +928,21 @@ def bootstrap_api_worktree(
     )
 
     return True, preview_storage_target
+
+
+def refresh_api_worktree(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> tuple[bool, str | None]:
+    return bootstrap_api_worktree(
+        worktree_path,
+        source_repo_path,
+        db_path=db_path,
+        migration_command=["php", "artisan", "migrate:fresh", "--force"],
+        migration_label="refreshing database",
+    )
 
 
 def cleanup_removed_api_preview_databases(
@@ -1767,12 +1787,12 @@ def build_api_preview_bootstrap_command(source_repo_path: pathlib.Path) -> str:
     )
 
 
-def build_api_preview_seed_command(migration_command: str = "php artisan migrate --force") -> str:
+def build_api_preview_refresh_command(source_repo_path: pathlib.Path) -> str:
+    rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
+    source_repo = shlex.quote(str(source_repo_path))
     return (
-        "php artisan config:clear && "
-        f"{migration_command} && "
-        "php artisan db:seed --force && "
-        f"php artisan tinker --execute={shlex.quote(build_api_preview_test_user_tinker_script())}"
+        f"python3 {rollout_script} --refresh-api-worktree \"$PWD\" "
+        f"--source-repo-path {source_repo}"
     )
 
 
@@ -1901,7 +1921,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.
                     {
                         "label": "Preview Only: Refresh DB + E2E User",
-                        "command": build_api_preview_seed_command("php artisan migrate:fresh --force"),
+                        "command": API_REFRESH_COMMAND_PLACEHOLDER,
                         "runMode": "preserve",
                     },
                     {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
@@ -2447,6 +2467,9 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
                 else command
                 for command in spec["local_config"]["scripts"]["setup"]
             ]
+            for run_action in spec["local_config"]["scripts"]["run"]:
+                if run_action.get("command") == API_REFRESH_COMMAND_PLACEHOLDER:
+                    run_action["command"] = build_api_preview_refresh_command(repo_path)
         repo_specs[repo_name] = spec
     return repo_specs
 
@@ -3742,6 +3765,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
     parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
     parser.add_argument("--bootstrap-api-worktree", type=pathlib.Path)
+    parser.add_argument("--refresh-api-worktree", type=pathlib.Path)
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
@@ -3785,6 +3809,16 @@ def main() -> int:
             raise SystemExit("--source-repo-path is required with --bootstrap-api-worktree")
         ready, _preview_storage_target = bootstrap_api_worktree(
             args.bootstrap_api_worktree,
+            args.source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if args.refresh_api_worktree is not None:
+        if args.source_repo_path is None:
+            raise SystemExit("--source-repo-path is required with --refresh-api-worktree")
+        ready, _preview_storage_target = refresh_api_worktree(
+            args.refresh_api_worktree,
             args.source_repo_path,
             db_path=args.db_path,
         )

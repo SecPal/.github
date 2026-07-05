@@ -712,9 +712,8 @@ if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
     exit 1
 fi
-grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
-grep -qF 'php artisan migrate:fresh --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --refresh-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "All Checks"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"command": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Preflight"' "$workspace_root/api/polyscope.local.json"
@@ -1755,6 +1754,72 @@ assert calls == [
 worktree_env = api_worktree.joinpath(".env").read_text()
 assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
 assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+PY
+
+# refresh_api_worktree must reuse the transient runtime DB password injection
+# when the worktree keeps DB_PASSWORD blank but the source checkout does not.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "refresh-transient-pgsql-password-fixture" / "source-api"
+api_worktree = workspace / "refresh-transient-pgsql-password-fixture" / "clones" / "api12345" / "quiet-bear"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__quiet_bear\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-only-password\n"
+)
+api_worktree.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__quiet_bear\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
+    calls.append(
+        (
+            tuple(command),
+            worktree_path,
+            command_env["DB_PASSWORD"],
+            command_env["PGPASSWORD"],
+        )
+    )
+
+module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
+
+ready, target = module.refresh_api_worktree(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+assert calls == [
+    (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "db:seed", "--force"), api_worktree, "source-only-password", "source-only-password"),
+    (
+        ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
+        api_worktree,
+        "source-only-password",
+        "source-only-password",
+    ),
+], calls
 PY
 
 # ensure_api_worktree_ready must quote generated KEK paths when the worktree
