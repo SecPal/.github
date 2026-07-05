@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
 import os
 import pathlib
 import re
+import secrets
 import shlex
 import shutil
 import sqlite3
@@ -72,24 +74,28 @@ def normalize_workspace_name(value: str, fallback: str = "workspace") -> str:
     return normalized or fallback
 
 
-def resolve_workspace_name_fallback(worktree_path: pathlib.Path) -> str:
+def resolve_workspace_name_from_path(worktree_path: pathlib.Path) -> str:
     return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name))
+
+
+def resolve_workspace_name_fallback(worktree_path: pathlib.Path) -> str:
+    return resolve_workspace_name_from_path(worktree_path)
 
 
 def find_current_worktree_record(
     connection: sqlite3.Connection,
     worktree_path: pathlib.Path,
-) -> tuple[str | None, str | None, str] | None:
+) -> tuple[str | None, str | None] | None:
     current_path = resolve_path_for_matching(worktree_path)
     rows = connection.execute(
         """
-        select id, path, branch
+        select id, path
         from worktrees
         order by created_at desc
         """
     ).fetchall()
 
-    for worktree_id, registered_path, branch in rows:
+    for worktree_id, registered_path in rows:
         if not isinstance(registered_path, str) or not registered_path.strip():
             continue
 
@@ -99,7 +105,7 @@ def find_current_worktree_record(
             registered_resolved_path = registered_path
 
         if registered_resolved_path == current_path:
-            return worktree_id, registered_path, branch
+            return worktree_id, registered_path
 
     return None
 
@@ -144,7 +150,7 @@ def resolve_linked_workspace_name(
     if row is None:
         return None
 
-    return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(row[0]).name))
+    return resolve_workspace_name_from_path(pathlib.Path(row[0]))
 
 
 def collect_linked_setup_context(
@@ -180,7 +186,7 @@ def collect_linked_setup_context(
 
     context: dict[str, str] = {}
     for repo_name, linked_path in rows:
-        workspace_name = normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(linked_path).name))
+        workspace_name = resolve_workspace_name_from_path(pathlib.Path(linked_path))
         context.setdefault(repo_name, workspace_name)
 
     return context
@@ -204,13 +210,13 @@ def build_linked_workspace_resolver_source() -> str:
             current_path = resolve_path_for_matching(Path.cwd())
             rows = connection.execute(
                 '''
-                select id, path, branch
+                select id, path
                 from worktrees
                 order by created_at desc
                 '''
             ).fetchall()
 
-            for worktree_id, registered_path, branch in rows:
+            for worktree_id, registered_path in rows:
                 if not isinstance(registered_path, str) or not registered_path.strip():
                     continue
                 try:
@@ -218,7 +224,7 @@ def build_linked_workspace_resolver_source() -> str:
                 except OSError:
                     registered_resolved_path = registered_path
                 if registered_resolved_path == current_path:
-                    return worktree_id, registered_path, branch
+                    return worktree_id, registered_path
 
             return None
 
@@ -227,8 +233,11 @@ def build_linked_workspace_resolver_source() -> str:
             normalized = re.sub(r'-+', '-', normalized)
             return normalized or fallback
 
+        def resolve_workspace_name_from_path(worktree_path):
+            return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name))
+
         def resolve_workspace_fallback(fallback):
-            return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", fallback))
+            return resolve_workspace_name_from_path(Path(fallback))
 
         def resolve_current_workspace(fallback):
             return resolve_workspace_fallback(fallback)
@@ -263,9 +272,13 @@ def build_linked_workspace_resolver_source() -> str:
             if row is None:
                 return fallback
 
-            return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", Path(row[0]).name))
+            return resolve_workspace_name_from_path(Path(row[0]))
         """
     ).strip()
+
+
+def generate_laravel_app_key() -> str:
+    return "base64:" + base64.b64encode(secrets.token_bytes(32)).decode("ascii")
 
 
 def build_preview_url_template(preview_prefix: str | None) -> str:
@@ -575,6 +588,8 @@ def ensure_api_worktree_ready(
     workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
     frontend_workspace = resolve_linked_workspace_name(worktree_path, "SecPal/frontend", db_path=db_path)
     updated_values = build_api_preview_env_updates(workspace, frontend_workspace)
+    if not env_values.get("APP_KEY", "").strip():
+        updated_values["APP_KEY"] = generate_laravel_app_key()
 
     if env_values.get("DB_CONNECTION", "").lower() == "pgsql":
         base_database = resolve_base_database_name(env_values, workspace)
@@ -796,13 +811,17 @@ for candidate in (Path("package-lock.json"), Path("npm-shrinkwrap.json")):
 raise SystemExit(1)
 PY
     then
-        npm ci
-        install_status=$?
-        if [ "$install_status" -eq 0 ] && python3 - <<'PY'
+        install_status=0
+        if npm ci; then
+            if python3 - <<'PY'
 {validate_install_script}
 PY
-        then
-            exit 0
+            then
+                exit 0
+            fi
+            install_status=$?
+        else
+            install_status=$?
         fi
         echo "npm ci produced an incomplete install on attempt $attempt; retrying" >&2
         rm -rf node_modules
@@ -2860,7 +2879,7 @@ def provision_worktrees(
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
-            except (OSError, subprocess.CalledProcessError, SystemExit) as error:
+            except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
                 error_message = str(error)
                 print(
                     f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",

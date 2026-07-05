@@ -847,6 +847,8 @@ module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
+module.ensure_workspace_alias(api_worktree, db_path=db_path)
+
 env = os.environ.copy()
 env["POLYSCOPE_DB_PATH"] = str(db_path)
 subprocess.run(
@@ -1096,7 +1098,9 @@ db_path = fixture / "polyscope.db"
 worktree_path = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
 registered_path = worktree_path.parent / "registered-worktree"
 normalized_path = worktree_path.parent / "azure-cheetah"
+linked_frontend_path = fixture / "clones" / "fe123456" / "azure-cheetah"
 worktree_path.mkdir(parents=True)
+linked_frontend_path.mkdir(parents=True)
 registered_path.symlink_to(worktree_path.name)
 
 spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
@@ -1105,20 +1109,45 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 with sqlite3.connect(db_path) as connection:
-    connection.execute(
+    connection.executescript(
         """
+        create table repositories (
+            id text primary key,
+            name text not null,
+            path text not null
+        );
         create table worktrees (
             id text primary key,
             repo_id text not null,
             branch text not null,
             path text not null,
             created_at text default (datetime('now')) not null
+        );
+        create table worktree_links (
+            worktree_id text not null,
+            linked_worktree_id text not null,
+            created_at text default (datetime('now')) not null
         )
         """
+    )
+    connection.executemany(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        [
+            ("api12345", "SecPal/api", str(fixture / "source-api")),
+            ("fe123456", "SecPal/frontend", str(fixture / "source-frontend")),
+        ],
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
+        ("frontend-worktree", "fe123456", "azure-cheetah", str(linked_frontend_path)),
     )
     connection.execute(
         "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
         ("api-worktree", "api12345", "not-the-workspace", str(registered_path)),
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("api-worktree", "frontend-worktree"),
     )
 
 module.normalize_registered_workspace_path(worktree_path, db_path=db_path)
@@ -1184,6 +1213,122 @@ assert alias_path.resolve() == worktree_path.resolve(), alias_path.resolve()
 assert not (worktree_path.parent / "Codex").exists(), list(worktree_path.parent.iterdir())
 PY
 
+# Workspace fallback names must drop the legacy eight-hex suffix for preview
+# hostnames and aliases.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "real-eight-hex-workspace-fixture"
+worktree_path = fixture / "clones" / "api12345" / "fix-deadbeef"
+worktree_path.mkdir(parents=True)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace_name = module.resolve_current_workspace_name(worktree_path)
+assert workspace_name == "fix", workspace_name
+PY
+
+# Linked-workspace resolution must stay compatible with older Polyscope DBs
+# whose `worktrees` table lacks an unused `branch` column.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+import textwrap
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "legacy-worktrees-schema-fixture"
+db_path = fixture / "polyscope.db"
+frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah"
+api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+source_api = fixture / "source-api"
+frontend_worktree.mkdir(parents=True)
+api_worktree.mkdir(parents=True)
+source_api.mkdir(parents=True)
+source_api.joinpath(".env").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=sqlite\n"
+)
+api_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+
+with sqlite3.connect(db_path) as connection:
+    connection.executescript(
+        """
+        create table repositories (id text primary key, name text not null, path text not null);
+        create table worktrees (id text primary key, repo_id text not null, path text not null, created_at text default (datetime('now')) not null);
+        create table worktree_links (worktree_id text not null, linked_worktree_id text not null, created_at text default (datetime('now')) not null);
+        """
+    )
+    connection.executemany(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        [
+            ("api12345", "SecPal/api", str(source_api)),
+            ("fe123456", "SecPal/frontend", str(fixture / "source-frontend")),
+        ],
+    )
+    connection.executemany(
+        "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
+        [
+            ("api-worktree", "api12345", str(api_worktree)),
+            ("frontend-worktree", "fe123456", str(frontend_worktree)),
+        ],
+    )
+    connection.executemany(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        [
+            ("frontend-worktree", "api-worktree"),
+            ("api-worktree", "frontend-worktree"),
+        ],
+    )
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+module.ensure_workspace_alias(api_worktree)
+
+linked_api_workspace = module.resolve_linked_workspace_name(
+    frontend_worktree,
+    "SecPal/api",
+    db_path=db_path,
+)
+assert linked_api_workspace == "azure-cheetah", linked_api_workspace
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+resolver_probe = (
+    "import os\n"
+    "import subprocess\n"
+    "from pathlib import Path\n\n"
+    f"{module.build_linked_workspace_resolver_source()}\n\n"
+    "workspace = resolve_current_workspace(Path.cwd().name)\n"
+    'api_workspace = resolve_linked_workspace("SecPal/api", workspace)\n'
+    'print(f"VITE_API_URL=https://api-{api_workspace}.preview.secpal.dev")\n'
+)
+probe_result = subprocess.run(
+    ["python3", "-c", resolver_probe],
+    cwd=frontend_worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert "VITE_API_URL=https://api-azure-cheetah.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
+PY
+
 # Legacy hash-suffixed worktree directory names must not leak into preview hostnames
 # when the Polyscope DB and git branch are unavailable.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -1218,6 +1363,10 @@ spec.loader.exec_module(module)
 
 workspace_name = module.resolve_current_workspace_name(api_worktree)
 assert workspace_name == "azure-cheetah", workspace_name
+
+module.ensure_workspace_alias(api_worktree)
+workspace_name_with_alias = module.resolve_current_workspace_name(api_worktree)
+assert workspace_name_with_alias == "azure-cheetah", workspace_name_with_alias
 
 ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api)
 assert ready
@@ -1285,7 +1434,8 @@ assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD=")
 assert "KEK_PATH=/runtime/local-kek" not in worktree_env, worktree_env
 assert "KEK_PATH=/template/kek" in worktree_env, worktree_env
 assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in worktree_env, worktree_env
-assert "APP_KEY=\n" in worktree_env or worktree_env.endswith("APP_KEY="), worktree_env
+assert "APP_KEY=\n" not in worktree_env and not worktree_env.endswith("APP_KEY="), worktree_env
+assert "APP_KEY=base64:" in worktree_env, worktree_env
 assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in worktree_env, worktree_env
 PY
 
@@ -1318,6 +1468,60 @@ result = subprocess.run(
     text=True,
 )
 assert result.returncode == 0, result.stderr
+PY
+
+# build_verified_npm_ci_command must retry failed npm ci attempts even though
+# provisioning runs the generated shell under `set -euo pipefail`.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "npm-ci-retry-fixture"
+fake_bin = fixture / "fake-bin"
+fixture.mkdir()
+fake_bin.mkdir()
+fixture.joinpath("package.json").write_text('{"name":"retry","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}\n')
+fixture.joinpath("package-lock.json").write_text(
+    '{"name":"retry","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"retry","version":"1.0.0"},"node_modules/left-pad":{"version":"1.3.0"}}}\n'
+)
+fake_bin.joinpath("npm").write_text(
+    """#!/usr/bin/env python3
+from pathlib import Path
+import sys
+
+counter_path = Path("npm-ci-attempts.txt")
+attempt = int(counter_path.read_text()) + 1 if counter_path.exists() else 1
+counter_path.write_text(str(attempt))
+if attempt == 1:
+    sys.exit(42)
+Path("node_modules").mkdir(exist_ok=True)
+Path("node_modules/.package-lock.json").write_text("{}\\n")
+sys.exit(0)
+"""
+)
+fake_bin.joinpath("npm").chmod(0o755)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    cwd=fixture,
+    env=env,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
+assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "2"
 PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
@@ -2451,6 +2655,7 @@ PY
 
 failing_api_clone="$home_dir/.polyscope/clones/api12345/abort-hawk"
 failing_api_cleanup_clone="$home_dir/.polyscope/clones/api12345/broken-mole"
+failing_api_alias_clone="$home_dir/.polyscope/clones/api12345/Steady Otter"
 failing_frontend_manifest_clone="$home_dir/.polyscope/clones/fe123456/broken-ibis"
 failing_frontend_io_clone="$home_dir/.polyscope/clones/fe123456/locked-oryx"
 guardguide_clone="$home_dir/.polyscope/clones/gg123456/steady-otter"
@@ -2458,17 +2663,20 @@ failure_isolation_summary_json="$workspace/failure-isolation-summary.json"
 
 mkdir -p "$failing_api_clone/.git/info" "$failing_api_clone/.git/hooks" "$failing_api_clone/scripts"
 mkdir -p "$failing_api_cleanup_clone/.git/info" "$failing_api_cleanup_clone/.git/hooks" "$failing_api_cleanup_clone/scripts"
+mkdir -p "$failing_api_alias_clone/.git/info" "$failing_api_alias_clone/.git/hooks" "$failing_api_alias_clone/scripts"
 mkdir -p "$failing_frontend_manifest_clone/.git/info" "$failing_frontend_manifest_clone/.git/hooks" "$failing_frontend_manifest_clone/scripts"
 mkdir -p "$failing_frontend_io_clone/.git/info" "$failing_frontend_io_clone/.git/hooks" "$failing_frontend_io_clone/scripts"
 mkdir -p "$guardguide_clone/.git/info" "$guardguide_clone/.git/hooks" "$guardguide_clone/database"
 
 seed_api_worktree_files "$failing_api_clone"
 seed_api_worktree_files "$failing_api_cleanup_clone"
+seed_api_worktree_files "$failing_api_alias_clone"
 seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibis"
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
 seed_api_worktree_files "$guardguide_clone"
 seed_node_worktree_files "$guardguide_clone" "guardguide-steady-otter"
 cp "$workspace_root/api/.env" "$failing_api_clone/.env"
+mkdir -p "$home_dir/.polyscope/clones/api12345/steady-otter"
 printf '{\n  "packages": []\n}\n' > "$guardguide_clone/composer.lock"
 printf '{"scripts": ' > "$failing_api_cleanup_clone/composer.json"
 printf '{"scripts": ' > "$failing_frontend_manifest_clone/package.json"
@@ -2516,6 +2724,7 @@ cleaned = summary.get('cleaned_preview_storage_targets', [])
 assert 'GuardGuide:steady-otter' in provisioned, provisioned
 assert 'api:abort-hawk' not in provisioned, provisioned
 assert 'api:broken-mole' not in provisioned, provisioned
+assert 'api:steady-otter' not in provisioned, provisioned
 assert 'frontend:broken-ibis' not in provisioned, provisioned
 assert 'frontend:locked-oryx' not in provisioned, provisioned
 assert 'secpal__preview__broken_mole' not in cleaned, cleaned
@@ -2529,6 +2738,12 @@ assert any(
     entry.get('repo') == 'api'
     and entry.get('workspace') == 'broken-mole'
     and 'invalid composer.json for rollout validation' in entry.get('error', '')
+    for entry in failed
+), failed
+assert any(
+    entry.get('repo') == 'api'
+    and entry.get('workspace') == 'Steady Otter'
+    and 'already exists and does not point' in entry.get('error', '')
     for entry in failed
 ), failed
 assert any(
@@ -2562,6 +2777,7 @@ grep -qF "php:$guardguide_clone:artisan tinker --execute=" "$provision_log"
 test -f "$guardguide_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_cleanup_clone/.polyscope-secpal-provisioned.json"
+test ! -f "$failing_api_alias_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_frontend_manifest_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_frontend_io_clone/.polyscope-secpal-provisioned.json"
 
