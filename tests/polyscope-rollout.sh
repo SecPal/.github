@@ -1235,6 +1235,39 @@ workspace_name = module.resolve_current_workspace_name(worktree_path)
 assert workspace_name == "fix", workspace_name
 PY
 
+# Distinct legacy hash-suffixed sibling worktrees must keep unique preview
+# slugs so they do not share databases, hostnames, or aliases.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "duplicate-legacy-workspace-fixture"
+first_worktree = fixture / "clones" / "api12345" / "azure-cheetah-11111111"
+second_worktree = fixture / "clones" / "api12345" / "azure-cheetah-22222222"
+first_worktree.mkdir(parents=True)
+second_worktree.mkdir(parents=True)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+first_workspace = module.resolve_current_workspace_name(first_worktree)
+second_workspace = module.resolve_current_workspace_name(second_worktree)
+assert first_workspace == "azure-cheetah-11111111", first_workspace
+assert second_workspace == "azure-cheetah-22222222", second_workspace
+assert first_workspace != second_workspace
+assert module.build_api_preview_env_updates(first_workspace)["APP_URL"] != module.build_api_preview_env_updates(second_workspace)["APP_URL"]
+assert module.build_preview_database_name("secpal", first_workspace) != module.build_preview_database_name("secpal", second_workspace)
+
+module.ensure_workspace_alias(first_worktree)
+module.ensure_workspace_alias(second_worktree)
+assert not (first_worktree.parent / "azure-cheetah").exists()
+PY
+
 # Linked-workspace resolution must stay compatible with older Polyscope DBs
 # whose `worktrees` table lacks an unused `branch` column.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"

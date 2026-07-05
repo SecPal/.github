@@ -74,8 +74,41 @@ def normalize_workspace_name(value: str, fallback: str = "workspace") -> str:
     return normalized or fallback
 
 
+def strip_legacy_workspace_suffix(value: str) -> str:
+    return re.sub(r"-[0-9a-f]{8}$", "", value)
+
+
+def workspace_slug_has_collision(worktree_path: pathlib.Path, workspace: str) -> bool:
+    try:
+        sibling_paths = tuple(worktree_path.parent.iterdir())
+    except OSError:
+        return False
+
+    current_path = resolve_path_for_matching(worktree_path)
+    for sibling_path in sibling_paths:
+        if sibling_path == worktree_path:
+            continue
+
+        sibling_workspace = normalize_workspace_name(strip_legacy_workspace_suffix(sibling_path.name))
+        if sibling_workspace != workspace:
+            continue
+
+        if resolve_path_for_matching(sibling_path) == current_path:
+            continue
+
+        return True
+
+    return False
+
+
 def resolve_workspace_name_from_path(worktree_path: pathlib.Path) -> str:
-    return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name))
+    normalized_name = normalize_workspace_name(worktree_path.name)
+    legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(worktree_path.name))
+    if legacy_name == normalized_name:
+        return normalized_name
+    if workspace_slug_has_collision(worktree_path, legacy_name):
+        return normalized_name
+    return legacy_name
 
 
 def resolve_workspace_name_fallback(worktree_path: pathlib.Path) -> str:
@@ -233,8 +266,39 @@ def build_linked_workspace_resolver_source() -> str:
             normalized = re.sub(r'-+', '-', normalized)
             return normalized or fallback
 
+        def strip_legacy_workspace_suffix(value):
+            return re.sub(r"-[0-9a-f]{8}$", "", value)
+
+        def workspace_slug_has_collision(worktree_path, workspace):
+            try:
+                sibling_paths = tuple(worktree_path.parent.iterdir())
+            except OSError:
+                return False
+
+            current_path = resolve_path_for_matching(worktree_path)
+            for sibling_path in sibling_paths:
+                if sibling_path == worktree_path:
+                    continue
+
+                sibling_workspace = normalize_workspace_name(strip_legacy_workspace_suffix(sibling_path.name))
+                if sibling_workspace != workspace:
+                    continue
+
+                if resolve_path_for_matching(sibling_path) == current_path:
+                    continue
+
+                return True
+
+            return False
+
         def resolve_workspace_name_from_path(worktree_path):
-            return normalize_workspace_name(re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name))
+            normalized_name = normalize_workspace_name(worktree_path.name)
+            legacy_name = normalize_workspace_name(strip_legacy_workspace_suffix(worktree_path.name))
+            if legacy_name == normalized_name:
+                return normalized_name
+            if workspace_slug_has_collision(worktree_path, legacy_name):
+                return normalized_name
+            return legacy_name
 
         def resolve_workspace_fallback(fallback):
             return resolve_workspace_name_from_path(Path(fallback))
