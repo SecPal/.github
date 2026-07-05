@@ -19,9 +19,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - normalized path-derived Polyscope workspace names into DNS-safe preview host labels before writing URLs, aliases, or local preview config, without using GitHub branch, PR, or issue metadata for hostnames
 - added rollout regression coverage for both the resolved-path database update case and the fallback preview-hostname normalization path
 - changed Polyscope API worktree preparation to create missing worktree `.env` files from `api/.env.example` instead of copying the source checkout `.env`, so each workspace starts from the committed template rather than inheriting the source workspace verbatim
-- preserved only non-sensitive template-defined local base values from the source checkout when bootstrapping a missing worktree `.env`, while leaving source-only secrets and sensitive values out of new worktrees and avoiding reuse of the source `APP_KEY`
+- preserved only template-defined local base values needed for workspace bootstrap when generating a missing worktree `.env`, still leaving source-only secrets out of new worktrees, avoiding reuse of the source `APP_KEY`, and keeping generated worktree `.env` files free of source `DB_PASSWORD` values even for PostgreSQL-backed previews
+- rewrote API preview `KEK_PATH` values to a writable per-worktree storage path so first-run seeders can create tenant key material inside each preview workspace instead of failing against the container-only `/home/appuser/.secrets` path from `api/.env.example`, and quote generated path values when the physical worktree path contains spaces
+- switched generated Polyscope preview URL templates from the raw `{{folder}}` placeholder to `{{worktree}}` so displayed preview hosts follow the resolved workspace name instead of leaking the underlying directory name into newly created workspace URLs
 - kept the preview rewrite step on top of the generated template so each workspace now receives its own preview-facing `APP_URL`, linked `FRONTEND_URL`, and per-workspace PostgreSQL settings without manual correction after creation
+- routed generated API setup through the rollout bootstrap command so new preview worktrees can borrow source PostgreSQL credentials transiently for database provisioning, migrations, and seeding without persisting those credentials into the generated worktree
+- routed the destructive `Preview Only: Refresh DB + E2E User` Polyscope action through the same rollout bootstrap path so PostgreSQL-backed preview refreshes keep borrowing source-only DB credentials transiently instead of failing once the worktree `.env` leaves `DB_PASSWORD` blank
 - aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for path-derived preview hostnames
+- removed an impossible rollout assertion for a nonexistent `--api-worktree-migration-command` flag so the API preview config regression test matches the generated refresh command it actually validates
 
 ---
 

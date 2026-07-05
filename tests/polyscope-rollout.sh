@@ -702,19 +702,18 @@ assert_rollout_rejects_invalid_local_config \
     'composer run missing-script' \
     "GuardGuide polyscope config references missing composer script 'missing-script'"
 
-grep -q 'https://api-{{folder}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
+grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
-grep -qF 'php artisan config:clear && php artisan migrate --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
     exit 1
 fi
-grep -qF "test@example.com" "$workspace_root/api/polyscope.local.json"
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
-grep -qF 'php artisan migrate:fresh --force && php artisan db:seed --force && php artisan tinker --execute=' "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --refresh-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "All Checks"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"command": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Preflight"' "$workspace_root/api/polyscope.local.json"
@@ -726,12 +725,12 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
     exit 1
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
-grep -q 'https://frontend-{{folder}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
-grep -q 'https://guardguide-{{folder}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -q 'https://secpal-app-{{folder}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
-grep -q 'https://guardguide-de-{{folder}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -q 'https://changelog-{{folder}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
+grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
+grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
+grep -q 'https://guardguide-de-{{worktree}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
+grep -q 'https://changelog-{{worktree}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
@@ -1206,6 +1205,8 @@ assert workspace_name == "fix-polyscope-preview-env-setup", workspace_name
 updates = module.build_api_preview_env_updates(workspace_name)
 assert updates["APP_URL"] == "https://api-fix-polyscope-preview-env-setup.preview.secpal.dev", updates
 assert "not-the-workspace" not in updates["APP_URL"], updates
+preview_updates = module.build_api_preview_env_updates(workspace_name, worktree_path=worktree_path)
+assert preview_updates["KEK_PATH"] == str((worktree_path / "storage" / "app" / "keys" / "kek.key").resolve()), preview_updates
 module.ensure_workspace_alias(worktree_path, db_path=db_path)
 alias_path = worktree_path.parent / workspace_name
 assert alias_path.exists(), alias_path
@@ -1542,6 +1543,11 @@ subprocess.run(
 frontend_env = frontend_worktree.joinpath(".env.local").read_text()
 assert "https://api-azure-cheetah.preview.secpal.dev" in frontend_env, frontend_env
 assert "https://api-azure-cheetah-165552b7.preview.secpal.dev" not in frontend_env, frontend_env
+
+repo_specs = module.build_repo_specs(workspace / "repo-spec-root")
+rendered_local_config = module.render_worktree_local_config(repo_specs["frontend"], frontend_worktree)
+assert "https://frontend-azure-cheetah.preview.secpal.dev" in rendered_local_config, rendered_local_config
+assert "https://frontend-azure-cheetah-165552b7.preview.secpal.dev" not in rendered_local_config, rendered_local_config
 PY
 
 # ensure_api_worktree_ready must build a missing API worktree .env from the
@@ -1591,13 +1597,345 @@ assert "DB_DATABASE=/tmp/preview.sqlite" in worktree_env, worktree_env
 assert "DB_PASSWORD=prod-secret-password" not in worktree_env, worktree_env
 assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 assert "KEK_PATH=/runtime/local-kek" not in worktree_env, worktree_env
-assert "KEK_PATH=/template/kek" in worktree_env, worktree_env
+assert f"KEK_PATH={api_worktree.joinpath('storage/app/keys/kek.key').resolve()}" in worktree_env, worktree_env
 assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in worktree_env, worktree_env
 assert "APP_KEY=\n" not in worktree_env and not worktree_env.endswith("APP_KEY="), worktree_env
 assert "APP_KEY=base64:" in worktree_env, worktree_env
 assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in worktree_env, worktree_env
 PY
 
+# build_api_worktree_env_template must keep source PostgreSQL passwords out of
+# generated worktree templates even when the source checkout uses one locally.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "source-pgsql-env-fixture" / "source-api"
+source_api.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+    "APP_KEY=\n"
+    "KEK_PATH=/template/kek\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=preview-db-password\n"
+    "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE\n"
+    "KEK_PATH=/runtime/local-kek\n"
+    "EXTRA_SECRET=do-not-copy-this-source-only-value\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+template = module.build_api_worktree_env_template(
+    source_api,
+    source_env_path=source_api / ".env",
+)
+assert "DB_PASSWORD=\n" in template or template.endswith("DB_PASSWORD="), template
+assert "APP_KEY=base64:SOURCE_APP_KEY_SHOULD_NOT_LEAVE_SOURCE" not in template, template
+assert "KEK_PATH=/runtime/local-kek" not in template, template
+assert "KEK_PATH=/template/kek" in template, template
+assert "EXTRA_SECRET=do-not-copy-this-source-only-value" not in template, template
+PY
+
+# build_api_worktree_env_template must keep a template PostgreSQL password
+# when the source checkout carries a blank local DB_PASSWORD assignment.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "source-pgsql-empty-password-fixture" / "source-api"
+source_api.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=preview-db-password\n"
+    "APP_KEY=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+template = module.build_api_worktree_env_template(
+    source_api,
+    source_env_path=source_api / ".env",
+)
+assert "DB_PASSWORD=preview-db-password" in template, template
+PY
+
+# upsert_env_assignments must preserve backslashes in replacement values instead
+# of letting re.sub interpret them as replacement escapes.
+python3 -B - <<'PY' "$PYTHON_SCRIPT"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+updated = module.upsert_env_assignments(
+    "DB_PASSWORD=\n",
+    {"DB_PASSWORD": r"secret\path\1"},
+)
+assert r"DB_PASSWORD=secret\path\1" in updated, updated
+PY
+
+# ensure_api_worktree_ready must use a source-only PostgreSQL password
+# transiently for preview database provisioning without persisting it into the
+# generated worktree .env.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "transient-pgsql-password-fixture" / "source-api"
+api_worktree = workspace / "transient-pgsql-password-fixture" / "clones" / "api12345" / "quiet-bear"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-only-password\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_postgres_role_can_create_databases(env_values, base_database):
+    calls.append(("role", env_values["DB_PASSWORD"], base_database))
+    return True
+
+def fake_ensure_postgres_preview_database(env_values, base_database, preview_database):
+    calls.append(("create", env_values["DB_PASSWORD"], base_database, preview_database))
+
+module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
+module.ensure_postgres_preview_database = fake_ensure_postgres_preview_database
+
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+assert calls == [
+    ("role", "source-only-password", "secpal"),
+    ("create", "source-only-password", "secpal", "secpal__preview__quiet_bear"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+PY
+
+# ensure_api_worktree_ready must not persist a source-only PostgreSQL password
+# into schema-mode DB_URL values when the role cannot create databases.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "schema-password-leak-fixture" / "source-api"
+api_worktree = workspace / "schema-password-leak-fixture" / "clones" / "api12345" / "careful-otter"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-only-password\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_postgres_role_can_create_databases(env_values, base_database):
+    calls.append(("role", env_values["DB_PASSWORD"], base_database))
+    return False
+
+def fake_ensure_postgres_preview_schema(env_values, base_database, preview_schema):
+    calls.append(("schema", env_values["DB_PASSWORD"], base_database, preview_schema))
+
+module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
+module.ensure_postgres_preview_schema = fake_ensure_postgres_preview_schema
+
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "schema:secpal:secpal__preview__careful_otter", target
+assert calls == [
+    ("role", "source-only-password", "secpal"),
+    ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "source-only-password@" not in worktree_env, worktree_env
+assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
+PY
+
+# refresh_api_worktree must reuse the transient runtime DB password injection
+# when the worktree keeps DB_PASSWORD blank but the source checkout does not.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "refresh-transient-pgsql-password-fixture" / "source-api"
+api_worktree = workspace / "refresh-transient-pgsql-password-fixture" / "clones" / "api12345" / "quiet-bear"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__quiet_bear\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-only-password\n"
+)
+api_worktree.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__quiet_bear\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
+    calls.append(
+        (
+            tuple(command),
+            worktree_path,
+            command_env["DB_PASSWORD"],
+            command_env["PGPASSWORD"],
+        )
+    )
+
+module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
+
+ready, target = module.refresh_api_worktree(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+assert calls == [
+    (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "db:seed", "--force"), api_worktree, "source-only-password", "source-only-password"),
+    (
+        ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
+        api_worktree,
+        "source-only-password",
+        "source-only-password",
+    ),
+], calls
+PY
+
+# ensure_api_worktree_ready must quote generated KEK paths when the worktree
+# path contains spaces so dotenv consumers can parse the value correctly.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "quoted-kek-path-fixture" / "source-api"
+api_worktree = workspace / "quoted-kek-path-fixture" / "clones" / "api12345" / "Steady Otter"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env.example").write_text(
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=sqlite\n"
+    "KEK_PATH=/template/kek\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+expected = api_worktree.joinpath("storage/app/keys/kek.key").resolve()
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert f'KEK_PATH="{expected}"' in worktree_env, worktree_env
+assert module.load_env_assignments(api_worktree / ".env")["KEK_PATH"] == str(expected)
+PY
 # build_verified_npm_ci_command must accept a valid locked package with no
 # dependencies; npm ci succeeds without creating node_modules in that case.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -2599,6 +2937,7 @@ grep -qF 'FRONTEND_URL=https://frontend-auto-hawk.preview.secpal.dev' "$api_clon
 grep -qF 'DB_CONNECTION=pgsql' "$api_clone/.env"
 grep -qF 'DB_DATABASE=secpal__preview__auto_hawk' "$api_clone/.env"
 grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$api_clone/.env"
+grep -qF "KEK_PATH=$api_clone/storage/app/keys/kek.key" "$api_clone/.env"
 grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
 grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
@@ -2975,7 +3314,7 @@ assert 'secpal__preview__broken_mole' not in cleaned, cleaned
 assert any(
     entry.get('repo') == 'api'
     and entry.get('workspace') == 'abort-hawk'
-    and 'returned non-zero exit status 23' in entry.get('error', '')
+    and '--bootstrap-api-worktree "$PWD"' in entry.get('error', '')
     for entry in failed
 ), failed
 assert any(
