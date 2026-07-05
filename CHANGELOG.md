@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-05 - Normalize Polyscope Preview Workspace Aliases
+
+**Fixed:**
+
+- updated `scripts/polyscope-rollout.py` so Polyscope path normalization now updates the matched `worktrees` row by id after resolved-path lookup, allowing preview alias rewrites to persist even when the stored database path string differs from the filesystem-resolved path
+- stripped legacy hash-suffixed fallback workspace directory names from Polyscope preview URL generation when git branch or database metadata is unavailable, keeping emitted preview hosts aligned with the nginx rule that now rejects deprecated suffixed hostnames
+- added rollout regression coverage for both the resolved-path database update case and the fallback preview-hostname normalization path
+
+---
+
 ## 2026-07-05 - Generate API Preview Env Files From Template
 
 **Fixed:**

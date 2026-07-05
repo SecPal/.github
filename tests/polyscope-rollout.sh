@@ -1080,6 +1080,111 @@ assert "PLAYWRIGHT_BASE_URL=https://frontend-azure-cheetah.preview.secpal.dev" i
 assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
 PY
 
+# normalize_registered_workspace_path must update the matched worktree row even when
+# Polyscope stored a different path string that resolves to the same directory.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sqlite3
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "normalize-registered-worktree-fixture"
+db_path = fixture / "polyscope.db"
+worktree_path = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+registered_path = worktree_path.parent / "registered-worktree"
+normalized_path = worktree_path.parent / "azure-cheetah"
+worktree_path.mkdir(parents=True)
+registered_path.symlink_to(worktree_path.name)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        """
+        create table worktrees (
+            id text primary key,
+            repo_id text not null,
+            branch text not null,
+            path text not null,
+            created_at text default (datetime('now')) not null
+        )
+        """
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
+        ("api-worktree", "api12345", "azure-cheetah", str(registered_path)),
+    )
+
+module.normalize_registered_workspace_path(worktree_path, db_path=db_path)
+
+with sqlite3.connect(db_path) as connection:
+    stored_path = connection.execute(
+        "select path from worktrees where id = ?",
+        ("api-worktree",),
+    ).fetchone()[0]
+
+assert stored_path == str(normalized_path), stored_path
+assert normalized_path.is_symlink(), normalized_path
+assert normalized_path.resolve() == worktree_path.resolve(), normalized_path.resolve()
+PY
+
+# Legacy hash-suffixed worktree directory names must not leak into preview hostnames
+# when the Polyscope DB and git branch are unavailable.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "legacy-preview-hostname-fixture"
+source_api = fixture / "source-api"
+api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
+frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah-165552b7"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+frontend_worktree.mkdir(parents=True, exist_ok=True)
+source_env = (
+    "APP_URL=https://api.secpal.dev\n"
+    "FRONTEND_URL=https://app.secpal.dev\n"
+    "DB_CONNECTION=sqlite\n"
+)
+source_api.joinpath(".env.example").write_text(source_env)
+source_api.joinpath(".env").write_text(source_env)
+frontend_worktree.joinpath(".env.local").write_text("VITE_API_URL=https://api.secpal.dev\n")
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace_name = module.resolve_current_workspace_name(api_worktree)
+assert workspace_name == "azure-cheetah", workspace_name
+
+ready, _ = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready
+api_env = api_worktree.joinpath(".env").read_text()
+assert "https://api-azure-cheetah.preview.secpal.dev" in api_env, api_env
+assert "https://api-azure-cheetah-165552b7.preview.secpal.dev" not in api_env, api_env
+
+subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_env_setup_command()],
+    cwd=frontend_worktree,
+    env={k: v for k, v in os.environ.items() if k != "POLYSCOPE_DB_PATH"},
+    check=True,
+)
+frontend_env = frontend_worktree.joinpath(".env.local").read_text()
+assert "https://api-azure-cheetah.preview.secpal.dev" in frontend_env, frontend_env
+assert "https://api-azure-cheetah-165552b7.preview.secpal.dev" not in frontend_env, frontend_env
+PY
+
 # ensure_api_worktree_ready must build a missing API worktree .env from the
 # source template, carry forward local base values, and then rewrite
 # preview-facing values for the worktree.

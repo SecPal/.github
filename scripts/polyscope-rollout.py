@@ -73,6 +73,14 @@ def resolve_git_workspace_name(worktree_path: pathlib.Path) -> str | None:
     return None
 
 
+def resolve_workspace_name_fallback(worktree_path: pathlib.Path) -> str:
+    git_workspace = resolve_git_workspace_name(worktree_path)
+    if git_workspace:
+        return git_workspace
+
+    return re.sub(r"-[0-9a-f]{8}$", "", worktree_path.name)
+
+
 def find_current_worktree_record(
     connection: sqlite3.Connection,
     worktree_path: pathlib.Path,
@@ -103,7 +111,7 @@ def find_current_worktree_record(
 
 def resolve_current_workspace_name(worktree_path: pathlib.Path, *, db_path: pathlib.Path | None = None) -> str:
     resolved_db_path = db_path or default_polyscope_db_path()
-    fallback = resolve_git_workspace_name(worktree_path) or worktree_path.name
+    fallback = resolve_workspace_name_fallback(worktree_path)
     if not resolved_db_path.exists():
         return fallback
 
@@ -163,7 +171,7 @@ def resolve_linked_workspace_name(
     if isinstance(branch, str) and branch.strip():
         return branch
 
-    return pathlib.Path(linked_path).name
+    return re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(linked_path).name)
 
 
 def collect_linked_setup_context(
@@ -199,7 +207,11 @@ def collect_linked_setup_context(
 
     context: dict[str, str] = {}
     for repo_name, branch, linked_path in rows:
-        workspace_name = branch if isinstance(branch, str) and branch.strip() else pathlib.Path(linked_path).name
+        workspace_name = (
+            branch
+            if isinstance(branch, str) and branch.strip()
+            else re.sub(r"-[0-9a-f]{8}$", "", pathlib.Path(linked_path).name)
+        )
         context.setdefault(repo_name, workspace_name)
 
     return context
@@ -210,6 +222,7 @@ def build_linked_workspace_resolver_source() -> str:
         """
         from pathlib import Path
         import os
+        import re
         import sqlite3
         import subprocess
 
@@ -259,9 +272,15 @@ def build_linked_workspace_resolver_source() -> str:
 
             return fallback
 
+        def resolve_workspace_fallback(fallback):
+            git_workspace = resolve_git_workspace(fallback)
+            if git_workspace != fallback:
+                return git_workspace
+            return re.sub(r"-[0-9a-f]{8}$", "", fallback)
+
         def resolve_current_workspace(fallback):
             db_path = Path(os.environ.get("POLYSCOPE_DB_PATH", Path.home() / ".polyscope" / "polyscope.db"))
-            fallback = resolve_git_workspace(fallback)
+            fallback = resolve_workspace_fallback(fallback)
             if not db_path.exists():
                 return fallback
 
@@ -314,7 +333,7 @@ def build_linked_workspace_resolver_source() -> str:
             if isinstance(branch, str) and branch.strip():
                 return branch
 
-            return Path(linked_path).name
+            return re.sub(r"-[0-9a-f]{8}$", "", Path(linked_path).name)
         """
     ).strip()
 
@@ -2683,7 +2702,6 @@ def normalize_registered_workspace_path(
     if not resolved_db_path.exists():
         return
 
-    current_path = resolve_path_for_matching(worktree_path)
     normalized_path = worktree_path.parent / resolve_current_workspace_name(worktree_path, db_path=resolved_db_path)
     if normalized_path == worktree_path:
         return
@@ -2700,13 +2718,18 @@ def normalize_registered_workspace_path(
 
     try:
         with sqlite3.connect(resolved_db_path) as connection:
+            current_worktree = find_current_worktree_record(connection, worktree_path)
+            if current_worktree is None:
+                return
+
+            worktree_id = current_worktree[0]
             connection.execute(
                 """
                 update worktrees
                 set path = ?
-                where path = ?
+                where id = ?
                 """,
-                (str(normalized_path), current_path),
+                (str(normalized_path), worktree_id),
             )
             connection.commit()
     except sqlite3.Error:
