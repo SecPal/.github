@@ -481,11 +481,24 @@ def resolve_base_database_name(env_values: dict[str, str], workspace: str) -> st
     if not current_database:
         return None
 
-    preview_suffix = POSTGRES_PREVIEW_DATABASE_SEPARATOR + sanitize_postgres_identifier_component(workspace, "workspace")
-    if current_database.endswith(preview_suffix):
-        candidate = current_database[: -len(preview_suffix)]
-        if candidate:
-            return candidate
+    workspace_components = {
+        sanitize_postgres_identifier_component(workspace, "workspace"),
+        sanitize_postgres_identifier_component(pathlib.Path(workspace).name, "workspace"),
+    }
+    stripped_workspace = re.sub(r"-[0-9a-f]{8}$", "", workspace)
+    workspace_components.add(sanitize_postgres_identifier_component(stripped_workspace, "workspace"))
+
+    preview_prefix = build_preview_database_prefix("app")
+    if POSTGRES_PREVIEW_DATABASE_SEPARATOR in current_database:
+        suffix = current_database.split(POSTGRES_PREVIEW_DATABASE_SEPARATOR, 1)[1]
+        workspace_components.add(suffix)
+
+    for workspace_component in workspace_components:
+        preview_suffix = POSTGRES_PREVIEW_DATABASE_SEPARATOR + workspace_component
+        if current_database.endswith(preview_suffix):
+            candidate = current_database[: -len(preview_suffix)]
+            if candidate:
+                return candidate
 
     return current_database
 

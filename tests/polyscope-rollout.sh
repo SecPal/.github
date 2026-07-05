@@ -2752,7 +2752,11 @@ grep -qF 'APP_URL=https://api-stale-otter.preview.secpal.dev' "$stale_api_clone/
 grep -qF 'FRONTEND_URL=https://frontend-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
 grep -qF 'DB_DATABASE=secpal__preview__stale_otter' "$stale_api_clone/.env"
 grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$stale_api_clone/.env"
-grep -qF 'DB_DATABASE=secpal__preview__legacy_hawk' "$legacy_hashed_api_clone/.env"
+grep -qxF 'DB_DATABASE=secpal__preview__legacy_hawk' "$legacy_hashed_api_clone/.env"
+if grep -qF 'DB_DATABASE=secpal__preview__legacy_hawk_165552b7__preview__legacy_hawk' "$legacy_hashed_api_clone/.env"; then
+    echo "legacy hashed preview database migration must not derive a nested preview database name" >&2
+    exit 1
+fi
 grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$legacy_hashed_api_clone/.env"
 test -f "$stale_api_clone/.polyscope-secpal-provisioned.json"
 grep -qF 'CREATE DATABASE "secpal__preview__stale_otter"' "$fake_psql_log"
