@@ -27,9 +27,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 - aligned the reusable workflow's Phase 3 behavior with Dependabot policy by keeping major version updates on manual review in every phase
 - updated `dependabot/fetch-metadata` to the upstream `v3.1.0` commit so the reusable workflow picks up the null `update-type` fix for Python, Composer, and Terraform Dependabot PRs instead of misrouting those updates to manual review
 - restored a bounded PR-title semver fallback for non-`github-actions` ecosystems when `fetch-metadata` still returns empty outputs, preserving patch/minor auto-merge behavior for repositories hit by upstream null-`update-type` gaps
+- configured `dependabot/fetch-metadata` to emit metadata for maintainer-touched Dependabot PRs while routing any reported maintainer changes to manual review instead of leaving the workflow in a hard failure state
+- fail-closed grouped Dependabot PRs to manual review because the upstream `update-type` output only reports the highest semver change for the group, which is not sufficient proof that every dependency in the PR is semver-safe to auto-merge
 - removed invalid caller-workflow `timeout-minutes` syntax from the reusable Dependabot workflow invocation while retaining timeouts inside the called workflow jobs
 - fixed the caller workflow to contain only one YAML document start marker and updated the reusable workflow's header example to show callers pinning to `@v1`
-- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses on the bounded metadata-empty title fallback, drifts off the pinned `fetch-metadata` fix, reintroduces duplicate or malformed caller document markers, or drifts back to `@main` in the usage example
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses on the bounded metadata-empty title fallback, drifts off the pinned `fetch-metadata` fix, stops fail-closing grouped or maintainer-changed Dependabot PRs, reintroduces duplicate or malformed caller document markers, or drifts back to `@main` in the usage example
 
 ---
 

@@ -145,8 +145,23 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
   exit 1
 }
 
+grep -q '^          skip-verification: true$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must configure fetch-metadata to emit outputs for manual-reviewable maintainer-change PRs." >&2
+  exit 1
+}
+
 grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow usage example must show callers pinning the workflow to @v1." >&2
+  exit 1
+}
+
+grep -Fq '          DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must surface the dependency-group metadata output." >&2
+  exit 1
+}
+
+grep -Fq '          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must surface the maintainer-changes metadata output." >&2
   exit 1
 }
 
@@ -165,6 +180,26 @@ grep -Fq 'Fallback to PR title parsing only when fetch-metadata returns empty ou
 # non-GitHub-Actions ecosystems with empty fetch-metadata outputs.
 grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must restrict the metadata-empty PR title fallback to non-GitHub-Actions ecosystems." >&2
+  exit 1
+}
+
+grep -Fq 'if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must fail closed when Dependabot metadata reports maintainer changes." >&2
+  exit 1
+}
+
+grep -Fq 'echo "update-type=maintainer-changes" >> "${GITHUB_OUTPUT}"' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must classify maintainer-changed Dependabot PRs for manual review." >&2
+  exit 1
+}
+
+grep -Fq '[[ -n "${DEPENDENCY_GROUP}" || "${DEPENDENCY_NAMES}" == *,* ]]' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must detect grouped Dependabot PRs conservatively." >&2
+  exit 1
+}
+
+grep -Fq 'echo "update-type=grouped-update" >> "${GITHUB_OUTPUT}"' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must classify grouped Dependabot PRs for manual review." >&2
   exit 1
 }
 

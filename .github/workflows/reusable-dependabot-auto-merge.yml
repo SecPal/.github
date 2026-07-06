@@ -58,6 +58,7 @@ jobs:
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98
         with:
           github-token: "${{ github.token }}"
+          skip-verification: true
 
       - name: Check PR metadata
         id: check
@@ -66,7 +67,10 @@ jobs:
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PHASE: ${{ inputs.phase }}
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
+          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
           UPDATE_TYPE_RAW: ${{ steps.metadata.outputs.update-type }}
+          UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
           PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
@@ -111,11 +115,18 @@ jobs:
             return 0
           }
 
+          is_grouped_update() {
+            [[ -n "${DEPENDENCY_GROUP}" || "${DEPENDENCY_NAMES}" == *,* ]]
+          }
+
           echo "PR Labels: ${PR_LABELS}"
           echo "Auto-merge Phase: ${PHASE}"
           echo "Dependency names: ${DEPENDENCY_NAMES}"
+          echo "Dependency group: ${DEPENDENCY_GROUP}"
+          echo "Maintainer changes: ${MAINTAINER_CHANGES}"
           echo "Package ecosystem: ${PACKAGE_ECOSYSTEM}"
           echo "Dependabot update-type: ${UPDATE_TYPE_RAW}"
+          echo "Updated dependencies JSON: ${UPDATED_DEPENDENCIES_JSON}"
           echo "Previous version: ${PREVIOUS_VERSION}"
           echo "New version: ${NEW_VERSION}"
 
@@ -124,6 +135,20 @@ jobs:
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=not-dependabot" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Missing dependencies label"
+            exit 0
+          fi
+
+          if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=maintainer-changes" >> "${GITHUB_OUTPUT}"
+            echo "❌ Not eligible: Dependabot PR includes maintainer changes"
+            exit 0
+          fi
+
+          if is_grouped_update; then
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=grouped-update" >> "${GITHUB_OUTPUT}"
+            echo "❌ Not eligible: Grouped Dependabot PR requires per-dependency manual review"
             exit 0
           fi
 
@@ -339,6 +364,26 @@ jobs:
               title = 'Dependabot metadata did not include an update type';
               reason = 'The Dependabot metadata action did not return a semver update classification for this PR.\n\n' +
                        'Please review manually.';
+            } else if (updateType === 'maintainer-changes') {
+              emoji = '🛠️';
+              title = 'Dependabot PR includes maintainer changes';
+              reason = 'This Dependabot PR includes maintainer-authored changes.\n\n' +
+                       'The auto-merge workflow therefore fails closed.\n\n' +
+                       '**Action required:**\n' +
+                       '1. Review the maintainer-authored diff\n' +
+                       '2. Verify the dependency update is still safe\n' +
+                       '3. Merge manually after verification';
+            } else if (updateType === 'grouped-update') {
+              emoji = '🧩';
+              title = 'Grouped Dependabot PR requires manual review';
+              reason = 'This Dependabot PR updates multiple dependencies or uses a Dependabot dependency group.\n\n' +
+                       'The metadata action exposes only the highest semver change for grouped PRs, ' +
+                       'so the auto-merge workflow cannot prove that every dependency in the group ' +
+                       'is semver-safe.\n\n' +
+                       '**Action required:**\n' +
+                       '1. Review each dependency in the group\n' +
+                       '2. Confirm there are no SHA-pinned or non-semver updates\n' +
+                       '3. Merge manually after verification';
             } else if (updateType === 'non-semver') {
               emoji = '❓';
               title = 'Non-semver dependency update requires manual review';
