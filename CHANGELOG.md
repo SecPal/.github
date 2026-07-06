@@ -17,7 +17,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - classified GitHub Actions workflow-reference bumps pinned to commit SHAs as explicit manual-review updates, avoiding false `unparseable` failures when Dependabot opens PRs such as `chore(deps): Bump ... from <sha> to <sha>`
 - aligned the reusable workflow's Phase 3 behavior with Dependabot policy by keeping major version updates on manual review in every phase
 - removed invalid caller-workflow `timeout-minutes` syntax from the reusable Dependabot workflow invocation while retaining timeouts inside the called workflow jobs
-- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses to title-based classification or stops fetching Dependabot metadata
+- fixed the caller workflow to contain only one YAML document start marker and updated the reusable workflow's header example to show callers pinning to `@v1`
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses to title-based classification, stops fetching Dependabot metadata, reintroduces duplicate caller document markers, or drifts back to `@main` in the usage example
 
 ---
 

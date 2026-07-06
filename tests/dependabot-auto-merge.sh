@@ -23,6 +23,11 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   fi
 done
 
+if [ "$(grep -c '^---$' "$CALLER_WORKFLOW")" -ne 1 ]; then
+  echo "Dependabot caller workflow must contain exactly one YAML document start marker." >&2
+  exit 1
+fi
+
 grep -q '^permissions:$' "$CALLER_WORKFLOW" || {
   echo "Dependabot caller workflow must declare explicit permissions." >&2
   exit 1
@@ -98,6 +103,11 @@ awk '
 
 grep -q 'uses: dependabot/fetch-metadata@' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must fetch Dependabot metadata instead of classifying updates from the PR title." >&2
+  exit 1
+}
+
+grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow usage example must show callers pinning the workflow to @v1." >&2
   exit 1
 }
 
