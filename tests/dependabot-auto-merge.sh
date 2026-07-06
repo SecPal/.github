@@ -64,6 +64,19 @@ grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-
   exit 1
 }
 
+if awk '
+  /^  auto-merge:$/ { in_job = 1; next }
+  in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@v1$/ {
+    reusable_job = 1
+  }
+  in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
+  END { exit !(reusable_job && has_timeout) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not set timeout-minutes on a reusable workflow caller job." >&2
+  exit 1
+fi
+
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.
@@ -72,7 +85,13 @@ grep -q "^    if: github.event.pull_request.user.login == 'dependabot\\[bot\\]'$
   exit 1
 }
 
-grep -q "needs.check-eligibility.outputs.should-auto-merge != 'true' && github.event.pull_request.user.login == 'dependabot\\[bot\\]'" "$REUSABLE_WORKFLOW" || {
+awk '
+  /^  skip-auto-merge:$/ { in_job = 1; next }
+  in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+  in_job && /needs\.check-eligibility\.outputs\.should-auto-merge != '\''true'\''/ { has_output_guard = 1 }
+  in_job && /github\.event\.pull_request\.user\.login == '\''dependabot\[bot\]'\''/ { has_author_guard = 1 }
+  END { exit !(has_output_guard && has_author_guard) }
+' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must gate skip-auto-merge on github.event.pull_request.user.login so maintainer-triggered events on Dependabot PRs still receive the manual-review comment." >&2
   exit 1
 }
@@ -91,6 +110,16 @@ if grep -Fq 'Extract version numbers from Dependabot PR title' "$REUSABLE_WORKFL
   echo "Reusable Dependabot workflow must not parse update type from the PR title; use Dependabot metadata outputs instead." >&2
   exit 1
 fi
+
+if grep -Fq 'Eligible for auto-merge (Phase 3): MAJOR' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must not auto-merge major updates in any phase." >&2
+  exit 1
+fi
+
+grep -q 'MAJOR semver update requires manual review' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must route major updates to manual review." >&2
+  exit 1
+}
 
 # Same anchoring as the caller guard: only flag actual YAML `if:` lines so
 # explanatory comments or documentation mentioning the old `github.actor`

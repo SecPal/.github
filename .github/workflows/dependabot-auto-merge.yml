@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
-
+---
 # Dependabot Auto-Merge Workflow (.github repository)
 # This is a caller workflow that uses the reusable workflow
 #
@@ -33,8 +33,9 @@ jobs:
     # skip auto-merge enrollment. See:
     # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
     if: github.event.pull_request.user.login == 'dependabot[bot]'
-    timeout-minutes: 10
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
     with:
-      phase: "1" # Phase 1: Only PATCH updates auto-merge
-      merge-method: "squash" # Use squash merge for cleaner history
+      # Phase 1: Only PATCH updates auto-merge
+      phase: "1"
+      # Use squash merge for cleaner history
+      merge-method: "squash"
