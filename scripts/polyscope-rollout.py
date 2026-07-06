@@ -155,7 +155,7 @@ def resolve_workspace_name_from_marker(worktree_path: pathlib.Path) -> str | Non
     if not workspace:
         return None
 
-    return workspace
+    return normalize_workspace_name(workspace)
 
 
 def resolve_stable_workspace_name(worktree_path: pathlib.Path) -> str:
@@ -399,7 +399,7 @@ def build_linked_workspace_resolver_source() -> str:
                 return None
             try:
                 marker = json.loads(marker_path.read_text())
-            except json.JSONDecodeError:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 return None
             if not isinstance(marker, dict):
                 return None
@@ -415,7 +415,7 @@ def build_linked_workspace_resolver_source() -> str:
             workspace = workspace.strip()
             if not workspace:
                 return None
-            return workspace
+            return normalize_workspace_name(workspace)
 
         def resolve_stable_workspace_name(worktree_path):
             marker_workspace = resolve_workspace_name_from_marker(worktree_path)
@@ -431,6 +431,8 @@ def build_linked_workspace_resolver_source() -> str:
                 "POLYSCOPE_DB_PATH",
                 str(Path.home() / ".polyscope" / "polyscope.db"),
             )
+            if not Path(db_path).exists():
+                return resolve_workspace_fallback(fallback)
             try:
                 with sqlite3.connect(db_path) as connection:
                     current_worktree = find_current_worktree(connection)
@@ -916,12 +918,6 @@ def ensure_api_worktree_ready(
         frontend_workspace,
         worktree_path=worktree_path,
     )
-    if (
-        env_values.get("DB_CONNECTION", "").strip().lower() == "pgsql"
-        and not env_values.get("DB_PASSWORD", "").strip()
-        and runtime_env_values.get("DB_PASSWORD", "").strip()
-    ):
-        updated_values["DB_PASSWORD"] = runtime_env_values["DB_PASSWORD"]
     if not env_values.get("APP_KEY", "").strip():
         updated_values["APP_KEY"] = generate_laravel_app_key()
 
@@ -3048,7 +3044,7 @@ def load_provision_marker(marker_path: pathlib.Path) -> dict[str, Any] | None:
 
     try:
         marker = json.loads(marker_path.read_text())
-    except json.JSONDecodeError:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
 
     if not isinstance(marker, dict):

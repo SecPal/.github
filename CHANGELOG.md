@@ -9,12 +9,25 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Harden Polyscope Preview Rollout
+
+**Fixed:**
+
+- kept displayed preview URLs and linked-workspace preview hosts pinned to the original provisioned workspace slug after later workspace-path renames, while normalizing marker-derived workspace values before they are used in aliases or hostnames
+- kept source PostgreSQL passwords transient during preview database provisioning and bootstrap commands instead of persisting them into generated API worktree `.env` files
+- kept generated inline linked-workspace resolvers from creating empty SQLite files when the configured Polyscope database path is missing
+- passed PostgreSQL host, port, and username explicitly to `psql` during preview database management and covered the command shape in rollout regression tests
+- made generated API `polyscope.local.json` configs start a dedicated `php artisan schedule:work` background run action automatically, so preview API workspaces keep Laravel scheduler tasks running without manual startup
+
+---
+
 ## 2026-07-06 - Fix Dependabot Auto-Merge Caller Workflow Parsing
 
 **Fixed:**
 
 - removed the invalid `timeout-minutes` key from the `jobs.auto-merge` reusable-workflow caller in `.github/workflows/dependabot-auto-merge.yml`, so GitHub no longer rejects the workflow at parse time before any Dependabot auto-merge job can start
 - added a regression check in `tests/dependabot-auto-merge.sh` to keep reusable-workflow caller jobs from reintroducing job-level keys that GitHub disallows alongside `uses:`
+- documented the reusable-workflow caller timeout exception in both the root and focused workflow instructions while keeping timeout coverage required inside called reusable workflows
 
 ---
 
@@ -34,7 +47,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - kept the preview rewrite step on top of the generated template so each workspace now receives its own preview-facing `APP_URL`, linked `FRONTEND_URL`, and per-workspace PostgreSQL settings without manual correction after creation
 - routed generated API setup through the rollout bootstrap command so new preview worktrees can borrow source PostgreSQL credentials transiently for database provisioning, migrations, and seeding without persisting those credentials into the generated worktree
 - routed the destructive `Preview Only: Refresh DB + E2E User` Polyscope action through the same rollout bootstrap path so PostgreSQL-backed preview refreshes keep borrowing source-only DB credentials transiently instead of failing once the worktree `.env` leaves `DB_PASSWORD` blank
-- kept schema-mode preview `DB_URL` values free of embedded PostgreSQL passwords across repeated `--prepare-api-worktree` reruns while still persisting the separate `DB_PASSWORD` field for bootstrap commands that need it
+- kept schema-mode preview `DB_URL` values free of embedded PostgreSQL passwords across repeated `--prepare-api-worktree` reruns while continuing to borrow source PostgreSQL passwords only transiently for bootstrap commands that need them
 - aligned Polyscope rollout regression coverage and preview URL template assertions with the current `{{worktree}}` placeholder used for path-derived preview hostnames
 - removed an impossible rollout assertion for a nonexistent `--api-worktree-migration-command` flag so the API preview config regression test matches the generated refresh command it actually validates
 
@@ -1864,5 +1877,3 @@ This is the foundational release establishing:
 - [Issue #37](https://github.com/SecPal/.github/issues/37): Dependabot check frequency (daily vs weekly)
 - [Issue #38](https://github.com/SecPal/.github/issues/38): AGPL-3.0-or-later license strategy review
 - [Issue #39](https://github.com/SecPal/.github/issues/39): TDD mandatory policy vs exploration exceptions
-- made generated API `polyscope.local.json` configs start a dedicated `php artisan schedule:work` background run action automatically, so preview API workspaces keep Laravel scheduler tasks running without manual startup
-- fixed Polyscope preview workspace resolution so displayed preview URLs and callable linked-workspace preview hosts stay pinned to the original provisioned workspace slug even after later workspace-path renames

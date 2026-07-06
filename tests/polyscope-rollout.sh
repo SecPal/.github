@@ -1398,6 +1398,46 @@ current_workspace_result = subprocess.run(
 assert current_workspace_result.stdout.strip() == "azure-cheetah-11111111", current_workspace_result.stdout
 PY
 
+# Generated inline resolvers must not create a new SQLite file when the
+# Polyscope database path is missing.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "missing-polyscope-db-fixture"
+worktree = fixture / "clones" / "fe123456" / "steady-otter"
+missing_db = fixture / "missing.db"
+worktree.mkdir(parents=True, exist_ok=True)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(missing_db)
+probe = (
+    "from pathlib import Path\n\n"
+    f"{module.build_linked_workspace_resolver_source()}\n\n"
+    "print(resolve_current_workspace(Path.cwd()))\n"
+)
+result = subprocess.run(
+    ["python3", "-c", probe],
+    cwd=worktree,
+    env=env,
+    capture_output=True,
+    text=True,
+    check=True,
+)
+assert result.stdout.strip() == "steady-otter", result.stdout
+assert not missing_db.exists(), missing_db
+PY
+
 # Linked-workspace resolution must stay compatible with older Polyscope DBs
 # whose `worktrees` table lacks an unused `branch` column.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -1550,6 +1590,41 @@ assert preview_updates["APP_URL"] == "https://api-bubbly-salmon.preview.secpal.d
 module.ensure_workspace_alias(renamed_worktree, db_path=db_path)
 assert original_alias.is_symlink(), original_alias
 assert original_alias.resolve() == renamed_worktree.resolve(), original_alias.resolve()
+PY
+
+# Provision markers are worktree-local state and must not be able to inject
+# path components into aliases or preview hostnames.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import json
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "unsafe-provision-marker-fixture"
+worktree = fixture / "clones" / "api12345" / "feature-branch"
+outside_alias = fixture / "clones" / "outside-alias"
+safe_alias = worktree.parent / "outside-alias"
+worktree.mkdir(parents=True, exist_ok=True)
+worktree.joinpath(".polyscope-secpal-provisioned.json").write_text(
+    json.dumps({"workspace": "../outside-alias"})
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace_name = module.resolve_current_workspace_name(worktree)
+assert workspace_name == "outside-alias", workspace_name
+preview_updates = module.build_api_preview_env_updates(workspace_name)
+assert preview_updates["APP_URL"] == "https://api-outside-alias.preview.secpal.dev", preview_updates
+
+module.ensure_workspace_alias(worktree)
+assert safe_alias.is_symlink(), safe_alias
+assert safe_alias.resolve() == worktree.resolve(), safe_alias.resolve()
+assert not outside_alias.exists(), outside_alias
 PY
 
 # Linked-workspace resolution and generated callable preview URLs must keep the
@@ -1861,9 +1936,9 @@ updated = module.upsert_env_assignments(
 assert r"DB_PASSWORD=secret\path\1" in updated, updated
 PY
 
-# ensure_api_worktree_ready must use a source-only PostgreSQL password for
-# preview database provisioning and persist it into the generated worktree .env
-# so follow-up artisan and psql calls stay self-contained.
+# ensure_api_worktree_ready must use a source-only PostgreSQL password
+# transiently for preview database provisioning without persisting it into the
+# generated worktree .env.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -1919,11 +1994,12 @@ assert calls == [
     ("create", "source-only-password", "secpal", "secpal__preview__quiet_bear"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
+assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 PY
 
-# ensure_api_worktree_ready must persist a source-only PostgreSQL password for
-# schema-mode previews without leaking it into DB_URL values.
+# ensure_api_worktree_ready must not persist a source-only PostgreSQL password
+# into schema-mode preview .env values or DB_URL values.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -1979,7 +2055,8 @@ assert calls == [
     ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
+assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 assert "source-only-password@" not in worktree_env, worktree_env
 assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
 
@@ -1992,7 +2069,8 @@ assert calls == [
     ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
+assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 assert "source-only-password@" not in worktree_env, worktree_env
 assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
 PY
@@ -2915,6 +2993,7 @@ cat >"$fake_exec_dir/psql" <<'STUB'
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -2933,7 +3012,7 @@ elif "-c" in args:
     sql = args[args.index("-c") + 1]
 
 with log_path.open("a") as handle:
-    handle.write(f"psql:{os.getcwd()}:{sql}\n")
+    handle.write(f"psql:{os.getcwd()}:{shlex.join(args)}:{sql}\n")
 
 databases = state.get("databases", [])
 schemas = state.get("schemas", [])
@@ -3152,6 +3231,7 @@ grep -qF "pre-commit:$api_clone:install --install-hooks --hook-type pre-commit" 
 grep -qF "pre-commit:$frontend_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
 grep -qF "SELECT 1 FROM pg_database WHERE datname = 'secpal__preview__auto_hawk'" "$fake_psql_log"
 grep -qF 'CREATE DATABASE "secpal__preview__auto_hawk"' "$fake_psql_log"
+grep -qF -- '-h 127.0.0.1 -p 5432 -U secpal -d secpal -Atqc' "$fake_psql_log"
 
 if grep -qF "$broken_api_clone" "$provision_log"; then
     echo "provisioning must skip invalid api stub directories" >&2

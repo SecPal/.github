@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
+WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -22,6 +23,11 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
     exit 1
   fi
 done
+
+if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
+  echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
+  exit 1
+fi
 
 grep -q '^permissions:$' "$CALLER_WORKFLOW" || {
   echo "Dependabot caller workflow must declare explicit permissions." >&2
@@ -70,6 +76,11 @@ if grep -q '^    timeout-minutes:' "$CALLER_WORKFLOW"; then
   echo "Dependabot caller workflow must not set timeout-minutes on a reusable-workflow uses job." >&2
   exit 1
 fi
+
+grep -q 'Reusable-workflow caller jobs that use `jobs\.<job_id>\.uses` cannot set `timeout-minutes` on the caller job' "$WORKFLOW_INSTRUCTIONS" || {
+  echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
+  exit 1
+}
 
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
