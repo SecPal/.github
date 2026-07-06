@@ -23,8 +23,12 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   fi
 done
 
-if [ "$(grep -c '^---$' "$CALLER_WORKFLOW")" -ne 1 ]; then
-  echo "Dependabot caller workflow must contain exactly one YAML document start marker." >&2
+if ! awk '
+  /^---$/ { document_start_markers++ }
+  /^----+$/ { malformed_document_markers++ }
+  END { exit !(document_start_markers == 1 && malformed_document_markers == 0) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must contain exactly one valid YAML document start marker." >&2
   exit 1
 fi
 
