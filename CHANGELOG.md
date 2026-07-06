@@ -16,9 +16,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 - replaced PR-title parsing in `.github/workflows/reusable-dependabot-auto-merge.yml` with official `dependabot/fetch-metadata` outputs so Dependabot auto-merge decisions now follow GitHub-provided update metadata instead of brittle `Bump ... from ... to ...` title strings
 - classified GitHub Actions workflow-reference bumps pinned to commit SHAs as explicit manual-review updates, avoiding false `unparseable` failures when Dependabot opens PRs such as `chore(deps): Bump ... from <sha> to <sha>`
 - aligned the reusable workflow's Phase 3 behavior with Dependabot policy by keeping major version updates on manual review in every phase
+- updated `dependabot/fetch-metadata` to the upstream `v3.1.0` commit so the reusable workflow picks up the null `update-type` fix for Python, Composer, and Terraform Dependabot PRs instead of misrouting those updates to manual review
 - removed invalid caller-workflow `timeout-minutes` syntax from the reusable Dependabot workflow invocation while retaining timeouts inside the called workflow jobs
 - fixed the caller workflow to contain only one YAML document start marker and updated the reusable workflow's header example to show callers pinning to `@v1`
-- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses to title-based classification, stops fetching Dependabot metadata, reintroduces duplicate caller document markers, or drifts back to `@main` in the usage example
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses to title-based classification, drifts off the pinned `fetch-metadata` fix, reintroduces duplicate or malformed caller document markers, or drifts back to `@main` in the usage example
 
 ---
 

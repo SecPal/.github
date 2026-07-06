@@ -23,7 +23,11 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   fi
 done
 
-if [ "$(grep -c '^---$' "$CALLER_WORKFLOW")" -ne 1 ]; then
+if ! awk '
+  /^---$/ { document_start_markers++ }
+  /^----+$/ { malformed_document_markers++ }
+  END { exit !(document_start_markers == 1 && malformed_document_markers == 0) }
+' "$CALLER_WORKFLOW"; then
   echo "Dependabot caller workflow must contain exactly one YAML document start marker." >&2
   exit 1
 fi
@@ -101,8 +105,8 @@ awk '
   exit 1
 }
 
-grep -q 'uses: dependabot/fetch-metadata@' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must fetch Dependabot metadata instead of classifying updates from the PR title." >&2
+grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
   exit 1
 }
 
