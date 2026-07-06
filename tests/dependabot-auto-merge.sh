@@ -64,6 +64,13 @@ grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-
   exit 1
 }
 
+# Reusable-workflow caller jobs cannot declare timeout-minutes alongside uses:.
+# GitHub rejects that combination at workflow-parse time before any job starts.
+if grep -q '^    timeout-minutes:' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not set timeout-minutes on a reusable-workflow uses job." >&2
+  exit 1
+fi
+
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.

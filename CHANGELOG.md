@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Fix Dependabot Auto-Merge Caller Workflow Parsing
+
+**Fixed:**
+
+- removed the invalid `timeout-minutes` key from the `jobs.auto-merge` reusable-workflow caller in `.github/workflows/dependabot-auto-merge.yml`, so GitHub no longer rejects the workflow at parse time before any Dependabot auto-merge job can start
+- added a regression check in `tests/dependabot-auto-merge.sh` to keep reusable-workflow caller jobs from reintroducing job-level keys that GitHub disallows alongside `uses:`
+
+---
+
 ## 2026-07-05 - Fix Polyscope Preview Workspace Bootstrap
 
 **Fixed:**
