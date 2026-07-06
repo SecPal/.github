@@ -145,13 +145,23 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
   exit 1
 }
 
-grep -q '^          skip-verification: true$' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must configure fetch-metadata to emit outputs for manual-reviewable maintainer-change PRs." >&2
+grep -q '^        continue-on-error: true$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must soft-fail fetch-metadata into the manual-review path." >&2
   exit 1
 }
 
+if grep -q '^          skip-verification: true$' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must not bypass fetch-metadata commit verification." >&2
+  exit 1
+fi
+
 grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow usage example must show callers pinning the workflow to @v1." >&2
+  exit 1
+}
+
+grep -Fq '          METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must surface the fetch-metadata step outcome." >&2
   exit 1
 }
 
@@ -185,6 +195,11 @@ grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from
 
 grep -Fq 'if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must fail closed when Dependabot metadata reports maintainer changes." >&2
+  exit 1
+}
+
+grep -Fq 'if [[ "${METADATA_STEP_OUTCOME}" != "success" ]]; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must fail closed when fetch-metadata itself cannot verify the PR." >&2
   exit 1
 }
 

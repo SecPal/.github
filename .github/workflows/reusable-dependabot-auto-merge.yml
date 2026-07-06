@@ -56,9 +56,9 @@ jobs:
       - name: Dependabot metadata
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98
+        continue-on-error: true
         with:
           github-token: "${{ github.token }}"
-          skip-verification: true
 
       - name: Check PR metadata
         id: check
@@ -66,6 +66,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PHASE: ${{ inputs.phase }}
+          METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
           DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
           MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
@@ -121,6 +122,7 @@ jobs:
 
           echo "PR Labels: ${PR_LABELS}"
           echo "Auto-merge Phase: ${PHASE}"
+          echo "Metadata step outcome: ${METADATA_STEP_OUTCOME}"
           echo "Dependency names: ${DEPENDENCY_NAMES}"
           echo "Dependency group: ${DEPENDENCY_GROUP}"
           echo "Maintainer changes: ${MAINTAINER_CHANGES}"
@@ -135,6 +137,13 @@ jobs:
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=not-dependabot" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Missing dependencies label"
+            exit 0
+          fi
+
+          if [[ "${METADATA_STEP_OUTCOME}" != "success" ]]; then
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
+            echo "❌ Not eligible: Dependabot metadata verification failed; route to manual review"
             exit 0
           fi
 
