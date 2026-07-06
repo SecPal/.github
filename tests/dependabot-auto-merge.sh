@@ -125,8 +125,11 @@ grep -Fq 'Fallback to PR title parsing only when fetch-metadata returns empty ou
   exit 1
 }
 
-grep -Fq 'elif fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must fall back to PR title parsing only after empty metadata for non-GitHub-Actions ecosystems." >&2
+# Keep every metadata-empty GitHub Actions update on manual review, even when
+# the PR title still looks semver-shaped. Title parsing is only allowed for
+# non-GitHub-Actions ecosystems with empty fetch-metadata outputs.
+grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must restrict the metadata-empty PR title fallback to non-GitHub-Actions ecosystems." >&2
   exit 1
 }
 

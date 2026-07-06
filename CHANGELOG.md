@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Restrict GitHub Actions Dependabot Fallback
+
+**Fixed:**
+
+- limited the metadata-empty PR-title fallback in `.github/workflows/reusable-dependabot-auto-merge.yml` to non-`github-actions` ecosystems so GitHub Actions bumps with incomplete `fetch-metadata` version outputs stay on manual review instead of being auto-merged from semver-shaped titles
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow ever re-enables PR-title fallback for metadata-empty `github-actions` Dependabot updates
+
+---
+
 ## 2026-07-06 - Fix Dependabot Auto-Merge Classification
 
 **Fixed:**

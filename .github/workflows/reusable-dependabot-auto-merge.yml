@@ -156,7 +156,7 @@ jobs:
                 echo "❌ Not eligible: GitHub Actions reference update does not expose a semver update-type"
               # Fallback to PR title parsing only when fetch-metadata returns empty outputs
               # for non-GitHub-Actions ecosystems.
-              elif fallback_from_pr_title; then
+              elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from_pr_title; then
                 :
               else
                 echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
