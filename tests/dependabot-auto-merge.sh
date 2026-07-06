@@ -115,15 +115,20 @@ grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-a
   exit 1
 }
 
-if grep -Fq 'PR_TITLE: ${{ github.event.pull_request.title }}' "$REUSABLE_WORKFLOW"; then
-  echo "Reusable Dependabot workflow must not depend on github.event.pull_request.title for update classification; SHA-based workflow bumps are not semver titles." >&2
+grep -Fq '          PR_TITLE: ${{ github.event.pull_request.title }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must expose the PR title for the metadata-empty fallback path." >&2
   exit 1
-fi
+}
 
-if grep -Fq 'Extract version numbers from Dependabot PR title' "$REUSABLE_WORKFLOW"; then
-  echo "Reusable Dependabot workflow must not parse update type from the PR title; use Dependabot metadata outputs instead." >&2
+grep -Fq 'Fallback to PR title parsing only when fetch-metadata returns empty outputs' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must document the metadata-empty title fallback boundary." >&2
   exit 1
-fi
+}
+
+grep -Fq 'elif fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must fall back to PR title parsing only after empty metadata for non-GitHub-Actions ecosystems." >&2
+  exit 1
+}
 
 if grep -Fq 'Eligible for auto-merge (Phase 3): MAJOR' "$REUSABLE_WORKFLOW"; then
   echo "Reusable Dependabot workflow must not auto-merge major updates in any phase." >&2

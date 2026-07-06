@@ -62,6 +62,7 @@ jobs:
       - name: Check PR metadata
         id: check
         env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PHASE: ${{ inputs.phase }}
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
@@ -70,6 +71,46 @@ jobs:
           PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
         run: |
+          fallback_from_pr_title() {
+            local version_range_pattern old_major old_minor old_patch new_major new_minor new_patch
+
+            version_range_pattern='from[[:space:]]+([0-9]+)(\.([0-9]+))?'
+            version_range_pattern+='(\.([0-9]+))?[[:space:]]+to[[:space:]]+'
+            version_range_pattern+='([0-9]+)(\.([0-9]+))?(\.([0-9]+))?'
+
+            if [[ ! "${PR_TITLE}" =~ ${version_range_pattern} ]]; then
+              return 1
+            fi
+
+            old_major="${BASH_REMATCH[1]}"
+            old_minor="${BASH_REMATCH[3]:-0}"
+            old_patch="${BASH_REMATCH[5]:-0}"
+            new_major="${BASH_REMATCH[6]}"
+            new_minor="${BASH_REMATCH[8]:-0}"
+            new_patch="${BASH_REMATCH[10]:-0}"
+
+            if [[ "${new_major}" != "${old_major}" ]]; then
+              echo "update-type=major" >> "${GITHUB_OUTPUT}"
+              echo "❌ Not eligible: MAJOR semver update requires manual review (Phase ${PHASE})"
+            elif [[ "${new_minor}" != "${old_minor}" ]]; then
+              echo "update-type=minor" >> "${GITHUB_OUTPUT}"
+              if [[ "${PHASE}" == "2" || "${PHASE}" == "3" ]]; then
+                echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
+                echo "✅ Eligible for auto-merge (Phase ${PHASE}): MINOR semver update via title fallback"
+              else
+                echo "❌ Not eligible: MINOR semver update requires manual review (Phase ${PHASE})"
+              fi
+            elif [[ "${new_patch}" != "${old_patch}" ]]; then
+              echo "update-type=patch" >> "${GITHUB_OUTPUT}"
+              echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
+              echo "✅ Eligible for auto-merge (Phase ${PHASE}): PATCH semver update via title fallback"
+            else
+              return 1
+            fi
+
+            return 0
+          }
+
           echo "PR Labels: ${PR_LABELS}"
           echo "Auto-merge Phase: ${PHASE}"
           echo "Dependency names: ${DEPENDENCY_NAMES}"
@@ -113,6 +154,10 @@ jobs:
                 [[ -n "${PREVIOUS_VERSION}" && -n "${NEW_VERSION}" ]]; then
                 echo "update-type=github-actions-non-semver" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: GitHub Actions reference update does not expose a semver update-type"
+              # Fallback to PR title parsing only when fetch-metadata returns empty outputs
+              # for non-GitHub-Actions ecosystems.
+              elif fallback_from_pr_title; then
+                :
               else
                 echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: Dependabot metadata did not include an update type"
