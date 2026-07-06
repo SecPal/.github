@@ -15,13 +15,44 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
+WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
     echo "Expected workflow was not found: $workflow" >&2
     exit 1
   fi
+
+  marker_count="$(grep -c '^---$' "$workflow")"
+  if [ "$marker_count" -ne 1 ]; then
+    echo "Dependabot workflows must contain exactly one YAML document marker: $workflow" >&2
+    exit 1
+  fi
 done
+
+grep -q '^---$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must include a YAML document marker." >&2
+  exit 1
+}
+
+grep -q '^name: Dependabot Auto-Merge$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must declare its workflow name." >&2
+  exit 1
+}
+
+if ! awk '
+  /^---$/ { marker = NR; next }
+  /^name: Dependabot Auto-Merge$/ { name = NR }
+  END { exit !(marker > 0 && name == marker + 1) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow YAML document marker must appear immediately before name:." >&2
+  exit 1
+fi
+
+if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
+  echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
+  exit 1
+fi
 
 if ! awk '
   /^---$/ { document_start_markers++ }
@@ -86,6 +117,10 @@ if awk '
   exit 1
 fi
 
+grep -q 'Reusable-workflow caller jobs that use `jobs\.<job_id>\.uses` cannot set `timeout-minutes` on the caller job' "$WORKFLOW_INSTRUCTIONS" || {
+  echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
+  exit 1
+}
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.

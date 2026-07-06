@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
----
 # Dependabot Auto-Merge Workflow (.github repository)
 # This is a caller workflow that uses the reusable workflow
 #
 # For implementation details, see:
 # .github/workflows/reusable-dependabot-auto-merge.yml
 
+---
 name: Dependabot Auto-Merge
 
 on:
