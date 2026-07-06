@@ -24,6 +24,33 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   fi
 done
 
+for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
+  marker_count="$(grep -c '^---$' "$workflow")"
+  if [ "$marker_count" -ne 1 ]; then
+    echo "Dependabot workflows must contain exactly one YAML document marker: $workflow" >&2
+    exit 1
+  fi
+done
+
+grep -q '^---$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must include a YAML document marker." >&2
+  exit 1
+}
+
+grep -q '^name: Dependabot Auto-Merge$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must declare its workflow name." >&2
+  exit 1
+}
+
+if ! awk '
+  /^---$/ { marker = NR; next }
+  /^name: Dependabot Auto-Merge$/ { name = NR }
+  END { exit !(marker > 0 && name == marker + 1) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow YAML document marker must appear immediately before name:." >&2
+  exit 1
+fi
+
 if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
   echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
   exit 1
