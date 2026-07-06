@@ -85,7 +85,9 @@ jobs:
           # require manual review, which is the safer approach for non-stable versions.
 
           # Extract "from X[.Y[.Z]] to A[.B[.C]]" pattern (flexible version format)
-          VERSION_RANGE_PATTERN='from[[:space:]]+([0-9]+)(\.([0-9]+))?(\.([0-9]+))?[[:space:]]+to[[:space:]]+([0-9]+)(\.([0-9]+))?(\.([0-9]+))?'
+          VERSION_RANGE_PATTERN='from[[:space:]]+([0-9]+)(\.([0-9]+))?'
+          VERSION_RANGE_PATTERN+='(\.([0-9]+))?[[:space:]]+to[[:space:]]+'
+          VERSION_RANGE_PATTERN+='([0-9]+)(\.([0-9]+))?(\.([0-9]+))?'
           if [[ "${PR_TITLE}" =~ ${VERSION_RANGE_PATTERN} ]]; then
             OLD_MAJOR="${BASH_REMATCH[1]}"
             OLD_MINOR="${BASH_REMATCH[3]:-0}"  # Default to 0 if not present
