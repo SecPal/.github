@@ -938,8 +938,14 @@ def ensure_api_worktree_ready(
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = ""
         else:
             ensure_postgres_preview_schema(runtime_env_values, base_database, preview_target)
+            schema_url_env_values = runtime_env_values.copy()
+            schema_url_env_values["DB_PASSWORD"] = ""
             updated_values["DB_DATABASE"] = base_database
-            updated_values["DB_URL"] = build_postgres_url(env_values, base_database, preview_target)
+            updated_values["DB_URL"] = build_postgres_url(
+                schema_url_env_values,
+                base_database,
+                preview_target,
+            )
             updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "schema"
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = preview_target
         updated_values[PREVIEW_DATABASE_BASE_ENV_KEY] = base_database

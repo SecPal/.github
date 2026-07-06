@@ -1982,6 +1982,19 @@ worktree_env = api_worktree.joinpath(".env").read_text()
 assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
 assert "source-only-password@" not in worktree_env, worktree_env
 assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
+
+calls.clear()
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "schema:secpal:secpal__preview__careful_otter", target
+assert calls == [
+    ("role", "source-only-password", "secpal"),
+    ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
+assert "source-only-password@" not in worktree_env, worktree_env
+assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
 PY
 
 # refresh_api_worktree must reuse the transient runtime DB password injection
