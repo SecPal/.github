@@ -20,6 +20,8 @@ Applies when editing GitHub Actions workflows, Dependabot configs, and YAML conf
       timeout-minutes: 15
   ```
 
+  Reusable-workflow caller jobs that use `jobs.<job_id>.uses` cannot set `timeout-minutes` on the caller job because GitHub rejects that key alongside `uses:`. Put timeout coverage on the called reusable workflow's jobs instead.
+
 - Set **explicit permissions** on every workflow (principle of least privilege). Start with the minimal baseline and add scopes only when a specific job requires them:
 
   ```yaml

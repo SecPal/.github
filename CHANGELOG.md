@@ -9,6 +9,28 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Harden Polyscope Preview Rollout
+
+**Fixed:**
+
+- kept displayed preview URLs and linked-workspace preview hosts pinned to the original provisioned workspace slug after later workspace-path renames, while normalizing marker-derived workspace values before they are used in aliases or hostnames
+- kept source PostgreSQL passwords transient during preview database provisioning and bootstrap commands instead of persisting them into generated API worktree `.env` files
+- kept generated inline linked-workspace resolvers from creating empty SQLite files when the configured Polyscope database path is missing
+- passed PostgreSQL host, port, and username explicitly to `psql` during preview database management and covered the command shape in rollout regression tests
+- made generated API `polyscope.local.json` configs start a dedicated `php artisan schedule:work` background run action automatically, so preview API workspaces keep Laravel scheduler tasks running without manual startup
+
+---
+
+## 2026-07-06 - Fix Dependabot Auto-Merge Caller Workflow Parsing
+
+**Fixed:**
+
+- removed the invalid `timeout-minutes` key from the `jobs.auto-merge` reusable-workflow caller in `.github/workflows/dependabot-auto-merge.yml`, so GitHub no longer rejects the workflow at parse time before any Dependabot auto-merge job can start
+- added a regression check in `tests/dependabot-auto-merge.sh` to keep reusable-workflow caller jobs from reintroducing job-level keys that GitHub disallows alongside `uses:`
+- documented the reusable-workflow caller timeout exception in both the root and focused workflow instructions while keeping timeout coverage required inside called reusable workflows
+
+---
+
 ## 2026-07-06 - Clean Up Dependabot Workflow yamllint Warnings
 
 **Fixed:**

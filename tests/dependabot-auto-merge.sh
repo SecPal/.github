@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
+WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -22,6 +23,38 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
     exit 1
   fi
 done
+
+for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
+  marker_count="$(grep -c '^---$' "$workflow")"
+  if [ "$marker_count" -ne 1 ]; then
+    echo "Dependabot workflows must contain exactly one YAML document marker: $workflow" >&2
+    exit 1
+  fi
+done
+
+grep -q '^---$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must include a YAML document marker." >&2
+  exit 1
+}
+
+grep -q '^name: Dependabot Auto-Merge$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must declare its workflow name." >&2
+  exit 1
+}
+
+if ! awk '
+  /^---$/ { marker = NR; next }
+  /^name: Dependabot Auto-Merge$/ { name = NR }
+  END { exit !(marker > 0 && name == marker + 1) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow YAML document marker must appear immediately before name:." >&2
+  exit 1
+fi
+
+if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
+  echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
+  exit 1
+fi
 
 grep -q '^permissions:$' "$CALLER_WORKFLOW" || {
   echo "Dependabot caller workflow must declare explicit permissions." >&2
@@ -61,6 +94,18 @@ fi
 
 grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$CALLER_WORKFLOW" || {
   echo "Dependabot caller workflow must keep the reusable workflow uses line pinned to @v1." >&2
+  exit 1
+}
+
+# Reusable-workflow caller jobs cannot declare timeout-minutes alongside uses:.
+# GitHub rejects that combination at workflow-parse time before any job starts.
+if grep -q '^    timeout-minutes:' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not set timeout-minutes on a reusable-workflow uses job." >&2
+  exit 1
+fi
+
+grep -q 'Reusable-workflow caller jobs that use `jobs\.<job_id>\.uses` cannot set `timeout-minutes` on the caller job' "$WORKFLOW_INSTRUCTIONS" || {
+  echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
   exit 1
 }
 
