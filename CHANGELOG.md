@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Fix Dependabot Auto-Merge Classification
+
+**Fixed:**
+
+- replaced PR-title parsing in `.github/workflows/reusable-dependabot-auto-merge.yml` with official `dependabot/fetch-metadata` outputs so Dependabot auto-merge decisions now follow GitHub-provided update metadata instead of brittle `Bump ... from ... to ...` title strings
+- classified GitHub Actions workflow-reference bumps pinned to commit SHAs as explicit manual-review updates, avoiding false `unparseable` failures when Dependabot opens PRs such as `chore(deps): Bump ... from <sha> to <sha>`
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses to title-based classification or stops fetching Dependabot metadata
+
+---
+
 ## 2026-07-05 - Fix Polyscope Preview Workspace Bootstrap
 
 **Fixed:**

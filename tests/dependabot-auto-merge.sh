@@ -77,6 +77,21 @@ grep -q "needs.check-eligibility.outputs.should-auto-merge != 'true' && github.e
   exit 1
 }
 
+grep -q 'uses: dependabot/fetch-metadata@' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must fetch Dependabot metadata instead of classifying updates from the PR title." >&2
+  exit 1
+}
+
+if grep -Fq 'PR_TITLE: ${{ github.event.pull_request.title }}' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must not depend on github.event.pull_request.title for update classification; SHA-based workflow bumps are not semver titles." >&2
+  exit 1
+fi
+
+if grep -Fq 'Extract version numbers from Dependabot PR title' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must not parse update type from the PR title; use Dependabot metadata outputs instead." >&2
+  exit 1
+fi
+
 # Same anchoring as the caller guard: only flag actual YAML `if:` lines so
 # explanatory comments or documentation mentioning the old `github.actor`
 # pattern do not trip the regression check.

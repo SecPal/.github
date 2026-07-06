@@ -53,16 +53,30 @@ jobs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
       update-type: ${{ steps.check.outputs.update-type }}
     steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@d7267f607e9d3fb96fc2fbe83e0af444713e90b7
+        with:
+          github-token: "${{ github.token }}"
+
       - name: Check PR metadata
         id: check
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PHASE: ${{ inputs.phase }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          UPDATE_TYPE_RAW: ${{ steps.metadata.outputs.update-type }}
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
+          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
         run: |
-          echo "PR Title: ${PR_TITLE}"
           echo "PR Labels: ${PR_LABELS}"
           echo "Auto-merge Phase: ${PHASE}"
+          echo "Dependency names: ${DEPENDENCY_NAMES}"
+          echo "Package ecosystem: ${PACKAGE_ECOSYSTEM}"
+          echo "Dependabot update-type: ${UPDATE_TYPE_RAW}"
+          echo "Previous version: ${PREVIOUS_VERSION}"
+          echo "New version: ${NEW_VERSION}"
 
           # Check if PR has 'dependencies' label (required for Dependabot PRs)
           if ! echo "${PR_LABELS}" | grep -q "dependencies"; then
@@ -72,72 +86,48 @@ jobs:
             exit 0
           fi
 
-          # Extract version numbers from Dependabot PR title
-          # Common formats:
-          #   "Bump package from 1.2.3 to 1.2.4"
-          #   "Update dependency from 1.2.3 to 1.2.4"
-          #   "chore(deps): bump package from 1.2.3 to 1.2.4"
-          #   "Bump action from 5 to 6" (GitHub Actions often use single-digit versions)
-          #
-          # Note: Pre-release versions (1.2.3-beta) and build metadata (1.2.3+build)
-          # are NOT supported. Such PRs will fall back to 'unparseable' status and
-          # require manual review, which is the safer approach for non-stable versions.
-
-          # Extract "from X[.Y[.Z]] to A[.B[.C]]" pattern (flexible version format)
-          if [[ "${PR_TITLE}" =~ from[[:space:]]+([0-9]+)(\.([0-9]+))?(\.([0-9]+))?[[:space:]]+to[[:space:]]+([0-9]+)(\.([0-9]+))?(\.([0-9]+))? ]]; then
-            OLD_MAJOR="${BASH_REMATCH[1]}"
-            OLD_MINOR="${BASH_REMATCH[3]:-0}"  # Default to 0 if not present
-            OLD_PATCH="${BASH_REMATCH[5]:-0}"  # Default to 0 if not present
-            NEW_MAJOR="${BASH_REMATCH[6]}"
-            NEW_MINOR="${BASH_REMATCH[8]:-0}"  # Default to 0 if not present
-            NEW_PATCH="${BASH_REMATCH[10]:-0}" # Default to 0 if not present
-
-            echo "Old version: ${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH}"
-            echo "New version: ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
-
-            # Determine update type based on semver rules
-            if [[ "${NEW_MAJOR}" != "${OLD_MAJOR}" ]]; then
+          case "${UPDATE_TYPE_RAW}" in
+            version-update:semver-major)
               echo "update-type=major" >> "${GITHUB_OUTPUT}"
-
-              # Phase 3: Auto-merge all (including MAJOR)
               if [[ "${PHASE}" == "3" ]]; then
                 echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-                echo "✅ Eligible for auto-merge (Phase 3): MAJOR update (${OLD_MAJOR}.x.x → ${NEW_MAJOR}.x.x)"
+                echo "✅ Eligible for auto-merge (Phase 3): MAJOR semver update"
               else
                 echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
-                echo "❌ Not eligible: MAJOR update (${OLD_MAJOR}.x.x → ${NEW_MAJOR}.x.x) requires manual review (Phase ${PHASE})"
+                echo "❌ Not eligible: MAJOR semver update requires manual review (Phase ${PHASE})"
               fi
-
-            elif [[ "${NEW_MINOR}" != "${OLD_MINOR}" ]]; then
+              ;;
+            version-update:semver-minor)
               echo "update-type=minor" >> "${GITHUB_OUTPUT}"
-
-              # Phase 2+: Auto-merge MINOR updates
               if [[ "${PHASE}" == "2" || "${PHASE}" == "3" ]]; then
                 echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-                echo "✅ Eligible for auto-merge (Phase ${PHASE}): MINOR update (${OLD_MAJOR}.${OLD_MINOR}.x → ${NEW_MAJOR}.${NEW_MINOR}.x)"
+                echo "✅ Eligible for auto-merge (Phase ${PHASE}): MINOR semver update"
               else
                 echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
-                echo "❌ Not eligible: MINOR update (${OLD_MAJOR}.${OLD_MINOR}.x → ${NEW_MAJOR}.${NEW_MINOR}.x) requires manual review (Phase ${PHASE})"
+                echo "❌ Not eligible: MINOR semver update requires manual review (Phase ${PHASE})"
               fi
-
-            elif [[ "${NEW_PATCH}" != "${OLD_PATCH}" ]]; then
+              ;;
+            version-update:semver-patch)
               echo "update-type=patch" >> "${GITHUB_OUTPUT}"
-
-              # All phases: Auto-merge PATCH updates
               echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-              echo "✅ Eligible for auto-merge (Phase ${PHASE}): PATCH update (${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH})"
-
-            else
+              echo "✅ Eligible for auto-merge (Phase ${PHASE}): PATCH semver update"
+              ;;
+            "")
               echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
-              echo "update-type=no-change" >> "${GITHUB_OUTPUT}"
-              echo "❌ Not eligible: Version unchanged"
-            fi
-          else
-            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
-            echo "update-type=unparseable" >> "${GITHUB_OUTPUT}"
-            echo "❌ Not eligible: Could not parse version numbers from PR title"
-            echo "    Title format expected: 'Bump X from 1.2.3 to 1.2.4'"
-          fi
+              if [[ "${PACKAGE_ECOSYSTEM}" == "github-actions" && -n "${PREVIOUS_VERSION}" && -n "${NEW_VERSION}" ]]; then
+                echo "update-type=github-actions-non-semver" >> "${GITHUB_OUTPUT}"
+                echo "❌ Not eligible: GitHub Actions reference update does not expose a semver update-type"
+              else
+                echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
+                echo "❌ Not eligible: Dependabot metadata did not include an update type"
+              fi
+              ;;
+            *)
+              echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+              echo "update-type=non-semver" >> "${GITHUB_OUTPUT}"
+              echo "❌ Not eligible: Unsupported Dependabot update type '${UPDATE_TYPE_RAW}'"
+              ;;
+          esac
 
   # Enable auto-merge for eligible PRs
   auto-merge:
@@ -281,11 +271,24 @@ jobs:
               } else if (phase === '2' || phase === '3') {
                 reason += '\n\n⚠️ **Note:** Your policy is set to Phase ' + phase + ' but this PR was not auto-merged. Check the logs for details.';
               }
-            } else if (updateType === 'unparseable') {
+            } else if (updateType === 'github-actions-non-semver') {
+              emoji = '🔒';
+              title = 'GitHub Actions reference update requires manual review';
+              reason = 'This Dependabot PR updates a GitHub Actions workflow reference pinned to a commit SHA.\n\n' +
+                       'Dependabot does not expose a semver `update-type` for this update shape, so the auto-merge policy treats it as manual review only.\n\n' +
+                       '**Action required:**\n' +
+                       '1. Review the upstream workflow or action diff\n' +
+                       '2. Verify the pinned commit is expected\n' +
+                       '3. Merge manually after verification';
+            } else if (updateType === 'metadata-unavailable') {
               emoji = '❓';
-              title = 'Could not determine update type';
-              reason = 'The PR title format could not be parsed.\n\n' +
-                       'Expected format: `Bump package from X.Y.Z to A.B.C`\n\n' +
+              title = 'Dependabot metadata did not include an update type';
+              reason = 'The Dependabot metadata action did not return a semver update classification for this PR.\n\n' +
+                       'Please review manually.';
+            } else if (updateType === 'non-semver') {
+              emoji = '❓';
+              title = 'Non-semver dependency update requires manual review';
+              reason = 'Dependabot reported a non-semver update classification for this PR.\n\n' +
                        'Please review manually.';
             } else {
               emoji = '🔍';
