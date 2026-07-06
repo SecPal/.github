@@ -7,6 +7,7 @@
 # For implementation details, see:
 # .github/workflows/reusable-dependabot-auto-merge.yml
 
+---
 name: Dependabot Auto-Merge
 
 on:
