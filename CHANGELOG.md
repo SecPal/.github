@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Clean Up Dependabot Workflow yamllint Warnings
+
+**Fixed:**
+
+- added YAML document start markers and wrapped overlong strings in the reusable and caller Dependabot auto-merge workflows so `yamllint` no longer reports style-noise warnings for those files
+
+---
+
 ## 2026-07-05 - Fix Polyscope Preview Workspace Bootstrap
 
 **Fixed:**

@@ -7,6 +7,7 @@
 # For implementation details, see:
 # .github/workflows/reusable-dependabot-auto-merge.yml
 
+---
 name: Dependabot Auto-Merge
 
 on:
@@ -36,5 +37,7 @@ jobs:
     timeout-minutes: 10
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
     with:
-      phase: "1" # Phase 1: Only PATCH updates auto-merge
-      merge-method: "squash" # Use squash merge for cleaner history
+      # Phase 1: Only PATCH updates auto-merge
+      phase: "1"
+      # Use squash merge for cleaner history
+      merge-method: "squash"
