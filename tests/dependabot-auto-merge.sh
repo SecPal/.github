@@ -22,9 +22,7 @@ for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
     echo "Expected workflow was not found: $workflow" >&2
     exit 1
   fi
-done
 
-for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   marker_count="$(grep -c '^---$' "$workflow")"
   if [ "$marker_count" -ne 1 ]; then
     echo "Dependabot workflows must contain exactly one YAML document marker: $workflow" >&2
@@ -53,6 +51,15 @@ fi
 
 if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
   echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
+  exit 1
+fi
+
+if ! awk '
+  /^---$/ { document_start_markers++ }
+  /^----+$/ { malformed_document_markers++ }
+  END { exit !(document_start_markers == 1 && malformed_document_markers == 0) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must contain exactly one valid YAML document start marker." >&2
   exit 1
 fi
 
@@ -97,10 +104,16 @@ grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-
   exit 1
 }
 
-# Reusable-workflow caller jobs cannot declare timeout-minutes alongside uses:.
-# GitHub rejects that combination at workflow-parse time before any job starts.
-if grep -q '^    timeout-minutes:' "$CALLER_WORKFLOW"; then
-  echo "Dependabot caller workflow must not set timeout-minutes on a reusable-workflow uses job." >&2
+if awk '
+  /^  auto-merge:$/ { in_job = 1; next }
+  in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@v1$/ {
+    reusable_job = 1
+  }
+  in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
+  END { exit !(reusable_job && has_timeout) }
+' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not set timeout-minutes on a reusable workflow caller job." >&2
   exit 1
 fi
 
@@ -108,7 +121,6 @@ grep -q 'Reusable-workflow caller jobs that use `jobs\.<job_id>\.uses` cannot se
   echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
   exit 1
 }
-
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.
@@ -117,8 +129,102 @@ grep -q "^    if: github.event.pull_request.user.login == 'dependabot\\[bot\\]'$
   exit 1
 }
 
-grep -q "needs.check-eligibility.outputs.should-auto-merge != 'true' && github.event.pull_request.user.login == 'dependabot\\[bot\\]'" "$REUSABLE_WORKFLOW" || {
+awk '
+  /^  skip-auto-merge:$/ { in_job = 1; next }
+  in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+  in_job && /needs\.check-eligibility\.outputs\.should-auto-merge != '\''true'\''/ { has_output_guard = 1 }
+  in_job && /github\.event\.pull_request\.user\.login == '\''dependabot\[bot\]'\''/ { has_author_guard = 1 }
+  END { exit !(has_output_guard && has_author_guard) }
+' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must gate skip-auto-merge on github.event.pull_request.user.login so maintainer-triggered events on Dependabot PRs still receive the manual-review comment." >&2
+  exit 1
+}
+
+grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
+  exit 1
+}
+
+grep -q '^        continue-on-error: true$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must soft-fail fetch-metadata into the manual-review path." >&2
+  exit 1
+}
+
+if grep -q '^          skip-verification: true$' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must not bypass fetch-metadata commit verification." >&2
+  exit 1
+fi
+
+grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow usage example must show callers pinning the workflow to @v1." >&2
+  exit 1
+}
+
+grep -Fq '          METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must surface the fetch-metadata step outcome." >&2
+  exit 1
+}
+
+grep -Fq '          DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must surface the dependency-group metadata output." >&2
+  exit 1
+}
+
+grep -Fq '          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must surface the maintainer-changes metadata output." >&2
+  exit 1
+}
+
+grep -Fq '          PR_TITLE: ${{ github.event.pull_request.title }}' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must expose the PR title for the metadata-empty fallback path." >&2
+  exit 1
+}
+
+grep -Fq 'Fallback to PR title parsing only when fetch-metadata returns empty outputs' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must document the metadata-empty title fallback boundary." >&2
+  exit 1
+}
+
+# Keep every metadata-empty GitHub Actions update on manual review, even when
+# the PR title still looks semver-shaped. Title parsing is only allowed for
+# non-GitHub-Actions ecosystems with empty fetch-metadata outputs.
+grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must restrict the metadata-empty PR title fallback to non-GitHub-Actions ecosystems." >&2
+  exit 1
+}
+
+grep -Fq 'if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must fail closed when Dependabot metadata reports maintainer changes." >&2
+  exit 1
+}
+
+grep -Fq 'if [[ "${METADATA_STEP_OUTCOME}" != "success" ]]; then' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must fail closed when fetch-metadata itself cannot verify the PR." >&2
+  exit 1
+}
+
+grep -Fq 'echo "update-type=maintainer-changes" >> "${GITHUB_OUTPUT}"' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must classify maintainer-changed Dependabot PRs for manual review." >&2
+  exit 1
+}
+
+grep -Fq '[[ -n "${DEPENDENCY_GROUP}" || "${DEPENDENCY_NAMES}" == *,* ]]' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must detect grouped Dependabot PRs conservatively." >&2
+  exit 1
+}
+
+grep -Fq 'echo "update-type=grouped-update" >> "${GITHUB_OUTPUT}"' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must classify grouped Dependabot PRs for manual review." >&2
+  exit 1
+}
+
+if grep -Fq 'Eligible for auto-merge (Phase 3): MAJOR' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must not auto-merge major updates in any phase." >&2
+  exit 1
+fi
+
+grep -q 'MAJOR semver update requires manual review' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must route major updates to manual review." >&2
   exit 1
 }
 

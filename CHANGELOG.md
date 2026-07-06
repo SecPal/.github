@@ -9,6 +9,32 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-06 - Restrict GitHub Actions Dependabot Fallback
+
+**Fixed:**
+
+- limited the metadata-empty PR-title fallback in `.github/workflows/reusable-dependabot-auto-merge.yml` to non-`github-actions` ecosystems so GitHub Actions bumps with incomplete `fetch-metadata` version outputs stay on manual review instead of being auto-merged from semver-shaped titles
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow ever re-enables PR-title fallback for metadata-empty `github-actions` Dependabot updates
+
+---
+
+## 2026-07-06 - Fix Dependabot Auto-Merge Classification
+
+**Fixed:**
+
+- replaced PR-title parsing in `.github/workflows/reusable-dependabot-auto-merge.yml` with official `dependabot/fetch-metadata` outputs so Dependabot auto-merge decisions now follow GitHub-provided update metadata instead of brittle `Bump ... from ... to ...` title strings
+- classified GitHub Actions workflow-reference bumps pinned to commit SHAs as explicit manual-review updates, avoiding false `unparseable` failures when Dependabot opens PRs such as `chore(deps): Bump ... from <sha> to <sha>`
+- aligned the reusable workflow's Phase 3 behavior with Dependabot policy by keeping major version updates on manual review in every phase
+- updated `dependabot/fetch-metadata` to the upstream `v3.1.0` commit so the reusable workflow picks up the null `update-type` fix for Python, Composer, and Terraform Dependabot PRs instead of misrouting those updates to manual review
+- restored a bounded PR-title semver fallback for non-`github-actions` ecosystems when `fetch-metadata` still returns empty outputs, preserving patch/minor auto-merge behavior for repositories hit by upstream null-`update-type` gaps
+- kept `dependabot/fetch-metadata` verification enabled while soft-failing metadata retrieval into explicit manual review, so maintainer-touched or otherwise unverifiable Dependabot PRs no longer bypass commit validation or strand the workflow in a hard failure state
+- fail-closed grouped Dependabot PRs to manual review because the upstream `update-type` output only reports the highest semver change for the group, which is not sufficient proof that every dependency in the PR is semver-safe to auto-merge
+- removed invalid caller-workflow `timeout-minutes` syntax from the reusable Dependabot workflow invocation while retaining timeouts inside the called workflow jobs
+- fixed the caller workflow to contain only one YAML document start marker and updated the reusable workflow's header example to show callers pinning to `@v1`
+- extended `tests/dependabot-auto-merge.sh` to fail if the reusable workflow regresses on the bounded metadata-empty title fallback, drifts off the pinned `fetch-metadata` fix, stops fail-closing grouped or maintainer-changed Dependabot PRs, reintroduces duplicate or malformed caller document markers, or drifts back to `@main` in the usage example
+
+---
+
 ## 2026-07-06 - Harden Polyscope Preview Rollout
 
 **Fixed:**
