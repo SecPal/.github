@@ -708,6 +708,9 @@ grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
+grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
+grep -qF '"command": "php artisan schedule:work"' "$workspace_root/api/polyscope.local.json"
+grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
     exit 1
@@ -1489,6 +1492,150 @@ probe_result = subprocess.run(
 assert "VITE_API_URL=https://api-azure-cheetah.preview.secpal.dev" in probe_result.stdout, probe_result.stdout
 PY
 
+# Provisioned worktrees must keep their original preview slug even when the
+# physical workspace directory is renamed later.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import json
+import pathlib
+import sqlite3
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "renamed-provisioned-workspace-fixture"
+db_path = fixture / "polyscope.db"
+original_alias = fixture / "clones" / "api12345" / "bubbly-salmon"
+renamed_worktree = fixture / "clones" / "api12345" / "fix-db-password-check"
+renamed_worktree.mkdir(parents=True, exist_ok=True)
+renamed_worktree.joinpath(".polyscope-secpal-provisioned.json").write_text(
+    json.dumps(
+        {
+            "repo": "api",
+            "workspace": "bubbly-salmon",
+            "physical_workspace": "bubbly-salmon",
+            "setup_hash": "fixture",
+            "provisioned_at": "2026-07-06T00:00:00+00:00",
+        }
+    )
+)
+
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        """
+        create table worktrees (
+            id text primary key,
+            repo_id text not null,
+            branch text not null,
+            path text not null,
+            created_at text default (datetime('now')) not null
+        )
+        """
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
+        ("api-worktree", "api12345", "fix-db-password-check", str(renamed_worktree)),
+    )
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+workspace_name = module.resolve_current_workspace_name(renamed_worktree, db_path=db_path)
+assert workspace_name == "bubbly-salmon", workspace_name
+preview_updates = module.build_api_preview_env_updates(workspace_name)
+assert preview_updates["APP_URL"] == "https://api-bubbly-salmon.preview.secpal.dev", preview_updates
+
+module.ensure_workspace_alias(renamed_worktree, db_path=db_path)
+assert original_alias.is_symlink(), original_alias
+assert original_alias.resolve() == renamed_worktree.resolve(), original_alias.resolve()
+PY
+
+# Linked-workspace resolution and generated callable preview URLs must keep the
+# original provisioned slug after a linked worktree directory rename.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import json
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "renamed-linked-workspace-fixture"
+db_path = fixture / "polyscope.db"
+frontend_worktree = fixture / "clones" / "fe123456" / "inspect-session-check"
+renamed_api_worktree = fixture / "clones" / "api12345" / "fix-db-password-check"
+frontend_worktree.mkdir(parents=True, exist_ok=True)
+renamed_api_worktree.mkdir(parents=True, exist_ok=True)
+renamed_api_worktree.joinpath(".polyscope-secpal-provisioned.json").write_text(
+    json.dumps(
+        {
+            "repo": "api",
+            "workspace": "bubbly-salmon",
+            "physical_workspace": "bubbly-salmon",
+            "setup_hash": "fixture",
+            "provisioned_at": "2026-07-06T00:00:00+00:00",
+        }
+    )
+)
+frontend_worktree.joinpath(".env.local").write_text("VITE_API_URL=https://api.secpal.dev\n")
+
+with sqlite3.connect(db_path) as connection:
+    connection.executescript(
+        """
+        create table repositories (id text primary key, name text not null, path text not null);
+        create table worktrees (id text primary key, repo_id text not null, path text not null, created_at text default (datetime('now')) not null);
+        create table worktree_links (worktree_id text not null, linked_worktree_id text not null, created_at text default (datetime('now')) not null);
+        """
+    )
+    connection.executemany(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        [
+            ("api12345", "SecPal/api", str(fixture / "source-api")),
+            ("fe123456", "SecPal/frontend", str(fixture / "source-frontend")),
+        ],
+    )
+    connection.executemany(
+        "insert into worktrees (id, repo_id, path) values (?, ?, ?)",
+        [
+            ("frontend-worktree", "fe123456", str(frontend_worktree)),
+            ("api-worktree", "api12345", str(renamed_api_worktree)),
+        ],
+    )
+    connection.execute(
+        "insert into worktree_links (worktree_id, linked_worktree_id) values (?, ?)",
+        ("frontend-worktree", "api-worktree"),
+    )
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+linked_api_workspace = module.resolve_linked_workspace_name(
+    frontend_worktree,
+    "SecPal/api",
+    db_path=db_path,
+)
+assert linked_api_workspace == "bubbly-salmon", linked_api_workspace
+
+env = os.environ.copy()
+env["POLYSCOPE_DB_PATH"] = str(db_path)
+subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_frontend_preview_env_setup_command()],
+    cwd=frontend_worktree,
+    env=env,
+    check=True,
+)
+frontend_env = frontend_worktree.joinpath(".env.local").read_text()
+assert "VITE_API_URL=https://api-bubbly-salmon.preview.secpal.dev" in frontend_env, frontend_env
+assert "fix-db-password-check" not in frontend_env, frontend_env
+PY
+
 # Legacy hash-suffixed worktree directory names must not leak into preview hostnames
 # when the Polyscope DB and git branch are unavailable.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -1714,9 +1861,9 @@ updated = module.upsert_env_assignments(
 assert r"DB_PASSWORD=secret\path\1" in updated, updated
 PY
 
-# ensure_api_worktree_ready must use a source-only PostgreSQL password
-# transiently for preview database provisioning without persisting it into the
-# generated worktree .env.
+# ensure_api_worktree_ready must use a source-only PostgreSQL password for
+# preview database provisioning and persist it into the generated worktree .env
+# so follow-up artisan and psql calls stay self-contained.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -1772,12 +1919,11 @@ assert calls == [
     ("create", "source-only-password", "secpal", "secpal__preview__quiet_bear"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
-assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
 PY
 
-# ensure_api_worktree_ready must not persist a source-only PostgreSQL password
-# into schema-mode DB_URL values when the role cannot create databases.
+# ensure_api_worktree_ready must persist a source-only PostgreSQL password for
+# schema-mode previews without leaking it into DB_URL values.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -1833,7 +1979,7 @@ assert calls == [
     ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
 assert "source-only-password@" not in worktree_env, worktree_env
 assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
 PY

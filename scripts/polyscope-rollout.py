@@ -142,6 +142,30 @@ def resolve_workspace_name_fallback(worktree_path: pathlib.Path) -> str:
     return resolve_workspace_name_from_path(worktree_path)
 
 
+def resolve_workspace_name_from_marker(worktree_path: pathlib.Path) -> str | None:
+    marker = load_provision_marker(worktree_path / PROVISION_MARKER_FILENAME)
+    if marker is None:
+        return None
+
+    workspace = marker.get("workspace")
+    if not isinstance(workspace, str):
+        return None
+
+    workspace = workspace.strip()
+    if not workspace:
+        return None
+
+    return workspace
+
+
+def resolve_stable_workspace_name(worktree_path: pathlib.Path) -> str:
+    marker_workspace = resolve_workspace_name_from_marker(worktree_path)
+    if marker_workspace is not None:
+        return marker_workspace
+
+    return resolve_workspace_name_from_path(worktree_path)
+
+
 def find_current_worktree_record(
     connection: sqlite3.Connection,
     worktree_path: pathlib.Path,
@@ -171,6 +195,21 @@ def find_current_worktree_record(
 
 
 def resolve_current_workspace_name(worktree_path: pathlib.Path, *, db_path: pathlib.Path | None = None) -> str:
+    marker_workspace = resolve_workspace_name_from_marker(worktree_path)
+    if marker_workspace is not None:
+        return marker_workspace
+
+    resolved_db_path = db_path or default_polyscope_db_path()
+    if resolved_db_path.exists():
+        try:
+            with sqlite3.connect(resolved_db_path) as connection:
+                current_worktree = find_current_worktree_record(connection, worktree_path)
+        except sqlite3.Error:
+            current_worktree = None
+
+        if current_worktree is not None and isinstance(current_worktree[1], str) and current_worktree[1].strip():
+            return resolve_stable_workspace_name(pathlib.Path(current_worktree[1]))
+
     return resolve_workspace_name_fallback(worktree_path)
 
 
@@ -210,7 +249,7 @@ def resolve_linked_workspace_name(
     if row is None:
         return None
 
-    return resolve_workspace_name_from_path(pathlib.Path(row[0]))
+    return resolve_stable_workspace_name(pathlib.Path(row[0]))
 
 
 def collect_linked_setup_context(
@@ -246,7 +285,7 @@ def collect_linked_setup_context(
 
     context: dict[str, str] = {}
     for repo_name, linked_path in rows:
-        workspace_name = resolve_workspace_name_from_path(pathlib.Path(linked_path))
+        workspace_name = resolve_stable_workspace_name(pathlib.Path(linked_path))
         context.setdefault(repo_name, workspace_name)
 
     return context
@@ -257,6 +296,7 @@ def build_linked_workspace_resolver_source() -> str:
         """
         from pathlib import Path
         import hashlib
+        import json
         import os
         import re
         import sqlite3
@@ -354,7 +394,52 @@ def build_linked_workspace_resolver_source() -> str:
         def resolve_workspace_fallback(fallback):
             return resolve_workspace_name_from_path(Path(fallback))
 
+        def load_provision_marker(marker_path):
+            if not marker_path.exists():
+                return None
+            try:
+                marker = json.loads(marker_path.read_text())
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(marker, dict):
+                return None
+            return marker
+
+        def resolve_workspace_name_from_marker(worktree_path):
+            marker = load_provision_marker(worktree_path / ".polyscope-secpal-provisioned.json")
+            if marker is None:
+                return None
+            workspace = marker.get("workspace")
+            if not isinstance(workspace, str):
+                return None
+            workspace = workspace.strip()
+            if not workspace:
+                return None
+            return workspace
+
+        def resolve_stable_workspace_name(worktree_path):
+            marker_workspace = resolve_workspace_name_from_marker(worktree_path)
+            if marker_workspace is not None:
+                return marker_workspace
+            return resolve_workspace_name_from_path(worktree_path)
+
         def resolve_current_workspace(fallback):
+            marker_workspace = resolve_workspace_name_from_marker(Path(fallback))
+            if marker_workspace is not None:
+                return marker_workspace
+            db_path = os.environ.get(
+                "POLYSCOPE_DB_PATH",
+                str(Path.home() / ".polyscope" / "polyscope.db"),
+            )
+            try:
+                with sqlite3.connect(db_path) as connection:
+                    current_worktree = find_current_worktree(connection)
+            except sqlite3.Error:
+                current_worktree = None
+
+            if current_worktree is not None and isinstance(current_worktree[1], str) and current_worktree[1].strip():
+                return resolve_stable_workspace_name(Path(current_worktree[1]))
+
             return resolve_workspace_fallback(fallback)
 
         def resolve_linked_workspace(linked_repo_name, fallback):
@@ -387,7 +472,7 @@ def build_linked_workspace_resolver_source() -> str:
             if row is None:
                 return fallback
 
-            return resolve_workspace_name_from_path(Path(row[0]))
+            return resolve_stable_workspace_name(Path(row[0]))
         """
     ).strip()
 
@@ -556,9 +641,21 @@ def build_postgres_command_env(env_values: dict[str, str]) -> dict[str, str]:
 
 
 def run_postgres_command(env_values: dict[str, str], database_name: str, sql: str) -> str:
+    command = ["psql", "-v", "ON_ERROR_STOP=1"]
+    host = env_values.get("DB_HOST", "").strip()
+    port = env_values.get("DB_PORT", "").strip()
+    username = env_values.get("DB_USERNAME", "").strip()
+    if host:
+        command.extend(["-h", host])
+    if port:
+        command.extend(["-p", port])
+    if username:
+        command.extend(["-U", username])
+    command.extend(["-d", database_name, "-Atqc", sql])
+
     try:
         result = subprocess.run(
-            ["psql", "-v", "ON_ERROR_STOP=1", "-d", database_name, "-Atqc", sql],
+            command,
             check=True,
             capture_output=True,
             text=True,
@@ -819,6 +916,12 @@ def ensure_api_worktree_ready(
         frontend_workspace,
         worktree_path=worktree_path,
     )
+    if (
+        env_values.get("DB_CONNECTION", "").strip().lower() == "pgsql"
+        and not env_values.get("DB_PASSWORD", "").strip()
+        and runtime_env_values.get("DB_PASSWORD", "").strip()
+    ):
+        updated_values["DB_PASSWORD"] = runtime_env_values["DB_PASSWORD"]
     if not env_values.get("APP_KEY", "").strip():
         updated_values["APP_KEY"] = generate_laravel_app_key()
 
@@ -1912,6 +2015,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 ],
                 "run": [
                     {"label": "Queue Worker", "command": "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600", "runMode": "replace"},
+                    {"label": "Scheduler", "command": "php artisan schedule:work", "autostart": True, "runMode": "replace"},
                     {"label": "Pail", "command": "php artisan pail --timeout=0", "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
                     # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.

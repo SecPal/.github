@@ -1854,3 +1854,5 @@ This is the foundational release establishing:
 - [Issue #37](https://github.com/SecPal/.github/issues/37): Dependabot check frequency (daily vs weekly)
 - [Issue #38](https://github.com/SecPal/.github/issues/38): AGPL-3.0-or-later license strategy review
 - [Issue #39](https://github.com/SecPal/.github/issues/39): TDD mandatory policy vs exploration exceptions
+- made generated API `polyscope.local.json` configs start a dedicated `php artisan schedule:work` background run action automatically, so preview API workspaces keep Laravel scheduler tasks running without manual startup
+- fixed Polyscope preview workspace resolution so displayed preview URLs and callable linked-workspace preview hosts stay pinned to the original provisioned workspace slug even after later workspace-path renames
