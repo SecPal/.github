@@ -158,14 +158,7 @@ if grep -Fq '"sh -c '\''deploy \"\$1\"'\'' deploy $REMOTE_REPO_NAME"' "$REUSABLE
 fi
 
 simulate_remote_allowlist() {
-  case "$1" in
-    "deploy 'shiny-pelican'"|"deploy 'shiny'\\'' pelican; echo bad'")
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  printf '%s\n' "$1" | grep -Eq "^deploy '([^']|'\\\\''*)+'$"
 }
 
 if ! simulate_remote_allowlist "deploy 'shiny-pelican'"; then
