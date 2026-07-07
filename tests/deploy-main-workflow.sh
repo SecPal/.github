@@ -147,23 +147,22 @@ grep -Fq 'REMOTE_REPO_NAME="$(quote_remote_word "$REPO_NAME")"' "$REUSABLE_WORKF
   exit 1
 }
 
-grep -Fq '"sh -c '\''deploy \"\$1\"'\'' deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable deploy workflow must pass the repository name as a positional argument without using a login shell." >&2
+grep -Fq '"deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable deploy workflow must invoke the remote deploy wrapper directly with the quoted repository name." >&2
   exit 1
 }
 
-if grep -Fq '"sh -lc '\''deploy \"\$1\"'\'' deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW"; then
-  echo "Reusable deploy workflow must not use sh -lc for the remote deploy command." >&2
+if grep -Fq '"sh -c '\''deploy \"\$1\"'\'' deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable deploy workflow must not wrap the remote deploy command in sh -c." >&2
   exit 1
 fi
 
-remote_output="$(
-  env -i PATH="/usr/bin:/bin" \
-    sh -c "sh -c 'printf \"argc=%s arg1=%s\\n\" \"\$#\" \"\$1\"' deploy 'shiny-pelican'"
-)"
+simulate_remote_allowlist() {
+  printf '%s\n' "$1" | grep -Eq "^deploy '([^']|'\\\\''*)+'$"
+}
 
-if [ "$remote_output" != 'argc=1 arg1=shiny-pelican' ]; then
-  echo "Reusable deploy workflow remote command must pass exactly one repository argument." >&2
+if ! simulate_remote_allowlist "deploy 'shiny-pelican'"; then
+  echo "Reusable deploy workflow remote command must match the VPS deploy allowlist shape." >&2
   exit 1
 fi
 
@@ -172,13 +171,8 @@ quote_remote_word() {
 }
 
 quoted_repo_name="$(quote_remote_word "shiny' pelican; echo bad")"
-quoted_remote_output="$(
-  env -i PATH="/usr/bin:/bin" \
-    sh -c "sh -c 'printf \"argc=%s arg1=%s\\n\" \"\$#\" \"\$1\"' deploy $quoted_repo_name"
-)"
-
-if [ "$quoted_remote_output" != "argc=1 arg1=shiny' pelican; echo bad" ]; then
-  echo "Reusable deploy workflow remote repository-name quoting must preserve one argument." >&2
+if ! simulate_remote_allowlist "deploy $quoted_repo_name"; then
+  echo "Reusable deploy workflow remote repository-name quoting must preserve the direct deploy allowlist shape." >&2
   exit 1
 fi
 
