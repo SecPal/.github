@@ -137,42 +137,47 @@ grep -Fq 'trap '\''rm -f ~/.ssh/vps_key ~/.ssh/known_hosts'\'' EXIT' "$REUSABLE_
   exit 1
 }
 
-grep -Fq 'quote_remote_word() {' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable deploy workflow must shell-quote the repository name for the remote shell." >&2
+if grep -Fq 'quote_remote_word() {' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable deploy workflow must not shell-quote the repository name into SSH_ORIGINAL_COMMAND." >&2
+  exit 1
+fi
+
+if grep -Fq 'REMOTE_REPO_NAME=' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable deploy workflow must not build a separately quoted remote repository name." >&2
+  exit 1
+fi
+
+grep -Fq 'grep -Eq '\''^[A-Za-z0-9._-]+$'\''' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable deploy workflow must validate the repository name before the direct deploy invocation." >&2
   exit 1
 }
 
-grep -Fq 'REMOTE_REPO_NAME="$(quote_remote_word "$REPO_NAME")"' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable deploy workflow must prepare a shell-quoted repository name." >&2
+grep -Fq '"deploy $REPO_NAME"' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable deploy workflow must invoke the remote deploy wrapper directly with the validated repository name." >&2
   exit 1
 }
 
-grep -Fq '"deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable deploy workflow must invoke the remote deploy wrapper directly with the quoted repository name." >&2
+if grep -Fq '"deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable deploy workflow must not quote the repository name into the direct deploy command." >&2
   exit 1
-}
+fi
 
 if grep -Fq '"sh -c '\''deploy \"\$1\"'\'' deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW"; then
   echo "Reusable deploy workflow must not wrap the remote deploy command in sh -c." >&2
   exit 1
 fi
 
-simulate_remote_allowlist() {
-  printf '%s\n' "$1" | grep -Eq "^deploy '([^']|'\\\\''*)+'$"
+repo_name_is_safe() {
+  printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9._-]+$'
 }
 
-if ! simulate_remote_allowlist "deploy 'shiny-pelican'"; then
-  echo "Reusable deploy workflow remote command must match the VPS deploy allowlist shape." >&2
+if ! repo_name_is_safe '.github'; then
+  echo "Reusable deploy workflow must allow repository names that match the VPS deploy contract." >&2
   exit 1
 fi
 
-quote_remote_word() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
-
-quoted_repo_name="$(quote_remote_word "shiny' pelican; echo bad")"
-if ! simulate_remote_allowlist "deploy $quoted_repo_name"; then
-  echo "Reusable deploy workflow remote repository-name quoting must preserve the direct deploy allowlist shape." >&2
+if repo_name_is_safe "shiny' pelican; echo bad"; then
+  echo "Reusable deploy workflow must reject repository names that are unsafe for direct deploy invocation." >&2
   exit 1
 fi
 

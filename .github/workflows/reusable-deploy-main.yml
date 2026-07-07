@@ -51,11 +51,10 @@ jobs:
           printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-          quote_remote_word() {
-            printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-          }
-
-          REMOTE_REPO_NAME="$(quote_remote_word "$REPO_NAME")"
+          if ! printf '%s\n' "$REPO_NAME" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "Repository name is unsafe for direct deploy invocation: $REPO_NAME" >&2
+            exit 1
+          fi
 
           ssh \
             -i ~/.ssh/vps_key \
@@ -63,4 +62,4 @@ jobs:
             -o UserKnownHostsFile=~/.ssh/known_hosts \
             -p "$VPS_PORT" \
             "$VPS_USER@$VPS_HOST" \
-            "deploy $REMOTE_REPO_NAME"
+            "deploy $REPO_NAME"
