@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-07 - Fix Direct Deploy Repo Name Validation
+
+**Fixed:**
+
+- removed shell-style quoting from `.github/workflows/reusable-deploy-main.yml` when calling the VPS `deploy <repo>` wrapper, because the forced command receives those quotes literally and rejects names such as `'.github'` as invalid
+- validated `github.event.repository.name` locally against the deploy host's allowed `^[A-Za-z0-9._-]+$` contract before invoking the direct `deploy <repo>` command
+- updated `tests/deploy-main-workflow.sh` so regression coverage now checks direct validated repo-name handoff instead of shell-quoted wrapper arguments
+
+---
+
 ## 2026-07-07 - Fix VPS Deploy Wrapper Command
 
 **Fixed:**
