@@ -13,8 +13,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Added:**
 
-- added `.github/workflows/deploy-main.yml` to deploy the pushed `main` branch repository to a VPS via the remote `deploy <repo>` command, with exact least-privilege permissions, job timeout coverage, SSH host verification, queued per-repository concurrency, and shell-quoted repository-name handoff
-- added `tests/deploy-main-workflow.sh` and wired it into `scripts/preflight.sh` so future edits keep the workflow contract for headers, exact permissions, timeout, guarded SSH handling, queued deployment concurrency, and safe repository-name handoff under regression coverage
+- added `.github/workflows/deploy-main.yml` as the repo-local caller and `.github/workflows/reusable-deploy-main.yml` as the reusable VPS deploy workflow, so deployable repositories can invoke the same guarded `deploy <repo>` flow through `workflow_call`
+- kept the reusable deploy command on a non-login `sh -c` path with exact least-privilege permissions, job timeout coverage, SSH host verification, queued per-repository concurrency, declared workflow-call secrets, and shell-quoted repository-name handoff
+- added `tests/deploy-main-workflow.sh` and wired it into `scripts/preflight.sh` so future edits keep the caller and reusable workflow contract for headers, permissions, timeout coverage, reusable invocation, guarded SSH handling, queued deployment concurrency, and safe repository-name handoff under regression coverage
 
 ---
 

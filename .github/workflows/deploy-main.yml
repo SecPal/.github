@@ -12,47 +12,7 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-main-${{ github.event.repository.name }}
-  cancel-in-progress: false
-
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Deploy repository on VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
-          REPO_NAME: ${{ github.event.repository.name }}
-        run: |
-          set -euo pipefail
-          trap 'rm -f ~/.ssh/vps_key ~/.ssh/known_hosts' EXIT
-
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/vps_key
-          chmod 600 ~/.ssh/vps_key
-
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-
-          quote_remote_word() {
-            printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-          }
-
-          REMOTE_REPO_NAME="$(quote_remote_word "$REPO_NAME")"
-
-          ssh \
-            -i ~/.ssh/vps_key \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile=~/.ssh/known_hosts \
-            -p "$VPS_PORT" \
-            "$VPS_USER@$VPS_HOST" \
-            "sh -lc 'deploy \"\$1\"' deploy $REMOTE_REPO_NAME"
+    uses: SecPal/.github/.github/workflows/reusable-deploy-main.yml@main
+    secrets: inherit
