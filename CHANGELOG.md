@@ -9,6 +9,36 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-07 - Fix Direct Deploy Repo Name Validation
+
+**Fixed:**
+
+- removed shell-style quoting from `.github/workflows/reusable-deploy-main.yml` when calling the VPS `deploy <repo>` wrapper, because the forced command receives those quotes literally and rejects names such as `'.github'` as invalid
+- validated `github.event.repository.name` locally against the deploy host's allowed `^[A-Za-z0-9._-]+$` contract before invoking the direct `deploy <repo>` command
+- updated `tests/deploy-main-workflow.sh` so regression coverage now checks direct validated repo-name handoff instead of shell-quoted wrapper arguments
+
+---
+
+## 2026-07-07 - Fix VPS Deploy Wrapper Command
+
+**Fixed:**
+
+- changed `.github/workflows/reusable-deploy-main.yml` to call the VPS wrapper on its allowed direct `deploy <repo>` path instead of wrapping the remote command in `sh -c`, which the production deploy host rejects with `Command not allowed`
+- updated `tests/deploy-main-workflow.sh` so regression coverage now checks the direct deploy-wrapper command shape and preserves quoted repository-name handoff without relying on a shell-wrapper simulation that the VPS does not allow
+
+---
+
+## 2026-07-07 - Add Main-Branch VPS Deploy Workflow
+
+**Added:**
+
+- added `.github/workflows/deploy-main.yml` as the repo-local caller and `.github/workflows/reusable-deploy-main.yml` as the reusable VPS deploy workflow, so deployable repositories can invoke the same guarded `deploy <repo>` flow through `workflow_call`
+- kept the reusable deploy command on the VPS wrapper's direct `deploy <repo>` path with exact least-privilege permissions, explicit empty reusable token permissions, SSH host verification, queued per-repository concurrency, declared workflow-call secrets, and shell-quoted repository-name handoff
+- mapped only the five required `VPS_*` secrets from the caller workflow into the reusable deploy workflow instead of inheriting every caller secret
+- added `tests/deploy-main-workflow.sh` and wired it into `scripts/preflight.sh` so future edits keep the caller and reusable workflow contract for headers, permissions, timeout coverage, explicit secret mapping, reusable invocation, direct deploy-wrapper compatibility, queued deployment concurrency, and safe repository-name handoff under regression coverage
+
+---
+
 ## 2026-07-07 - Stabilize Polyscope API Runtime Credentials
 
 **Fixed:**
