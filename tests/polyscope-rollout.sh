@@ -2241,7 +2241,7 @@ assert calls == [
     (
         "execvpe",
         "bash",
-        ("bash", "-lc", "set -euo pipefail; exec php artisan schedule:work"),
+        ("bash", "-c", "set -euo pipefail; exec php artisan schedule:work"),
         "source-only-password",
         "source-only-password",
         str(db_path),

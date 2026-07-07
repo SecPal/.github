@@ -1087,7 +1087,7 @@ def run_api_worktree_shell_command(
         command_env["POLYSCOPE_DB_PATH"] = str(db_path)
 
     os.chdir(worktree_path)
-    os.execvpe("bash", ["bash", "-lc", f"set -euo pipefail; exec {shell_command}"], command_env)
+    os.execvpe("bash", ["bash", "-c", f"set -euo pipefail; exec {shell_command}"], command_env)
 
 
 def cleanup_removed_api_preview_databases(
