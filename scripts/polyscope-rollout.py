@@ -58,6 +58,19 @@ MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
 NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
 API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
 API_REFRESH_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_REFRESH__"
+API_QUEUE_WORKER_COMMAND = (
+    "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default "
+    "--sleep=3 --tries=3 --max-time=3600"
+)
+API_SCHEDULER_COMMAND = "php artisan schedule:work"
+API_PAIL_COMMAND = "php artisan pail --timeout=0"
+API_RUNTIME_PREVIEW_COMMANDS = frozenset(
+    {
+        API_QUEUE_WORKER_COMMAND,
+        API_SCHEDULER_COMMAND,
+        API_PAIL_COMMAND,
+    }
+)
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -495,6 +508,16 @@ def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
     return (
         f"python3 {rollout_script} --prepare-api-worktree \"$PWD\" "
         f"--source-repo-path {source_repo}"
+    )
+
+
+def build_api_preview_runtime_shell_command(command: str, source_repo_path: pathlib.Path) -> str:
+    rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
+    source_repo = shlex.quote(str(source_repo_path))
+    shell_command = shlex.quote(command)
+    return (
+        f"python3 {rollout_script} --run-api-worktree \"$PWD\" "
+        f"--source-repo-path {source_repo} --shell-command {shell_command}"
     )
 
 
@@ -1044,6 +1067,27 @@ def refresh_api_worktree(
         migration_command=["php", "artisan", "migrate:fresh", "--force"],
         migration_label="refreshing database",
     )
+
+
+def run_api_worktree_shell_command(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    shell_command: str,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> None:
+    env_path = worktree_path / ".env"
+    if not env_path.exists():
+        raise SystemExit(f"api worktree {worktree_path} is missing .env")
+
+    env_values = load_env_assignments(env_path)
+    source_env_values = load_optional_env_assignments(source_repo_path / ".env")
+    command_env = build_api_worktree_command_env(env_values, source_env_values)
+    if db_path is not None:
+        command_env["POLYSCOPE_DB_PATH"] = str(db_path)
+
+    os.chdir(worktree_path)
+    os.execvpe("bash", ["bash", "-lc", f"set -euo pipefail; exec {shell_command}"], command_env)
 
 
 def cleanup_removed_api_preview_databases(
@@ -2016,9 +2060,9 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
-                    {"label": "Queue Worker", "command": "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600", "runMode": "replace"},
-                    {"label": "Scheduler", "command": "php artisan schedule:work", "autostart": True, "runMode": "replace"},
-                    {"label": "Pail", "command": "php artisan pail --timeout=0", "runMode": "replace"},
+                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "runMode": "replace"},
+                    {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": True, "runMode": "replace"},
+                    {"label": "Pail", "command": API_PAIL_COMMAND, "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
                     # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.
                     {
@@ -2572,6 +2616,9 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
             for run_action in spec["local_config"]["scripts"]["run"]:
                 if run_action.get("command") == API_REFRESH_COMMAND_PLACEHOLDER:
                     run_action["command"] = build_api_preview_refresh_command(repo_path)
+                    continue
+                if run_action.get("command") in API_RUNTIME_PREVIEW_COMMANDS:
+                    run_action["command"] = build_api_preview_runtime_shell_command(run_action["command"], repo_path)
         repo_specs[repo_name] = spec
     return repo_specs
 
@@ -3868,7 +3915,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
     parser.add_argument("--bootstrap-api-worktree", type=pathlib.Path)
     parser.add_argument("--refresh-api-worktree", type=pathlib.Path)
+    parser.add_argument("--run-api-worktree", type=pathlib.Path)
     parser.add_argument("--source-repo-path", type=pathlib.Path)
+    parser.add_argument("--shell-command")
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
     parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
@@ -3925,6 +3974,19 @@ def main() -> int:
             db_path=args.db_path,
         )
         return 0 if ready else 1
+
+    if args.run_api_worktree is not None:
+        if args.source_repo_path is None:
+            raise SystemExit("--source-repo-path is required with --run-api-worktree")
+        if not args.shell_command:
+            raise SystemExit("--shell-command is required with --run-api-worktree")
+        run_api_worktree_shell_command(
+            args.run_api_worktree,
+            args.source_repo_path,
+            args.shell_command,
+            db_path=args.db_path,
+        )
+        return 0
 
     repo_specs = build_repo_specs(args.workspace_root)
 

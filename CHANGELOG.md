@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-07 - Stabilize Polyscope API Runtime Credentials
+
+**Fixed:**
+
+- routed generated API preview run actions for `queue:work`, `schedule:work`, and `pail` through `scripts/polyscope-rollout.py`, so long-running preview processes now inherit the same transient PostgreSQL password injection already used during bootstrap and refresh
+- made the API runtime wrapper hand off to the long-running artisan process with `exec`, avoiding stale child processes when Polyscope replaces or stops preview run actions
+- extended `tests/polyscope-rollout.sh` to fail if API runtime commands ever regress to direct artisan invocations without the rollout wrapper, depend on display labels for wrapping, keep a parent wrapper process alive, or stop propagating transient `DB_PASSWORD` and `PGPASSWORD` values into those long-running preview processes
+
+---
+
 ## 2026-07-06 - Restrict GitHub Actions Dependabot Fallback
 
 **Fixed:**

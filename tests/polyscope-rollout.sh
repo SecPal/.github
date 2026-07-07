@@ -707,14 +707,42 @@ grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polys
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
-grep -qF 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600' "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600'" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
-grep -qF '"command": "php artisan schedule:work"' "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan schedule:work'" "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan pail --timeout=0'" "$workspace_root/api/polyscope.local.json"
 grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
     exit 1
 fi
+if grep -qF '"command": "php artisan schedule:work"' "$workspace_root/api/polyscope.local.json"; then
+    echo "preview API scheduler must run through the rollout runtime env wrapper" >&2
+    exit 1
+fi
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace_root"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace_root = pathlib.Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+api_run_actions = module.REPO_SETTINGS["api"]["local_config"]["scripts"]["run"]
+api_run_actions[0]["label"] = "Background Queue"
+api_run_actions[1]["label"] = "Cron Loop"
+api_run_actions[2]["label"] = "Log Tail"
+api_spec = module.build_repo_specs(workspace_root)["api"]
+runtime_commands = [
+    action["command"]
+    for action in api_spec["local_config"]["scripts"]["run"][:3]
+]
+assert all("--run-api-worktree" in command for command in runtime_commands), runtime_commands
+PY
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --refresh-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "All Checks"' "$workspace_root/api/polyscope.local.json"
@@ -2137,6 +2165,86 @@ assert calls == [
         api_worktree,
         "source-only-password",
         "source-only-password",
+    ),
+], calls
+PY
+
+# run_api_worktree_shell_command must reuse the transient runtime DB password
+# injection for long-running preview actions such as the queue worker and scheduler.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "run-transient-pgsql-password-fixture" / "source-api"
+api_worktree = workspace / "run-transient-pgsql-password-fixture" / "clones" / "api12345" / "steady-hawk"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__steady_hawk\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-only-password\n"
+)
+api_worktree.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__steady_hawk\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_chdir(cwd):
+    calls.append(("chdir", cwd))
+
+def fake_execvpe(file, args, env):
+    calls.append(
+        (
+            "execvpe",
+            file,
+            tuple(args),
+            env["DB_PASSWORD"],
+            env["PGPASSWORD"],
+            env["POLYSCOPE_DB_PATH"],
+        )
+    )
+    raise SystemExit(0)
+
+module.os.chdir = fake_chdir
+module.os.execvpe = fake_execvpe
+
+db_path = workspace / "runtime-polyscope.db"
+try:
+    module.run_api_worktree_shell_command(
+        api_worktree,
+        source_api,
+        "php artisan schedule:work",
+        db_path=db_path,
+    )
+except SystemExit as error:
+    assert error.code == 0, error
+
+assert calls == [
+    ("chdir", api_worktree),
+    (
+        "execvpe",
+        "bash",
+        ("bash", "-lc", "set -euo pipefail; exec php artisan schedule:work"),
+        "source-only-password",
+        "source-only-password",
+        str(db_path),
     ),
 ], calls
 PY
