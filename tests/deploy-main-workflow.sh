@@ -59,6 +59,12 @@ if [ "$permissions_block" != "$expected_permissions_block" ]; then
   exit 1
 fi
 
+reusable_permissions_line="$(awk '/^permissions:/ { print; exit }' "$REUSABLE_WORKFLOW")"
+if [ "$reusable_permissions_line" != 'permissions: {}' ]; then
+  echo "Reusable deploy workflow must declare explicit empty token permissions." >&2
+  exit 1
+fi
+
 grep -q '^      - main$' "$CALLER_WORKFLOW" || {
   echo "Deploy caller workflow must trigger on pushes to main." >&2
   exit 1
@@ -84,10 +90,17 @@ grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-deploy-main\.yml
   exit 1
 }
 
-grep -q '^    secrets: inherit$' "$CALLER_WORKFLOW" || {
-  echo "Deploy caller workflow must inherit secrets into the reusable deploy workflow." >&2
+if grep -q '^    secrets: inherit$' "$CALLER_WORKFLOW"; then
+  echo "Deploy caller workflow must not inherit every caller secret into the reusable deploy workflow." >&2
   exit 1
-}
+fi
+
+for secret_name in VPS_HOST VPS_PORT VPS_USER VPS_SSH_KEY VPS_KNOWN_HOSTS; do
+  grep -q "^      ${secret_name}: \${{ secrets\.${secret_name} }}$" "$CALLER_WORKFLOW" || {
+    echo "Deploy caller workflow must map ${secret_name} explicitly into the reusable deploy workflow." >&2
+    exit 1
+  }
+done
 
 if awk '
   /^  deploy:$/ { in_job = 1; next }

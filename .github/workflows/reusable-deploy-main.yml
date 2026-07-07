@@ -18,6 +18,8 @@ on:
       VPS_KNOWN_HOSTS:
         required: true
 
+permissions: {}
+
 concurrency:
   group: deploy-main-${{ github.event.repository.name }}
   cancel-in-progress: false
