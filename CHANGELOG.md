@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-07 - Add Main-Branch VPS Deploy Workflow
+
+**Added:**
+
+- added `.github/workflows/deploy-main.yml` to deploy the pushed `main` branch repository to a VPS via the remote `deploy <repo>` command, with exact least-privilege permissions, job timeout coverage, SSH host verification, queued per-repository concurrency, and shell-quoted repository-name handoff
+- added `tests/deploy-main-workflow.sh` and wired it into `scripts/preflight.sh` so future edits keep the workflow contract for headers, exact permissions, timeout, guarded SSH handling, queued deployment concurrency, and safe repository-name handoff under regression coverage
+
+---
+
 ## 2026-07-06 - Restrict GitHub Actions Dependabot Fallback
 
 **Fixed:**
