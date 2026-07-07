@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-07 - Add Main-Branch VPS Deploy Workflow
+
+**Added:**
+
+- added `.github/workflows/deploy-main.yml` as the repo-local caller and `.github/workflows/reusable-deploy-main.yml` as the reusable VPS deploy workflow, so deployable repositories can invoke the same guarded `deploy <repo>` flow through `workflow_call`
+- kept the reusable deploy command on a non-login `sh -c` path with exact least-privilege permissions, explicit empty reusable token permissions, SSH host verification, queued per-repository concurrency, declared workflow-call secrets, and shell-quoted repository-name handoff
+- mapped only the five required `VPS_*` secrets from the caller workflow into the reusable deploy workflow instead of inheriting every caller secret
+- added `tests/deploy-main-workflow.sh` and wired it into `scripts/preflight.sh` so future edits keep the caller and reusable workflow contract for headers, permissions, timeout coverage, explicit secret mapping, reusable invocation, guarded SSH handling, queued deployment concurrency, and safe repository-name handoff under regression coverage
+
+---
+
 ## 2026-07-06 - Restrict GitHub Actions Dependabot Fallback
 
 **Fixed:**
