@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-08 - Trigger Provisioning On SQLite WAL Writes
+
+**Fixed:**
+
+- updated `scripts/install-polyscope-rollout.sh` so the installed `polyscope-worktree-provision.path` watches `~/.polyscope/polyscope.db-wal` with `PathModified=`, ensuring fresh workspace creation triggers automatic SecPal worktree provisioning on WAL appends instead of waiting for the SQLite writer to close `polyscope.db`
+- extended `tests/polyscope-rollout.sh` to fail if the installed `polyscope-worktree-provision.path` ever drops the `PathModified=` watch for `polyscope.db-wal`
+
+---
+
 ## 2026-07-07 - Fix Direct Deploy Repo Name Validation
 
 **Fixed:**
