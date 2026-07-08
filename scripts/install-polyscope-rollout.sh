@@ -339,10 +339,11 @@ Description=Provision SecPal Polyscope worktrees automatically
 After=polyscope-rollout-sync.service
 # Bound the self-trigger feedback loop: DB sync writes to polyscope.db which is
 # watched by the paired path unit; without a burst cap this can re-trigger the
-# service until systemd rate-limits the unit.  Three starts per five minutes is
-# enough to handle normal provisioning while preventing runaway activation.
+# service until systemd rate-limits the unit. Five starts per five minutes
+# leaves room for the three-minute fallback timer plus real workspace events
+# without letting the provisioning loop run away indefinitely.
 StartLimitIntervalSec=300
-StartLimitBurst=3
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -404,9 +405,9 @@ else
 fi
 
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
+"$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
-"$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $EXPOSE_WRAPPER_TARGET"
