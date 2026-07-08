@@ -15,6 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - updated `scripts/install-polyscope-rollout.sh` so the installed `polyscope-worktree-provision.path` watches `~/.polyscope/polyscope.db-wal` with `PathModified=`, ensuring fresh workspace creation triggers automatic SecPal worktree provisioning on WAL appends instead of waiting for the SQLite writer to close `polyscope.db`
 - also watched `$POLYSCOPE_CLONE_ROOT` with `PathModified=` and installed a three-minute `polyscope-worktree-provision.timer` fallback so nested workspace-directory creation under existing repository clone roots is still provisioned when the non-recursive path unit cannot observe it directly
+- stopped explicitly starting `polyscope-worktree-provision.service` during installation so the newly enabled timer and path units do not immediately stack duplicate provisioning runs on already-booted machines
 - extended `tests/polyscope-rollout.sh` to fail if the installed `polyscope-worktree-provision.path` ever drops either the `polyscope.db-wal` or clone-root provisioning watches, or if the timer fallback is not installed and enabled
 
 ---

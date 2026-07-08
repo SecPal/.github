@@ -407,7 +407,6 @@ fi
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
-"$SYSTEMCTL_BIN" --user start polyscope-worktree-provision.service
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $EXPOSE_WRAPPER_TARGET"

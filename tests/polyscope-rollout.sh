@@ -4180,8 +4180,12 @@ grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log
 grep -q '^--user daemon-reload$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
+grep -q '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log"
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
-grep -q '^--user start polyscope-worktree-provision.service$' "$system_systemctl_log"
+if grep -q '^--user start polyscope-worktree-provision.service$' "$system_systemctl_log"; then
+  echo "system-scope install must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
+  exit 1
+fi
 
 system_fallback_dropin_dir="$workspace/system-fallback-service-units/polyscope-server.service.d"
 mkdir -p "$system_fallback_dropin_dir"
@@ -4239,7 +4243,10 @@ grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
-grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"
+if grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"; then
+  echo "installer must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
+  exit 1
+fi
 
 # installer must refuse when system scope is detected but sudo is unavailable
 no_sudo_home_dir="$workspace/no-sudo-home"
