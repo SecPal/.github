@@ -360,7 +360,7 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 
 [Path]
 PathChanged=$HOME/.polyscope/polyscope.db
-PathChanged=$HOME/.polyscope/polyscope.db-wal
+PathModified=$HOME/.polyscope/polyscope.db-wal
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
