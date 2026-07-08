@@ -17,6 +17,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - also watched `$POLYSCOPE_CLONE_ROOT` with `PathModified=` and installed a three-minute `polyscope-worktree-provision.timer` fallback so nested workspace-directory creation under existing repository clone roots is still provisioned when the non-recursive path unit cannot observe it directly
 - stopped explicitly starting `polyscope-worktree-provision.service` during installation so the newly enabled timer and path units do not immediately stack duplicate provisioning runs on already-booted machines
 - moved the provision path/timer activation until after the initial rollout sync and raised the provisioning burst budget to five starts per five minutes, preventing the three-minute fallback timer from consuming nearly all rate-limit headroom for real workspace events
+- switched the fallback timer's first trigger from `OnBootSec=30s` to `OnStartupSec=30s`, so user-manager restarts do not treat the initial delay as already elapsed and race provisioning against the first rollout sync
 - extended `tests/polyscope-rollout.sh` to fail if the installed `polyscope-worktree-provision.path` ever drops either the `polyscope.db-wal` or clone-root provisioning watches, or if the timer fallback is not installed and enabled
 
 ---

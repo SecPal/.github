@@ -384,7 +384,7 @@ cat >"$PROVISION_TIMER_UNIT" <<EOF
 Description=Poll SecPal Polyscope worktrees for provisioning fallback
 
 [Timer]
-OnBootSec=30s
+OnStartupSec=30s
 OnUnitActiveSec=3min
 Persistent=true
 

@@ -4233,7 +4233,7 @@ grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktre
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitBurst=5' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q '^OnBootSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
+grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
