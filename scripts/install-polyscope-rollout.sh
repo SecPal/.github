@@ -72,6 +72,7 @@ SERVICE_UNIT="$UNIT_DIR/polyscope-rollout-sync.service"
 PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
 PROVISION_SERVICE_UNIT="$UNIT_DIR/polyscope-worktree-provision.service"
 PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
+PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
 ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
@@ -361,6 +362,7 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 [Path]
 PathChanged=$HOME/.polyscope/polyscope.db
 PathModified=$HOME/.polyscope/polyscope.db-wal
+PathModified=$POLYSCOPE_CLONE_ROOT
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
@@ -372,6 +374,21 @@ PathChanged=$WORKSPACE_ROOT/.github/polyscope.local.json
 
 [Install]
 WantedBy=default.target
+EOF
+
+cat >"$PROVISION_TIMER_UNIT" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Poll SecPal Polyscope worktrees for provisioning fallback
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 EOF
 
 "$SYSTEMCTL_BIN" --user daemon-reload
@@ -388,6 +405,7 @@ fi
 
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
+"$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
 "$SYSTEMCTL_BIN" --user start polyscope-worktree-provision.service
 
@@ -401,3 +419,4 @@ echo "Installed $SERVICE_UNIT"
 echo "Installed $PATH_UNIT"
 echo "Installed $PROVISION_SERVICE_UNIT"
 echo "Installed $PROVISION_PATH_UNIT"
+echo "Installed $PROVISION_TIMER_UNIT"
