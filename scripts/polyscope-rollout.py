@@ -30,6 +30,9 @@ PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
+PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE"
+PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE_SHA256"
+PREVIEW_DB_PASSWORD_SOURCE_VALUE = "source"
 PREVIEW_SCHEMA_ENV_KEY = "POLYSCOPE_PREVIEW_SCHEMA"
 PREVIEW_STORAGE_MODE_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_MODE"
 POSTGRES_PREVIEW_DATABASE_SEPARATOR = "__preview__"
@@ -524,7 +527,10 @@ def build_api_preview_runtime_shell_command(command: str, source_repo_path: path
 def decode_env_value(raw_value: str) -> str:
     value = raw_value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
-        return value[1:-1]
+        inner_value = value[1:-1]
+        if value[0] == "\"":
+            return inner_value.replace("\\\"", "\"").replace("\\\\", "\\")
+        return inner_value
     return value
 
 
@@ -793,6 +799,69 @@ def load_optional_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
     return load_env_assignments(env_path)
 
 
+def build_db_password_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def is_source_managed_db_password(
+    worktree_env_values: dict[str, str],
+    source_env_values: dict[str, str],
+) -> bool:
+    if worktree_env_values.get("DB_CONNECTION", "").strip().lower() != "pgsql":
+        return False
+
+    worktree_db_password = worktree_env_values.get("DB_PASSWORD", "").strip()
+    if not worktree_db_password:
+        return True
+
+    if (
+        worktree_env_values.get(PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY, "").strip()
+        != PREVIEW_DB_PASSWORD_SOURCE_VALUE
+    ):
+        return False
+
+    recorded_source_hash = worktree_env_values.get(
+        PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY,
+        "",
+    ).strip()
+    if recorded_source_hash:
+        return recorded_source_hash == build_db_password_sha256(worktree_db_password)
+
+    source_db_password = source_env_values.get("DB_PASSWORD", "").strip()
+    return bool(source_db_password) and worktree_db_password == source_db_password
+
+
+def build_source_db_password_tracking_updates(
+    worktree_env_values: dict[str, str],
+    source_env_values: dict[str, str],
+) -> dict[str, str]:
+    if is_source_managed_db_password(worktree_env_values, source_env_values):
+        source_db_password = source_env_values.get("DB_PASSWORD", "").strip()
+        if source_db_password:
+            return {
+                PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY: PREVIEW_DB_PASSWORD_SOURCE_VALUE,
+                PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY: build_db_password_sha256(source_db_password),
+            }
+        return {
+            PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY: "",
+            PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY: "",
+        }
+
+    if any(
+        worktree_env_values.get(key, "").strip()
+        for key in (
+            PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY,
+            PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY,
+        )
+    ):
+        return {
+            PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY: "",
+            PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY: "",
+        }
+
+    return {}
+
+
 def build_api_preview_env_updates(
     workspace: str,
     frontend_workspace: str | None = None,
@@ -846,13 +915,8 @@ def build_api_worktree_runtime_env(
     source_env_values: dict[str, str],
 ) -> dict[str, str]:
     runtime_env_values = dict(worktree_env_values)
-    if (
-        runtime_env_values.get("DB_CONNECTION", "").strip().lower() == "pgsql"
-        and not runtime_env_values.get("DB_PASSWORD", "").strip()
-    ):
-        source_db_password = source_env_values.get("DB_PASSWORD", "").strip()
-        if source_db_password:
-            runtime_env_values["DB_PASSWORD"] = source_db_password
+    if is_source_managed_db_password(worktree_env_values, source_env_values):
+        runtime_env_values["DB_PASSWORD"] = source_env_values.get("DB_PASSWORD", "").strip()
     return runtime_env_values
 
 
@@ -945,6 +1009,14 @@ def ensure_api_worktree_ready(
         updated_values["APP_KEY"] = generate_laravel_app_key()
 
     if env_values.get("DB_CONNECTION", "").lower() == "pgsql":
+        if (
+            env_values.get("DB_PASSWORD", "").strip()
+            != runtime_env_values.get("DB_PASSWORD", "").strip()
+        ):
+            updated_values["DB_PASSWORD"] = runtime_env_values["DB_PASSWORD"]
+        updated_values.update(
+            build_source_db_password_tracking_updates(env_values, source_env_values)
+        )
         base_database = resolve_base_database_name(runtime_env_values, workspace)
         if not base_database:
             raise SystemExit(f"api worktree {worktree_path} is missing DB_DATABASE in .env")
@@ -1060,6 +1132,13 @@ def refresh_api_worktree(
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
+    ready, preview_storage_target = ensure_api_worktree_ready(
+        worktree_path,
+        source_repo_path,
+        db_path=db_path,
+    )
+    if not ready:
+        return ready, preview_storage_target
     return bootstrap_api_worktree(
         worktree_path,
         source_repo_path,
