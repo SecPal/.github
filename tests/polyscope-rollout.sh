@@ -1946,12 +1946,13 @@ PY
 
 # upsert_env_assignments must preserve backslashes in replacement values instead
 # of letting re.sub interpret them as replacement escapes.
-python3 -B - <<'PY' "$PYTHON_SCRIPT"
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
 import sys
 
 script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
 spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -1962,6 +1963,11 @@ updated = module.upsert_env_assignments(
     {"DB_PASSWORD": r"secret\path\1"},
 )
 assert r"DB_PASSWORD=secret\path\1" in updated, updated
+
+round_trip_path = workspace / "roundtrip.env"
+round_trip_path.write_text('DB_PASSWORD="secret\\\\path\\\\1 #\\"quoted\\""\n')
+round_trip = module.load_env_assignments(round_trip_path)
+assert round_trip["DB_PASSWORD"] == 'secret\\path\\1 #"quoted"', round_trip
 PY
 
 # ensure_api_worktree_ready must persist the PostgreSQL password into preview
@@ -2044,6 +2050,71 @@ assert calls == [
 worktree_env = api_worktree.joinpath(".env").read_text()
 assert "DB_PASSWORD=rotated-source-password" in worktree_env, worktree_env
 assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+PY
+
+# ensure_api_worktree_ready must preserve source-managed PostgreSQL passwords
+# that require quoted env encoding across later reruns.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "escaped-pgsql-password-fixture" / "source-api"
+api_worktree = workspace / "escaped-pgsql-password-fixture" / "clones" / "api12345" / "quiet-bear"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_password = 'secret\\path\\1 #"quoted"'
+escaped_source_password = source_password.replace("\\", "\\\\").replace('"', '\\"')
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    f'DB_PASSWORD="{escaped_source_password}"\n'
+)
+api_worktree.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_postgres_role_can_create_databases(env_values, base_database):
+    calls.append(("role", env_values["DB_PASSWORD"], base_database))
+    return True
+
+def fake_ensure_postgres_preview_database(env_values, base_database, preview_database):
+    calls.append(("create", env_values["DB_PASSWORD"], base_database, preview_database))
+
+module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
+module.ensure_postgres_preview_database = fake_ensure_postgres_preview_database
+
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+assert calls == [
+    ("role", source_password, "secpal"),
+    ("create", source_password, "secpal", "secpal__preview__quiet_bear"),
+    ("role", source_password, "secpal"),
+    ("create", source_password, "secpal", "secpal__preview__quiet_bear"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert 'DB_PASSWORD="secret\\\\path\\\\1 #\\"quoted\\""' in worktree_env, worktree_env
 PY
 
 # ensure_api_worktree_ready must not overwrite an explicitly configured

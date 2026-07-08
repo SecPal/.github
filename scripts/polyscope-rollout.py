@@ -527,7 +527,10 @@ def build_api_preview_runtime_shell_command(command: str, source_repo_path: path
 def decode_env_value(raw_value: str) -> str:
     value = raw_value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
-        return value[1:-1]
+        inner_value = value[1:-1]
+        if value[0] == "\"":
+            return inner_value.replace("\\\"", "\"").replace("\\\\", "\\")
+        return inner_value
     return value
 
 
