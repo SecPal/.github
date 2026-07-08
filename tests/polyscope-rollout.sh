@@ -1964,9 +1964,10 @@ updated = module.upsert_env_assignments(
 assert r"DB_PASSWORD=secret\path\1" in updated, updated
 PY
 
-# ensure_api_worktree_ready must use a source-only PostgreSQL password
-# transiently for preview database provisioning without persisting it into the
-# generated worktree .env.
+# ensure_api_worktree_ready must persist the PostgreSQL password into preview
+# API worktree .env files so PHP-FPM runtime requests can connect after
+# provisioning, while still using that same password during preview database
+# provisioning.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -2022,12 +2023,90 @@ assert calls == [
     ("create", "source-only-password", "secpal", "secpal__preview__quiet_bear"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
+
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=rotated-source-password\n"
+)
+calls.clear()
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+assert calls == [
+    ("role", "rotated-source-password", "secpal"),
+    ("create", "rotated-source-password", "secpal", "secpal__preview__quiet_bear"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=rotated-source-password" in worktree_env, worktree_env
 assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
-assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
 PY
 
-# ensure_api_worktree_ready must not persist a source-only PostgreSQL password
-# into schema-mode preview .env values or DB_URL values.
+# ensure_api_worktree_ready must not overwrite an explicitly configured
+# worktree PostgreSQL password with the source checkout password.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "explicit-pgsql-password-fixture" / "source-api"
+api_worktree = workspace / "explicit-pgsql-password-fixture" / "clones" / "api12345" / "quiet-bear"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=source-password\n"
+)
+api_worktree.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=worktree-password\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+
+def fake_postgres_role_can_create_databases(env_values, base_database):
+    calls.append(("role", env_values["DB_PASSWORD"], base_database))
+    return True
+
+def fake_ensure_postgres_preview_database(env_values, base_database, preview_database):
+    calls.append(("create", env_values["DB_PASSWORD"], base_database, preview_database))
+
+module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
+module.ensure_postgres_preview_database = fake_ensure_postgres_preview_database
+
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__quiet_bear", target
+assert calls == [
+    ("role", "worktree-password", "secpal"),
+    ("create", "worktree-password", "secpal", "secpal__preview__quiet_bear"),
+], calls
+worktree_env = api_worktree.joinpath(".env").read_text()
+assert "DB_PASSWORD=worktree-password" in worktree_env, worktree_env
+assert "DB_PASSWORD=source-password" not in worktree_env, worktree_env
+PY
+
+# ensure_api_worktree_ready must persist the PostgreSQL password into schema-mode
+# preview .env values without leaking it through generated DB_URL values.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -2083,8 +2162,7 @@ assert calls == [
     ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
-assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
 assert "source-only-password@" not in worktree_env, worktree_env
 assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
 
@@ -2097,8 +2175,7 @@ assert calls == [
     ("schema", "source-only-password", "secpal", "secpal__preview__careful_otter"),
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
-assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
-assert "DB_PASSWORD=\n" in worktree_env or worktree_env.endswith("DB_PASSWORD="), worktree_env
+assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
 assert "source-only-password@" not in worktree_env, worktree_env
 assert "DB_URL=postgresql://secpal_app@127.0.0.1:5432/secpal?search_path=secpal__preview__careful_otter" in worktree_env, worktree_env
 PY
