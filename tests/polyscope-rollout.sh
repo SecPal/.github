@@ -4179,9 +4179,21 @@ grep -q '^restart polyscope-server.service$' "$system_systemctl_log"
 grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log"
 grep -q '^--user daemon-reload$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
-grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
-grep -q '^--user start polyscope-worktree-provision.service$' "$system_systemctl_log"
+grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
+grep -q '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log"
+if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
+  echo "system-scope install must finish the initial sync before enabling the provision path watcher" >&2
+  exit 1
+fi
+if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
+  echo "system-scope install must finish the initial sync before enabling the provision timer" >&2
+  exit 1
+fi
+if grep -q '^--user start polyscope-worktree-provision.service$' "$system_systemctl_log"; then
+  echo "system-scope install must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
+  exit 1
+fi
 
 system_fallback_dropin_dir="$workspace/system-fallback-service-units/polyscope-server.service.d"
 mkdir -p "$system_fallback_dropin_dir"
@@ -4219,22 +4231,38 @@ grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'StartLimitBurst=3' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'StartLimitBurst=5' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
+grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
+grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathModified=.*/\.polyscope/polyscope\.db-wal$' "$fake_unit_dir/polyscope-worktree-provision.path"
+grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
-grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
-grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"
+grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
+grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
+if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
+  echo "installer must finish the initial sync before enabling the provision path watcher" >&2
+  exit 1
+fi
+if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
+  echo "installer must finish the initial sync before enabling the provision timer" >&2
+  exit 1
+fi
+if grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"; then
+  echo "installer must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
+  exit 1
+fi
 
 # installer must refuse when system scope is detected but sudo is unavailable
 no_sudo_home_dir="$workspace/no-sudo-home"

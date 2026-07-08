@@ -72,6 +72,7 @@ SERVICE_UNIT="$UNIT_DIR/polyscope-rollout-sync.service"
 PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
 PROVISION_SERVICE_UNIT="$UNIT_DIR/polyscope-worktree-provision.service"
 PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
+PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
 ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
@@ -338,10 +339,11 @@ Description=Provision SecPal Polyscope worktrees automatically
 After=polyscope-rollout-sync.service
 # Bound the self-trigger feedback loop: DB sync writes to polyscope.db which is
 # watched by the paired path unit; without a burst cap this can re-trigger the
-# service until systemd rate-limits the unit.  Three starts per five minutes is
-# enough to handle normal provisioning while preventing runaway activation.
+# service until systemd rate-limits the unit. Five starts per five minutes
+# leaves room for the three-minute fallback timer plus real workspace events
+# without letting the provisioning loop run away indefinitely.
 StartLimitIntervalSec=300
-StartLimitBurst=3
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -361,6 +363,7 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 [Path]
 PathChanged=$HOME/.polyscope/polyscope.db
 PathModified=$HOME/.polyscope/polyscope.db-wal
+PathModified=$POLYSCOPE_CLONE_ROOT
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
@@ -372,6 +375,21 @@ PathChanged=$WORKSPACE_ROOT/.github/polyscope.local.json
 
 [Install]
 WantedBy=default.target
+EOF
+
+cat >"$PROVISION_TIMER_UNIT" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Poll SecPal Polyscope worktrees for provisioning fallback
+
+[Timer]
+OnStartupSec=30s
+OnUnitActiveSec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 EOF
 
 "$SYSTEMCTL_BIN" --user daemon-reload
@@ -387,9 +405,9 @@ else
 fi
 
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
-"$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
-"$SYSTEMCTL_BIN" --user start polyscope-worktree-provision.service
+"$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
+"$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $EXPOSE_WRAPPER_TARGET"
@@ -401,3 +419,4 @@ echo "Installed $SERVICE_UNIT"
 echo "Installed $PATH_UNIT"
 echo "Installed $PROVISION_SERVICE_UNIT"
 echo "Installed $PROVISION_PATH_UNIT"
+echo "Installed $PROVISION_TIMER_UNIT"
