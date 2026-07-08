@@ -14,6 +14,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - persisted source PostgreSQL `DB_PASSWORD` values back into generated API preview worktree `.env` files during `ensure_api_worktree_ready()` and refreshed them after source password rotation, so PHP-FPM runtime requests no longer fail with `fe_sendauth: no password supplied` after otherwise successful preview provisioning
+- tracked source-managed preview passwords with a hash snapshot so manual worktree `DB_PASSWORD` overrides are preserved, source-password removals clear stale preview secrets, and `refresh_api_worktree()` repairs existing `.env` files before rerunning artisan refresh steps
 - kept schema-mode preview `DB_URL` values password-free while still persisting `DB_PASSWORD` separately in the worktree `.env`, avoiding credential leaks in connection URLs
 - updated `scripts/install-polyscope-rollout.sh` so the installed `polyscope-worktree-provision.path` watches `~/.polyscope/polyscope.db-wal` with `PathModified=`, ensuring fresh workspace creation triggers automatic SecPal worktree provisioning on WAL appends instead of waiting for the SQLite writer to close `polyscope.db`
 - also watched `$POLYSCOPE_CLONE_ROOT` with `PathModified=` and installed a three-minute `polyscope-worktree-provision.timer` fallback so nested workspace-directory creation under existing repository clone roots is still provisioned when the non-recursive path unit cannot observe it directly
