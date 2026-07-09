@@ -20,6 +20,7 @@ REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.y
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
+ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -65,6 +66,11 @@ fi
 
 if [ ! -f "$WORKFLOW_CATALOG_README" ]; then
   echo "Expected workflow catalog README was not found: $WORKFLOW_CATALOG_README" >&2
+  exit 1
+fi
+
+if [ ! -f "$ROLLOUT_GUIDE" ]; then
+  echo "Expected rollout guide was not found: $ROLLOUT_GUIDE" >&2
   exit 1
 fi
 
@@ -211,6 +217,26 @@ fi
 
 grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
   echo "Workflow catalog README must document trusted commit SHA pinning for reusable workflows." >&2
+  exit 1
+}
+
+if grep -q '@main' "$ROLLOUT_GUIDE"; then
+  echo "Rollout guide must not tell cross-repository consumers to track moving @main refs." >&2
+  exit 1
+fi
+
+if grep -q '@v1\.0\.0' "$ROLLOUT_GUIDE"; then
+  echo "Rollout guide must not steer cross-repository consumers to stale release tags." >&2
+  exit 1
+fi
+
+grep -q '@<trusted-commit-sha>' "$ROLLOUT_GUIDE" || {
+  echo "Rollout guide must document trusted commit SHA pinning for reusable workflows." >&2
+  exit 1
+}
+
+grep -q '^# SPDX-FileCopyrightText: 2025-2026 SecPal$' "$REPO_ROOT/.github/workflows/quality.yml" || {
+  echo "Quality workflow SPDX year must stay current when the file is edited." >&2
   exit 1
 }
 
