@@ -201,8 +201,10 @@ Applies when editing GitHub Actions workflows, Dependabot configs, and YAML conf
 - Consume them via:
 
   ```yaml
-  uses: SecPal/.github/.github/workflows/reusable-<name>.yml@main
+  uses: SecPal/.github/.github/workflows/reusable-<name>.yml@<trusted-commit-sha>
   ```
+
+- For cross-repository callers, prefer a reviewed immutable commit SHA over a branch ref. A moving branch or stale tag can silently change or preserve behavior outside the caller's own change set.
 
 - Check `EXAMPLE_workflow_for_other_repos.yml` for reference patterns before writing a new workflow
 
