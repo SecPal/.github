@@ -1,3 +1,4 @@
+---
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
@@ -65,8 +66,10 @@ jobs:
               EXCLUDE_REGEX=$(echo "$EXCLUDE_PATTERNS" | tr '\n' '|' | sed 's/|$//')
 
               # NOTE: The regex validation logic below is duplicated from scripts/preflight.sh.
-              # This duplication is necessary because GitHub Actions workflows cannot reliably source external shell scripts.
-              # If you update the validation logic here, you MUST also update scripts/preflight.sh to keep them in sync.
+              # This duplication is necessary because GitHub Actions workflows
+              # cannot reliably source external shell scripts.
+              # If you update the validation logic here, you MUST also update
+              # scripts/preflight.sh to keep them in sync.
 
               # Validate regex and warn about dangerous patterns
               # grep exit codes: 0=match, 1=no match, 2=error (invalid regex)
@@ -153,7 +156,8 @@ jobs:
           if [ "$CHANGED" -gt "$MAX_LINES" ]; then
             echo "::error::PR too large ($CHANGED > $MAX_LINES lines). Please split into smaller changes."
             echo "Tip: Lock files and license files are excluded via .preflight-exclude"
-            echo "For legitimate large PRs (e.g., boilerplate templates), request the 'large-pr-approved' label from a maintainer."
+            echo "For legitimate large PRs (e.g., boilerplate templates),"
+            echo "request the 'large-pr-approved' label from a maintainer."
             exit 1
           fi
 

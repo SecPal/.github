@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-09 - Clean Up Repository-Wide yamllint Warnings
+
+**Fixed:**
+
+- added YAML document start markers across the warned GitHub workflow files, refreshed touched SPDX year headers, and wrapped overlong workflow command and script lines so `yamllint .github/workflows/` now completes without repository-wide warning noise
+- kept the repository lint policy explicit by adding a document start marker to `.yamllint.yml` itself instead of leaving YAML style drift as ad hoc warning output
+
+---
+
 ## 2026-07-09 - Remove Dependabot Auto-Merge Self-Tag Drift
 
 **Fixed:**

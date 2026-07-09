@@ -1,3 +1,4 @@
+---
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -59,4 +60,7 @@ jobs:
         run: npm ci
 
       - name: Run markdownlint
-        run: npx markdownlint --config .markdownlint.json --dot "**/*.md" --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git
+        run: >
+          npx markdownlint --config .markdownlint.json --dot "**/*.md"
+          --ignore node_modules --ignore vendor --ignore storage
+          --ignore build --ignore .git
