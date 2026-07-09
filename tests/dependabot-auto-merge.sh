@@ -18,6 +18,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
+WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -53,6 +54,11 @@ fi
 
 if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
   echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
+  exit 1
+fi
+
+if [ ! -f "$WORKFLOW_EXAMPLE" ]; then
+  echo "Expected workflow example was not found: $WORKFLOW_EXAMPLE" >&2
   exit 1
 fi
 
@@ -101,15 +107,15 @@ if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WO
   exit 1
 fi
 
-grep -q '^    uses: \./\.github/workflows/reusable-dependabot-auto-merge\.yml$' "$CALLER_WORKFLOW" || {
-  echo "Dependabot caller workflow must use the repo-local reusable workflow path so same-repo fixes do not depend on an external tag." >&2
+grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@main$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must keep auto-merge decisions on the reviewed main-branch reusable workflow." >&2
   exit 1
 }
 
 if awk '
   /^  auto-merge:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
-  in_job && /^[[:space:]]+uses: \.\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml$/ {
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@main$/ {
     reusable_job = 1
   }
   in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
@@ -171,6 +177,26 @@ if grep -qE '^[[:space:]]+uses: SecPal/\.github/\.github/workflows/reusable-depe
   echo "Dependabot caller workflow must not self-reference the reusable workflow through the stale @v1 tag." >&2
   exit 1
 fi
+
+if grep -q '^    uses: \./\.github/workflows/reusable-dependabot-auto-merge\.yml$' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not execute the reusable workflow from the PR merge commit." >&2
+  exit 1
+fi
+
+if grep -qE 'uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$' "$WORKFLOW_EXAMPLE"; then
+  echo "Workflow example must not steer cross-repository callers to moving @main refs." >&2
+  exit 1
+fi
+
+grep -q '^    uses: SecPal/\.github/\.github/workflows/project-automation-v2\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
+  echo "Workflow example must pin project automation to a trusted commit SHA." >&2
+  exit 1
+}
+
+grep -q '^    uses: SecPal/\.github/\.github/workflows/draft-pr-reminder\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
+  echo "Workflow example must pin draft PR reminder to a trusted commit SHA." >&2
+  exit 1
+}
 
 grep -Fq '          METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must surface the fetch-metadata step outcome." >&2
