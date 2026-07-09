@@ -19,6 +19,7 @@ CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
+WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -59,6 +60,11 @@ fi
 
 if [ ! -f "$WORKFLOW_EXAMPLE" ]; then
   echo "Expected workflow example was not found: $WORKFLOW_EXAMPLE" >&2
+  exit 1
+fi
+
+if [ ! -f "$WORKFLOW_CATALOG_README" ]; then
+  echo "Expected workflow catalog README was not found: $WORKFLOW_CATALOG_README" >&2
   exit 1
 fi
 
@@ -195,6 +201,16 @@ grep -q '^    uses: SecPal/\.github/\.github/workflows/project-automation-v2\.ym
 
 grep -q '^    uses: SecPal/\.github/\.github/workflows/draft-pr-reminder\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
   echo "Workflow example must pin draft PR reminder to a trusted commit SHA." >&2
+  exit 1
+}
+
+if grep -qE 'uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$' "$WORKFLOW_CATALOG_README"; then
+  echo "Workflow catalog README must not steer cross-repository callers to moving @main refs." >&2
+  exit 1
+fi
+
+grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
+  echo "Workflow catalog README must document trusted commit SHA pinning for reusable workflows." >&2
   exit 1
 }
 

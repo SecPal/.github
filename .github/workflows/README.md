@@ -1,11 +1,15 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # Reusable Workflows
 
 This directory contains reusable GitHub Actions workflows that can be used across all SecPal repositories.
+
+For cross-repository callers, pin reusable workflows to a reviewed immutable
+commit SHA such as `@<trusted-commit-sha>`. Do not copy moving branch refs such
+as `@main` into consumer repositories.
 
 ## Available Workflows
 
@@ -20,7 +24,7 @@ Checks REUSE 3.3 compliance for copyright and licensing information.
 ```yaml
 jobs:
   reuse:
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@<trusted-commit-sha>
 ```
 
 #### `reusable-license-compatibility.yml`
@@ -32,7 +36,7 @@ Checks that all licenses are compatible with AGPL-3.0-or-later.
 ```yaml
 jobs:
   license-check:
-    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@<trusted-commit-sha>
 ```
 
 #### `reusable-prettier.yml`
@@ -46,7 +50,7 @@ When a repository has a `package.json`, the workflow uses `npm ci` by default an
 ```yaml
 jobs:
   prettier:
-    uses: SecPal/.github/.github/workflows/reusable-prettier.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-prettier.yml@<trusted-commit-sha>
     with:
       node-version: "22.x" # optional, default: '22.x'
       files: "**/*.{md,yml,yaml,json}" # optional
@@ -62,7 +66,7 @@ Lints Markdown files.
 ```yaml
 jobs:
   markdown-lint:
-    uses: SecPal/.github/.github/workflows/reusable-markdown-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-markdown-lint.yml@<trusted-commit-sha>
 ```
 
 ### Frontend Workflows (Node.js/React)
@@ -76,7 +80,7 @@ Runs Node.js tests.
 ```yaml
 jobs:
   test:
-    uses: SecPal/.github/.github/workflows/reusable-node-test.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-node-test.yml@<trusted-commit-sha>
     with:
       node-version: "22.x" # optional, default: '22.x'
       install-command: "npm ci" # optional
@@ -92,7 +96,7 @@ Runs Node.js linting (ESLint).
 ```yaml
 jobs:
   lint:
-    uses: SecPal/.github/.github/workflows/reusable-node-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-node-lint.yml@<trusted-commit-sha>
     with:
       node-version: "22.x" # optional, default: '22.x'
       lint-command: "npm run lint" # optional
@@ -107,7 +111,7 @@ Builds Node.js project.
 ```yaml
 jobs:
   build:
-    uses: SecPal/.github/.github/workflows/reusable-node-build.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-node-build.yml@<trusted-commit-sha>
     with:
       node-version: "22.x" # optional, default: '22.x'
       build-command: "npm run build" # optional
@@ -124,7 +128,7 @@ Runs PHP tests with PEST.
 ```yaml
 jobs:
   test:
-    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@<trusted-commit-sha>
     with:
       php-version: "8.4" # optional, default: '8.4'
       test-command: "./vendor/bin/pest" # optional
@@ -139,7 +143,7 @@ Checks PHP code style with Laravel Pint.
 ```yaml
 jobs:
   pint:
-    uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@<trusted-commit-sha>
     with:
       php-version: "8.4" # optional, default: '8.4'
       pint-command: "./vendor/bin/pint --test" # optional
@@ -154,7 +158,7 @@ Runs static analysis with PHPStan.
 ```yaml
 jobs:
   phpstan:
-    uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@<trusted-commit-sha>
     with:
       php-version: "8.4" # optional, default: '8.4'
       phpstan-command: "./vendor/bin/phpstan analyse" # optional
@@ -173,7 +177,7 @@ When a repository has a `package.json`, the workflow uses `npm ci` by default an
 ```yaml
 jobs:
   openapi-lint:
-    uses: SecPal/.github/.github/workflows/reusable-openapi-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-openapi-lint.yml@<trusted-commit-sha>
     with:
       openapi-file: "openapi.yaml" # optional, default: 'openapi.yaml'
       node-version: "22.x" # optional, default: '22.x'
@@ -201,25 +205,25 @@ on:
 
 jobs:
   reuse:
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@<trusted-commit-sha>
 
   license-check:
-    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@<trusted-commit-sha>
 
   prettier:
-    uses: SecPal/.github/.github/workflows/reusable-prettier.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-prettier.yml@<trusted-commit-sha>
 
   markdown-lint:
-    uses: SecPal/.github/.github/workflows/reusable-markdown-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-markdown-lint.yml@<trusted-commit-sha>
 
   lint:
-    uses: SecPal/.github/.github/workflows/reusable-node-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-node-lint.yml@<trusted-commit-sha>
 
   test:
-    uses: SecPal/.github/.github/workflows/reusable-node-test.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-node-test.yml@<trusted-commit-sha>
 
   build:
-    uses: SecPal/.github/.github/workflows/reusable-node-build.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-node-build.yml@<trusted-commit-sha>
 ```
 
 ## Example: Complete CI Workflow for Backend
@@ -237,19 +241,19 @@ on:
 
 jobs:
   reuse:
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@<trusted-commit-sha>
 
   license-check:
-    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-license-compatibility.yml@<trusted-commit-sha>
 
   pint:
-    uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-php-lint.yml@<trusted-commit-sha>
 
   phpstan:
-    uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@<trusted-commit-sha>
 
   test:
-    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@<trusted-commit-sha>
 ```
 
 ### Workflow Linting
@@ -263,5 +267,5 @@ Lints GitHub Actions workflows with actionlint and shellcheck.
 ```yaml
 jobs:
   actionlint:
-    uses: SecPal/.github/.github/workflows/reusable-actionlint.yml@main
+    uses: SecPal/.github/.github/workflows/reusable-actionlint.yml@<trusted-commit-sha>
 ```
