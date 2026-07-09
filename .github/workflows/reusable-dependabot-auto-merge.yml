@@ -7,9 +7,12 @@
 # Usage in other repositories:
 #   jobs:
 #     auto-merge:
-#       uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
+#       uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@<trusted-commit-sha>
 #       with:
 #         phase: "1"  # Optional: 1 (PATCH only), 2 or 3 (PATCH+MINOR)
+#
+# For cross-repository callers, pin to a reviewed immutable commit SHA. A
+# moving branch ref or stale tag can silently preserve obsolete behavior.
 #
 # Strategy:
 #   Phase 1 (default): PATCH updates auto-merge ✅, MINOR/MAJOR require review

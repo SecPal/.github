@@ -8,6 +8,8 @@
 # author rather than the event actor so maintainer-triggered `reopened` and
 # `ready_for_review` events on Dependabot-authored PRs still enroll in
 # auto-merge.
+#
+# shellcheck disable=SC2016 # This test intentionally matches literal GitHub expressions.
 
 set -euo pipefail
 
@@ -16,6 +18,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
+WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
+WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
+ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -51,6 +56,21 @@ fi
 
 if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
   echo "Expected workflow instructions were not found: $WORKFLOW_INSTRUCTIONS" >&2
+  exit 1
+fi
+
+if [ ! -f "$WORKFLOW_EXAMPLE" ]; then
+  echo "Expected workflow example was not found: $WORKFLOW_EXAMPLE" >&2
+  exit 1
+fi
+
+if [ ! -f "$WORKFLOW_CATALOG_README" ]; then
+  echo "Expected workflow catalog README was not found: $WORKFLOW_CATALOG_README" >&2
+  exit 1
+fi
+
+if [ ! -f "$ROLLOUT_GUIDE" ]; then
+  echo "Expected rollout guide was not found: $ROLLOUT_GUIDE" >&2
   exit 1
 fi
 
@@ -99,15 +119,15 @@ if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WO
   exit 1
 fi
 
-grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$CALLER_WORKFLOW" || {
-  echo "Dependabot caller workflow must keep the reusable workflow uses line pinned to @v1." >&2
+grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@main$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must keep auto-merge decisions on the reviewed main-branch reusable workflow." >&2
   exit 1
 }
 
 if awk '
   /^  auto-merge:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
-  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@v1$/ {
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@main$/ {
     reusable_job = 1
   }
   in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
@@ -155,8 +175,68 @@ if grep -q '^          skip-verification: true$' "$REUSABLE_WORKFLOW"; then
   exit 1
 fi
 
-grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow usage example must show callers pinning the workflow to @v1." >&2
+grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@<trusted-commit-sha>$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow usage example must tell external callers to pin the workflow to a reviewed immutable commit SHA." >&2
+  exit 1
+}
+
+if grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow usage example must not steer callers back to the stale @v1 tag." >&2
+  exit 1
+fi
+
+if grep -qE '^[[:space:]]+uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not self-reference the reusable workflow through the stale @v1 tag." >&2
+  exit 1
+fi
+
+if grep -q '^    uses: \./\.github/workflows/reusable-dependabot-auto-merge\.yml$' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not execute the reusable workflow from the PR merge commit." >&2
+  exit 1
+fi
+
+if grep -qE 'uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$' "$WORKFLOW_EXAMPLE"; then
+  echo "Workflow example must not steer cross-repository callers to moving @main refs." >&2
+  exit 1
+fi
+
+grep -q '^    uses: SecPal/\.github/\.github/workflows/project-automation-v2\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
+  echo "Workflow example must pin project automation to a trusted commit SHA." >&2
+  exit 1
+}
+
+grep -q '^    uses: SecPal/\.github/\.github/workflows/draft-pr-reminder\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
+  echo "Workflow example must pin draft PR reminder to a trusted commit SHA." >&2
+  exit 1
+}
+
+if grep -qE 'uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$' "$WORKFLOW_CATALOG_README"; then
+  echo "Workflow catalog README must not steer cross-repository callers to moving @main refs." >&2
+  exit 1
+fi
+
+grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
+  echo "Workflow catalog README must document trusted commit SHA pinning for reusable workflows." >&2
+  exit 1
+}
+
+if grep -q '@main' "$ROLLOUT_GUIDE"; then
+  echo "Rollout guide must not tell cross-repository consumers to track moving @main refs." >&2
+  exit 1
+fi
+
+if grep -q '@v1\.0\.0' "$ROLLOUT_GUIDE"; then
+  echo "Rollout guide must not steer cross-repository consumers to stale release tags." >&2
+  exit 1
+fi
+
+grep -q '@<trusted-commit-sha>' "$ROLLOUT_GUIDE" || {
+  echo "Rollout guide must document trusted commit SHA pinning for reusable workflows." >&2
+  exit 1
+}
+
+grep -q '^# SPDX-FileCopyrightText: 2025-2026 SecPal$' "$REPO_ROOT/.github/workflows/quality.yml" || {
+  echo "Quality workflow SPDX year must stay current when the file is edited." >&2
   exit 1
 }
 

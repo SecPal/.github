@@ -46,7 +46,7 @@ on:
 
 jobs:
   automate:
-    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main
+    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@<trusted-commit-sha>
     secrets:
       PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
 ```
@@ -206,7 +206,7 @@ If your repository uses different labels, modify the workflow file:
 ```yaml
 jobs:
   automate:
-    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main
+    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@<trusted-commit-sha>
     secrets:
       PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     # Note: Label mapping is in the reusable workflow
@@ -303,16 +303,16 @@ After deployment, monitor:
 
 When the reusable workflow in `.github` is updated:
 
-1. **Automatic:** Workflows in other repos automatically use the latest version (because of `@main`)
-2. **No action needed** in consuming repositories
-3. **Testing:** Always test in `.github` repo first
+1. **Publish a reviewed ref:** capture the reviewed workflow commit SHA after testing in `.github`
+2. **Update consuming repositories:** replace the old pinned SHA with the new reviewed commit SHA
+3. **Testing:** always test the workflow in `.github` before rolling the new SHA into consumers
 
 ### Pinning to a Specific Version
 
-For stability, pin to a release tag:
+For stability, pin to the reviewed workflow commit SHA:
 
 ```yaml
-uses: SecPal/.github/.github/workflows/project-automation-v2.yml@v1.0.0
+uses: SecPal/.github/.github/workflows/project-automation-v2.yml@<trusted-commit-sha>
 ```
 
 ## 📝 Documentation Updates

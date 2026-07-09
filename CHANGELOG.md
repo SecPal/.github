@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-09 - Remove Dependabot Auto-Merge Self-Tag Drift
+
+**Fixed:**
+
+- switched `.github/workflows/dependabot-auto-merge.yml` from the stale `SecPal/.github@v1` tag to the reviewed `SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@main` ref, so this repository no longer depends on an outdated published tag while keeping auto-merge decisions on reviewed workflow code
+- updated `.github/workflows/reusable-dependabot-auto-merge.yml`, `.github/instructions/github-workflows.instructions.md`, and `.github/copilot-instructions.md` to tell cross-repository callers to pin reusable workflows to a reviewed immutable commit SHA instead of `@main` or the stale `@v1` example
+- updated `EXAMPLE_workflow_for_other_repos.yml` and extended `tests/dependabot-auto-merge.sh` so cross-repository reference patterns now use immutable commit SHA placeholders and the caller workflow cannot regress to a local reusable workflow path, stale `@v1` tag, or moving example refs
+- updated `.github/workflows/README.md` to align every cross-repository reusable workflow example with the immutable SHA-pinning guidance instead of moving `@main` refs, and refreshed the touched example file SPDX years
+- updated `docs/workflows/ROLLOUT_GUIDE.md` and the cross-repository guidance comments in `.github/workflows/quality.yml` so the remaining reusable workflow copy-paste examples no longer point consumers at moving `@main` refs
+- updated the rollout guide's later maintenance section so it now describes rotating reviewed commit SHAs instead of auto-tracking `@main` or pinning release tags, and refreshed the touched `quality.yml` SPDX year
+
+---
+
 ## 2026-07-08 - Harden Polyscope Workspace Provisioning Triggers
 
 **Fixed:**
