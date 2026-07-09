@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-09 - Remove Dependabot Auto-Merge Self-Tag Drift
+
+**Fixed:**
+
+- switched `.github/workflows/dependabot-auto-merge.yml` to call `./.github/workflows/reusable-dependabot-auto-merge.yml` locally, so same-repo Dependabot workflow fixes no longer depend on whatever state the external `SecPal/.github@v1` tag happens to expose
+- updated `.github/workflows/reusable-dependabot-auto-merge.yml`, `.github/instructions/github-workflows.instructions.md`, and `.github/copilot-instructions.md` to tell cross-repository callers to pin reusable workflows to a reviewed immutable commit SHA instead of `@main` or the stale `@v1` example
+- extended `tests/dependabot-auto-merge.sh` to fail if the caller workflow regresses to a self-reference through `@v1` or if the reusable workflow example stops documenting immutable SHA pinning for external callers
+
+---
+
 ## 2026-07-08 - Harden Polyscope Workspace Provisioning Triggers
 
 **Fixed:**

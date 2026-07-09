@@ -8,6 +8,8 @@
 # author rather than the event actor so maintainer-triggered `reopened` and
 # `ready_for_review` events on Dependabot-authored PRs still enroll in
 # auto-merge.
+#
+# shellcheck disable=SC2016 # This test intentionally matches literal GitHub expressions.
 
 set -euo pipefail
 
@@ -99,15 +101,15 @@ if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WO
   exit 1
 fi
 
-grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$CALLER_WORKFLOW" || {
-  echo "Dependabot caller workflow must keep the reusable workflow uses line pinned to @v1." >&2
+grep -q '^    uses: \./\.github/workflows/reusable-dependabot-auto-merge\.yml$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must use the repo-local reusable workflow path so same-repo fixes do not depend on an external tag." >&2
   exit 1
 }
 
 if awk '
   /^  auto-merge:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
-  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@v1$/ {
+  in_job && /^[[:space:]]+uses: \.\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml$/ {
     reusable_job = 1
   }
   in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
@@ -155,10 +157,20 @@ if grep -q '^          skip-verification: true$' "$REUSABLE_WORKFLOW"; then
   exit 1
 fi
 
-grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow usage example must show callers pinning the workflow to @v1." >&2
+grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@<trusted-commit-sha>$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow usage example must tell external callers to pin the workflow to a reviewed immutable commit SHA." >&2
   exit 1
 }
+
+if grep -q '^#       uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow usage example must not steer callers back to the stale @v1 tag." >&2
+  exit 1
+fi
+
+if grep -qE '^[[:space:]]+uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@v1$' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not self-reference the reusable workflow through the stale @v1 tag." >&2
+  exit 1
+fi
 
 grep -Fq '          METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must surface the fetch-metadata step outcome." >&2

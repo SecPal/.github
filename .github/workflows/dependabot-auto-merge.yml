@@ -33,7 +33,9 @@ jobs:
     # skip auto-merge enrollment. See:
     # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
     if: github.event.pull_request.user.login == 'dependabot[bot]'
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@v1
+    # Reuse the local workflow file so same-repo fixes stay coherent inside one
+    # pull request instead of depending on a separately published tag.
+    uses: ./.github/workflows/reusable-dependabot-auto-merge.yml
     with:
       # Phase 1: Only PATCH updates auto-merge
       phase: "1"
