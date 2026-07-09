@@ -12,8 +12,7 @@
 #         phase: "1"  # Optional: 1 (PATCH only), 2 or 3 (PATCH+MINOR)
 #
 # For cross-repository callers, pin to a reviewed immutable commit SHA. A
-# moved tag can lag behind the reusable workflow source and silently preserve
-# obsolete behavior.
+# moving branch ref or stale tag can silently preserve obsolete behavior.
 #
 # Strategy:
 #   Phase 1 (default): PATCH updates auto-merge ✅, MINOR/MAJOR require review
