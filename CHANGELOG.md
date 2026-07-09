@@ -14,6 +14,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - added YAML document start markers across the warned GitHub workflow files, refreshed touched SPDX year headers, and wrapped overlong workflow command and script lines so `yamllint .github/workflows/` now completes without repository-wide warning noise
+- replaced the folded `python -c` REUSE.toml checks in the local and reusable license-compatibility workflows with heredoc-fed Python, preventing indentation-driven runtime failures when repositories use custom LicenseRefs in `REUSE.toml`, and extended `tests/license-compatibility.sh` so future workflow refactors must preserve that execution shape
+- refreshed the touched workflow sidecar SPDX years in `.github/workflows/validate-copilot-instructions.yml.license` and `.github/workflows/pr-size.yml.license` so edited sidecar-licensed workflows stay REUSE-accurate
 - kept the repository lint policy explicit by adding a document start marker to `.yamllint.yml` itself instead of leaving YAML style drift as ad hoc warning output
 
 ---

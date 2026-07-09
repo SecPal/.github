@@ -68,16 +68,20 @@ jobs:
                   | sed -nE "s/.*${spdx_identifier_prefix}[[:space:]]*(.*)$/\\1/p" || true
 
                 if [ -f REUSE.toml ]; then
-                  python -c '
-                  import pathlib, sys, tomllib
-                  spdx_license_identifier = "SPDX-License" + "-Identifier"
-                  reuse_toml = pathlib.Path("REUSE.toml")
-                  document = tomllib.loads(reuse_toml.read_text()) if reuse_toml.exists() else {"annotations": []}
-                  for annotation in document.get("annotations", []):
-                      expression = annotation.get(spdx_license_identifier)
-                      if isinstance(expression, str) and sys.argv[1] in expression:
-                          print(expression)
-                  ' "$ref"
+                  python - "$ref" <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+
+          spdx_license_identifier = "SPDX-License" + "-Identifier"
+          reuse_toml = pathlib.Path("REUSE.toml")
+          document = tomllib.loads(reuse_toml.read_text()) if reuse_toml.exists() else {"annotations": []}
+
+          for annotation in document.get("annotations", []):
+              expression = annotation.get(spdx_license_identifier)
+              if isinstance(expression, str) and sys.argv[1] in expression:
+                  print(expression)
+          PY
                 fi
 
                 if [ -f .reuse/dep5 ]; then
