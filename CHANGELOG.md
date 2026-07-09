@@ -19,7 +19,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - updated `.github/workflows/README.md` to align every cross-repository reusable workflow example with the immutable SHA-pinning guidance instead of moving `@main` refs, and refreshed the touched example file SPDX years
 - updated `docs/workflows/ROLLOUT_GUIDE.md` and the cross-repository guidance comments in `.github/workflows/quality.yml` so the remaining reusable workflow copy-paste examples no longer point consumers at moving `@main` refs
 - updated the rollout guide's later maintenance section so it now describes rotating reviewed commit SHAs instead of auto-tracking `@main` or pinning release tags, and refreshed the touched `quality.yml` SPDX year
-- narrowed the rollout-guide `@main` regression guard in `tests/dependabot-auto-merge.sh` to anchored YAML `uses:` lines, so prose can warn against moving refs without falsely tripping the pinning check
+- narrowed the rollout-guide `@main` regression guard in `tests/dependabot-auto-merge.sh` to anchored YAML `uses:` lines, including inline-comment variants, so prose can warn against moving refs without falsely tripping the pinning check
 
 ---
 
