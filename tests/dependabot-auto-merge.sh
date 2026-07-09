@@ -220,11 +220,17 @@ grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
   exit 1
 }
 
-ROLLOUT_GUIDE_MAIN_REF_PATTERN='uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$'
+ROLLOUT_GUIDE_MAIN_REF_PATTERN='^[[:space:]]*uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$'
 
 printf 'Do not copy moving refs such as `@main` into consumer repositories.\n' |
   grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
     echo "Rollout guide regression guard must allow prose warnings that mention @main." >&2
+    exit 1
+  }
+
+printf 'Example prose: uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
+    echo "Rollout guide regression guard must ignore prose that embeds a uses: pin mid-line." >&2
     exit 1
   }
 
