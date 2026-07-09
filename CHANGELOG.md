@@ -17,6 +17,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - updated `.github/workflows/reusable-dependabot-auto-merge.yml`, `.github/instructions/github-workflows.instructions.md`, and `.github/copilot-instructions.md` to tell cross-repository callers to pin reusable workflows to a reviewed immutable commit SHA instead of `@main` or the stale `@v1` example
 - updated `EXAMPLE_workflow_for_other_repos.yml` and extended `tests/dependabot-auto-merge.sh` so cross-repository reference patterns now use immutable commit SHA placeholders and the caller workflow cannot regress to a local reusable workflow path, stale `@v1` tag, or moving example refs
 - updated `.github/workflows/README.md` to align every cross-repository reusable workflow example with the immutable SHA-pinning guidance instead of moving `@main` refs, and refreshed the touched example file SPDX years
+- updated `docs/workflows/ROLLOUT_GUIDE.md` and the cross-repository guidance comments in `.github/workflows/quality.yml` so the remaining reusable workflow copy-paste examples no longer point consumers at moving `@main` refs
 
 ---
 

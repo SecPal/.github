@@ -46,7 +46,7 @@ on:
 
 jobs:
   automate:
-    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main
+    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@<trusted-commit-sha>
     secrets:
       PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
 ```
@@ -206,7 +206,7 @@ If your repository uses different labels, modify the workflow file:
 ```yaml
 jobs:
   automate:
-    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main
+    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@<trusted-commit-sha>
     secrets:
       PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
     # Note: Label mapping is in the reusable workflow
