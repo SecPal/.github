@@ -39,7 +39,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_COMMITS_FILE: ${{ runner.temp }}/pull-request-commits.json
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" > "$PR_COMMITS_FILE"
+        run: >
+          gh api --paginate --slurp
+          "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100"
+          > "$PR_COMMITS_FILE"
 
       - name: Validate pull request commit signatures
         env:

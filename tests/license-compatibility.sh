@@ -123,10 +123,12 @@ custom_license_ref_guard_case() {
       failures+=("FAIL [$label]: $workflow_label does not require the Tailwind Plus license file")
     fi
 
+    # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF 'must use the approved $reference_label text'; then
       failures+=("FAIL [$label]: $workflow_label does not reject mismatched SecPal attribution text")
     fi
 
+    # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF 'reference_label="$5"'; then
       failures+=("FAIL [$label]: $workflow_label does not reject mismatched Tailwind Plus text")
     fi
@@ -135,16 +137,19 @@ custom_license_ref_guard_case() {
       failures+=("FAIL [$label]: $workflow_label does not require tracked REUSE metadata for custom license references")
     fi
 
+    # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF 'is only allowed with $required_license' \
       || ! printf '%s' "$workflow" | grep -qF 'in the same SPDX-License-Identifier expression:'; then
       failures+=("FAIL [$label]: $workflow_label does not reject OR-paired or non-AGPL custom license expressions")
     fi
 
+    # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF 'spdx_identifier_prefix="SPDX-License"' \
       || ! printf '%s' "$workflow" | grep -qF 'spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"'; then
       failures+=("FAIL [$label]: $workflow_label does not search real SPDX-License-Identifier headers")
     fi
 
+    # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF 'git grep -h "$spdx_identifier_prefix.*$ref"'; then
       failures+=("FAIL [$label]: $workflow_label does not extract SPDX header expressions without git grep path prefixes")
     fi
@@ -153,10 +158,19 @@ custom_license_ref_guard_case() {
       failures+=("FAIL [$label]: $workflow_label does not inspect REUSE.toml expressions for custom license references")
     fi
 
+    if ! printf '%s' "$workflow" | grep -qF "python - \"\$ref\" <<'PY'"; then
+      failures+=("FAIL [$label]: $workflow_label does not feed the REUSE.toml Python check through a heredoc")
+    fi
+
+    if printf '%s' "$workflow" | grep -qF "python -c '"; then
+      failures+=("FAIL [$label]: $workflow_label still embeds the REUSE.toml Python check in an indented python -c string")
+    fi
+
     if ! printf '%s' "$workflow" | grep -qF 'spdx_license_identifier = "SPDX-License" + "-Identifier"'; then
       failures+=("FAIL [$label]: $workflow_label does not inspect REUSE.toml with the SPDX key reconstructed safely")
     fi
 
+    # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF '$1 == "License" && index($2, ref)'; then
       failures+=("FAIL [$label]: $workflow_label does not inspect DEP5 license expressions for custom license references")
     fi
@@ -183,8 +197,35 @@ extract_agpl_compatibility_script() {
       if ($0 ~ /^      - name:/) {
         exit
       }
-      sub(/^          /, "")
-      print
+      lines[++count] = $0
+    }
+    END {
+      min_indent = -1
+
+      for (i = 1; i <= count; i++) {
+        if (lines[i] ~ /^[[:space:]]*$/) {
+          continue
+        }
+
+        match(lines[i], /[^ ]/)
+        indent = RSTART - 1
+        if (min_indent == -1 || indent < min_indent) {
+          min_indent = indent
+        }
+      }
+
+      if (min_indent < 0) {
+        min_indent = 0
+      }
+
+      for (i = 1; i <= count; i++) {
+        if (lines[i] == "") {
+          print ""
+          continue
+        }
+
+        print substr(lines[i], min_indent + 1)
+      }
     }
   ' "$workflow"
 }
@@ -243,9 +284,11 @@ version = 1
 
 [[annotations]]
 EOF
-  printf 'path = "%s"\n' "$path_value" >> "$target_file"
-  printf 'SPDX-FileCopyrightText = "2026 SecPal Contributors"\n' >> "$target_file"
-  printf '%s = "%s"\n' "$spdx_identifier_key" "$expression" >> "$target_file"
+  {
+    printf 'path = "%s"\n' "$path_value"
+    printf 'SPDX-FileCopyrightText = "2026 SecPal Contributors"\n'
+    printf '%s = "%s"\n' "$spdx_identifier_key" "$expression"
+  } >> "$target_file"
 }
 
 build_valid_custom_license_fixture() {

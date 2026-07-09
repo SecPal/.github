@@ -1,3 +1,4 @@
+---
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -63,4 +64,7 @@ jobs:
           fi
 
       - name: Run markdownlint
-        run: markdownlint --config "${{ inputs.config-file }}" --dot "**/*.md" --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git --ignore .secpal-governance
+        run: >
+          markdownlint --config "${{ inputs.config-file }}" --dot "**/*.md"
+          --ignore node_modules --ignore vendor --ignore storage
+          --ignore build --ignore .git --ignore .secpal-governance
