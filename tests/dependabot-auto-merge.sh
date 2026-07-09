@@ -220,7 +220,51 @@ grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
   exit 1
 }
 
-if grep -q '@main' "$ROLLOUT_GUIDE"; then
+ROLLOUT_GUIDE_MAIN_REF_PATTERN="^[[:space:]]*uses:[[:space:]]*['\"]?SecPal/\\.github/\\.github/workflows/[^[:space:]'\\\"]+@main['\"]?([[:space:]]*(#.*)?)?$"
+
+printf 'Do not copy moving refs such as `@main` into consumer repositories.\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
+    echo "Rollout guide regression guard must allow prose warnings that mention @main." >&2
+    exit 1
+  }
+
+printf 'Example prose: uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
+    echo "Rollout guide regression guard must ignore prose that embeds a uses: pin mid-line." >&2
+    exit 1
+  }
+
+printf 'Example prose: uses: "SecPal/.github/.github/workflows/project-automation-v2.yml@main"\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
+    echo "Rollout guide regression guard must ignore prose that embeds a quoted uses: pin mid-line." >&2
+    exit 1
+  }
+
+printf '    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
+    echo "Rollout guide regression guard must still reject uses: pins that track @main." >&2
+    exit 1
+  }
+
+printf '    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main # rotate after review\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
+    echo "Rollout guide regression guard must still reject uses: pins that track @main when they carry inline comments." >&2
+    exit 1
+  }
+
+printf '    uses: "SecPal/.github/.github/workflows/project-automation-v2.yml@main"\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
+    echo "Rollout guide regression guard must still reject quoted uses: pins that track @main." >&2
+    exit 1
+  }
+
+printf '    uses: "SecPal/.github/.github/workflows/project-automation-v2.yml@main" # rotate after review\n' |
+  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
+    echo "Rollout guide regression guard must still reject quoted uses: pins that track @main when they carry inline comments." >&2
+    exit 1
+  }
+
+if grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" "$ROLLOUT_GUIDE"; then
   echo "Rollout guide must not tell cross-repository consumers to track moving @main refs." >&2
   exit 1
 fi
