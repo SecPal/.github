@@ -15,8 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - canonicalized physical hash-suffixed Polyscope preview hosts by resolving provision markers from the clone root rather than relying on the Expose process working directory, and emit only the canonical host in both successful announcement fields so clone storage names such as `misty-vulture-26c1f2f1` cannot leak into the displayed preview URL; if canonical provisioning metadata is unavailable, the wrapper fails closed instead of publishing the suffixed host
 - made the rollout sync install and reload its rendered nginx configuration, preventing removed routing guards from remaining active on the preview host after the provisioning source has been updated
-- made automatic nginx installation transactional: unchanged configurations skip backup and reload, while validation or reload failures restore and revalidate the previous configuration
-- made the autostarted frontend build watcher track npm's installed lock metadata and the `cross-env` binary, allowing it to recover when it races the setup-time replacement of `node_modules` without either waiting for an unrelated source edit or retrying a permanently missing dependency in a tight loop
+- made automatic nginx installation transactional and safe for unattended rollout: installations fail before service setup when non-interactive privileges are unavailable, privileged commands cannot prompt inside the user service, unchanged configurations skip backup and reload, and validation or reload failures restore and revalidate the previous configuration
 
 ## 2026-07-10 - Gate API Preview Readiness
 

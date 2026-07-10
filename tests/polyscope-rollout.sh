@@ -951,12 +951,6 @@ if "run" in args and "build" in args:
     counter = int(counter_path.read_text()) if counter_path.exists() else 0
     counter_path.write_text(str(counter + 1))
 
-    if os.environ.get("FAKE_NPM_FAIL_FIRST_BUILD_127") == "1" and counter == 0:
-        Path("node_modules/.bin").mkdir(parents=True, exist_ok=True)
-        Path("node_modules/.bin/cross-env").write_text("ready\\n")
-        Path("node_modules/.package-lock.json").write_text("{}\\n")
-        sys.exit(127)
-
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "assets").mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(f"<!doctype html>build {counter}\\n")
@@ -1096,33 +1090,10 @@ assert 'api_workspace = resolve_linked_workspace("SecPal/api", workspace)' in ru
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
-assert 'Path("node_modules/.bin/cross-env")' in watch_script, watch_script
-assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
-
-# The autostarted watcher can race the setup-time npm ci, which temporarily
-# removes node_modules/.bin. Exit 127 must therefore retry without requiring a
-# source edit after dependency installation finishes.
-frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
-bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(3):\n", 1).replace(
-    "    time.sleep(1)\n",
-    "    time.sleep(0.05)\n",
-    1,
-)
-watch_retry_result = subprocess.run(
-    ["python3", "-c", bounded_watch_script],
-    cwd=frontend_worktree,
-    env={**build_env, "FAKE_NPM_FAIL_FIRST_BUILD_127": "1"},
-    capture_output=True,
-    text=True,
-    timeout=5,
-)
-assert watch_retry_result.returncode == 0, watch_retry_result.stderr
-assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_result.stderr
-assert "waiting for dependency installation or a source change" in watch_retry_result.stderr, watch_retry_result.stderr
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""
@@ -3045,6 +3016,7 @@ PY
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
@@ -3056,13 +3028,19 @@ fixture.mkdir()
 target = fixture / "preview.secpal.dev"
 candidate = fixture / "candidate.conf"
 systemctl_log = fixture / "systemctl.log"
+systemctl_failure_marker = fixture / "systemctl-failed-once"
 fake_sudo = fixture / "sudo"
 fake_nginx = fixture / "nginx"
 fake_systemctl = fixture / "systemctl"
 
 target.write_text("valid-current\n")
 candidate.write_text("invalid-candidate\n")
-fake_sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+fake_sudo.write_text(
+    "#!/usr/bin/env bash\n"
+    "[[ \"${1:-}\" == '-n' ]] || exit 97\n"
+    "shift\n"
+    "exec \"$@\"\n"
+)
 fake_nginx.write_text(
     "#!/usr/bin/env bash\n"
     f"grep -q '^invalid' {target!s} && exit 1\n"
@@ -3071,6 +3049,10 @@ fake_nginx.write_text(
 fake_systemctl.write_text(
     "#!/usr/bin/env bash\n"
     f"printf '%s\\n' \"$*\" >> {systemctl_log!s}\n"
+    f"if [[ \"${{FAIL_FIRST_SYSTEMCTL_RELOAD:-0}}\" == '1' && ! -e {systemctl_failure_marker!s} ]]; then\n"
+    f"  touch {systemctl_failure_marker!s}\n"
+    "  exit 1\n"
+    "fi\n"
 )
 for executable in (fake_sudo, fake_nginx, fake_systemctl):
     executable.chmod(0o755)
@@ -3107,6 +3089,32 @@ module.install_nginx_config(
 assert target.read_text() == "valid-next\n", target.read_text()
 assert systemctl_log.read_text().splitlines() == ["reload nginx"], systemctl_log.read_text()
 
+target.write_text("valid-current-before-reload-failure\n")
+candidate.write_text("valid-next-reload-failure\n")
+os.environ["FAIL_FIRST_SYSTEMCTL_RELOAD"] = "1"
+try:
+    module.install_nginx_config(
+        candidate,
+        target=target,
+        sudo_bin=str(fake_sudo),
+        nginx_bin=str(fake_nginx),
+        systemctl_bin=str(fake_systemctl),
+    )
+except subprocess.CalledProcessError:
+    pass
+else:
+    raise AssertionError("nginx reload failure must fail installation after restoring the previous config")
+finally:
+    os.environ.pop("FAIL_FIRST_SYSTEMCTL_RELOAD", None)
+
+assert target.read_text() == "valid-current-before-reload-failure\n", target.read_text()
+assert systemctl_log.read_text().splitlines() == [
+    "reload nginx",
+    "reload nginx",
+    "reload nginx",
+], systemctl_log.read_text()
+
+candidate.write_text("valid-current-before-reload-failure\n")
 module.install_nginx_config(
     candidate,
     target=target,
@@ -3114,7 +3122,11 @@ module.install_nginx_config(
     nginx_bin=str(fake_nginx),
     systemctl_bin=str(fake_systemctl),
 )
-assert systemctl_log.read_text().splitlines() == ["reload nginx"], systemctl_log.read_text()
+assert systemctl_log.read_text().splitlines() == [
+    "reload nginx",
+    "reload nginx",
+    "reload nginx",
+], systemctl_log.read_text()
 PY
 
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
@@ -4396,12 +4408,15 @@ cat >"$fake_sudo_dir/sudo" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SUDO_LOG"
 
-if [[ "${1:-}" == "-n" ]]; then
-    shift
+if [[ "${1:-}" == "-n" && "${2:-}" == "-k" && "${3:-}" == "true" ]]; then
+    exit 0
+fi
+if [[ "${1:-}" == "-n" && "${2:-}" == "true" ]]; then
+    exit 98
 fi
 
-if [[ "${1:-}" == "true" ]]; then
-    exit 0
+if [[ "${1:-}" == "-n" ]]; then
+    shift
 fi
 
 exec "$@"
@@ -4412,6 +4427,8 @@ env HOME="$home_dir" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
     FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
@@ -4435,6 +4452,8 @@ env HOME="$home_dir" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
     FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
@@ -4448,6 +4467,8 @@ env HOME="$home_dir" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
     FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
@@ -4470,6 +4491,8 @@ env HOME="$home_dir" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
     POLYSCOPE_EXPOSE_BIN="$fake_guard_expose_bin" \
     POLYSCOPE_EXPOSE_REAL_BIN="$fake_guard_expose_real" \
     PATH="$fake_systemctl_dir:$PATH" \
@@ -4578,6 +4601,7 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
@@ -4668,6 +4692,36 @@ if [[ "$no_sudo_exit" -eq 0 ]]; then
     exit 1
 fi
 test ! -e "$no_sudo_unit_dir/polyscope-server.service"
+
+# The user-scoped rollout sync also installs nginx and must therefore reject
+# configurations that cannot obtain unattended privileges before writing units.
+no_sudo_user_home_dir="$workspace/no-sudo-user-home"
+no_sudo_user_bin_dir="$workspace/no-sudo-user-bin"
+no_sudo_user_unit_dir="$workspace/no-sudo-user-units"
+no_sudo_user_exit=0
+mkdir -p "$no_sudo_user_home_dir/.polyscope/bin"
+cat >"$no_sudo_user_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$no_sudo_user_home_dir/.polyscope/bin/expose-linux-x64"
+env HOME="$no_sudo_user_home_dir" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$no_sudo_systemctl_log" \
+    SUDO_BIN="$no_sudo_sudo_dir/sudo" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$no_sudo_user_bin_dir" \
+        --unit-dir "$no_sudo_user_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        --polyscope-server-scope user \
+        2>/dev/null || no_sudo_user_exit=$?
+if [[ "$no_sudo_user_exit" -eq 0 ]]; then
+    echo "installer must refuse user scope when unattended nginx privileges are unavailable" >&2
+    exit 1
+fi
+test ! -e "$no_sudo_user_unit_dir/polyscope-rollout-sync.service"
 
 # installer must also refuse when --polyscope-server-scope system is forced but no unit exists
 no_unit_exit=0
