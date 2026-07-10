@@ -14,7 +14,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - added explicit least-privilege permission ceilings to the reusable actionlint, Node.js, PHP, PR-size, and REUSE workflows; actionlint can write checks, PR-size can read pull-request metadata, and the remaining audited workflows only read repository contents
-- extended the reusable-workflow policy regression test and preflight guidance so every reusable workflow must retain a top-level `permissions` block as well as job timeouts
+- extended the reusable-workflow policy regression test and preflight guidance so every `.yml` or `.yaml` reusable workflow must retain a valid, non-null top-level `permissions` block as well as job timeouts
+- added focused positive and negative fixtures for mapping and deny-all permissions, missing or null permissions, and missing timeouts so the policy scanner cannot silently lose coverage
 
 ---
 

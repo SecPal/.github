@@ -17,10 +17,29 @@ fi
 failures=()
 permission_failures=()
 
+find_reusable_workflows() {
+  find .github/workflows -maxdepth 1 -type f \
+    \( -name 'reusable-*.yml' -o -name 'reusable-*.yaml' \) -print | sort
+}
+
 while IFS= read -r workflow; do
   if ! awk '
-    /^permissions:[[:space:]]*(\{\})?[[:space:]]*$/ {
+    /^permissions:[[:space:]]*\{\}[[:space:]]*(#.*)?$/ {
       found = 1
+      exit
+    }
+    /^permissions:[[:space:]]*(#.*)?$/ {
+      in_permissions = 1
+      next
+    }
+    in_permissions && /^[[:space:]]*($|#)/ {
+      next
+    }
+    in_permissions && /^[[:space:]]+[A-Za-z0-9_-]+:[[:space:]]*(read|write|none)[[:space:]]*(#.*)?$/ {
+      found = 1
+      exit
+    }
+    in_permissions {
       exit
     }
     /^jobs:[[:space:]]*$/ {
@@ -32,10 +51,10 @@ while IFS= read -r workflow; do
   ' "$workflow"; then
     permission_failures+=("$workflow")
   fi
-done < <(find .github/workflows -maxdepth 1 -type f -name 'reusable-*.yml' | sort)
+done < <(find_reusable_workflows)
 
 if [ ${#permission_failures[@]} -gt 0 ]; then
-  echo "Missing top-level permissions block on reusable workflows:" >&2
+  echo "Missing or invalid top-level permissions on reusable workflows:" >&2
   for workflow in "${permission_failures[@]}"; do
     echo "  - $workflow" >&2
   done
@@ -119,7 +138,7 @@ while IFS= read -r workflow; do
   if [ ${#current_failures[@]} -gt 0 ]; then
     failures+=("${current_failures[@]}")
   fi
-done < <(find .github/workflows -maxdepth 1 -type f -name 'reusable-*.yml' | sort)
+done < <(find_reusable_workflows)
 
 if [ ${#failures[@]} -gt 0 ]; then
   echo "Missing timeout-minutes on reusable workflow jobs:" >&2
