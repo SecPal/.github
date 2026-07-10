@@ -58,7 +58,7 @@ wait_for_api_preview_readiness() {
 	local direct_url="$1"
 	local readiness_url="${direct_url}/health/ready"
 	local retry_seconds="${POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS:-2}"
-	local max_attempts="${POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS:-60}"
+	local max_attempts="${POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS:-92}"
 	local attempt
 
 	if [[ ! "$retry_seconds" =~ ^[0-9]+$ || ! "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then

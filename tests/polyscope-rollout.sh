@@ -4483,6 +4483,14 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscop
 grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
+
+default_readiness_retry_seconds="$(sed -nE 's/.*POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS:-([0-9]+).*/\1/p' "$REPO_ROOT/scripts/polyscope-expose-wrapper.sh")"
+default_readiness_max_attempts="$(sed -nE 's/.*POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS:-([0-9]+).*/\1/p' "$REPO_ROOT/scripts/polyscope-expose-wrapper.sh")"
+if (( (default_readiness_max_attempts - 1) * default_readiness_retry_seconds <= 180 )); then
+    echo "API preview readiness wait must exceed the three-minute provisioning fallback" >&2
+    exit 1
+fi
+
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
