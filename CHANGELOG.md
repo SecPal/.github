@@ -19,6 +19,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-10 - Start API Preview Queue Workers Automatically
+
+**Fixed:**
+
+- marked the generated API preview Queue Worker action as autostarted, so scheduled forensic jobs are consumed and readiness does not remain blocked by a missing worker heartbeat
+
+---
+
 ## 2026-07-09 - Clean Up Repository-Wide yamllint Warnings
 
 **Fixed:**

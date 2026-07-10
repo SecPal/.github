@@ -733,6 +733,8 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 api_run_actions = module.REPO_SETTINGS["api"]["local_config"]["scripts"]["run"]
+queue_worker_action = next(action for action in api_run_actions if action["label"] == "Queue Worker")
+assert queue_worker_action.get("autostart") is True, queue_worker_action
 api_run_actions[0]["label"] = "Background Queue"
 api_run_actions[1]["label"] = "Cron Loop"
 api_run_actions[2]["label"] = "Log Tail"

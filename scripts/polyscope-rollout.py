@@ -2139,7 +2139,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
-                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "runMode": "replace"},
+                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "autostart": True, "runMode": "replace"},
                     {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": True, "runMode": "replace"},
                     {"label": "Pail", "command": API_PAIL_COMMAND, "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
