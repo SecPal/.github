@@ -42,6 +42,46 @@ normalize_preview_url() {
 	printf '\n'
 }
 
+api_preview_origin() {
+	local direct_url="$1"
+	local host_and_path host
+
+	[[ "$direct_url" == https://* ]] || return 1
+	host_and_path="${direct_url#https://}"
+	host="${host_and_path%%/*}"
+	[[ "$host" =~ ^api-[A-Za-z0-9-]+\.preview\.secpal\.dev$ ]] || return 1
+
+	printf 'https://%s\n' "$host"
+}
+
+wait_for_api_preview_readiness() {
+	local direct_url="$1"
+	local readiness_url="${direct_url}/health/ready"
+	local retry_seconds="${POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS:-2}"
+	local max_attempts="${POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS:-302}"
+	local attempt status_code
+
+	if [[ ! "$retry_seconds" =~ ^[0-9]+$ || ! "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
+		echo "Error: preview readiness retry settings must be non-negative seconds and positive attempts" >&2
+		return 1
+	fi
+
+	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+		if status_code="$(curl -fsS --max-time 3 -o /dev/null -w '%{http_code}' "$readiness_url")" \
+			&& [[ "$status_code" =~ ^2[0-9][0-9]$ ]]; then
+			return 0
+		fi
+
+		printf 'Waiting for API preview readiness (%s, attempt %s)\n' "$readiness_url" "$attempt" >&2
+		if ((attempt < max_attempts)); then
+			sleep "$retry_seconds"
+		fi
+	done
+
+	echo "Error: API preview did not become ready after $max_attempts attempts" >&2
+	return 1
+}
+
 announce_direct_preview() {
 	local shared_site="$1"
 	local direct_url="$2"
@@ -64,6 +104,10 @@ announce_direct_preview() {
 if [[ $# -ge 2 && "$1" == "share" ]]; then
 	direct_preview_url="$(normalize_preview_url "$2" || true)"
 	if [[ -n "$direct_preview_url" ]]; then
+		api_preview_url="$(api_preview_origin "$direct_preview_url" || true)"
+		if [[ -n "$api_preview_url" ]]; then
+			wait_for_api_preview_readiness "$api_preview_url"
+		fi
 		announce_direct_preview "$2" "$direct_preview_url"
 	fi
 fi
