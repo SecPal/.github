@@ -23,7 +23,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- marked the generated API preview Queue Worker action as autostarted, so scheduled forensic jobs are consumed and readiness does not remain blocked by a missing worker heartbeat
+- marked the generated API preview Queue Worker action as autostarted and kept it running without a supervisor-dependent time limit, so scheduled forensic jobs continue to be consumed and readiness does not become blocked by a missing worker heartbeat
 
 ---
 

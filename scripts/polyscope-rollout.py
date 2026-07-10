@@ -63,7 +63,7 @@ API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
 API_REFRESH_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_REFRESH__"
 API_QUEUE_WORKER_COMMAND = (
     "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default "
-    "--sleep=3 --tries=3 --max-time=3600"
+    "--sleep=3 --tries=3"
 )
 API_SCHEDULER_COMMAND = "php artisan schedule:work"
 API_PAIL_COMMAND = "php artisan pail --timeout=0"
