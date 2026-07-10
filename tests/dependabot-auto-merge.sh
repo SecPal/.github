@@ -21,6 +21,8 @@ WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instruct
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
 ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
+RELEASE_GUIDE="$REPO_ROOT/docs/workflows/REUSABLE_WORKFLOW_RELEASES.md"
+RELEASE_VALIDATION_WORKFLOW="$REPO_ROOT/.github/workflows/validate-reusable-workflow-release.yml"
 
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
@@ -73,6 +75,56 @@ if [ ! -f "$ROLLOUT_GUIDE" ]; then
   echo "Expected rollout guide was not found: $ROLLOUT_GUIDE" >&2
   exit 1
 fi
+
+if [ ! -f "$RELEASE_GUIDE" ]; then
+  echo "Expected reusable workflow release guide was not found: $RELEASE_GUIDE" >&2
+  exit 1
+fi
+
+grep -Fq 'v<major>.<minor>.<patch>' "$RELEASE_GUIDE" || {
+  echo "Reusable workflow releases must use complete semantic version tags." >&2
+  exit 1
+}
+
+grep -Fq 'immutable GitHub Release' "$RELEASE_GUIDE" || {
+  echo "Reusable workflow release tags must be immutable." >&2
+  exit 1
+}
+
+grep -Fq 'resolved commit SHA' "$RELEASE_GUIDE" || {
+  echo "Reusable workflow releases must record their resolved commit SHA." >&2
+  exit 1
+}
+
+if [ ! -f "$RELEASE_VALIDATION_WORKFLOW" ]; then
+  echo "Expected reusable workflow release validation workflow was not found: $RELEASE_VALIDATION_WORKFLOW" >&2
+  exit 1
+fi
+
+grep -Fq 'types: [published]' "$RELEASE_VALIDATION_WORKFLOW" || {
+  echo "Reusable workflow releases must be validated when published." >&2
+  exit 1
+}
+
+grep -Fq '^v[0-9]+\.[0-9]+\.[0-9]+$' "$RELEASE_VALIDATION_WORKFLOW" || {
+  echo "Reusable workflow releases must reject incomplete semantic version tags." >&2
+  exit 1
+}
+
+grep -Fq 'isImmutable' "$RELEASE_VALIDATION_WORKFLOW" || {
+  echo "Reusable workflow releases must verify GitHub Release immutability." >&2
+  exit 1
+}
+
+grep -Fq 'git cat-file -t "refs/tags/${TAG}"' "$RELEASE_VALIDATION_WORKFLOW" || {
+  echo "Reusable workflow releases must require annotated tags." >&2
+  exit 1
+}
+
+grep -Fq 'RELEASE_BODY' "$RELEASE_VALIDATION_WORKFLOW" || {
+  echo "Reusable workflow releases must verify the release notes record the commit SHA." >&2
+  exit 1
+}
 
 if ! awk '
   /^---$/ { document_start_markers++ }

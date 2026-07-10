@@ -11,8 +11,10 @@
 #       with:
 #         phase: "1"  # Optional: 1 (PATCH only), 2 or 3 (PATCH+MINOR)
 #
-# For cross-repository callers, pin to a reviewed immutable commit SHA. A
-# moving branch ref or stale tag can silently preserve obsolete behavior.
+# For cross-repository callers, use a reviewed immutable commit SHA or a
+# published immutable semantic release tag. The latter lets Dependabot classify
+# numeric updates; verify its resolved commit SHA before merging.
+# See docs/workflows/REUSABLE_WORKFLOW_RELEASES.md for the release contract.
 #
 # Strategy:
 #   Phase 1 (default): PATCH updates auto-merge ✅, MINOR/MAJOR require review

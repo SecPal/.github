@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: CC0-1.0
+---
+name: Validate Reusable Workflow Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate immutable semantic release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      resolved-commit-sha: ${{ steps.validate.outputs.resolved-commit-sha }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Validate release contract
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          TAG="${RELEASE_TAG:?Release tag is required}"
+
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be a complete semantic version: ${TAG}" >&2
+            exit 1
+          fi
+
+          if [[ "$(git cat-file -t "refs/tags/${TAG}")" != "tag" ]]; then
+            echo "Release tag must be annotated: ${TAG}" >&2
+            exit 1
+          fi
+
+          RESOLVED_COMMIT_SHA="$(git rev-parse "${TAG}^{commit}")"
+          IS_IMMUTABLE="$(gh release view "${TAG}" --json isImmutable --jq '.isImmutable')"
+          RELEASE_BODY="$(gh release view "${TAG}" --json body --jq '.body')"
+
+          if [[ "${IS_IMMUTABLE}" != "true" ]]; then
+            echo "Release must be immutable: ${TAG}" >&2
+            exit 1
+          fi
+
+          if ! grep -Fq "${RESOLVED_COMMIT_SHA}" <<<"${RELEASE_BODY}"; then
+            echo "Release notes must record the resolved commit SHA: ${TAG}" >&2
+            exit 1
+          fi
+
+          echo "resolved-commit-sha=${RESOLVED_COMMIT_SHA}" >> "${GITHUB_OUTPUT}"

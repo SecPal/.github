@@ -54,6 +54,12 @@ Applies when editing GitHub Actions workflows, Dependabot configs, and YAML conf
 
 - For cross-repository callers, prefer a reviewed immutable commit SHA over a branch ref. A moving branch or stale tag can silently change or preserve behavior outside the caller's own change set.
 
+- Published reusable workflows may instead use a complete immutable semantic
+  release tag such as `@v2.0.0`. This makes Dependabot version classification
+  available. Before merging an update, verify the tag against the release's
+  recorded resolved commit SHA. Never use major-only tags such as `@v1`.
+  See `docs/workflows/REUSABLE_WORKFLOW_RELEASES.md` for the release contract.
+
 - Check `EXAMPLE_workflow_for_other_repos.yml` for reference patterns before writing a new workflow
 
 ## `continue-on-error`

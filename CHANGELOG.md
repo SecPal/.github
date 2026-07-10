@@ -5,7 +5,22 @@
 
 Log of notable changes to SecPal organization defaults (newest first).
 
-**Note:** This repository contains organization-wide configuration and is NOT versioned. For versioned releases, see individual project repositories (`api/`, `frontend/`, `contracts/`).
+**Note:** This repository contains organization-wide configuration and is NOT
+versioned as an application. Its reusable workflows are a separately versioned
+integration surface; see `docs/workflows/REUSABLE_WORKFLOW_RELEASES.md`.
+
+---
+
+## 2026-07-10 - Version Reusable Workflow Releases
+
+**Added:**
+
+- defined immutable semantic releases for reusable workflows, including
+  full-version tags, signed annotated tags, immutable GitHub Releases, and a
+  recorded resolved commit SHA for auditability
+- documented consumer usage of complete immutable semantic tags so Dependabot
+  can classify numeric updates without accepting moving refs or the stale
+  legacy `v1` tag
 
 ---
 
