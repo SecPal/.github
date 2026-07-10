@@ -4656,7 +4656,7 @@ env HOME="$home_dir" \
 
 grep -q 'Public URL               https://api-path-hawk.preview.secpal.dev/some/path' "$path_preview_wrapper_out"
 test "$(cat "$fake_curl_attempt_file")" = "3"
-grep -qx -- '-fsS --max-time 3 https://api-path-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
+grep -qx -- '-fsS --max-time 3 -o /dev/null -w %{http_code} https://api-path-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
 
 env HOME="$home_dir" \
     PATH="$workspace/fake-tools:$PATH" \
