@@ -1538,6 +1538,9 @@ watch_files = [
             Path(".env.local"),
             Path(".env.preview.local"),
             Path(".env.production.local"),
+            Path("node_modules/.package-lock.json"),
+            Path("node_modules/.bin/cross-env"),
+            Path("node_modules/.bin/vite"),
 ]
 watch_suffixes = {
             ".css",
@@ -1726,11 +1729,18 @@ while True:
         previous_snapshot = current_snapshot
         exit_code = run_build()
         if exit_code != 0:
-            print(
-                f"Preview rebuild failed with exit code {{exit_code}}; waiting for the next change before retrying.",
-                file=sys.stderr,
-                flush=True,
-            )
+            if exit_code == 127:
+                print(
+                    "Preview build dependencies were unavailable; waiting for dependency installation or a source change.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Preview rebuild failed with exit code {{exit_code}}; waiting for the next change before retrying.",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     time.sleep(1)
         """
@@ -3980,13 +3990,59 @@ def build_summary(
     return summary
 
 
-def install_nginx_config(nginx_output: pathlib.Path) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup_target = f"/etc/nginx/sites-available/preview.secpal.dev.bak-{timestamp}"
-    subprocess.run(["sudo", "cp", "/etc/nginx/sites-available/preview.secpal.dev", backup_target], check=True)
-    subprocess.run(["sudo", "install", "-m", "644", str(nginx_output), "/etc/nginx/sites-available/preview.secpal.dev"], check=True)
-    subprocess.run(["sudo", "nginx", "-t"], check=True)
-    subprocess.run(["sudo", "systemctl", "reload", "nginx"], check=True)
+def install_nginx_config(
+    nginx_output: pathlib.Path,
+    *,
+    target: pathlib.Path = pathlib.Path("/etc/nginx/sites-available/preview.secpal.dev"),
+    sudo_bin: str | None = None,
+    nginx_bin: str = "nginx",
+    systemctl_bin: str = "systemctl",
+) -> None:
+    sudo_bin = sudo_bin or os.environ.get("POLYSCOPE_SUDO_BIN", "sudo")
+
+    def sudo_command(*command: str) -> list[str]:
+        if os.geteuid() == 0:
+            return list(command)
+        return [sudo_bin, "-n", *command]
+
+    target_exists = subprocess.run(
+        sudo_command("test", "-f", str(target)),
+        check=False,
+    ).returncode == 0
+    if target_exists:
+        unchanged = subprocess.run(
+            sudo_command("cmp", "-s", str(nginx_output), str(target)),
+            check=False,
+        ).returncode == 0
+        if unchanged:
+            return
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_target = target.with_name(f"{target.name}.bak-{timestamp}")
+    if target_exists:
+        subprocess.run(sudo_command("cp", str(target), str(backup_target)), check=True)
+
+    def restore_previous_config() -> None:
+        if target_exists:
+            subprocess.run(sudo_command("cp", str(backup_target), str(target)), check=True)
+        else:
+            subprocess.run(sudo_command("rm", "-f", str(target)), check=True)
+
+    subprocess.run(sudo_command("install", "-m", "644", str(nginx_output), str(target)), check=True)
+    try:
+        subprocess.run(sudo_command(nginx_bin, "-t"), check=True)
+    except subprocess.CalledProcessError:
+        restore_previous_config()
+        subprocess.run(sudo_command(nginx_bin, "-t"), check=True)
+        raise
+
+    try:
+        subprocess.run(sudo_command(systemctl_bin, "reload", "nginx"), check=True)
+    except subprocess.CalledProcessError:
+        restore_previous_config()
+        subprocess.run(sudo_command(nginx_bin, "-t"), check=True)
+        subprocess.run(sudo_command(systemctl_bin, "reload", "nginx"), check=True)
+        raise
 
 
 def parse_args() -> argparse.Namespace:

@@ -131,7 +131,9 @@ can_run_privileged_commands() {
         return 0
     fi
 
-    "$SUDO_BIN" -n true >/dev/null 2>&1
+    # Invalidate cached credentials so success proves the future user service
+    # can authenticate without a terminal, not merely reuse this shell's ticket.
+    "$SUDO_BIN" -n -k true >/dev/null 2>&1
 }
 
 run_privileged() {
@@ -198,9 +200,9 @@ if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]];
     exit 1
 fi
 
-if [[ "$server_scope" == "system" ]] && ! can_run_privileged_commands; then
-    echo "Error: detected existing system $POLYSCOPE_SYSTEM_SERVER_UNIT at ${system_server_fragment_path:-<unknown>}, but non-interactive sudo or root access is unavailable." >&2
-    echo "Refusing to create a competing user polyscope-server.service on port 4321." >&2
+if ! can_run_privileged_commands; then
+    echo "Error: automatic nginx rollout requires non-interactive sudo or root access." >&2
+    echo "Refusing to install a rollout service that cannot update and reload nginx unattended." >&2
     exit 1
 fi
 
@@ -288,7 +290,8 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE
+Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --install-nginx
 EOF
 
 cat >"$PATH_UNIT" <<EOF

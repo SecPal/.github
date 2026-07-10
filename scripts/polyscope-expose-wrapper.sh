@@ -42,6 +42,81 @@ normalize_preview_url() {
 	printf '\n'
 }
 
+canonicalize_preview_url_from_marker() {
+	local direct_url="$1"
+	local marker_path="${POLYSCOPE_PROVISION_MARKER_PATH:-$PWD/.polyscope-secpal-provisioned.json}"
+	local clone_root="${POLYSCOPE_CLONE_ROOT:-$HOME/.polyscope/clones}"
+
+	python3 - "$direct_url" "$marker_path" "$clone_root" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+direct_url = sys.argv[1]
+marker_path = Path(sys.argv[2])
+clone_root = Path(sys.argv[3])
+
+repo_prefixes = {
+    "api": "api",
+    "frontend": "frontend",
+    "GuardGuide": "guardguide",
+    "guardguide.de": "guardguide-de",
+    "secpal.app": "secpal-app",
+    "changelog": "changelog",
+}
+url = urlsplit(direct_url)
+host_match = re.fullmatch(
+    r"(api|frontend|guardguide-de|guardguide|secpal-app|changelog)-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.preview\.secpal\.dev",
+    url.hostname or "",
+)
+if host_match is None:
+    raise SystemExit(1)
+
+prefix, physical_workspace = host_match.groups()
+marker_paths = []
+if marker_path.is_file():
+    marker_paths.append(marker_path)
+if clone_root.is_dir():
+    marker_paths.extend(clone_root.glob(f"*/{physical_workspace}/.polyscope-secpal-provisioned.json"))
+
+canonical_urls = set()
+seen_marker_paths = set()
+for candidate in marker_paths:
+    try:
+        resolved_candidate = candidate.resolve()
+    except OSError:
+        resolved_candidate = candidate
+    if resolved_candidate in seen_marker_paths:
+        continue
+    seen_marker_paths.add(resolved_candidate)
+
+    try:
+        marker = json.loads(candidate.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    if not isinstance(marker, dict):
+        continue
+
+    repo = marker.get("repo")
+    workspace = marker.get("workspace")
+    marker_physical_workspace = marker.get("physical_workspace")
+    if repo_prefixes.get(repo) != prefix or marker_physical_workspace != physical_workspace:
+        continue
+    if not isinstance(workspace, str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", workspace):
+        continue
+
+    canonical_host = f"{prefix}-{workspace}.preview.secpal.dev"
+    canonical_urls.add(urlunsplit((url.scheme, canonical_host, url.path, url.query, url.fragment)))
+
+if len(canonical_urls) != 1:
+    raise SystemExit(1)
+
+print(canonical_urls.pop())
+PY
+}
+
 api_preview_origin() {
 	local direct_url="$1"
 	local host_and_path host
@@ -104,11 +179,18 @@ announce_direct_preview() {
 if [[ $# -ge 2 && "$1" == "share" ]]; then
 	direct_preview_url="$(normalize_preview_url "$2" || true)"
 	if [[ -n "$direct_preview_url" ]]; then
+		canonical_preview_url=""
+		if canonical_preview_url="$(canonicalize_preview_url_from_marker "$direct_preview_url")"; then
+			direct_preview_url="$canonical_preview_url"
+		elif [[ "$direct_preview_url" =~ ^https://(api|frontend|guardguide-de|guardguide|secpal-app|changelog)-[A-Za-z0-9-]+-[0-9a-fA-F]{8}\.preview\.secpal\.dev(/|$) ]]; then
+			echo "Error: refusing to announce physical hash-suffixed preview URL without a canonical workspace host: $direct_preview_url" >&2
+			exit 1
+		fi
 		api_preview_url="$(api_preview_origin "$direct_preview_url" || true)"
 		if [[ -n "$api_preview_url" ]]; then
 			wait_for_api_preview_readiness "$api_preview_url"
 		fi
-		announce_direct_preview "$2" "$direct_preview_url"
+		announce_direct_preview "$direct_preview_url" "$direct_preview_url"
 	fi
 fi
 

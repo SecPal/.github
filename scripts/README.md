@@ -339,6 +339,11 @@ the rollout-managed workspace can sync back to the expected repository set.
 bash .github/scripts/install-polyscope-rollout.sh
 ```
 
+Automatic nginx deployment runs from a user systemd service and therefore
+requires either root execution or passwordless, non-interactive `sudo`. The
+installer invalidates cached sudo credentials while checking this prerequisite
+and exits before writing service units when unattended access is unavailable.
+
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new
 managed repositories automatically when the canonical repo list changes.
