@@ -59,7 +59,7 @@ wait_for_api_preview_readiness() {
 	local readiness_url="${direct_url}/health/ready"
 	local retry_seconds="${POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS:-2}"
 	local max_attempts="${POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS:-92}"
-	local attempt
+	local attempt status_code
 
 	if [[ ! "$retry_seconds" =~ ^[0-9]+$ || ! "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
 		echo "Error: preview readiness retry settings must be non-negative seconds and positive attempts" >&2
@@ -67,7 +67,8 @@ wait_for_api_preview_readiness() {
 	fi
 
 	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-		if curl -fsS --max-time 3 "$readiness_url" >/dev/null; then
+		if status_code="$(curl -fsS --max-time 3 -o /dev/null -w '%{http_code}' "$readiness_url")" \
+			&& [[ "$status_code" =~ ^2[0-9][0-9]$ ]]; then
 			return 0
 		fi
 

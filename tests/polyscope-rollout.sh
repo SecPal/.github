@@ -4627,6 +4627,8 @@ printf '%s\n' "$attempt" > "$FAKE_CURL_ATTEMPT_FILE"
 if [[ "${FAKE_CURL_ALWAYS_FAIL:-0}" == "1" || "$attempt" -lt 2 ]]; then
     exit 1
 fi
+
+printf '%s' "${FAKE_CURL_HTTP_STATUS:-200}"
 STUB
 chmod +x "$fake_curl_bin"
 
@@ -4641,7 +4643,7 @@ env HOME="$home_dir" \
 grep -q 'Shared site              https://api-auto-hawk.preview.secpal.dev:443' "$preview_wrapper_out"
 grep -q 'Public URL               https://api-auto-hawk.preview.secpal.dev' "$preview_wrapper_out"
 test "$(cat "$fake_curl_attempt_file")" = "2"
-grep -qx -- '-fsS --max-time 3 https://api-auto-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
+grep -qx -- '-fsS --max-time 3 -o /dev/null -w %{http_code} https://api-auto-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
 
 path_preview_wrapper_out="$workspace/expose-wrapper-path-preview.out"
 env HOME="$home_dir" \
@@ -4680,6 +4682,24 @@ fi
 grep -q 'API preview did not become ready after 1 attempts' "$failed_preview_wrapper_out"
 if grep -q 'Public URL' "$failed_preview_wrapper_out"; then
     echo "unready API preview must not announce a public URL" >&2
+    exit 1
+fi
+
+redirect_preview_wrapper_out="$workspace/expose-wrapper-preview-redirect.out"
+if env HOME="$home_dir" \
+    PATH="$workspace/fake-tools:$PATH" \
+    FAKE_CURL_LOG="$fake_curl_log" \
+    FAKE_CURL_ATTEMPT_FILE="$fake_curl_attempt_file" \
+    FAKE_CURL_HTTP_STATUS=302 \
+    POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://api-redirect-hawk.preview.secpal.dev:443 >"$redirect_preview_wrapper_out" 2>&1; then
+    echo "redirecting API preview must not announce readiness" >&2
+    exit 1
+fi
+
+grep -q 'API preview did not become ready after 1 attempts' "$redirect_preview_wrapper_out"
+if grep -q 'Public URL' "$redirect_preview_wrapper_out"; then
+    echo "redirecting API preview must not announce a public URL" >&2
     exit 1
 fi
 
