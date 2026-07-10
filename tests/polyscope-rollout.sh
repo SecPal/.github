@@ -4601,12 +4601,66 @@ if [[ "$no_gpg_sign_exit" -eq 0 ]]; then
 fi
 
 preview_wrapper_out="$workspace/expose-wrapper-preview.out"
-env HOME="$home_dir" \
-    POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
-    "$fake_polyscope_bin_dir/expose-linux-x64" share https://frontend-auto-hawk.preview.secpal.dev:443 >"$preview_wrapper_out"
+fake_curl_bin="$workspace/fake-tools/curl"
+fake_curl_log="$workspace/fake-curl.log"
+fake_curl_attempt_file="$workspace/fake-curl-attempt"
+cat >"$fake_curl_bin" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
 
-grep -q 'Shared site              https://frontend-auto-hawk.preview.secpal.dev:443' "$preview_wrapper_out"
-grep -q 'Public URL               https://frontend-auto-hawk.preview.secpal.dev' "$preview_wrapper_out"
+printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+attempt=0
+if [[ -f "$FAKE_CURL_ATTEMPT_FILE" ]]; then
+    attempt="$(cat "$FAKE_CURL_ATTEMPT_FILE")"
+fi
+attempt=$((attempt + 1))
+printf '%s\n' "$attempt" > "$FAKE_CURL_ATTEMPT_FILE"
+
+if [[ "${FAKE_CURL_ALWAYS_FAIL:-0}" == "1" || "$attempt" -lt 2 ]]; then
+    exit 1
+fi
+STUB
+chmod +x "$fake_curl_bin"
+
+env HOME="$home_dir" \
+    PATH="$workspace/fake-tools:$PATH" \
+    FAKE_CURL_LOG="$fake_curl_log" \
+    FAKE_CURL_ATTEMPT_FILE="$fake_curl_attempt_file" \
+    POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS=0 \
+    POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://api-auto-hawk.preview.secpal.dev:443 >"$preview_wrapper_out"
+
+grep -q 'Shared site              https://api-auto-hawk.preview.secpal.dev:443' "$preview_wrapper_out"
+grep -q 'Public URL               https://api-auto-hawk.preview.secpal.dev' "$preview_wrapper_out"
+test "$(cat "$fake_curl_attempt_file")" = "2"
+grep -qx -- '-fsS --max-time 3 https://api-auto-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
+
+env HOME="$home_dir" \
+    PATH="$workspace/fake-tools:$PATH" \
+    FAKE_CURL_LOG="$fake_curl_log" \
+    FAKE_CURL_ATTEMPT_FILE="$fake_curl_attempt_file" \
+    POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://frontend-auto-hawk.preview.secpal.dev:443 >/dev/null
+
+test "$(cat "$fake_curl_attempt_file")" = "2"
+
+failed_preview_wrapper_out="$workspace/expose-wrapper-preview-failed.out"
+if env HOME="$home_dir" \
+    PATH="$workspace/fake-tools:$PATH" \
+    FAKE_CURL_LOG="$fake_curl_log" \
+    FAKE_CURL_ATTEMPT_FILE="$fake_curl_attempt_file" \
+    FAKE_CURL_ALWAYS_FAIL=1 \
+    POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://api-failing-hawk.preview.secpal.dev:443 >"$failed_preview_wrapper_out" 2>&1; then
+    echo "unready API preview must fail instead of announcing readiness" >&2
+    exit 1
+fi
+
+grep -q 'API preview did not become ready after 1 attempts' "$failed_preview_wrapper_out"
+if grep -q 'Public URL' "$failed_preview_wrapper_out"; then
+    echo "unready API preview must not announce a public URL" >&2
+    exit 1
+fi
 
 if [[ -s "$fake_expose_real_log" ]]; then
     echo "preview-domain Expose wrapper must not invoke the real Expose binary" >&2
