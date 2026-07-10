@@ -288,7 +288,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --install-nginx
 EOF
 
 cat >"$PATH_UNIT" <<EOF

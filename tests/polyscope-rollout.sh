@@ -951,6 +951,12 @@ if "run" in args and "build" in args:
     counter = int(counter_path.read_text()) if counter_path.exists() else 0
     counter_path.write_text(str(counter + 1))
 
+    if os.environ.get("FAKE_NPM_FAIL_FIRST_BUILD_127") == "1" and counter == 0:
+        Path("node_modules/.bin").mkdir(parents=True, exist_ok=True)
+        Path("node_modules/.bin/cross-env").write_text("ready\\n")
+        Path("node_modules/.package-lock.json").write_text("{}\\n")
+        sys.exit(127)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "assets").mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(f"<!doctype html>build {counter}\\n")
@@ -1090,10 +1096,33 @@ assert 'api_workspace = resolve_linked_workspace("SecPal/api", workspace)' in ru
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
+assert 'Path("node_modules/.bin/cross-env")' in watch_script, watch_script
+assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
+
+# The autostarted watcher can race the setup-time npm ci, which temporarily
+# removes node_modules/.bin. Exit 127 must therefore retry without requiring a
+# source edit after dependency installation finishes.
+frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
+bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(3):\n", 1).replace(
+    "    time.sleep(1)\n",
+    "    time.sleep(0.05)\n",
+    1,
+)
+watch_retry_result = subprocess.run(
+    ["python3", "-c", bounded_watch_script],
+    cwd=frontend_worktree,
+    env={**build_env, "FAKE_NPM_FAIL_FIRST_BUILD_127": "1"},
+    capture_output=True,
+    text=True,
+    timeout=5,
+)
+assert watch_retry_result.returncode == 0, watch_retry_result.stderr
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_result.stderr
+assert "waiting for dependency installation or a source change" in watch_retry_result.stderr, watch_retry_result.stderr
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""
@@ -3013,6 +3042,81 @@ except ValueError:
 else:
     raise SystemExit("unsupported nginx HTTP/2 syntax must fail before rendering")
 PY
+
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "nginx-install-rollback-fixture"
+fixture.mkdir()
+target = fixture / "preview.secpal.dev"
+candidate = fixture / "candidate.conf"
+systemctl_log = fixture / "systemctl.log"
+fake_sudo = fixture / "sudo"
+fake_nginx = fixture / "nginx"
+fake_systemctl = fixture / "systemctl"
+
+target.write_text("valid-current\n")
+candidate.write_text("invalid-candidate\n")
+fake_sudo.write_text('#!/usr/bin/env bash\nexec "$@"\n')
+fake_nginx.write_text(
+    "#!/usr/bin/env bash\n"
+    f"grep -q '^invalid' {target!s} && exit 1\n"
+    "exit 0\n"
+)
+fake_systemctl.write_text(
+    "#!/usr/bin/env bash\n"
+    f"printf '%s\\n' \"$*\" >> {systemctl_log!s}\n"
+)
+for executable in (fake_sudo, fake_nginx, fake_systemctl):
+    executable.chmod(0o755)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+try:
+    module.install_nginx_config(
+        candidate,
+        target=target,
+        sudo_bin=str(fake_sudo),
+        nginx_bin=str(fake_nginx),
+        systemctl_bin=str(fake_systemctl),
+    )
+except subprocess.CalledProcessError:
+    pass
+else:
+    raise AssertionError("invalid nginx candidate must fail installation")
+
+assert target.read_text() == "valid-current\n", target.read_text()
+assert not systemctl_log.exists(), systemctl_log.read_text() if systemctl_log.exists() else ""
+
+candidate.write_text("valid-next\n")
+module.install_nginx_config(
+    candidate,
+    target=target,
+    sudo_bin=str(fake_sudo),
+    nginx_bin=str(fake_nginx),
+    systemctl_bin=str(fake_systemctl),
+)
+assert target.read_text() == "valid-next\n", target.read_text()
+assert systemctl_log.read_text().splitlines() == ["reload nginx"], systemctl_log.read_text()
+
+module.install_nginx_config(
+    candidate,
+    target=target,
+    sudo_bin=str(fake_sudo),
+    nginx_bin=str(fake_nginx),
+    systemctl_bin=str(fake_systemctl),
+)
+assert systemctl_log.read_text().splitlines() == ["reload nginx"], systemctl_log.read_text()
+PY
+
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
 grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
 grep -qF "if (\$repo = guardguide) {" "$nginx_output"
@@ -4469,6 +4573,7 @@ grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscop
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'ExecStart=.* --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
@@ -4640,7 +4745,7 @@ env HOME="$home_dir" \
     POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
     "$fake_polyscope_bin_dir/expose-linux-x64" share https://api-auto-hawk.preview.secpal.dev:443 >"$preview_wrapper_out"
 
-grep -q 'Shared site              https://api-auto-hawk.preview.secpal.dev:443' "$preview_wrapper_out"
+grep -q 'Shared site              https://api-auto-hawk.preview.secpal.dev' "$preview_wrapper_out"
 grep -q 'Public URL               https://api-auto-hawk.preview.secpal.dev' "$preview_wrapper_out"
 test "$(cat "$fake_curl_attempt_file")" = "2"
 grep -qx -- '-fsS --max-time 3 -o /dev/null -w %{http_code} https://api-auto-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
@@ -4666,6 +4771,78 @@ env HOME="$home_dir" \
     "$fake_polyscope_bin_dir/expose-linux-x64" share https://frontend-auto-hawk.preview.secpal.dev:443 >/dev/null
 
 test "$(cat "$fake_curl_attempt_file")" = "3"
+
+physical_preview_clone_root="$workspace/physical-preview-clones"
+physical_preview_worktree="$physical_preview_clone_root/fe123456/misty-vulture-26c1f2f1"
+physical_preview_wrapper_out="$workspace/expose-wrapper-physical-preview.out"
+mkdir -p "$physical_preview_worktree"
+cat >"$physical_preview_worktree/.polyscope-secpal-provisioned.json" <<'JSON'
+{
+  "repo": "frontend",
+  "workspace": "misty-vulture",
+  "physical_workspace": "misty-vulture-26c1f2f1"
+}
+JSON
+
+(
+    cd "$workspace"
+    env HOME="$home_dir" \
+        PATH="$workspace/fake-tools:$PATH" \
+        POLYSCOPE_CLONE_ROOT="$physical_preview_clone_root" \
+        POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+        "$fake_polyscope_bin_dir/expose-linux-x64" \
+        share https://frontend-misty-vulture-26c1f2f1.preview.secpal.dev:443
+) >"$physical_preview_wrapper_out"
+
+grep -q 'Shared site              https://frontend-misty-vulture.preview.secpal.dev' "$physical_preview_wrapper_out"
+grep -q 'Public URL               https://frontend-misty-vulture.preview.secpal.dev' "$physical_preview_wrapper_out"
+if grep -q 'misty-vulture-26c1f2f1' "$physical_preview_wrapper_out"; then
+    echo "successful preview announcement must not expose the physical hash-suffixed host" >&2
+    exit 1
+fi
+
+canonical_hash_workspace="$physical_preview_clone_root/fe123456/release-deadbeef"
+canonical_hash_wrapper_out="$workspace/expose-wrapper-canonical-hash-preview.out"
+mkdir -p "$canonical_hash_workspace"
+cat >"$canonical_hash_workspace/.polyscope-secpal-provisioned.json" <<'JSON'
+{
+  "repo": "frontend",
+  "workspace": "release-deadbeef",
+  "physical_workspace": "release-deadbeef"
+}
+JSON
+
+(
+    cd "$workspace"
+    env HOME="$home_dir" \
+        POLYSCOPE_CLONE_ROOT="$physical_preview_clone_root" \
+        POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+        "$fake_polyscope_bin_dir/expose-linux-x64" \
+        share https://frontend-release-deadbeef.preview.secpal.dev:443
+) >"$canonical_hash_wrapper_out"
+
+grep -q 'Public URL               https://frontend-release-deadbeef.preview.secpal.dev' "$canonical_hash_wrapper_out"
+
+unprovisioned_physical_worktree="$workspace/unprovisioned-physical-preview/misty-vulture-26c1f2f1"
+unprovisioned_clone_root="$workspace/unprovisioned-physical-clones"
+unprovisioned_physical_wrapper_out="$workspace/expose-wrapper-unprovisioned-physical-preview.out"
+mkdir -p "$unprovisioned_physical_worktree" "$unprovisioned_clone_root"
+if (
+    cd "$unprovisioned_physical_worktree"
+    env HOME="$home_dir" \
+        POLYSCOPE_CLONE_ROOT="$unprovisioned_clone_root" \
+        POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+        "$fake_polyscope_bin_dir/expose-linux-x64" \
+        share https://frontend-misty-vulture-26c1f2f1.preview.secpal.dev:443
+) >"$unprovisioned_physical_wrapper_out" 2>&1; then
+    echo "physical hash-suffixed preview must not be announced without canonical provisioning metadata" >&2
+    exit 1
+fi
+grep -q 'refusing to announce physical hash-suffixed preview URL' "$unprovisioned_physical_wrapper_out"
+if grep -q 'Public URL' "$unprovisioned_physical_wrapper_out"; then
+    echo "physical hash-suffixed preview must never be exposed as the public URL" >&2
+    exit 1
+fi
 
 failed_preview_wrapper_out="$workspace/expose-wrapper-preview-failed.out"
 if env HOME="$home_dir" \
