@@ -18,6 +18,10 @@ on:
         type: string
         default: ""
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   pr-size:
     name: Check PR Size

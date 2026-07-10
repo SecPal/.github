@@ -7,6 +7,10 @@ name: Reusable - actionlint
 on:
   workflow_call:
 
+permissions:
+  checks: write
+  contents: read
+
 jobs:
   actionlint:
     name: Lint GitHub Actions Workflows

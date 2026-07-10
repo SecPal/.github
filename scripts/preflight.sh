@@ -116,8 +116,17 @@ fi
 if [ -f tests/reusable-workflow-timeouts.sh ]; then
   bash tests/reusable-workflow-timeouts.sh || {
     echo "" >&2
-    echo "❌ Reusable workflow timeout validation failed!" >&2
-    echo "Add timeout-minutes to every reusable workflow job before continuing." >&2
+    echo "❌ Reusable workflow policy validation failed!" >&2
+    echo "Add top-level permissions and timeout-minutes to every reusable workflow before continuing." >&2
+    exit 1
+  }
+fi
+
+if [ -f tests/reusable-workflow-policy.sh ]; then
+  bash tests/reusable-workflow-policy.sh || {
+    echo "" >&2
+    echo "❌ Reusable workflow policy regression fixtures failed!" >&2
+    echo "Keep .yml/.yaml discovery and positive/negative permission and timeout cases enforced." >&2
     exit 1
   }
 fi
