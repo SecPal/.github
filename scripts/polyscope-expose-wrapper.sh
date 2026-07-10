@@ -42,10 +42,16 @@ normalize_preview_url() {
 	printf '\n'
 }
 
-is_api_preview_url() {
+api_preview_origin() {
 	local direct_url="$1"
+	local host_and_path host
 
-	[[ "$direct_url" =~ ^https://api-[A-Za-z0-9-]+\.preview\.secpal\.dev$ ]]
+	[[ "$direct_url" == https://* ]] || return 1
+	host_and_path="${direct_url#https://}"
+	host="${host_and_path%%/*}"
+	[[ "$host" =~ ^api-[A-Za-z0-9-]+\.preview\.secpal\.dev$ ]] || return 1
+
+	printf 'https://%s\n' "$host"
 }
 
 wait_for_api_preview_readiness() {
@@ -97,8 +103,9 @@ announce_direct_preview() {
 if [[ $# -ge 2 && "$1" == "share" ]]; then
 	direct_preview_url="$(normalize_preview_url "$2" || true)"
 	if [[ -n "$direct_preview_url" ]]; then
-		if is_api_preview_url "$direct_preview_url"; then
-			wait_for_api_preview_readiness "$direct_preview_url"
+		api_preview_url="$(api_preview_origin "$direct_preview_url" || true)"
+		if [[ -n "$api_preview_url" ]]; then
+			wait_for_api_preview_readiness "$api_preview_url"
 		fi
 		announce_direct_preview "$2" "$direct_preview_url"
 	fi

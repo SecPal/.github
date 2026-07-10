@@ -4635,6 +4635,19 @@ grep -q 'Public URL               https://api-auto-hawk.preview.secpal.dev' "$pr
 test "$(cat "$fake_curl_attempt_file")" = "2"
 grep -qx -- '-fsS --max-time 3 https://api-auto-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
 
+path_preview_wrapper_out="$workspace/expose-wrapper-path-preview.out"
+env HOME="$home_dir" \
+    PATH="$workspace/fake-tools:$PATH" \
+    FAKE_CURL_LOG="$fake_curl_log" \
+    FAKE_CURL_ATTEMPT_FILE="$fake_curl_attempt_file" \
+    POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS=0 \
+    POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" share https://api-path-hawk.preview.secpal.dev/some/path >"$path_preview_wrapper_out"
+
+grep -q 'Public URL               https://api-path-hawk.preview.secpal.dev/some/path' "$path_preview_wrapper_out"
+test "$(cat "$fake_curl_attempt_file")" = "3"
+grep -qx -- '-fsS --max-time 3 https://api-path-hawk.preview.secpal.dev/health/ready' "$fake_curl_log"
+
 env HOME="$home_dir" \
     PATH="$workspace/fake-tools:$PATH" \
     FAKE_CURL_LOG="$fake_curl_log" \
@@ -4642,7 +4655,7 @@ env HOME="$home_dir" \
     POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
     "$fake_polyscope_bin_dir/expose-linux-x64" share https://frontend-auto-hawk.preview.secpal.dev:443 >/dev/null
 
-test "$(cat "$fake_curl_attempt_file")" = "2"
+test "$(cat "$fake_curl_attempt_file")" = "3"
 
 failed_preview_wrapper_out="$workspace/expose-wrapper-preview-failed.out"
 if env HOME="$home_dir" \
