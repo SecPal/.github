@@ -707,7 +707,7 @@ grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polys
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3 --max-time=3600'" "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3'" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan schedule:work'" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan pail --timeout=0'" "$workspace_root/api/polyscope.local.json"
@@ -733,6 +733,13 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 api_run_actions = module.REPO_SETTINGS["api"]["local_config"]["scripts"]["run"]
+queue_worker_action = next(
+    (action for action in api_run_actions if action["label"] == "Queue Worker"),
+    None,
+)
+assert queue_worker_action is not None, api_run_actions
+assert queue_worker_action.get("autostart") is True, queue_worker_action
+assert "--max-time" not in queue_worker_action["command"], queue_worker_action
 api_run_actions[0]["label"] = "Background Queue"
 api_run_actions[1]["label"] = "Cron Loop"
 api_run_actions[2]["label"] = "Log Tail"

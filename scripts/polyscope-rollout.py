@@ -63,7 +63,7 @@ API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
 API_REFRESH_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_REFRESH__"
 API_QUEUE_WORKER_COMMAND = (
     "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default "
-    "--sleep=3 --tries=3 --max-time=3600"
+    "--sleep=3 --tries=3"
 )
 API_SCHEDULER_COMMAND = "php artisan schedule:work"
 API_PAIL_COMMAND = "php artisan pail --timeout=0"
@@ -2139,7 +2139,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
-                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "runMode": "replace"},
+                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "autostart": True, "runMode": "replace"},
                     {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": True, "runMode": "replace"},
                     {"label": "Pail", "command": API_PAIL_COMMAND, "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
