@@ -13,7 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- delayed the API preview tunnel's ready announcement until its public `/health/ready` endpoint returns a 2xx response, so Polyscope does not present an API preview as ready while nginx or Laravel provisioning still returns a generic `404` or a redirect; the default wait window exceeds the three-minute provisioning fallback, while static previews retain their immediate announcement behavior
+- delayed the API preview tunnel's ready announcement until its public `/health/ready` endpoint returns a 2xx response, so Polyscope does not present an API preview as ready while nginx or Laravel provisioning still returns a generic `404` or a redirect; the ten-minute default wait window covers provisioning after the three-minute fallback timer, while static previews retain their immediate announcement behavior
 
 ---
 
