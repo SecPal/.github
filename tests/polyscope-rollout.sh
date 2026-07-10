@@ -3157,6 +3157,26 @@ assert systemctl_log.read_text().splitlines() == [
     "reload nginx",
     "reload nginx",
 ], systemctl_log.read_text()
+
+# Root execution must not depend on a sudo binary being installed.
+root_target = fixture / "root-preview.secpal.dev"
+root_candidate = fixture / "root-candidate.conf"
+root_target.write_text("valid-root-current\\n")
+root_candidate.write_text("valid-root-next\\n")
+original_geteuid = module.os.geteuid
+module.os.geteuid = lambda: 0
+try:
+    module.install_nginx_config(
+        root_candidate,
+        target=root_target,
+        sudo_bin=str(fixture / "missing-sudo"),
+        nginx_bin=str(fake_nginx),
+        systemctl_bin=str(fake_systemctl),
+    )
+finally:
+    module.os.geteuid = original_geteuid
+
+assert root_target.read_text() == "valid-root-next\\n", root_target.read_text()
 PY
 
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"

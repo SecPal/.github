@@ -4001,6 +4001,8 @@ def install_nginx_config(
     sudo_bin = sudo_bin or os.environ.get("POLYSCOPE_SUDO_BIN", "sudo")
 
     def sudo_command(*command: str) -> list[str]:
+        if os.geteuid() == 0:
+            return list(command)
         return [sudo_bin, "-n", *command]
 
     target_exists = subprocess.run(
