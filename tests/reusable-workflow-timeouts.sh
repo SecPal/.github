@@ -42,9 +42,6 @@ while IFS= read -r workflow; do
     in_permissions {
       exit
     }
-    /^jobs:[[:space:]]*$/ {
-      exit
-    }
     END {
       exit !found
     }

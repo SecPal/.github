@@ -42,6 +42,23 @@ YAML
 run_validator
 
 reset_workflows
+cat >"$workspace/.github/workflows/reusable-commented-late-permissions.yml" <<'YAML'
+---
+name: Valid late commented permissions
+on:
+  workflow_call:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: "true"
+permissions: # Explicit token-permission ceiling.
+  contents: read
+YAML
+run_validator
+
+reset_workflows
 cat >"$workspace/.github/workflows/reusable-deny-all.yaml" <<'YAML'
 ---
 name: Valid deny-all permissions
