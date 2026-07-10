@@ -951,6 +951,13 @@ if "run" in args and "build" in args:
     counter = int(counter_path.read_text()) if counter_path.exists() else 0
     counter_path.write_text(str(counter + 1))
 
+    if os.environ.get("FAKE_NPM_FAIL_FIRST_BUILD_127") == "1" and counter == 0:
+        Path("node_modules/.bin").mkdir(parents=True, exist_ok=True)
+        Path("node_modules/.bin/cross-env").write_text("ready\\n")
+        Path("node_modules/.package-lock.json").write_text("{}\\n")
+        Path("node_modules/.bin/vite").write_text("ready\\n")
+        sys.exit(127)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "assets").mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(f"<!doctype html>build {counter}\\n")
@@ -1090,10 +1097,33 @@ assert 'api_workspace = resolve_linked_workspace("SecPal/api", workspace)' in ru
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
+assert 'Path("node_modules/.bin/cross-env")' in watch_script, watch_script
+assert 'Path("node_modules/.bin/vite")' in watch_script, watch_script
+assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
+
+# The watcher can race setup-time npm ci. It must retry once both the npm
+# metadata and all build binaries become available, including Vite.
+frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
+bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(3):\n", 1).replace(
+    "    time.sleep(1)",
+    "    time.sleep(0.05)",
+    1,
+)
+watch_retry_result = subprocess.run(
+    ["python3", "-c", bounded_watch_script],
+    cwd=frontend_worktree,
+    env={**build_env, "FAKE_NPM_FAIL_FIRST_BUILD_127": "1"},
+    capture_output=True,
+    text=True,
+    timeout=5,
+)
+assert watch_retry_result.returncode == 0, watch_retry_result.stderr
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_result.stderr
+assert "waiting for dependency installation or a source change" in watch_retry_result.stderr, watch_retry_result.stderr
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""
@@ -4876,6 +4906,14 @@ JSON
 ) >"$canonical_hash_wrapper_out"
 
 grep -q 'Public URL               https://frontend-release-deadbeef.preview.secpal.dev' "$canonical_hash_wrapper_out"
+
+generic_hash_wrapper_out="$workspace/expose-wrapper-generic-hash-preview.out"
+env HOME="$home_dir" \
+    POLYSCOPE_CLONE_ROOT="$physical_preview_clone_root" \
+    POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE=1 \
+    "$fake_polyscope_bin_dir/expose-linux-x64" \
+    share https://release-deadbeef.preview.secpal.dev:443 >"$generic_hash_wrapper_out"
+grep -q 'Public URL               https://release-deadbeef.preview.secpal.dev' "$generic_hash_wrapper_out"
 
 unprovisioned_physical_worktree="$workspace/unprovisioned-physical-preview/misty-vulture-26c1f2f1"
 unprovisioned_clone_root="$workspace/unprovisioned-physical-clones"

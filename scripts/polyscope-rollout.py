@@ -1538,6 +1538,9 @@ watch_files = [
             Path(".env.local"),
             Path(".env.preview.local"),
             Path(".env.production.local"),
+            Path("node_modules/.package-lock.json"),
+            Path("node_modules/.bin/cross-env"),
+            Path("node_modules/.bin/vite"),
 ]
 watch_suffixes = {
             ".css",
@@ -1726,11 +1729,18 @@ while True:
         previous_snapshot = current_snapshot
         exit_code = run_build()
         if exit_code != 0:
-            print(
-                f"Preview rebuild failed with exit code {{exit_code}}; waiting for the next change before retrying.",
-                file=sys.stderr,
-                flush=True,
-            )
+            if exit_code == 127:
+                print(
+                    "Preview build dependencies were unavailable; waiting for dependency installation or a source change.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Preview rebuild failed with exit code {{exit_code}}; waiting for the next change before retrying.",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     time.sleep(1)
         """
