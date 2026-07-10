@@ -18,6 +18,9 @@ on:
         type: string
         default: "./vendor/bin/phpstan analyse"
 
+permissions:
+  contents: read
+
 jobs:
   phpstan:
     name: Static Analysis

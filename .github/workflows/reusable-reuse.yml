@@ -7,6 +7,9 @@ name: Reusable - REUSE Compliance
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   reuse:
     name: Check REUSE Compliance

@@ -15,6 +15,32 @@ if [ ! -d ".github/workflows" ]; then
 fi
 
 failures=()
+permission_failures=()
+
+while IFS= read -r workflow; do
+  if ! awk '
+    /^permissions:[[:space:]]*(\{\})?[[:space:]]*$/ {
+      found = 1
+      exit
+    }
+    /^jobs:[[:space:]]*$/ {
+      exit
+    }
+    END {
+      exit !found
+    }
+  ' "$workflow"; then
+    permission_failures+=("$workflow")
+  fi
+done < <(find .github/workflows -maxdepth 1 -type f -name 'reusable-*.yml' | sort)
+
+if [ ${#permission_failures[@]} -gt 0 ]; then
+  echo "Missing top-level permissions block on reusable workflows:" >&2
+  for workflow in "${permission_failures[@]}"; do
+    echo "  - $workflow" >&2
+  done
+  exit 1
+fi
 
 while IFS= read -r workflow; do
   current_failures=()

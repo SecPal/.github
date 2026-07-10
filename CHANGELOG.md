@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-10 - Restrict Reusable Workflow Token Permissions
+
+**Fixed:**
+
+- added explicit least-privilege permission ceilings to the reusable actionlint, Node.js, PHP, PR-size, and REUSE workflows; actionlint can write checks, PR-size can read pull-request metadata, and the remaining audited workflows only read repository contents
+- extended the reusable-workflow policy regression test and preflight guidance so every reusable workflow must retain a top-level `permissions` block as well as job timeouts
+
+---
+
 ## 2026-07-09 - Clean Up Repository-Wide yamllint Warnings
 
 **Fixed:**

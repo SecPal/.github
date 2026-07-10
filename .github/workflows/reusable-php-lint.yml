@@ -18,6 +18,9 @@ on:
         type: string
         default: "./vendor/bin/pint --test"
 
+permissions:
+  contents: read
+
 jobs:
   pint:
     name: Check Code Style
