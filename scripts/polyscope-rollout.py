@@ -1146,6 +1146,16 @@ def bootstrap_api_worktree(
     if migration_command is None:
         migration_command = ["php", "artisan", "migrate", "--force"]
 
+    if (worktree_path / "vendor" / "autoload.php").is_file():
+        print(f"{prefix} Composer dependencies already present")
+    else:
+        print(f"{prefix} installing Composer dependencies")
+        run_api_worktree_bootstrap_command(
+            worktree_path,
+            ["composer", "install"],
+            command_env=command_env,
+        )
+
     if env_values.get("APP_KEY", "").strip():
         print(f"{prefix} app key already present")
     else:

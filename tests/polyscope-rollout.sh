@@ -2471,6 +2471,7 @@ assert db_calls == [
     ),
 ], db_calls
 assert calls == [
+    (("composer", "install"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"), api_worktree, "source-only-password", "source-only-password"),
@@ -2591,10 +2592,12 @@ assert ready is True
 assert target == "database:secpal__preview__coral_crow", target
 assert not kek_path.exists(), "recovery must remove the stale isolated-preview KEK"
 assert calls == [
+    ("composer", "install"),
     ("php", "artisan", "config:clear"),
     ("php", "artisan", "migrate", "--force"),
     ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
+    ("composer", "install"),
     ("php", "artisan", "config:clear"),
     ("php", "artisan", "migrate:fresh", "--force"),
     ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
