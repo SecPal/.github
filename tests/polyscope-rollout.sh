@@ -954,8 +954,11 @@ if "run" in args and "build" in args:
     counter_path.write_text(str(counter + 1))
 
     if os.environ.get("FAKE_NPM_FAIL_ALWAYS_BUILD_127") == "1" or (
-        os.environ.get("FAKE_NPM_FAIL_WITHOUT_CROSS_ENV") == "1"
-        and not Path("node_modules/.bin/cross-env").exists()
+        os.environ.get("FAKE_NPM_FAIL_WITHOUT_BUILD_BINARIES") == "1"
+        and not all(
+            Path(f"node_modules/.bin/{binary}").exists()
+            for binary in ("cross-env", "vite")
+        )
     ):
         sys.exit(127)
 
@@ -1110,8 +1113,9 @@ assert "child.is_symlink()" in watch_script, watch_script
 # independently after the initial missing-command failure and must trigger one
 # retry via npm's stable hidden lockfile, without a source edit.
 frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
+frontend_worktree.joinpath("dist").unlink()
 shutil.rmtree(frontend_worktree / "node_modules", ignore_errors=True)
-bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(5):\n", 1).replace(
+bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(8):\n", 1).replace(
     "    time.sleep(1)",
     "    time.sleep(0.1)",
     1,
@@ -1119,7 +1123,7 @@ bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iterati
 watch_retry_process = subprocess.Popen(
     ["python3", "-c", bounded_watch_script],
     cwd=frontend_worktree,
-    env={**build_env, "FAKE_NPM_FAIL_WITHOUT_CROSS_ENV": "1"},
+    env={**build_env, "FAKE_NPM_FAIL_WITHOUT_BUILD_BINARIES": "1"},
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     text=True,
@@ -1135,10 +1139,15 @@ else:
 frontend_worktree.joinpath("node_modules").mkdir(exist_ok=True)
 frontend_worktree.joinpath("node_modules/.bin").mkdir(exist_ok=True)
 frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
+frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
+time.sleep(0.2)
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1"
 frontend_worktree.joinpath("node_modules/.package-lock.json").write_text("{}\\n")
 _watch_retry_stdout, watch_retry_stderr = watch_retry_process.communicate(timeout=5)
 assert watch_retry_process.returncode == 0, watch_retry_stderr
 assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_stderr
+assert frontend_worktree.joinpath("dist/index.html").exists(), watch_retry_stderr
+assert frontend_worktree.joinpath("dist/index.html").read_text() == "<!doctype html>build 1\n", watch_retry_stderr
 assert "waiting for dependency installation or a source change" in watch_retry_stderr, watch_retry_stderr
 
 # Permanently unavailable dependencies must wait for a subsequent change, not
