@@ -102,7 +102,8 @@ def has_active_process(root: Path) -> bool:
                 if is_within(Path(os.readlink(location)), root):
                     return True
             except OSError:
-                pass
+                # The process may exit or hide this link while it is scanned.
+                continue
         fd_dir = entry / "fd"
         try:
             fds = list(fd_dir.iterdir())
@@ -114,7 +115,8 @@ def has_active_process(root: Path) -> bool:
                 if target.startswith("/") and is_within(Path(target), root):
                     return True
             except OSError:
-                pass
+                # File descriptors can close between directory listing and lookup.
+                continue
     return False
 
 
