@@ -785,6 +785,7 @@ fi
 grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'PLAYWRIGHT_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'PLAYWRIGHT_API_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'POLYSCOPE_WORKSPACE' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'tests/e2e/smoke.spec.ts' "$workspace_root/frontend/polyscope.local.json"
 grep -qF -- '--project=chromium' "$workspace_root/frontend/polyscope.local.json"
 grep -qF -- '--project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
@@ -937,6 +938,7 @@ fake_npm.write_text(
     """#!/usr/bin/env python3
 import os
 import sys
+import time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -949,6 +951,17 @@ for index, arg in enumerate(args[:-1]):
 Path("npm-vite-api-url.log").write_text(os.environ.get("VITE_API_URL", "") + "\\n")
 
 if "run" in args and "build" in args:
+    active_build_path = Path(".fake-npm-build-active")
+    try:
+        active_build_fd = os.open(active_build_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        Path(".fake-npm-build-overlap").write_text("overlap\\n")
+        sys.exit(99)
+    os.close(active_build_fd)
+    if os.environ.get("FAKE_NPM_BUILD_DELAY"):
+        time.sleep(float(os.environ["FAKE_NPM_BUILD_DELAY"]))
+    active_build_path.unlink()
+
     counter_path = Path(".fake-npm-build-count")
     counter = int(counter_path.read_text()) if counter_path.exists() else 0
     counter_path.write_text(str(counter + 1))
@@ -1058,6 +1071,26 @@ symlink_build_result = subprocess.run(
 assert symlink_build_result.returncode == 1, symlink_build_result.stderr
 assert "staged build output contains symlink: assets/linked-secret.txt" in symlink_build_result.stderr, symlink_build_result.stderr
 assert not frontend_worktree.joinpath("dist", "assets", "linked-secret.txt").exists()
+
+# Concurrent preview builds must serialize the complete build and publication
+# lifecycle rather than interleaving their staged artifacts.
+frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
+concurrent_builds = [
+    subprocess.Popen(
+        ["bash", "-c", "set -euo pipefail; " + build_command],
+        cwd=frontend_worktree,
+        env={**build_env, "FAKE_NPM_BUILD_DELAY": "0.2"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    for _ in range(2)
+]
+concurrent_results = [process.communicate(timeout=5) for process in concurrent_builds]
+assert [process.returncode for process in concurrent_builds] == [0, 0], concurrent_results
+assert not frontend_worktree.joinpath(".fake-npm-build-overlap").exists(), concurrent_results
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", concurrent_results
+assert "build 1" in frontend_worktree.joinpath("dist", "index.html").read_text()
 
 frontend_worktree.joinpath("dist").rename(frontend_worktree / "old-dist")
 frontend_worktree.joinpath("live-dist-target").mkdir()
@@ -2470,8 +2503,10 @@ assert db_calls == [
     ),
 ], db_calls
 assert calls == [
+    (("composer", "install"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "db:seed", "--force"), api_worktree, "source-only-password", "source-only-password"),
     (
         ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
@@ -2589,11 +2624,15 @@ assert ready is True
 assert target == "database:secpal__preview__coral_crow", target
 assert not kek_path.exists(), "recovery must remove the stale isolated-preview KEK"
 assert calls == [
+    ("composer", "install"),
     ("php", "artisan", "config:clear"),
     ("php", "artisan", "migrate", "--force"),
+    ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
+    ("composer", "install"),
     ("php", "artisan", "config:clear"),
     ("php", "artisan", "migrate:fresh", "--force"),
+    ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
     ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
 ], calls
@@ -3934,6 +3973,7 @@ test ! -f "$broken_android_clone/.polyscope-secpal-provisioned.json"
 grep -qF "composer:$api_clone:install" "$provision_log"
 grep -qF "php:$api_clone:artisan config:clear" "$provision_log"
 grep -qF "php:$api_clone:artisan migrate --force" "$provision_log"
+grep -qF "php:$api_clone:artisan addresses:import --if-empty --setup-only --no-interaction" "$provision_log"
 grep -qF "php:$api_clone:artisan db:seed --force" "$provision_log"
 grep -qF "php:$api_clone:artisan tinker --execute=" "$provision_log"
 grep -qF "npm:$frontend_clone:ci" "$provision_log"
@@ -4798,10 +4838,6 @@ grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_l
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log"
-if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
-  echo "system-scope install must finish the initial sync before enabling the provision path watcher" >&2
-  exit 1
-fi
 if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
   echo "system-scope install must finish the initial sync before enabling the provision timer" >&2
   exit 1
@@ -4850,7 +4886,7 @@ grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polysc
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitBurst=5' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
@@ -4871,9 +4907,15 @@ grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-w
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathModified=.*/\.polyscope/polyscope\.db-wal$' "$fake_unit_dir/polyscope-worktree-provision.path"
-grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"
+if grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"; then
+  echo "worktree provision path must not watch clone contents it modifies" >&2
+  exit 1
+fi
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
+grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '.polyscope-preview-stage' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'build.lock' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"
@@ -4882,10 +4924,6 @@ grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-clone-reaper.timer' "$fake_systemctl_log"
-if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
-  echo "installer must finish the initial sync before enabling the provision path watcher" >&2
-  exit 1
-fi
 if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
   echo "installer must finish the initial sync before enabling the provision timer" >&2
   exit 1

@@ -359,7 +359,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --skip-local-configs --provision-worktrees
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --skip-local-configs --skip-db-sync --provision-worktrees
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF
@@ -371,7 +371,6 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 [Path]
 PathChanged=$HOME/.polyscope/polyscope.db
 PathModified=$HOME/.polyscope/polyscope.db-wal
-PathModified=$POLYSCOPE_CLONE_ROOT
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json

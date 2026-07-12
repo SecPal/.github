@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-12 - Import Address Data into API Previews
+
+**Fixed:**
+
+- imported the address dataset during API Polyscope workspace bootstrap when absent, matching the API setup workflow so newly provisioned previews retain address lookup functionality
+- stopped the automatic worktree-provisioning service from synchronizing the Polyscope database it watches, preventing its own metadata write from repeatedly retriggering the path unit while retaining immediate event-driven provisioning
+- serialized staged frontend preview builds and stopped the provision watcher from observing clone contents it changes itself, so every published HTML document, JavaScript bundle, and service worker comes from one completed build
+- passed the canonical Polyscope workspace name to generated frontend browser smokes, so hash-suffixed clone directories continue to test the public canonical preview host instead of a non-existent physical-name host
+
+---
+
 ## 2026-07-12 - Reap Orphaned Polyscope Clone Roots
 
 **Fixed:**
