@@ -2446,9 +2446,58 @@ assert "POLYSCOPE_DB_PASSWORD_SOURCE=source" in worktree_env, worktree_env
 assert "POLYSCOPE_DB_PASSWORD_SOURCE_SHA256=" in worktree_env, worktree_env
 PY
 
+# Bootstrap output must remain visible while a command is running, while its
+# complete transcript remains available to classify a failed seed command.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import builtins
+import importlib.util
+import pathlib
+import subprocess
+import sys
+from unittest.mock import patch
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+emitted = []
+popen_calls = []
+
+class FakeProcess:
+    stdout = ["first line\n", "second line\n"]
+
+    def wait(self):
+        assert emitted == ["first line\n", "second line\n"], emitted
+        return 1
+
+def fake_popen(*args, **kwargs):
+    popen_calls.append((args, kwargs))
+    return FakeProcess()
+
+with patch.object(module.subprocess, "Popen", side_effect=fake_popen):
+    with patch.object(builtins, "print", side_effect=lambda value="", end="\n": emitted.append(value)):
+        try:
+            module.run_api_worktree_bootstrap_command(
+                workspace,
+                ["php", "artisan", "db:seed", "--force"],
+                command_env={},
+            )
+        except subprocess.CalledProcessError as error:
+            assert error.output == "first line\nsecond line\n", error.output
+        else:
+            raise AssertionError("expected streamed bootstrap failure")
+
+assert len(popen_calls) == 1, popen_calls
+assert popen_calls[0][1]["stdout"] is subprocess.PIPE, popen_calls
+assert popen_calls[0][1]["stderr"] is subprocess.STDOUT, popen_calls
+PY
+
 # A stale per-worktree KEK cannot unwrap tenant keys left in an isolated
 # preview database. Bootstrap must recognize that exact failure, discard only
-# the preview key material, and retry once from a fresh preview schema.
+# the preview key material, and retry once from a fresh preview database.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib

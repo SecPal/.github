@@ -1057,7 +1057,7 @@ def run_api_worktree_bootstrap_command(
     *,
     command_env: dict[str, str],
 ) -> None:
-    result = subprocess.run(
+    process = subprocess.Popen(
         command,
         cwd=worktree_path,
         env=command_env,
@@ -1065,9 +1065,17 @@ def run_api_worktree_bootstrap_command(
         stderr=subprocess.STDOUT,
         text=True,
     )
-    if result.stdout:
-        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
-    result.check_returncode()
+    if process.stdout is None:
+        raise RuntimeError("Failed to capture API bootstrap command output")
+
+    output_chunks: list[str] = []
+    for output_chunk in process.stdout:
+        print(output_chunk, end="")
+        output_chunks.append(output_chunk)
+
+    return_code = process.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command, output="".join(output_chunks))
 
 
 def is_recoverable_preview_tenant_key_failure(error: subprocess.CalledProcessError) -> bool:
@@ -1094,7 +1102,7 @@ def discard_stale_preview_kek(
     preview_storage_target: str | None,
 ) -> bool:
     """Discard only a stale KEK belonging to an isolated API preview worktree."""
-    if preview_storage_target is None or "__preview__" not in preview_storage_target:
+    if preview_storage_target is None or POSTGRES_PREVIEW_DATABASE_SEPARATOR not in preview_storage_target:
         return False
 
     configured_kek_path = env_values.get("KEK_PATH", "").strip()
