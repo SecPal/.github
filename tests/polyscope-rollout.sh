@@ -812,10 +812,12 @@ python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
 import pathlib
+import shutil
 import shlex
 import sqlite3
 import subprocess
 import sys
+import time
 
 script_path = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
@@ -951,11 +953,13 @@ if "run" in args and "build" in args:
     counter = int(counter_path.read_text()) if counter_path.exists() else 0
     counter_path.write_text(str(counter + 1))
 
-    if os.environ.get("FAKE_NPM_FAIL_FIRST_BUILD_127") == "1" and counter == 0:
-        Path("node_modules/.bin").mkdir(parents=True, exist_ok=True)
-        Path("node_modules/.bin/cross-env").write_text("ready\\n")
-        Path("node_modules/.package-lock.json").write_text("{}\\n")
-        Path("node_modules/.bin/vite").write_text("ready\\n")
+    if os.environ.get("FAKE_NPM_FAIL_ALWAYS_BUILD_127") == "1" or (
+        os.environ.get("FAKE_NPM_FAIL_WITHOUT_BUILD_BINARIES") == "1"
+        and not all(
+            Path(f"node_modules/.bin/{binary}").exists()
+            for binary in ("cross-env", "vite")
+        )
+    ):
         sys.exit(127)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1097,33 +1101,69 @@ assert 'api_workspace = resolve_linked_workspace("SecPal/api", workspace)' in ru
 assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
-assert 'Path("node_modules/.bin/cross-env")' in watch_script, watch_script
-assert 'Path("node_modules/.bin/vite")' in watch_script, watch_script
 assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
+assert 'Path("node_modules/.bin/cross-env")' not in watch_script, watch_script
+assert 'Path("node_modules/.bin/vite")' not in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
 
-# The watcher can race setup-time npm ci. It must retry once both the npm
-# metadata and all build binaries become available, including Vite.
+# The watcher can race setup-time npm ci. Dependency installation completes
+# independently after the initial missing-command failure and must trigger one
+# retry via npm's stable hidden lockfile, without a source edit.
 frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
-bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(3):\n", 1).replace(
+frontend_worktree.joinpath("dist").unlink()
+shutil.rmtree(frontend_worktree / "node_modules", ignore_errors=True)
+bounded_watch_script = watch_script.replace("while True:\n", "for _watch_iteration in range(8):\n", 1).replace(
     "    time.sleep(1)",
-    "    time.sleep(0.05)",
+    "    time.sleep(0.1)",
     1,
 )
-watch_retry_result = subprocess.run(
+watch_retry_process = subprocess.Popen(
     ["python3", "-c", bounded_watch_script],
     cwd=frontend_worktree,
-    env={**build_env, "FAKE_NPM_FAIL_FIRST_BUILD_127": "1"},
+    env={**build_env, "FAKE_NPM_FAIL_WITHOUT_BUILD_BINARIES": "1"},
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+for _ in range(20):
+    if frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1":
+        break
+    time.sleep(0.05)
+else:
+    watch_retry_process.kill()
+    raise AssertionError("watcher did not attempt the initial build")
+
+frontend_worktree.joinpath("node_modules").mkdir(exist_ok=True)
+frontend_worktree.joinpath("node_modules/.bin").mkdir(exist_ok=True)
+frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
+frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
+time.sleep(0.2)
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1"
+frontend_worktree.joinpath("node_modules/.package-lock.json").write_text("{}\\n")
+_watch_retry_stdout, watch_retry_stderr = watch_retry_process.communicate(timeout=5)
+assert watch_retry_process.returncode == 0, watch_retry_stderr
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_stderr
+assert frontend_worktree.joinpath("dist/index.html").exists(), watch_retry_stderr
+assert frontend_worktree.joinpath("dist/index.html").read_text() == "<!doctype html>build 1\n", watch_retry_stderr
+assert "waiting for dependency installation or a source change" in watch_retry_stderr, watch_retry_stderr
+
+# Permanently unavailable dependencies must wait for a subsequent change, not
+# spin through repeated exit-127 builds.
+frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
+frontend_worktree.joinpath("node_modules/.package-lock.json").unlink()
+watch_no_retry_result = subprocess.run(
+    ["python3", "-c", bounded_watch_script],
+    cwd=frontend_worktree,
+    env={**build_env, "FAKE_NPM_FAIL_ALWAYS_BUILD_127": "1"},
     capture_output=True,
     text=True,
     timeout=5,
 )
-assert watch_retry_result.returncode == 0, watch_retry_result.stderr
-assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_result.stderr
-assert "waiting for dependency installation or a source change" in watch_retry_result.stderr, watch_retry_result.stderr
+assert watch_no_retry_result.returncode == 0, watch_no_retry_result.stderr
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1", watch_no_retry_result.stderr
 
 # build_frontend_preview_playwright_command: assert linked API workspace is used in PLAYWRIGHT_API_BASE_URL
 playwright_probe = _textwrap.dedent(f"""

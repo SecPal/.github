@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-12 - Recover Frontend Preview Watcher After Dependency Installation
+
+**Fixed:**
+
+- made the frontend Polyscope build watcher observe npm's hidden installed-dependency lockfile, so one rebuild follows a setup-time `npm ci` race that initially leaves `cross-env` unavailable; ordinary failures and permanently missing dependencies still wait for a later change instead of retrying continuously
+
+---
+
 ## 2026-07-12 - Recover Stale Polyscope Preview Tenant Keys
 
 **Fixed:**
