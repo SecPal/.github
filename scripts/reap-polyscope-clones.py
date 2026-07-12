@@ -82,7 +82,8 @@ def quarantine_if_still_orphan(
             conn.execute("BEGIN IMMEDIATE")
             if candidate.name in protected_clone_root_names(conn, clone_root):
                 return None
-            if candidate.stat().st_mtime > cutoff or has_lock(candidate) or has_active_process(candidate):
+            newest_mtime = newest_tree_mtime(candidate)
+            if newest_mtime is None or newest_mtime > cutoff or has_lock(candidate) or has_active_process(candidate):
                 return None
             candidate.rename(quarantine)
         return quarantine
@@ -163,6 +164,13 @@ def allocated_bytes(root: Path) -> int:
     return total
 
 
+def newest_tree_mtime(root: Path) -> float | None:
+    try:
+        return max(path.lstat().st_mtime for path in [root, *root.rglob("*")])
+    except OSError:
+        return None
+
+
 def reap(args: argparse.Namespace) -> dict[str, Any]:
     home = resolved_absolute(Path(args.polyscope_home), "Polyscope home")
     clone_root = resolved_absolute(Path(args.clone_root) if args.clone_root else home / "clones", "clone root")
@@ -187,7 +195,11 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
             report["skipped"]["active"].append(str(candidate))
             continue
         try:
-            if candidate.stat().st_mtime > cutoff:
+            newest_mtime = newest_tree_mtime(candidate)
+            if newest_mtime is None:
+                report["skipped"]["unsafe"].append(str(candidate))
+                continue
+            if newest_mtime > cutoff:
                 report["skipped"]["grace_period"].append(str(candidate))
                 continue
         except OSError:

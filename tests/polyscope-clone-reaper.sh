@@ -44,14 +44,15 @@ conn.commit()
 conn.close()
 PY
 
-mkdir -p "$clone_root/orphan-old/node_modules/cache" "$clone_root/orphan-young" "$clone_root/orphan-lock/.git" "$clone_root/orphan-busy"
+mkdir -p "$clone_root/orphan-old/node_modules/cache" "$clone_root/orphan-recent/cache" "$clone_root/orphan-young" "$clone_root/orphan-lock/.git" "$clone_root/orphan-busy"
 mkdir -p "$clone_root/registered-path-root"
 outside_root="$workspace/outside-clone-root"
 mkdir -p "$outside_root"
 ln -s "$outside_root" "$clone_root/external-link"
 printf 'payload\n' > "$clone_root/orphan-old/node_modules/cache/file"
 touch "$clone_root/orphan-old/yarn.lock"
-python3 - <<'PY' "$clone_root/orphan-old" "$clone_root/inactive-repo" "$clone_root/orphan-lock" "$clone_root/orphan-busy" "$clone_root/registered-path-root" "$clone_root/direct-worktree"
+touch "$clone_root/orphan-lock/.git/index.lock"
+python3 - <<'PY' "$clone_root/orphan-old" "$clone_root/orphan-old/node_modules" "$clone_root/orphan-old/node_modules/cache" "$clone_root/orphan-old/node_modules/cache/file" "$clone_root/orphan-old/yarn.lock" "$clone_root/orphan-recent" "$clone_root/inactive-repo" "$clone_root/orphan-lock" "$clone_root/orphan-lock/.git" "$clone_root/orphan-lock/.git/index.lock" "$clone_root/orphan-busy" "$clone_root/registered-path-root" "$clone_root/direct-worktree"
 import os
 import sys
 import time
@@ -60,7 +61,6 @@ mtime = time.time() - 10 * 24 * 60 * 60
 for value in sys.argv[1:]:
     os.utime(value, (mtime, mtime))
 PY
-touch "$clone_root/orphan-lock/.git/index.lock"
 
 # A process whose current directory is inside a candidate must prevent deletion.
 (cd "$clone_root/orphan-busy" && sleep 30) &
@@ -82,7 +82,7 @@ assert report['skipped']['active'] == [
     str(clones / 'inactive-repo'),
     str(clones / 'registered-path-root'),
 ]
-assert report['skipped']['grace_period'] == [str(clones / 'orphan-young')]
+assert report['skipped']['grace_period'] == [str(clones / 'orphan-recent'), str(clones / 'orphan-young')]
 assert report['skipped']['lock'] == [str(clones / 'orphan-lock')]
 assert report['skipped']['process'] == [str(clones / 'orphan-busy')]
 assert report['skipped']['unsafe'] == [str(clones / 'external-link')]
@@ -105,7 +105,7 @@ assert report['reclaimed_bytes'] > 0
 PY
 
 [[ ! -e "$clone_root/orphan-old" ]] || { echo 'orphan clone root was not removed' >&2; exit 1; }
-[[ -d "$clone_root/active-repo" && -d "$clone_root/direct-worktree" && -d "$clone_root/inactive-repo" && -d "$clone_root/orphan-young" && -d "$clone_root/orphan-lock" && -d "$clone_root/orphan-busy" && -d "$clone_root/registered-path-root" && -d "$outside_root" ]] || {
+[[ -d "$clone_root/active-repo" && -d "$clone_root/direct-worktree" && -d "$clone_root/inactive-repo" && -d "$clone_root/orphan-recent" && -d "$clone_root/orphan-young" && -d "$clone_root/orphan-lock" && -d "$clone_root/orphan-busy" && -d "$clone_root/registered-path-root" && -d "$outside_root" ]] || {
     echo 'reaper removed a protected clone root' >&2
     exit 1
 }
