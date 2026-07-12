@@ -938,6 +938,7 @@ fake_npm.write_text(
     """#!/usr/bin/env python3
 import os
 import sys
+import time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -950,6 +951,17 @@ for index, arg in enumerate(args[:-1]):
 Path("npm-vite-api-url.log").write_text(os.environ.get("VITE_API_URL", "") + "\\n")
 
 if "run" in args and "build" in args:
+    active_build_path = Path(".fake-npm-build-active")
+    try:
+        active_build_fd = os.open(active_build_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        Path(".fake-npm-build-overlap").write_text("overlap\\n")
+        sys.exit(99)
+    os.close(active_build_fd)
+    if os.environ.get("FAKE_NPM_BUILD_DELAY"):
+        time.sleep(float(os.environ["FAKE_NPM_BUILD_DELAY"]))
+    active_build_path.unlink()
+
     counter_path = Path(".fake-npm-build-count")
     counter = int(counter_path.read_text()) if counter_path.exists() else 0
     counter_path.write_text(str(counter + 1))
@@ -1059,6 +1071,26 @@ symlink_build_result = subprocess.run(
 assert symlink_build_result.returncode == 1, symlink_build_result.stderr
 assert "staged build output contains symlink: assets/linked-secret.txt" in symlink_build_result.stderr, symlink_build_result.stderr
 assert not frontend_worktree.joinpath("dist", "assets", "linked-secret.txt").exists()
+
+# Concurrent preview builds must serialize the complete build and publication
+# lifecycle rather than interleaving their staged artifacts.
+frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
+concurrent_builds = [
+    subprocess.Popen(
+        ["bash", "-c", "set -euo pipefail; " + build_command],
+        cwd=frontend_worktree,
+        env={**build_env, "FAKE_NPM_BUILD_DELAY": "0.2"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    for _ in range(2)
+]
+concurrent_results = [process.communicate(timeout=5) for process in concurrent_builds]
+assert [process.returncode for process in concurrent_builds] == [0, 0], concurrent_results
+assert not frontend_worktree.joinpath(".fake-npm-build-overlap").exists(), concurrent_results
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", concurrent_results
+assert "build 1" in frontend_worktree.joinpath("dist", "index.html").read_text()
 
 frontend_worktree.joinpath("dist").rename(frontend_worktree / "old-dist")
 frontend_worktree.joinpath("live-dist-target").mkdir()
@@ -4804,7 +4836,7 @@ grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log
 grep -q '^--user daemon-reload$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
-grep -q '^--user disable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
+grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log"
 if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
   echo "system-scope install must finish the initial sync before enabling the provision timer" >&2
@@ -4889,7 +4921,7 @@ grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
-grep -q 'disable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
+grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-clone-reaper.timer' "$fake_systemctl_log"
 if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
