@@ -326,6 +326,28 @@ python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --
 - `1`: One or more findings detected
 - `2`: Usage error or missing dependency/state
 
+### `reap-polyscope-clones.py`
+
+Conservatively reclaims orphaned Polyscope repository clone roots. It derives
+its allowlist from worktree paths currently registered in `polyscope.db`, waits
+seven days by default, and skips clone roots with lock files or active
+processes. It only considers immediate real directories inside the configured
+clone root.
+
+**Usage:**
+
+```bash
+# Inspect eligible orphan roots and potential reclaimed space
+python3 scripts/reap-polyscope-clones.py --dry-run
+
+# Reap an isolated fixture or non-default Polyscope location
+python3 scripts/reap-polyscope-clones.py --polyscope-home /tmp/polyscope --clone-root /tmp/polyscope/clones --grace-period 14d
+```
+
+The rollout installer enables `polyscope-clone-reaper.timer`, which runs the
+reaper daily after startup. The reaper prints reclaimed bytes and supports
+`--json` for operational reporting.
+
 ### `install-polyscope-rollout.sh`
 
 Installs the SecPal Polyscope rollout systemd units that keep workspace clones,
@@ -346,7 +368,9 @@ and exits before writing service units when unattended access is unavailable.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new
-managed repositories automatically when the canonical repo list changes.
+managed repositories automatically when the canonical repo list changes. The
+paired daily `polyscope-clone-reaper.timer` removes only aged orphan clone
+roots after checking the live database allowlist, locks, and processes.
 
 ### `setup-hooks.sh`
 

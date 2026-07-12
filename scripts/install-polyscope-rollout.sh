@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="$SCRIPT_DIR/polyscope-rollout.py"
+REAPER_SOURCE="$SCRIPT_DIR/reap-polyscope-clones.py"
 WRAPPER_SOURCE="$SCRIPT_DIR/polyscope-expose-wrapper.sh"
 GIT_WRAPPER_SOURCE="$SCRIPT_DIR/polyscope-git-wrapper.sh"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/code/SecPal}"
@@ -65,6 +66,7 @@ if [[ -z "$SERVICE_PATH" ]]; then
 fi
 
 INSTALL_TARGET="$BIN_DIR/polyscope-secpal-rollout.py"
+REAPER_TARGET="$BIN_DIR/reap-polyscope-clones.py"
 EXPOSE_WRAPPER_TARGET="$BIN_DIR/polyscope-expose-wrapper.sh"
 GIT_WRAPPER_TARGET="$BIN_DIR/polyscope-git-wrapper.sh"
 SERVER_UNIT="$UNIT_DIR/polyscope-server.service"
@@ -73,6 +75,8 @@ PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
 PROVISION_SERVICE_UNIT="$UNIT_DIR/polyscope-worktree-provision.service"
 PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
+REAPER_SERVICE_UNIT="$UNIT_DIR/polyscope-clone-reaper.service"
+REAPER_TIMER_UNIT="$UNIT_DIR/polyscope-clone-reaper.timer"
 ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
@@ -208,6 +212,7 @@ fi
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
+ln -sfn "$REAPER_SOURCE" "$REAPER_TARGET"
 ln -sfn "$WRAPPER_SOURCE" "$EXPOSE_WRAPPER_TARGET"
 ln -sfn "$GIT_WRAPPER_SOURCE" "$GIT_WRAPPER_TARGET"
 
@@ -395,6 +400,34 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+cat >"$REAPER_SERVICE_UNIT" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Reap orphaned SecPal Polyscope clone roots
+After=polyscope-worktree-provision.service
+
+[Service]
+Type=oneshot
+Environment=PATH=$SERVICE_PATH
+ExecStart=$REAPER_TARGET --polyscope-home $POLYSCOPE_HOME --clone-root $POLYSCOPE_CLONE_ROOT --grace-period 7d
+EOF
+
+cat >"$REAPER_TIMER_UNIT" <<EOF
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Schedule conservative Polyscope clone-root reaping
+
+[Timer]
+OnStartupSec=10min
+OnUnitActiveSec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 "$SYSTEMCTL_BIN" --user daemon-reload
 
 if [[ "$server_scope" == "user" ]]; then
@@ -411,6 +444,7 @@ fi
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
+"$SYSTEMCTL_BIN" --user enable --now polyscope-clone-reaper.timer
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $EXPOSE_WRAPPER_TARGET"
@@ -423,3 +457,5 @@ echo "Installed $PATH_UNIT"
 echo "Installed $PROVISION_SERVICE_UNIT"
 echo "Installed $PROVISION_PATH_UNIT"
 echo "Installed $PROVISION_TIMER_UNIT"
+echo "Installed $REAPER_SERVICE_UNIT"
+echo "Installed $REAPER_TIMER_UNIT"

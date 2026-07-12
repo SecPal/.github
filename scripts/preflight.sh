@@ -311,6 +311,15 @@ if [ -f tests/polyscope-state-audit.sh ]; then
   }
 fi
 
+if [ -f tests/polyscope-clone-reaper.sh ]; then
+  bash tests/polyscope-clone-reaper.sh || {
+    echo "" >&2
+    echo "❌ Polyscope clone reaper regression test failed!" >&2
+    echo "Keep scripts/reap-polyscope-clones.py conservative: database allowlist, grace period, locks, and live processes must all protect clone roots." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/polyscope-rollout.sh ]; then
   bash tests/polyscope-rollout.sh || {
     echo "" >&2
