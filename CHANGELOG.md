@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-12 - Reap Orphaned Polyscope Worktree Directories
+
+**Fixed:**
+
+- extended the scheduled Polyscope reaper to reclaim aged, unregistered immediate worktree directories below protected clone roots while preserving active `worktrees.path` records, clone-root worktrees, hidden metadata, locks, live processes, and paths outside the clone root
+- added positive and negative fixtures for nested worktree deletion, dry runs, active registrations, grace periods, locks, active processes, and symlink escapes
+
+---
+
 ## 2026-07-12 - Import Address Data into API Previews
 
 **Fixed:**
