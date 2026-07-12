@@ -328,11 +328,13 @@ python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --
 
 ### `reap-polyscope-clones.py`
 
-Conservatively reclaims orphaned Polyscope repository clone roots. It derives
-its allowlist from worktree paths currently registered in `polyscope.db`, waits
-seven days by default, and skips clone roots with lock files or active
-processes. It only considers immediate real directories inside the configured
-clone root.
+Conservatively reclaims orphaned Polyscope repository clone roots. It protects
+every repository and active worktree currently registered in `polyscope.db`,
+waits seven days by default, and skips clone roots with lock files or active
+processes. Immediately before deletion it revalidates the database while
+holding a write-reservation transaction and atomically detaches the candidate,
+so concurrent registration cannot expose a live root to recursive deletion. It
+only considers immediate real directories inside the configured clone root.
 
 **Usage:**
 

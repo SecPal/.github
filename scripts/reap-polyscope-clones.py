@@ -43,19 +43,12 @@ def resolved_absolute(path: Path, description: str) -> Path:
     return path.resolve()
 
 
-def active_clone_root_names(db_path: Path, clone_root: Path) -> set[str]:
-    if not db_path.is_file():
-        raise ValueError(f"Polyscope DB not found at {db_path}")
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            paths = [
-                Path(row[0]).resolve()
-                for row in conn.execute("SELECT path FROM worktrees WHERE status = 'active'")
-            ]
-    except sqlite3.Error as exc:
-        raise ValueError(f"unable to read Polyscope DB: {exc}") from exc
-
-    names: set[str] = set()
+def protected_clone_root_names(conn: sqlite3.Connection, clone_root: Path) -> set[str]:
+    names = {str(row[0]) for row in conn.execute("SELECT id FROM repositories")}
+    paths = [
+        Path(row[0]).resolve()
+        for row in conn.execute("SELECT path FROM worktrees WHERE status = 'active'")
+    ]
     for path in paths:
         try:
             relative = path.relative_to(clone_root)
@@ -64,6 +57,35 @@ def active_clone_root_names(db_path: Path, clone_root: Path) -> set[str]:
         if len(relative.parts) >= 2:
             names.add(relative.parts[0])
     return names
+
+
+def load_protected_clone_root_names(db_path: Path, clone_root: Path) -> set[str]:
+    if not db_path.is_file():
+        raise ValueError(f"Polyscope DB not found at {db_path}")
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            return protected_clone_root_names(conn, clone_root)
+    except sqlite3.Error as exc:
+        raise ValueError(f"unable to read Polyscope DB: {exc}") from exc
+
+
+
+def quarantine_if_still_orphan(
+    db_path: Path, clone_root: Path, candidate: Path, cutoff: float
+) -> Path | None:
+    """Atomically detach a candidate while preventing database registrations."""
+    quarantine = clone_root / f".reaper-trash-{os.getpid()}-{candidate.name}"
+    try:
+        with sqlite3.connect(db_path, timeout=30) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if candidate.name in protected_clone_root_names(conn, clone_root):
+                return None
+            if candidate.stat().st_mtime > cutoff or has_lock(candidate) or has_active_process(candidate):
+                return None
+            candidate.rename(quarantine)
+        return quarantine
+    except (OSError, sqlite3.Error):
+        return None
 
 
 def is_within(path: Path, parent: Path) -> bool:
@@ -133,7 +155,8 @@ def allocated_bytes(root: Path) -> int:
 def reap(args: argparse.Namespace) -> dict[str, Any]:
     home = resolved_absolute(Path(args.polyscope_home), "Polyscope home")
     clone_root = resolved_absolute(Path(args.clone_root) if args.clone_root else home / "clones", "clone root")
-    allowlist = active_clone_root_names(home / "polyscope.db", clone_root)
+    db_path = home / "polyscope.db"
+    allowlist = load_protected_clone_root_names(db_path, clone_root)
     report: dict[str, Any] = {
         "removed": [],
         "would_remove": [],
@@ -170,8 +193,12 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
             report["would_remove"].append(str(candidate))
             report["reclaimed_bytes"] += size
             continue
+        quarantined = quarantine_if_still_orphan(db_path, clone_root, candidate, cutoff)
+        if quarantined is None:
+            report["skipped"]["unsafe"].append(str(candidate))
+            continue
         try:
-            shutil.rmtree(candidate)
+            shutil.rmtree(quarantined)
         except OSError:
             report["skipped"]["unsafe"].append(str(candidate))
             continue
