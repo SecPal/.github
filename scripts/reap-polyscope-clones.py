@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal
 # SPDX-License-Identifier: MIT
 
-"""Conservatively remove stale Polyscope clone roots."""
+"""Conservatively remove stale Polyscope clone roots and worktrees."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import sys
 import time
 from pathlib import Path
@@ -43,14 +44,24 @@ def resolved_absolute(path: Path, description: str) -> Path:
     return path.resolve()
 
 
-def protected_clone_root_names(conn: sqlite3.Connection, clone_root: Path) -> set[str]:
-    names = {str(row[0]) for row in conn.execute("SELECT id FROM repositories")}
+def active_worktree_paths(conn: sqlite3.Connection, clone_root: Path) -> set[Path]:
+    """Return active registered worktrees physically contained by clone_root."""
     worktree_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(worktrees)")}
     worktree_query = "SELECT path FROM worktrees"
     if "status" in worktree_columns:
         worktree_query += " WHERE status = 'active'"
+    paths = set()
+    for row in conn.execute(worktree_query):
+        path = Path(row[0]).resolve()
+        if is_within(path, clone_root):
+            paths.add(path)
+    return paths
+
+
+def protected_clone_root_names(conn: sqlite3.Connection, clone_root: Path) -> set[str]:
+    names = {str(row[0]) for row in conn.execute("SELECT id FROM repositories")}
     paths = [Path(row[0]).resolve() for row in conn.execute("SELECT path FROM repositories")]
-    paths.extend(Path(row[0]).resolve() for row in conn.execute(worktree_query))
+    paths.extend(active_worktree_paths(conn, clone_root))
     for path in paths:
         try:
             relative = path.relative_to(clone_root)
@@ -61,34 +72,66 @@ def protected_clone_root_names(conn: sqlite3.Connection, clone_root: Path) -> se
     return names
 
 
-def load_protected_clone_root_names(db_path: Path, clone_root: Path) -> set[str]:
+def load_protected_paths(db_path: Path, clone_root: Path) -> tuple[set[str], set[Path]]:
     if not db_path.is_file():
         raise ValueError(f"Polyscope DB not found at {db_path}")
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            return protected_clone_root_names(conn, clone_root)
+            return protected_clone_root_names(conn, clone_root), active_worktree_paths(conn, clone_root)
     except sqlite3.Error as exc:
         raise ValueError(f"unable to read Polyscope DB: {exc}") from exc
 
 
 
+def is_registered_candidate(
+    conn: sqlite3.Connection, clone_root: Path, candidate: Path, is_worktree: bool
+) -> bool:
+    if is_worktree:
+        return protects_active_worktree(candidate, active_worktree_paths(conn, clone_root))
+    return candidate.name in protected_clone_root_names(conn, clone_root)
+
+
 def quarantine_if_still_orphan(
-    db_path: Path, clone_root: Path, candidate: Path, cutoff: float
+    db_path: Path, clone_root: Path, candidate: Path, cutoff: float, is_worktree: bool
 ) -> Path | None:
     """Atomically detach a candidate while preventing database registrations."""
-    quarantine = clone_root / f".reaper-trash-{os.getpid()}-{candidate.name}"
+    parent_name = candidate.parent.name if is_worktree else "root"
+    quarantine = clone_root / f".reaper-trash-{os.getpid()}-{parent_name}-{candidate.name}"
+    parent_fd = -1
+    clone_fd = -1
     try:
+        clone_fd = os.open(clone_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        if is_worktree:
+            if candidate.parent.parent != clone_root:
+                return None
+            parent_fd = os.open(candidate.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        else:
+            parent_fd = os.dup(clone_fd)
+        pinned_candidate = Path(f"/proc/self/fd/{parent_fd}") / candidate.name
+        candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(candidate_stat.st_mode) or pinned_candidate.is_symlink():
+            return None
         with sqlite3.connect(db_path, timeout=30) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if candidate.name in protected_clone_root_names(conn, clone_root):
+            if is_registered_candidate(conn, clone_root, candidate, is_worktree):
                 return None
-            newest_mtime = newest_tree_mtime(candidate)
-            if newest_mtime is None or newest_mtime > cutoff or has_lock(candidate) or has_active_process(candidate):
+            newest_mtime = newest_tree_mtime(pinned_candidate)
+            if (
+                newest_mtime is None
+                or newest_mtime > cutoff
+                or has_lock(pinned_candidate)
+                or has_active_process(pinned_candidate.resolve())
+            ):
                 return None
-            candidate.rename(quarantine)
+            os.rename(candidate.name, quarantine.name, src_dir_fd=parent_fd, dst_dir_fd=clone_fd)
         return quarantine
-    except (OSError, sqlite3.Error):
+    except (AttributeError, OSError, sqlite3.Error):
         return None
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        if clone_fd >= 0:
+            os.close(clone_fd)
 
 
 def is_within(path: Path, parent: Path) -> bool:
@@ -97,6 +140,21 @@ def is_within(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def is_safe_candidate(candidate: Path, clone_root: Path, is_worktree: bool) -> bool:
+    """Reject candidates whose lexical parent or resolved path escaped clone_root."""
+    if is_worktree and (
+        candidate.parent.parent != clone_root
+        or candidate.parent.is_symlink()
+        or not candidate.parent.is_dir()
+    ):
+        return False
+    return (
+        not candidate.is_symlink()
+        and candidate.is_dir()
+        and is_within(candidate.resolve(), clone_root)
+    )
 
 
 def has_lock(root: Path) -> bool:
@@ -171,11 +229,43 @@ def newest_tree_mtime(root: Path) -> float | None:
         return None
 
 
+def protects_active_worktree(candidate: Path, active_worktrees: set[Path]) -> bool:
+    """Whether candidate is, or contains, an active registered worktree."""
+    candidate_path = candidate.resolve()
+    return any(is_within(worktree, candidate_path) for worktree in active_worktrees)
+
+
+def candidates(
+    clone_root: Path, protected_roots: set[str], protected_worktrees: set[Path]
+) -> list[tuple[Path, bool]]:
+    """Return root and safe-to-inspect child worktree candidates in path order."""
+    result: list[tuple[Path, bool]] = []
+    for root in clone_root.iterdir():
+        result.append((root, False))
+        try:
+            root_path = root.resolve()
+            # Only registered clone roots can contain individually managed
+            # worktrees. A registered worktree at the root has arbitrary
+            # source subdirectories, never worktree candidates.
+            if (
+                root.name not in protected_roots
+                or root.is_symlink()
+                or not root.is_dir()
+                or not is_within(root_path, clone_root)
+                or root_path in protected_worktrees
+            ):
+                continue
+            result.extend((child, True) for child in root.iterdir())
+        except OSError:
+            continue
+    return sorted(result, key=lambda item: str(item[0]))
+
+
 def reap(args: argparse.Namespace) -> dict[str, Any]:
     home = resolved_absolute(Path(args.polyscope_home), "Polyscope home")
     clone_root = resolved_absolute(Path(args.clone_root) if args.clone_root else home / "clones", "clone root")
     db_path = home / "polyscope.db"
-    allowlist = load_protected_clone_root_names(db_path, clone_root)
+    protected_roots, protected_worktrees = load_protected_paths(db_path, clone_root)
     report: dict[str, Any] = {
         "removed": [],
         "would_remove": [],
@@ -186,12 +276,20 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
         return report
 
     cutoff = time.time() - args.grace_period
-    for candidate in sorted(clone_root.iterdir()):
-        # Only immediate, real directories under the configured clone root are eligible.
-        if candidate.is_symlink() or not candidate.is_dir() or not is_within(candidate.resolve(), clone_root):
+    for candidate, is_worktree in candidates(clone_root, protected_roots, protected_worktrees):
+        # Only real clone roots and immediate worktree children are eligible.
+        if (
+            (is_worktree and candidate.name.startswith("."))
+            or not is_safe_candidate(candidate, clone_root, is_worktree)
+        ):
             report["skipped"]["unsafe"].append(str(candidate))
             continue
-        if candidate.name in allowlist:
+        protected = (
+            protects_active_worktree(candidate, protected_worktrees)
+            if is_worktree
+            else candidate.name in protected_roots
+        )
+        if protected:
             report["skipped"]["active"].append(str(candidate))
             continue
         try:
@@ -211,15 +309,19 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
         if has_active_process(candidate):
             report["skipped"]["process"].append(str(candidate))
             continue
-        size = allocated_bytes(candidate)
+        if not is_safe_candidate(candidate, clone_root, is_worktree):
+            report["skipped"]["unsafe"].append(str(candidate))
+            continue
         if args.dry_run:
+            size = allocated_bytes(candidate)
             report["would_remove"].append(str(candidate))
             report["reclaimed_bytes"] += size
             continue
-        quarantined = quarantine_if_still_orphan(db_path, clone_root, candidate, cutoff)
+        quarantined = quarantine_if_still_orphan(db_path, clone_root, candidate, cutoff, is_worktree)
         if quarantined is None:
             report["skipped"]["unsafe"].append(str(candidate))
             continue
+        size = allocated_bytes(quarantined)
         try:
             shutil.rmtree(quarantined)
         except OSError:
@@ -241,7 +343,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         action = "Would reclaim" if args.dry_run else "Reclaimed"
-        print(f"{action} {report['reclaimed_bytes']} bytes from {len(report['would_remove']) or len(report['removed'])} clone roots.")
+        print(f"{action} {report['reclaimed_bytes']} bytes from {len(report['would_remove']) or len(report['removed'])} Polyscope directories.")
         for reason, paths in report["skipped"].items():
             for path in paths:
                 print(f"Skipped ({reason}): {path}")
