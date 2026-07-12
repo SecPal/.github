@@ -1569,11 +1569,11 @@ workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
-lock_path = Path(".polyscope-preview-build.lock")
+stage_root = Path(".polyscope-preview-stage")
+stage_root.mkdir(exist_ok=True)
+lock_path = stage_root / "build.lock"
 with lock_path.open("w") as lock_file:
     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-    stage_root = Path(".polyscope-preview-stage")
-    stage_root.mkdir(exist_ok=True)
     stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
     try:
         result = subprocess.run(
@@ -1782,11 +1782,11 @@ def run_build() -> int:
     api_workspace = resolve_linked_workspace("SecPal/api", workspace)
     env = os.environ.copy()
     env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
-    lock_path = Path(".polyscope-preview-build.lock")
+    stage_root = Path(".polyscope-preview-stage")
+    stage_root.mkdir(exist_ok=True)
+    lock_path = stage_root / "build.lock"
     with lock_path.open("w") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        stage_root = Path(".polyscope-preview-stage")
-        stage_root.mkdir(exist_ok=True)
         stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
 
         try:
