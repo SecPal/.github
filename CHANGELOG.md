@@ -14,7 +14,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - extended the scheduled Polyscope reaper to reclaim aged, unregistered immediate worktree directories below protected clone roots while preserving active `worktrees.path` records, clone-root worktrees, hidden metadata, locks, live processes, and paths outside the clone root
-- pinned final worktree detachment to non-symlink parent-directory handles and moved recoverable quarantines to the clone root, preventing parent-swap path escapes and stranded cleanup after interruptions
+- pinned final worktree detachment to non-symlink parent-directory handles, revalidated candidates after process scans before dry-run measurement, and moved recoverable quarantines to the clone root, preventing parent-swap path escapes and stranded cleanup after interruptions
 - added positive and negative fixtures for nested worktree deletion, dry runs, active registrations, grace periods, locks, active processes, symlink escapes, parent swaps, and interrupted quarantine deletion
 
 ---

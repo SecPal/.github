@@ -142,6 +142,21 @@ def is_within(path: Path, parent: Path) -> bool:
         return False
 
 
+def is_safe_candidate(candidate: Path, clone_root: Path, is_worktree: bool) -> bool:
+    """Reject candidates whose lexical parent or resolved path escaped clone_root."""
+    if is_worktree and (
+        candidate.parent.parent != clone_root
+        or candidate.parent.is_symlink()
+        or not candidate.parent.is_dir()
+    ):
+        return False
+    return (
+        not candidate.is_symlink()
+        and candidate.is_dir()
+        and is_within(candidate.resolve(), clone_root)
+    )
+
+
 def has_lock(root: Path) -> bool:
     try:
         # Dependency manifests such as yarn.lock are durable source files, not
@@ -262,14 +277,10 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
 
     cutoff = time.time() - args.grace_period
     for candidate, is_worktree in candidates(clone_root, protected_roots, protected_worktrees):
-        parent = candidate.parent.resolve()
-        expected_parent = parent if is_worktree else clone_root
         # Only real clone roots and immediate worktree children are eligible.
         if (
             (is_worktree and candidate.name.startswith("."))
-            or candidate.is_symlink()
-            or not candidate.is_dir()
-            or not is_within(candidate.resolve(), expected_parent)
+            or not is_safe_candidate(candidate, clone_root, is_worktree)
         ):
             report["skipped"]["unsafe"].append(str(candidate))
             continue
@@ -298,8 +309,11 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
         if has_active_process(candidate):
             report["skipped"]["process"].append(str(candidate))
             continue
-        size = allocated_bytes(candidate)
+        if not is_safe_candidate(candidate, clone_root, is_worktree):
+            report["skipped"]["unsafe"].append(str(candidate))
+            continue
         if args.dry_run:
+            size = allocated_bytes(candidate)
             report["would_remove"].append(str(candidate))
             report["reclaimed_bytes"] += size
             continue
@@ -307,6 +321,7 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
         if quarantined is None:
             report["skipped"]["unsafe"].append(str(candidate))
             continue
+        size = allocated_bytes(quarantined)
         try:
             shutil.rmtree(quarantined)
         except OSError:

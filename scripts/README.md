@@ -339,7 +339,9 @@ write-reservation transaction and atomically detaches the candidate through a
 pinned, non-symlink parent-directory handle, so concurrent registration or a
 parent-path replacement cannot redirect recursive deletion. Quarantines live at
 the clone-root level so a later run can finish cleanup after an interruption.
-The reaper rejects symlinks and paths outside the configured clone root.
+The reaper revalidates candidates after process inspection before measuring
+dry-run storage, and rejects symlinks and paths outside the configured clone
+root.
 
 **Usage:**
 

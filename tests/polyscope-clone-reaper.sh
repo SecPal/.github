@@ -257,6 +257,7 @@ home = Path(sys.argv[2])
 clones = Path(sys.argv[3])
 outside = Path(sys.argv[4])
 original_process_check = module.has_active_process
+original_allocated_bytes = module.allocated_bytes
 swapped = False
 
 def swap_parent_during_scan(root):
@@ -268,6 +269,12 @@ def swap_parent_during_scan(root):
     return original_process_check(root)
 
 module.has_active_process = swap_parent_during_scan
+
+def reject_outside_size_scan(root):
+    assert module.is_within(root.resolve(), clones), root
+    return original_allocated_bytes(root)
+
+module.allocated_bytes = reject_outside_size_scan
 report = module.reap(argparse.Namespace(
     polyscope_home=str(home), clone_root=str(clones), grace_period=7 * 24 * 60 * 60,
     dry_run=False, json=True,
@@ -275,6 +282,7 @@ report = module.reap(argparse.Namespace(
 outside_file = outside / 'victim' / 'important'
 assert outside_file.is_file(), report
 assert str(clones / 'swapped-parent' / 'victim') not in report['removed'], report
+assert str(clones / 'swapped-parent' / 'victim') in report['skipped']['unsafe'], report
 PY
 
 # A failed recursive deletion must leave a quarantine that a later run can
