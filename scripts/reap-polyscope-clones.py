@@ -45,16 +45,18 @@ def resolved_absolute(path: Path, description: str) -> Path:
 
 def protected_clone_root_names(conn: sqlite3.Connection, clone_root: Path) -> set[str]:
     names = {str(row[0]) for row in conn.execute("SELECT id FROM repositories")}
-    paths = [
-        Path(row[0]).resolve()
-        for row in conn.execute("SELECT path FROM worktrees WHERE status = 'active'")
-    ]
+    worktree_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(worktrees)")}
+    worktree_query = "SELECT path FROM worktrees"
+    if "status" in worktree_columns:
+        worktree_query += " WHERE status = 'active'"
+    paths = [Path(row[0]).resolve() for row in conn.execute("SELECT path FROM repositories")]
+    paths.extend(Path(row[0]).resolve() for row in conn.execute(worktree_query))
     for path in paths:
         try:
             relative = path.relative_to(clone_root)
         except ValueError:
             continue
-        if len(relative.parts) >= 2:
+        if relative.parts:
             names.add(relative.parts[0])
     return names
 
@@ -102,10 +104,19 @@ def has_lock(root: Path) -> bool:
         # evidence of an in-progress operation. Git's lock files live inside
         # a worktree's .git directory and protect exactly the metadata that a
         # clone-root deletion must not race.
-        return any(
-            ".git" in path.relative_to(root).parts and path.is_file()
-            for path in root.rglob("*.lock")
+        metadata_paths = [root / ".git"]
+        metadata_paths.extend(
+            child / ".git" for child in root.iterdir() if child.is_dir() and not child.is_symlink()
         )
+        for metadata in metadata_paths:
+            if metadata.is_file():
+                contents = metadata.read_text(errors="replace").strip()
+                if contents.startswith("gitdir: "):
+                    git_dir = Path(contents.removeprefix("gitdir: "))
+                    metadata = (metadata.parent / git_dir).resolve() if not git_dir.is_absolute() else git_dir
+            if metadata.is_dir() and any(path.is_file() for path in metadata.rglob("*.lock")):
+                return True
+        return False
     except OSError:
         # An unreadable tree must never be a deletion candidate.
         return True

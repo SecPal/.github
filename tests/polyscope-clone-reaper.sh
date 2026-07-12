@@ -30,23 +30,36 @@ CREATE TABLE worktrees (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT 
 ''')
 conn.execute('INSERT INTO repositories VALUES (?, ?, ?)', ('active-repo', 'active', '/tmp/active'))
 conn.execute('INSERT INTO repositories VALUES (?, ?, ?)', ('inactive-repo', 'inactive', '/tmp/inactive'))
+conn.execute('INSERT INTO repositories VALUES (?, ?, ?)', ('path-id', 'path', str(clones / 'registered-path-root')))
 active = clones / 'active-repo' / 'workspace'
 active.mkdir(parents=True)
 conn.execute('INSERT INTO worktrees VALUES (?, ?, ?, ?, ?)', ('active', 'active-repo', 'main', str(active), 'active'))
 inactive = clones / 'inactive-repo' / 'workspace'
 inactive.mkdir(parents=True)
 conn.execute('INSERT INTO worktrees VALUES (?, ?, ?, ?, ?)', ('inactive', 'inactive-repo', 'old', str(inactive), 'removed'))
+direct = clones / 'direct-worktree'
+direct.mkdir()
+conn.execute('INSERT INTO worktrees VALUES (?, ?, ?, ?, ?)', ('direct', 'active-repo', 'direct', str(direct), 'active'))
 conn.commit()
 conn.close()
 PY
 
 mkdir -p "$clone_root/orphan-old/node_modules/cache" "$clone_root/orphan-young" "$clone_root/orphan-lock/.git" "$clone_root/orphan-busy"
+mkdir -p "$clone_root/registered-path-root"
 outside_root="$workspace/outside-clone-root"
 mkdir -p "$outside_root"
 ln -s "$outside_root" "$clone_root/external-link"
 printf 'payload\n' > "$clone_root/orphan-old/node_modules/cache/file"
 touch "$clone_root/orphan-old/yarn.lock"
-touch -d '10 days ago' "$clone_root/orphan-old" "$clone_root/inactive-repo" "$clone_root/orphan-lock" "$clone_root/orphan-busy"
+python3 - <<'PY' "$clone_root/orphan-old" "$clone_root/inactive-repo" "$clone_root/orphan-lock" "$clone_root/orphan-busy" "$clone_root/registered-path-root" "$clone_root/direct-worktree"
+import os
+import sys
+import time
+
+mtime = time.time() - 10 * 24 * 60 * 60
+for value in sys.argv[1:]:
+    os.utime(value, (mtime, mtime))
+PY
 touch "$clone_root/orphan-lock/.git/index.lock"
 
 # A process whose current directory is inside a candidate must prevent deletion.
@@ -63,7 +76,12 @@ report = json.loads(sys.argv[1])
 clones = Path(sys.argv[2])
 assert report['removed'] == []
 assert report['would_remove'] == [str(clones / 'orphan-old')]
-assert report['skipped']['active'] == [str(clones / 'active-repo'), str(clones / 'inactive-repo')]
+assert report['skipped']['active'] == [
+    str(clones / 'active-repo'),
+    str(clones / 'direct-worktree'),
+    str(clones / 'inactive-repo'),
+    str(clones / 'registered-path-root'),
+]
 assert report['skipped']['grace_period'] == [str(clones / 'orphan-young')]
 assert report['skipped']['lock'] == [str(clones / 'orphan-lock')]
 assert report['skipped']['process'] == [str(clones / 'orphan-busy')]
@@ -87,7 +105,7 @@ assert report['reclaimed_bytes'] > 0
 PY
 
 [[ ! -e "$clone_root/orphan-old" ]] || { echo 'orphan clone root was not removed' >&2; exit 1; }
-[[ -d "$clone_root/active-repo" && -d "$clone_root/inactive-repo" && -d "$clone_root/orphan-young" && -d "$clone_root/orphan-lock" && -d "$clone_root/orphan-busy" && -d "$outside_root" ]] || {
+[[ -d "$clone_root/active-repo" && -d "$clone_root/direct-worktree" && -d "$clone_root/inactive-repo" && -d "$clone_root/orphan-young" && -d "$clone_root/orphan-lock" && -d "$clone_root/orphan-busy" && -d "$clone_root/registered-path-root" && -d "$outside_root" ]] || {
     echo 'reaper removed a protected clone root' >&2
     exit 1
 }
@@ -95,7 +113,14 @@ PY
 # A repository registered after the initial allowlist read must still prevent
 # deletion at the final destructive boundary.
 mkdir -p "$clone_root/racing-repo/workspace"
-touch -d '10 days ago' "$clone_root/racing-repo"
+python3 - <<'PY' "$clone_root/racing-repo"
+import os
+import sys
+import time
+
+mtime = time.time() - 10 * 24 * 60 * 60
+os.utime(sys.argv[1], (mtime, mtime))
+PY
 python3 - <<'PY' "$REAPER" "$polyscope_home" "$clone_root"
 import argparse
 import importlib.util
@@ -126,6 +151,45 @@ report = module.reap(argparse.Namespace(
 ))
 assert (clones / 'racing-repo').is_dir(), report
 assert str(clones / 'racing-repo') not in report['removed'], report
+PY
+
+# Older Polyscope databases have no worktree status column. Their registered
+# worktrees must still be protected instead of disabling scheduled cleanup.
+legacy_home="$workspace/legacy/.polyscope"
+legacy_root="$legacy_home/clones"
+mkdir -p "$legacy_root/legacy-worktree" "$legacy_root/legacy-orphan"
+python3 - <<'PY' "$legacy_home" "$legacy_root"
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+home = Path(sys.argv[1])
+root = Path(sys.argv[2])
+conn = sqlite3.connect(home / 'polyscope.db')
+conn.executescript('''
+CREATE TABLE repositories (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL);
+CREATE TABLE worktrees (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL);
+''')
+conn.execute('INSERT INTO repositories VALUES (?, ?, ?)', ('legacy-repo', 'legacy', '/tmp/legacy'))
+conn.execute('INSERT INTO worktrees VALUES (?, ?, ?, ?)', ('legacy', 'legacy-repo', 'main', str(root / 'legacy-worktree')))
+conn.commit()
+conn.close()
+mtime = time.time() - 10 * 24 * 60 * 60
+for path in (root / 'legacy-worktree', root / 'legacy-orphan'):
+    os.utime(path, (mtime, mtime))
+PY
+legacy_output="$(python3 "$REAPER" --polyscope-home "$legacy_home" --dry-run --json)"
+python3 - <<'PY' "$legacy_output" "$legacy_root"
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(sys.argv[1])
+root = Path(sys.argv[2])
+assert report['skipped']['active'] == [str(root / 'legacy-worktree')]
+assert report['would_remove'] == [str(root / 'legacy-orphan')]
 PY
 
 # A configured clone root must be absolute and must not permit cleanup elsewhere.
