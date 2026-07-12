@@ -4675,6 +4675,8 @@ env HOME="$home_dir" \
 
 test -L "$fake_bin_dir/polyscope-secpal-rollout.py"
 test -x "$fake_bin_dir/polyscope-secpal-rollout.py"
+test -L "$fake_bin_dir/reap-polyscope-clones.py"
+test -x "$fake_bin_dir/reap-polyscope-clones.py"
 test -L "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -L "$fake_bin_dir/polyscope-git-wrapper.sh"
@@ -4852,6 +4854,10 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscop
 grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
+grep -q 'ExecStart=.*/reap-polyscope-clones.py --polyscope-home .* --clone-root .* --grace-period 7d' "$fake_unit_dir/polyscope-clone-reaper.service"
+grep -q '^OnStartupSec=10min$' "$fake_unit_dir/polyscope-clone-reaper.timer"
+grep -q '^OnUnitActiveSec=1d$' "$fake_unit_dir/polyscope-clone-reaper.timer"
+grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-clone-reaper.timer"
 
 default_readiness_retry_seconds="$(sed -nE 's/.*POLYSCOPE_EXPOSE_WRAPPER_RETRY_SECONDS:-([0-9]+).*/\1/p' "$REPO_ROOT/scripts/polyscope-expose-wrapper.sh")"
 default_readiness_max_attempts="$(sed -nE 's/.*POLYSCOPE_EXPOSE_WRAPPER_MAX_ATTEMPTS:-([0-9]+).*/\1/p' "$REPO_ROOT/scripts/polyscope-expose-wrapper.sh")"
@@ -4875,6 +4881,7 @@ grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
+grep -q 'enable --now polyscope-clone-reaper.timer' "$fake_systemctl_log"
 if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
   echo "installer must finish the initial sync before enabling the provision path watcher" >&2
   exit 1

@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-12 - Reap Orphaned Polyscope Clone Roots
+
+**Fixed:**
+
+- added a daily, conservative Polyscope clone-root reaper that derives its allowlist from live `polyscope.db` worktree paths, waits a seven-day grace period, rejects paths outside the configured clone root, skips active processes and lock files, supports dry-run and JSON reporting, and reports reclaimed storage
+- added positive and negative fixtures covering registered roots, fresh roots, locks, active processes, dry runs, invalid clone roots, and actual deletion; rollout installation now enables the reaper timer
+- protected all registered repository roots and added transactional final revalidation plus atomic quarantine before deletion to prevent concurrent registration from racing cleanup
+
+---
+
 ## 2026-07-12 - Recover Frontend Preview Watcher After Dependency Installation
 
 **Fixed:**
