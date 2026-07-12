@@ -4801,12 +4801,8 @@ grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log
 grep -q '^--user daemon-reload$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
-grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
+grep -q '^--user disable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log"
-if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
-  echo "system-scope install must finish the initial sync before enabling the provision path watcher" >&2
-  exit 1
-fi
 if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
   echo "system-scope install must finish the initial sync before enabling the provision timer" >&2
   exit 1
@@ -4883,19 +4879,16 @@ fi
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
-grep -qF '.polyscope-preview-stage/build.lock' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '.polyscope-preview-stage' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'build.lock' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
-grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
+grep -q 'disable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-clone-reaper.timer' "$fake_systemctl_log"
-if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
-  echo "installer must finish the initial sync before enabling the provision path watcher" >&2
-  exit 1
-fi
 if [[ "$(grep -n 'start polyscope-rollout-sync.service' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
   echo "installer must finish the initial sync before enabling the provision timer" >&2
   exit 1

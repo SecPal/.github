@@ -441,7 +441,7 @@ fi
 
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
-"$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
+"$SYSTEMCTL_BIN" --user disable --now polyscope-worktree-provision.path >/dev/null 2>&1 || true
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 "$SYSTEMCTL_BIN" --user enable --now polyscope-clone-reaper.timer
 
