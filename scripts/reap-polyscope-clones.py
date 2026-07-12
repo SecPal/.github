@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import sys
 import time
 from pathlib import Path
@@ -94,19 +95,43 @@ def quarantine_if_still_orphan(
     db_path: Path, clone_root: Path, candidate: Path, cutoff: float, is_worktree: bool
 ) -> Path | None:
     """Atomically detach a candidate while preventing database registrations."""
-    quarantine = candidate.parent / f".reaper-trash-{os.getpid()}-{candidate.name}"
+    parent_name = candidate.parent.name if is_worktree else "root"
+    quarantine = clone_root / f".reaper-trash-{os.getpid()}-{parent_name}-{candidate.name}"
+    parent_fd = -1
+    clone_fd = -1
     try:
+        clone_fd = os.open(clone_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        if is_worktree:
+            if candidate.parent.parent != clone_root:
+                return None
+            parent_fd = os.open(candidate.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        else:
+            parent_fd = os.dup(clone_fd)
+        pinned_candidate = Path(f"/proc/self/fd/{parent_fd}") / candidate.name
+        candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(candidate_stat.st_mode) or pinned_candidate.is_symlink():
+            return None
         with sqlite3.connect(db_path, timeout=30) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if is_registered_candidate(conn, clone_root, candidate, is_worktree):
                 return None
-            newest_mtime = newest_tree_mtime(candidate)
-            if newest_mtime is None or newest_mtime > cutoff or has_lock(candidate) or has_active_process(candidate):
+            newest_mtime = newest_tree_mtime(pinned_candidate)
+            if (
+                newest_mtime is None
+                or newest_mtime > cutoff
+                or has_lock(pinned_candidate)
+                or has_active_process(pinned_candidate.resolve())
+            ):
                 return None
-            candidate.rename(quarantine)
+            os.rename(candidate.name, quarantine.name, src_dir_fd=parent_fd, dst_dir_fd=clone_fd)
         return quarantine
-    except (OSError, sqlite3.Error):
+    except (AttributeError, OSError, sqlite3.Error):
         return None
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        if clone_fd >= 0:
+            os.close(clone_fd)
 
 
 def is_within(path: Path, parent: Path) -> bool:

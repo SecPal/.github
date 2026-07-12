@@ -335,9 +335,11 @@ by default, and skips candidates with lock files or active processes. An active
 worktree at a clone-root level is never scanned for children; otherwise, only
 its immediate non-hidden child directories can be worktree candidates.
 Immediately before deletion the reaper revalidates the database while holding a
-write-reservation transaction and atomically detaches the candidate, so
-concurrent registration cannot expose a live directory to recursive deletion.
-It rejects symlinks and paths outside the configured clone root.
+write-reservation transaction and atomically detaches the candidate through a
+pinned, non-symlink parent-directory handle, so concurrent registration or a
+parent-path replacement cannot redirect recursive deletion. Quarantines live at
+the clone-root level so a later run can finish cleanup after an interruption.
+The reaper rejects symlinks and paths outside the configured clone root.
 
 **Usage:**
 

@@ -223,6 +223,110 @@ assert candidate.is_dir(), report
 assert str(candidate) not in report['removed'], report
 PY
 
+# Replacing a registered clone root with a symlink during inspection must not
+# redirect worktree cleanup outside the configured clone root.
+mkdir -p "$clone_root/swapped-parent/victim" "$workspace/swapped-parent-target/victim"
+printf 'outside data\n' > "$workspace/swapped-parent-target/victim/important"
+python3 - <<'PY' "$polyscope_home" "$clone_root/swapped-parent/victim" "$workspace/swapped-parent-target/victim"
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+home = Path(sys.argv[1])
+with sqlite3.connect(home / 'polyscope.db') as conn:
+    conn.execute('INSERT INTO repositories VALUES (?, ?, ?)', ('swapped-parent', 'swapped parent', '/tmp/swapped-parent'))
+mtime = time.time() - 10 * 24 * 60 * 60
+for value in sys.argv[2:]:
+    path = Path(value)
+    os.utime(path, (mtime, mtime))
+    for child in path.iterdir():
+        os.utime(child, (mtime, mtime))
+PY
+python3 - <<'PY' "$REAPER" "$polyscope_home" "$clone_root" "$workspace/swapped-parent-target"
+import argparse
+import importlib.util
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location('clone_reaper', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = Path(sys.argv[2])
+clones = Path(sys.argv[3])
+outside = Path(sys.argv[4])
+original_process_check = module.has_active_process
+swapped = False
+
+def swap_parent_during_scan(root):
+    global swapped
+    if root == clones / 'swapped-parent' / 'victim' and not swapped:
+        root.parent.rename(clones / 'swapped-parent-detached')
+        root.parent.symlink_to(outside, target_is_directory=True)
+        swapped = True
+    return original_process_check(root)
+
+module.has_active_process = swap_parent_during_scan
+report = module.reap(argparse.Namespace(
+    polyscope_home=str(home), clone_root=str(clones), grace_period=7 * 24 * 60 * 60,
+    dry_run=False, json=True,
+))
+outside_file = outside / 'victim' / 'important'
+assert outside_file.is_file(), report
+assert str(clones / 'swapped-parent' / 'victim') not in report['removed'], report
+PY
+
+# A failed recursive deletion must leave a quarantine that a later run can
+# recognize and finish reclaiming.
+mkdir -p "$clone_root/quarantine-repo/old-worktree"
+printf 'payload\n' > "$clone_root/quarantine-repo/old-worktree/file"
+python3 - <<'PY' "$polyscope_home" "$clone_root/quarantine-repo/old-worktree"
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+home = Path(sys.argv[1])
+candidate = Path(sys.argv[2])
+with sqlite3.connect(home / 'polyscope.db') as conn:
+    conn.execute('INSERT INTO repositories VALUES (?, ?, ?)', ('quarantine-repo', 'quarantine repo', '/tmp/quarantine-repo'))
+mtime = time.time() - 10 * 24 * 60 * 60
+for path in (candidate, candidate / 'file'):
+    os.utime(path, (mtime, mtime))
+PY
+python3 - <<'PY' "$REAPER" "$polyscope_home" "$clone_root"
+import argparse
+import importlib.util
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location('clone_reaper', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+home = Path(sys.argv[2])
+clones = Path(sys.argv[3])
+original_rmtree = module.shutil.rmtree
+
+def fail_once(path):
+    module.shutil.rmtree = original_rmtree
+    raise OSError('simulated interruption')
+
+module.shutil.rmtree = fail_once
+module.reap(argparse.Namespace(
+    polyscope_home=str(home), clone_root=str(clones), grace_period=7 * 24 * 60 * 60,
+    dry_run=False, json=True,
+))
+quarantines = list(clones.glob('.reaper-trash-*-quarantine-repo-old-worktree'))
+assert len(quarantines) == 1, quarantines
+report = module.reap(argparse.Namespace(
+    polyscope_home=str(home), clone_root=str(clones), grace_period=7 * 24 * 60 * 60,
+    dry_run=False, json=True,
+))
+assert not quarantines[0].exists(), report
+PY
+
 # Older Polyscope databases have no worktree status column. Their registered
 # worktrees must still be protected instead of disabling scheduled cleanup.
 legacy_home="$workspace/legacy/.polyscope"
