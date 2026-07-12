@@ -1165,6 +1165,20 @@ def bootstrap_api_worktree(
         command_env=command_env,
     )
 
+    print(f"{prefix} importing address data when absent")
+    run_api_worktree_bootstrap_command(
+        worktree_path,
+        [
+            "php",
+            "artisan",
+            "addresses:import",
+            "--if-empty",
+            "--setup-only",
+            "--no-interaction",
+        ],
+        command_env=command_env,
+    )
+
     print(f"{prefix} seeding database")
     try:
         run_api_worktree_bootstrap_command(

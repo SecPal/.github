@@ -2472,6 +2472,7 @@ assert db_calls == [
 assert calls == [
     (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "db:seed", "--force"), api_worktree, "source-only-password", "source-only-password"),
     (
         ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
@@ -2591,9 +2592,11 @@ assert not kek_path.exists(), "recovery must remove the stale isolated-preview K
 assert calls == [
     ("php", "artisan", "config:clear"),
     ("php", "artisan", "migrate", "--force"),
+    ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
     ("php", "artisan", "config:clear"),
     ("php", "artisan", "migrate:fresh", "--force"),
+    ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
     ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
 ], calls
@@ -3934,6 +3937,7 @@ test ! -f "$broken_android_clone/.polyscope-secpal-provisioned.json"
 grep -qF "composer:$api_clone:install" "$provision_log"
 grep -qF "php:$api_clone:artisan config:clear" "$provision_log"
 grep -qF "php:$api_clone:artisan migrate --force" "$provision_log"
+grep -qF "php:$api_clone:artisan addresses:import --if-empty --setup-only --no-interaction" "$provision_log"
 grep -qF "php:$api_clone:artisan db:seed --force" "$provision_log"
 grep -qF "php:$api_clone:artisan tinker --execute=" "$provision_log"
 grep -qF "npm:$frontend_clone:ci" "$provision_log"
@@ -4850,7 +4854,7 @@ grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polysc
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitBurst=5' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
