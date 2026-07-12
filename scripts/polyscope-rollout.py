@@ -1057,7 +1057,47 @@ def run_api_worktree_bootstrap_command(
     *,
     command_env: dict[str, str],
 ) -> None:
-    subprocess.run(command, cwd=worktree_path, env=command_env, check=True)
+    result = subprocess.run(
+        command,
+        cwd=worktree_path,
+        env=command_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    result.check_returncode()
+
+
+def is_recoverable_preview_tenant_key_failure(error: subprocess.CalledProcessError) -> bool:
+    """Return whether seed output proves an isolated preview KEK mismatch."""
+    output = error.output
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    if not isinstance(output, str):
+        return False
+
+    return "App\\Models\\TenantKey::loadKek" in output and "App\\Models\\TenantKey::unwrapDek" in output
+
+
+def discard_stale_preview_kek(
+    worktree_path: pathlib.Path,
+    env_values: dict[str, str],
+    preview_storage_target: str | None,
+) -> bool:
+    """Discard only a stale KEK belonging to an isolated API preview worktree."""
+    if preview_storage_target is None or "__preview__" not in preview_storage_target:
+        return False
+
+    configured_kek_path = env_values.get("KEK_PATH", "").strip()
+    expected_kek_path = pathlib.Path(build_api_preview_kek_path(worktree_path))
+    if not configured_kek_path or pathlib.Path(configured_kek_path).resolve() != expected_kek_path:
+        return False
+
+    if expected_kek_path.exists():
+        expected_kek_path.unlink()
+    return True
 
 
 def bootstrap_api_worktree(
@@ -1067,6 +1107,7 @@ def bootstrap_api_worktree(
     db_path: pathlib.Path | None = None,
     migration_command: list[str] | None = None,
     migration_label: str = "running migrations",
+    allow_tenant_key_recovery: bool = True,
 ) -> tuple[bool, str | None]:
     env_path = worktree_path / ".env"
     preview_storage_target: str | None = None
@@ -1110,11 +1151,29 @@ def bootstrap_api_worktree(
     )
 
     print(f"{prefix} seeding database")
-    run_api_worktree_bootstrap_command(
-        worktree_path,
-        ["php", "artisan", "db:seed", "--force"],
-        command_env=command_env,
-    )
+    try:
+        run_api_worktree_bootstrap_command(
+            worktree_path,
+            ["php", "artisan", "db:seed", "--force"],
+            command_env=command_env,
+        )
+    except subprocess.CalledProcessError as error:
+        if not (
+            allow_tenant_key_recovery
+            and is_recoverable_preview_tenant_key_failure(error)
+            and discard_stale_preview_kek(worktree_path, env_values, preview_storage_target)
+        ):
+            raise
+
+        print(f"{prefix} recovering stale preview tenant key material")
+        return bootstrap_api_worktree(
+            worktree_path,
+            source_repo_path,
+            db_path=db_path,
+            migration_command=["php", "artisan", "migrate:fresh", "--force"],
+            migration_label="resetting preview database after tenant key recovery",
+            allow_tenant_key_recovery=False,
+        )
 
     print(f"{prefix} normalizing preview test user")
     run_api_worktree_bootstrap_command(
