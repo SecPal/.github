@@ -1477,6 +1477,7 @@ exit 1
 def build_frontend_preview_build_command() -> str:
     script = textwrap.dedent(
         f"""\
+import fcntl
 import os
 import shutil
 import subprocess
@@ -1568,32 +1569,35 @@ workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
 env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
-stage_root = Path(".polyscope-preview-stage")
-stage_root.mkdir(exist_ok=True)
-stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
-try:
-    result = subprocess.run(
-        [
-            "npm",
-            "run",
-            "build",
-            "--",
-            "--mode",
-            "preview",
-            "--outDir",
-            stage_dir.as_posix(),
-        ],
-        env=env,
-    )
-    if result.returncode == 0:
-        try:
-            publish_preview_build(stage_dir)
-        except Exception as exc:
-            print(f"publish failed: {{exc}}", file=__import__("sys").stderr)
-            raise SystemExit(1) from exc
-    raise SystemExit(result.returncode)
-finally:
-    shutil.rmtree(stage_dir, ignore_errors=True)
+lock_path = Path(".polyscope-preview-build.lock")
+with lock_path.open("w") as lock_file:
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    stage_root = Path(".polyscope-preview-stage")
+    stage_root.mkdir(exist_ok=True)
+    stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
+    try:
+        result = subprocess.run(
+            [
+                "npm",
+                "run",
+                "build",
+                "--",
+                "--mode",
+                "preview",
+                "--outDir",
+                stage_dir.as_posix(),
+            ],
+            env=env,
+        )
+        if result.returncode == 0:
+            try:
+                publish_preview_build(stage_dir)
+            except Exception as exc:
+                print(f"publish failed: {{exc}}", file=__import__("sys").stderr)
+                raise SystemExit(1) from exc
+        raise SystemExit(result.returncode)
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
         """
     ).strip()
 
@@ -1604,6 +1608,7 @@ def build_frontend_preview_build_watch_command() -> str:
     script = textwrap.dedent(
         f"""\
 import hashlib
+import fcntl
 import os
 import shutil
 import subprocess
@@ -1777,34 +1782,37 @@ def run_build() -> int:
     api_workspace = resolve_linked_workspace("SecPal/api", workspace)
     env = os.environ.copy()
     env["VITE_API_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
-    stage_root = Path(".polyscope-preview-stage")
-    stage_root.mkdir(exist_ok=True)
-    stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
+    lock_path = Path(".polyscope-preview-build.lock")
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        stage_root = Path(".polyscope-preview-stage")
+        stage_root.mkdir(exist_ok=True)
+        stage_dir = Path(tempfile.mkdtemp(prefix="frontend-", dir=stage_root))
 
-    try:
-        result = subprocess.run(
-            [
-                "npm",
-                "run",
-                "build",
-                "--",
-                "--mode",
-                "preview",
-                "--outDir",
-                stage_dir.as_posix(),
-            ],
-            check=False,
-            env=env,
-        )
-        if result.returncode == 0:
-            try:
-                publish_preview_build(stage_dir)
-            except Exception as exc:
-                print(f"publish failed: {{exc}}", file=sys.stderr)
-                return 1
-        return result.returncode
-    finally:
-        shutil.rmtree(stage_dir, ignore_errors=True)
+        try:
+            result = subprocess.run(
+                [
+                    "npm",
+                    "run",
+                    "build",
+                    "--",
+                    "--mode",
+                    "preview",
+                    "--outDir",
+                    stage_dir.as_posix(),
+                ],
+                check=False,
+                env=env,
+            )
+            if result.returncode == 0:
+                try:
+                    publish_preview_build(stage_dir)
+                except Exception as exc:
+                    print(f"publish failed: {{exc}}", file=sys.stderr)
+                    return 1
+            return result.returncode
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
 print("Watching frontend preview sources for changes...", flush=True)
 previous_snapshot = None
@@ -1851,6 +1859,7 @@ from pathlib import Path
 workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
 env = os.environ.copy()
+env["POLYSCOPE_WORKSPACE"] = workspace
 env["PLAYWRIGHT_BASE_URL"] = f"https://frontend-{{workspace}}.preview.secpal.dev"
 env["PLAYWRIGHT_API_BASE_URL"] = f"https://api-{{api_workspace}}.preview.secpal.dev"
 {"env['TEST_USER_EMAIL'] = 'test@example.com'" if authenticated else "env['CI'] = 'true'"}

@@ -15,6 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - imported the address dataset during API Polyscope workspace bootstrap when absent, matching the API setup workflow so newly provisioned previews retain address lookup functionality
 - stopped the automatic worktree-provisioning service from synchronizing the Polyscope database it watches, preventing its own metadata write from repeatedly retriggering the path unit until systemd disabled it
+- serialized staged frontend preview builds and stopped the provision watcher from observing clone contents it changes itself, so every published HTML document, JavaScript bundle, and service worker comes from one completed build
 
 ---
 

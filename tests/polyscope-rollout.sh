@@ -785,6 +785,7 @@ fi
 grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'PLAYWRIGHT_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'PLAYWRIGHT_API_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
+grep -qF 'POLYSCOPE_WORKSPACE' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'tests/e2e/smoke.spec.ts' "$workspace_root/frontend/polyscope.local.json"
 grep -qF -- '--project=chromium' "$workspace_root/frontend/polyscope.local.json"
 grep -qF -- '--project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
@@ -4875,9 +4876,14 @@ grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-w
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathModified=.*/\.polyscope/polyscope\.db-wal$' "$fake_unit_dir/polyscope-worktree-provision.path"
-grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"
+if grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"; then
+  echo "worktree provision path must not watch clone contents it modifies" >&2
+  exit 1
+fi
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
+grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
+grep -qF '.polyscope-preview-build.lock' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"

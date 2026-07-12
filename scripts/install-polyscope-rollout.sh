@@ -371,7 +371,6 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 [Path]
 PathChanged=$HOME/.polyscope/polyscope.db
 PathModified=$HOME/.polyscope/polyscope.db-wal
-PathModified=$POLYSCOPE_CLONE_ROOT
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
