@@ -1078,7 +1078,14 @@ def is_recoverable_preview_tenant_key_failure(error: subprocess.CalledProcessErr
     if not isinstance(output, str):
         return False
 
-    return "App\\Models\\TenantKey::loadKek" in output and "App\\Models\\TenantKey::unwrapDek" in output
+    return all(
+        marker in output
+        for marker in (
+            "App\\Models\\TenantKey::loadKek",
+            "App\\Models\\TenantKey::unwrapDek",
+            "Failed to unwrap DEK",
+        )
+    )
 
 
 def discard_stale_preview_kek(

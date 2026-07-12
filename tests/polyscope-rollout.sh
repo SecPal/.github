@@ -2512,6 +2512,17 @@ assert calls == [
 assert not module.is_recoverable_preview_tenant_key_failure(
     subprocess.CalledProcessError(1, ["php", "artisan", "db:seed", "--force"], output="ordinary seeder failure")
 )
+assert not module.is_recoverable_preview_tenant_key_failure(
+    subprocess.CalledProcessError(
+        1,
+        ["php", "artisan", "db:seed", "--force"],
+        output=(
+            "App\\Models\\TenantKey::loadKek()\n"
+            "App\\Models\\TenantKey::unwrapDek()\n"
+            "Unrelated tenant key failure\n"
+        ),
+    )
+), "stack frames alone must not authorize destructive preview recovery"
 kek_path.write_bytes(b"must-not-delete")
 assert not module.discard_stale_preview_kek(
     api_worktree,
@@ -2519,6 +2530,21 @@ assert not module.discard_stale_preview_kek(
     "database:secpal",
 )
 assert kek_path.exists(), "recovery must not reset an unisolated database"
+
+api_worktree.joinpath(".env").write_text(
+    "APP_KEY=base64:preview\n"
+    f"KEK_PATH={kek_path}\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=schema\n"
+    "POLYSCOPE_PREVIEW_DATABASE_BASE=secpal\n"
+    "POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__coral_crow\n"
+    "DB_DATABASE=secpal\n"
+)
+assert module.discard_stale_preview_kek(
+    api_worktree,
+    module.load_env_assignments(api_worktree / ".env"),
+    "schema:secpal:secpal__preview__coral_crow",
+)
+assert not kek_path.exists(), "schema previews must permit the same isolated KEK recovery"
 PY
 
 # run_api_worktree_shell_command must reuse the transient runtime DB password

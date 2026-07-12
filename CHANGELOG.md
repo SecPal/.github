@@ -13,7 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- recovered isolated API previews whose seeded tenant envelope keys no longer match their per-worktree KEK: provisioning now recognizes the precise `TenantKey::loadKek()` / `unwrapDek()` seed failure, removes only the preview-local KEK, resets only that preview database, and retries seeding once; unrelated seed failures still surface normally
+- recovered isolated API previews whose seeded tenant envelope keys no longer match their per-worktree KEK: provisioning now requires the precise `TenantKey::loadKek()` / `unwrapDek()` stack and `Failed to unwrap DEK` error, removes only the preview-local KEK, resets only that preview database or schema, and retries seeding once; unrelated seed failures still surface normally
 
 ---
 
