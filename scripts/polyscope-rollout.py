@@ -1613,8 +1613,6 @@ watch_files = [
             Path(".env.preview.local"),
             Path(".env.production.local"),
             Path("node_modules/.package-lock.json"),
-            Path("node_modules/.bin/cross-env"),
-            Path("node_modules/.bin/vite"),
 ]
 watch_suffixes = {
             ".css",
