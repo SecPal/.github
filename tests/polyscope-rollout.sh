@@ -2446,6 +2446,156 @@ assert "POLYSCOPE_DB_PASSWORD_SOURCE=source" in worktree_env, worktree_env
 assert "POLYSCOPE_DB_PASSWORD_SOURCE_SHA256=" in worktree_env, worktree_env
 PY
 
+# Bootstrap output must remain visible while a command is running, while its
+# complete transcript remains available to classify a failed seed command.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import builtins
+import importlib.util
+import pathlib
+import subprocess
+import sys
+from unittest.mock import patch
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+emitted = []
+popen_calls = []
+
+class FakeProcess:
+    stdout = ["first line\n", "second line\n"]
+
+    def wait(self):
+        assert emitted == ["first line\n", "second line\n"], emitted
+        return 1
+
+def fake_popen(*args, **kwargs):
+    popen_calls.append((args, kwargs))
+    return FakeProcess()
+
+with patch.object(module.subprocess, "Popen", side_effect=fake_popen):
+    with patch.object(builtins, "print", side_effect=lambda value="", end="\n": emitted.append(value)):
+        try:
+            module.run_api_worktree_bootstrap_command(
+                workspace,
+                ["php", "artisan", "db:seed", "--force"],
+                command_env={},
+            )
+        except subprocess.CalledProcessError as error:
+            assert error.output == "first line\nsecond line\n", error.output
+        else:
+            raise AssertionError("expected streamed bootstrap failure")
+
+assert len(popen_calls) == 1, popen_calls
+assert popen_calls[0][1]["stdout"] is subprocess.PIPE, popen_calls
+assert popen_calls[0][1]["stderr"] is subprocess.STDOUT, popen_calls
+PY
+
+# A stale per-worktree KEK cannot unwrap tenant keys left in an isolated
+# preview database. Bootstrap must recognize that exact failure, discard only
+# the preview key material, and retry once from a fresh preview database.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "tenant-key-recovery-fixture" / "source-api"
+api_worktree = workspace / "tenant-key-recovery-fixture" / "clones" / "api12345" / "coral-crow-d6cd6a1f"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text("DB_CONNECTION=sqlite\n")
+kek_path = api_worktree / "storage" / "app" / "keys" / "kek.key"
+kek_path.parent.mkdir(parents=True)
+kek_path.write_bytes(b"stale-preview-kek")
+api_worktree.joinpath(".env").write_text(
+    "APP_KEY=base64:preview\n"
+    f"KEK_PATH={kek_path}\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+    "DB_DATABASE=secpal__preview__coral_crow\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+calls = []
+seed_attempts = [0]
+
+def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
+    seed_attempts[0] += 1 if command == ["php", "artisan", "db:seed", "--force"] else 0
+    calls.append(tuple(command))
+    if command == ["php", "artisan", "db:seed", "--force"] and seed_attempts[0] == 1:
+        raise subprocess.CalledProcessError(
+            1,
+            command,
+            output=(
+                "App\\Models\\TenantKey::loadKek()\n"
+                "App\\Models\\TenantKey::unwrapDek()\n"
+                "Failed to unwrap DEK\n"
+            ),
+        )
+module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
+
+ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__coral_crow", target
+assert not kek_path.exists(), "recovery must remove the stale isolated-preview KEK"
+assert calls == [
+    ("php", "artisan", "config:clear"),
+    ("php", "artisan", "migrate", "--force"),
+    ("php", "artisan", "db:seed", "--force"),
+    ("php", "artisan", "config:clear"),
+    ("php", "artisan", "migrate:fresh", "--force"),
+    ("php", "artisan", "db:seed", "--force"),
+    ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
+], calls
+
+assert not module.is_recoverable_preview_tenant_key_failure(
+    subprocess.CalledProcessError(1, ["php", "artisan", "db:seed", "--force"], output="ordinary seeder failure")
+)
+assert not module.is_recoverable_preview_tenant_key_failure(
+    subprocess.CalledProcessError(
+        1,
+        ["php", "artisan", "db:seed", "--force"],
+        output=(
+            "App\\Models\\TenantKey::loadKek()\n"
+            "App\\Models\\TenantKey::unwrapDek()\n"
+            "Unrelated tenant key failure\n"
+        ),
+    )
+), "stack frames alone must not authorize destructive preview recovery"
+kek_path.write_bytes(b"must-not-delete")
+assert not module.discard_stale_preview_kek(
+    api_worktree,
+    module.load_env_assignments(api_worktree / ".env"),
+    "database:secpal",
+)
+assert kek_path.exists(), "recovery must not reset an unisolated database"
+
+api_worktree.joinpath(".env").write_text(
+    "APP_KEY=base64:preview\n"
+    f"KEK_PATH={kek_path}\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=schema\n"
+    "POLYSCOPE_PREVIEW_DATABASE_BASE=secpal\n"
+    "POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__coral_crow\n"
+    "DB_DATABASE=secpal\n"
+)
+assert module.discard_stale_preview_kek(
+    api_worktree,
+    module.load_env_assignments(api_worktree / ".env"),
+    "schema:secpal:secpal__preview__coral_crow",
+)
+assert not kek_path.exists(), "schema previews must permit the same isolated KEK recovery"
+PY
+
 # run_api_worktree_shell_command must reuse the transient runtime DB password
 # injection for long-running preview actions such as the queue worker and scheduler.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"

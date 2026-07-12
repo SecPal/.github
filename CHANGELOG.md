@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-12 - Recover Stale Polyscope Preview Tenant Keys
+
+**Fixed:**
+
+- recovered isolated API previews whose seeded tenant envelope keys no longer match their per-worktree KEK: provisioning now requires the precise `TenantKey::loadKek()` / `unwrapDek()` stack and `Failed to unwrap DEK` error, removes only the preview-local KEK, resets only that preview database or schema, and retries seeding once; unrelated seed failures still surface normally
+
+---
+
 ## 2026-07-10 - Canonicalize Polyscope Preview Hosts
 
 **Fixed:**
