@@ -131,6 +131,15 @@ if [ -f tests/reusable-workflow-policy.sh ]; then
   }
 fi
 
+if [ -f tests/project-automation-core.sh ]; then
+  bash tests/project-automation-core.sh || {
+    echo "" >&2
+    echo "❌ Project automation workflow token-input regression test failed!" >&2
+    echo "Use the supported client-id input while preserving the APP_ID and APP_PRIVATE_KEY secret contract." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/deploy-main-workflow.sh ]; then
   bash tests/deploy-main-workflow.sh || {
     echo "" >&2
