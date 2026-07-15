@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-15 - Fix Instruction Validation During Push
+
+**Fixed:**
+
+- scoped the extra-blank-line exception to the authoritative and mirrored instruction files, so formatting-only whitespace differences no longer block validated pushes without weakening repository-wide Markdown validation
+- added positive and negative regression coverage for the file-local exception and continued enforcement in ordinary Markdown files, requiring the directive in each instruction header and the lockfile-installed Markdownlint binary for self-contained validation
+
+---
+
 ## 2026-07-15 - Pin Nested Dependabot Workflow Actions
 
 **Fixed:**
