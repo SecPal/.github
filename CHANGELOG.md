@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-15 - Pin Nested Dependabot Workflow Actions
+
+**Fixed:**
+
+- pinned `lewagon/wait-on-check-action` and both `actions/github-script` invocations in `.github/workflows/reusable-dependabot-auto-merge.yml` to immutable commits, so callers pinned to a reviewed reusable-workflow commit cannot execute code changed through movable nested action tags
+- extended `tests/dependabot-auto-merge.sh` to reject every non-immutable nested action reference while retaining Dependabot's daily `github-actions` update configuration
+
+---
+
 ## 2026-07-12 - Reap Orphaned Polyscope Worktree Directories
 
 **Fixed:**

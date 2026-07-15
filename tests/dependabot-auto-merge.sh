@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
+DEPENDABOT_CONFIG="$REPO_ROOT/.github/dependabot.yml"
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
@@ -73,6 +74,16 @@ if [ ! -f "$ROLLOUT_GUIDE" ]; then
   echo "Expected rollout guide was not found: $ROLLOUT_GUIDE" >&2
   exit 1
 fi
+
+if [ ! -f "$DEPENDABOT_CONFIG" ]; then
+  echo "Expected Dependabot configuration was not found: $DEPENDABOT_CONFIG" >&2
+  exit 1
+fi
+
+grep -q '^  - package-ecosystem: "github-actions"$' "$DEPENDABOT_CONFIG" || {
+  echo "Dependabot must continue to update immutable GitHub Actions references." >&2
+  exit 1
+}
 
 if ! awk '
   /^---$/ { document_start_markers++ }
@@ -164,6 +175,25 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
   echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
   exit 1
 }
+
+# Cross-repository callers pin this reusable workflow to a commit, but that
+# pin is only meaningful when every action it invokes is also immutable.
+# Require a full commit SHA for each action reference so a movable tag cannot
+# silently change the code executed by all callers.
+if ! awk '
+  /^[[:space:]]+uses: [^@[:space:]]+@/ {
+    reference = $2
+    sub(/^.*@/, "", reference)
+    if (reference !~ /^[0-9a-f]{40}$/) {
+      printf "Movable nested action reference: %s\n", $2 > "/dev/stderr"
+      invalid_reference = 1
+    }
+  }
+  END { exit invalid_reference }
+' "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must pin every nested action to a full commit SHA." >&2
+  exit 1
+fi
 
 grep -q '^        continue-on-error: true$' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must soft-fail fetch-metadata into the manual-review path." >&2
