@@ -177,68 +177,101 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
 }
 
 validate_immutable_action_references() {
-  awk '
-    function trim(value) {
-      sub(/^[[:space:]]+/, "", value)
-      sub(/[[:space:]]+$/, "", value)
-      return value
-    }
+  node -e '
+    const fs = require("node:fs");
+    const yaml = require("js-yaml");
 
-    {
-      line = $0
-      sub(/^[[:space:]]*/, "", line)
-      sub(/^-[[:space:]]*/, "", line)
-      if (line !~ /^uses:[[:space:]]+/) {
-        next
-      }
+    const inputPaths = process.argv.slice(1);
+    const inputs = inputPaths.length > 0
+      ? inputPaths.map((path) => ({ name: path, source: fs.readFileSync(path, "utf8") }))
+      : [{ name: "standard input", source: fs.readFileSync(0, "utf8") }];
+    let invalidReference = false;
 
-      sub(/^uses:[[:space:]]+/, "", line)
-      sub(/[[:space:]]+#.*$/, "", line)
-      reference = trim(line)
+    function validateReference(reference, location) {
+      const repositoryPin = /^[^@\s]+@[0-9a-f]{40}$/i;
+      const dockerPin = /^docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/;
+      let immutable = false;
 
-      first_character = substr(reference, 1, 1)
-      last_character = substr(reference, length(reference), 1)
-      if ((first_character == "\"" && last_character == "\"") ||
-          (first_character == "\047" && last_character == "\047")) {
-        reference = substr(reference, 2, length(reference) - 2)
-      }
-
-      if (reference ~ /^\.\//) {
-        next
-      }
-
-      if (reference ~ /^docker:\/\//) {
-        immutable = reference ~ /^docker:\/\/[^@[:space:]]+@sha256:[0-9a-f]{64}$/
-      } else {
-        immutable = reference ~ /^[^@[:space:]]+@[0-9a-f]{40}$/
+      if (typeof reference === "string" && reference.startsWith("docker://")) {
+        immutable = dockerPin.test(reference);
+      } else if (typeof reference === "string" && !reference.startsWith("./")) {
+        immutable = repositoryPin.test(reference);
       }
 
       if (!immutable) {
-        printf "Movable nested action reference: %s\n", reference > "/dev/stderr"
-        invalid_reference = 1
+        process.stderr.write(`Movable nested action reference at ${location}: ${String(reference)}\n`);
+        invalidReference = true;
       }
     }
 
-    END { exit invalid_reference }
+    function validateWorkflow(workflow, sourceName) {
+      if (workflow === null || typeof workflow !== "object" || Array.isArray(workflow)) {
+        throw new Error(`${sourceName}: workflow document must be a mapping`);
+      }
+
+      const jobs = workflow.jobs;
+      if (jobs === null || typeof jobs !== "object" || Array.isArray(jobs)) {
+        return;
+      }
+
+      for (const [jobId, job] of Object.entries(jobs)) {
+        if (job === null || typeof job !== "object" || Array.isArray(job)) {
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(job, "uses")) {
+          validateReference(job.uses, `${sourceName}: jobs.${jobId}.uses`);
+        }
+        if (!Array.isArray(job.steps)) {
+          continue;
+        }
+        job.steps.forEach((step, index) => {
+          if (step !== null && typeof step === "object" &&
+              !Array.isArray(step) && Object.prototype.hasOwnProperty.call(step, "uses")) {
+            validateReference(step.uses, `${sourceName}: jobs.${jobId}.steps[${index}].uses`);
+          }
+        });
+      }
+    }
+
+    try {
+      for (const input of inputs) {
+        yaml.loadAll(input.source, (workflow) => validateWorkflow(workflow, input.name));
+      }
+    } catch (error) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
+
+    process.exit(invalidReference ? 1 : 0);
   ' "$@"
 }
 
-immutable_action_fixture='steps:
-  - uses: actions/example@0123456789abcdef0123456789abcdef01234567
-  - uses: "actions/example@0123456789abcdef0123456789abcdef01234567" # v1.2.3
-  - uses: ./.github/actions/local-check
-  - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+immutable_action_fixture='jobs:
+  reusable-workflow:
+    uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567
+  action-steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/example@0123456789abcdef0123456789abcdef01234567
+      - uses : actions/example@0123456789ABCDEF0123456789ABCDEF01234567
+      - { name: Example, uses: "actions/example@0123456789abcdef0123456789abcdef01234567" }
+      - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
 if ! printf '%s\n' "$immutable_action_fixture" | validate_immutable_action_references; then
-  echo "Immutable action reference validation must accept Git commit pins, local actions, and Docker digests in every valid step form." >&2
+  echo "Immutable action reference validation must accept Git commit pins in either hex case and canonical Docker digests in every valid step form." >&2
   exit 1
 fi
 
 for movable_action_fixture in \
-  '      uses: actions/example@v1' \
-  '      - uses: actions/example@main' \
-  "      - uses: 'actions/example@v1.2.3' # release" \
-  '      uses: docker://alpine:latest'; do
+  'jobs: { fixture: { uses: actions/example/.github/workflows/example.yml@v1 } }' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@main' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses : actions/example@v1' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - { name: Example, uses: actions/example@v1 }' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/local-check' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/local-check@0123456789abcdef0123456789abcdef01234567' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine@0123456789abcdef0123456789abcdef01234567' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine@sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine:latest'; do
   if printf '%s\n' "$movable_action_fixture" | validate_immutable_action_references 2>/dev/null; then
     echo "Immutable action reference validation accepted a movable reference: $movable_action_fixture" >&2
     exit 1
@@ -247,11 +280,11 @@ done
 
 # Cross-repository callers pin this reusable workflow to a commit, but that
 # pin is only meaningful when every action it invokes is also immutable.
-# Require a full commit SHA for repository actions and a SHA-256 digest for
-# Docker actions so a movable tag cannot silently change the code executed by
-# all callers. Local actions are part of the already-pinned workflow commit.
+# Require a full commit SHA for repository actions and a canonical SHA-256
+# digest for Docker actions so a movable or caller-local reference cannot
+# silently change the code executed by consumers.
 if ! validate_immutable_action_references "$REUSABLE_WORKFLOW"; then
-  echo "Reusable Dependabot workflow must pin every nested repository action to a full commit SHA and every Docker action to a SHA-256 digest." >&2
+  echo "Reusable Dependabot workflow must pin every nested repository action to a full commit SHA and every Docker action to a canonical SHA-256 digest; caller-local references are not allowed." >&2
   exit 1
 fi
 
