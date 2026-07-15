@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-15 - Fix Instruction Validation During Push
+
+**Fixed:**
+
+- aligned the tracked markdownlint configuration with instruction mirror validation by allowing extra blank lines, so formatting-only whitespace before mirrored instruction sections no longer blocks validated pushes
+- added a regression assertion that the repository configuration preserves this instruction-validation contract
+
+---
+
 ## 2026-07-15 - Pin Nested Dependabot Workflow Actions
 
 **Fixed:**

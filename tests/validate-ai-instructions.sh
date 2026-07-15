@@ -13,6 +13,11 @@ trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p "$workspace/bin"
 
+if ! grep -qE '"MD012"[[:space:]]*:[[:space:]]*false' "$REPO_ROOT/.markdownlint.json"; then
+    echo "repository markdownlint configuration must allow extra blank lines in mirrored instruction sections" >&2
+    exit 1
+fi
+
 cat >"$workspace/bin/npx" <<'STUB'
 #!/usr/bin/env bash
 exit 0
