@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-15 - Replace Deprecated Project Token Input
+
+**Fixed:**
+
+- replaced the deprecated `app-id` input with `client-id` in every GitHub App token step of `.github/workflows/project-automation-core.yml` while retaining the existing `APP_ID` and `APP_PRIVATE_KEY` caller secret contract
+- added a focused project-automation workflow regression test to prevent reintroducing the deprecated input and verify all token steps retain that secret wiring
+
+---
+
 ## 2026-07-15 - Pin Nested Dependabot Workflow Actions
 
 **Fixed:**
