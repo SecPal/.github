@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
+DEPENDABOT_CONFIG="$REPO_ROOT/.github/dependabot.yml"
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
@@ -73,6 +74,16 @@ if [ ! -f "$ROLLOUT_GUIDE" ]; then
   echo "Expected rollout guide was not found: $ROLLOUT_GUIDE" >&2
   exit 1
 fi
+
+if [ ! -f "$DEPENDABOT_CONFIG" ]; then
+  echo "Expected Dependabot configuration was not found: $DEPENDABOT_CONFIG" >&2
+  exit 1
+fi
+
+grep -q '^  - package-ecosystem: "github-actions"$' "$DEPENDABOT_CONFIG" || {
+  echo "Dependabot must continue to update immutable GitHub Actions references." >&2
+  exit 1
+}
 
 if ! awk '
   /^---$/ { document_start_markers++ }
@@ -164,6 +175,127 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
   echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
   exit 1
 }
+
+validate_immutable_action_references() {
+  local parser=()
+  local source_name yaml_json
+
+  if [[ $# -gt 1 ]]; then
+    echo "Immutable action reference validation accepts at most one workflow path." >&2
+    return 1
+  fi
+
+  if [[ -x "$REPO_ROOT/node_modules/.bin/js-yaml" ]]; then
+    parser=("$REPO_ROOT/node_modules/.bin/js-yaml")
+  elif command -v npx >/dev/null 2>&1; then
+    parser=(npx --yes js-yaml@4.2.0)
+  else
+    echo "Immutable action reference validation requires npm dependencies or npx." >&2
+    return 1
+  fi
+
+  source_name="${1:-standard input}"
+  yaml_json="$("${parser[@]}" "$@")" || return 1
+
+  printf '%s\n' "$yaml_json" |
+  node -e '
+    const fs = require("node:fs");
+    const sourceName = process.argv[1];
+    const workflow = JSON.parse(fs.readFileSync(0, "utf8"));
+    let invalidReference = false;
+
+    function validateReference(reference, location) {
+      const repositoryPin = /^[^@\s]+@[0-9a-f]{40}$/i;
+      const dockerPin = /^docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/;
+      let immutable = false;
+
+      if (typeof reference === "string" && reference.startsWith("docker://")) {
+        immutable = dockerPin.test(reference);
+      } else if (typeof reference === "string" && !reference.startsWith("./")) {
+        immutable = repositoryPin.test(reference);
+      }
+
+      if (!immutable) {
+        process.stderr.write(`Movable nested action reference at ${location}: ${String(reference)}\n`);
+        invalidReference = true;
+      }
+    }
+
+    function validateWorkflow(workflow, sourceName) {
+      if (workflow === null || typeof workflow !== "object" || Array.isArray(workflow)) {
+        throw new Error(`${sourceName}: workflow document must be a mapping`);
+      }
+
+      const jobs = workflow.jobs;
+      if (jobs === null || typeof jobs !== "object" || Array.isArray(jobs)) {
+        return;
+      }
+
+      for (const [jobId, job] of Object.entries(jobs)) {
+        if (job === null || typeof job !== "object" || Array.isArray(job)) {
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(job, "uses")) {
+          validateReference(job.uses, `${sourceName}: jobs.${jobId}.uses`);
+        }
+        if (!Array.isArray(job.steps)) {
+          continue;
+        }
+        job.steps.forEach((step, index) => {
+          if (step !== null && typeof step === "object" &&
+              !Array.isArray(step) && Object.prototype.hasOwnProperty.call(step, "uses")) {
+            validateReference(step.uses, `${sourceName}: jobs.${jobId}.steps[${index}].uses`);
+          }
+        });
+      }
+    }
+
+    validateWorkflow(workflow, sourceName);
+    process.exit(invalidReference ? 1 : 0);
+  ' "$source_name"
+}
+
+immutable_action_fixture='jobs:
+  reusable-workflow:
+    uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567
+  action-steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/example@0123456789abcdef0123456789abcdef01234567
+      - uses : actions/example@0123456789ABCDEF0123456789ABCDEF01234567
+      - { name: Example, uses: "actions/example@0123456789abcdef0123456789abcdef01234567" }
+      - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+
+if ! printf '%s\n' "$immutable_action_fixture" | validate_immutable_action_references; then
+  echo "Immutable action reference validation must accept Git commit pins in either hex case and canonical Docker digests in every valid step form." >&2
+  exit 1
+fi
+
+for movable_action_fixture in \
+  'jobs: { fixture: { uses: actions/example/.github/workflows/example.yml@v1 } }' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@main' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses : actions/example@v1' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - { name: Example, uses: actions/example@v1 }' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/local-check' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/local-check@0123456789abcdef0123456789abcdef01234567' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine@0123456789abcdef0123456789abcdef01234567' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine@sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF' \
+  $'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine:latest'; do
+  if printf '%s\n' "$movable_action_fixture" | validate_immutable_action_references 2>/dev/null; then
+    echo "Immutable action reference validation accepted a movable reference: $movable_action_fixture" >&2
+    exit 1
+  fi
+done
+
+# Cross-repository callers pin this reusable workflow to a commit, but that
+# pin is only meaningful when every action it invokes is also immutable.
+# Require a full commit SHA for repository actions and a canonical SHA-256
+# digest for Docker actions so a movable or caller-local reference cannot
+# silently change the code executed by consumers.
+if ! validate_immutable_action_references "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must pin every nested repository action to a full commit SHA and every Docker action to a canonical SHA-256 digest; caller-local references are not allowed." >&2
+  exit 1
+fi
 
 grep -q '^        continue-on-error: true$' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must soft-fail fetch-metadata into the manual-review path." >&2
