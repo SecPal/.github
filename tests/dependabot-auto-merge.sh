@@ -176,22 +176,82 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
   exit 1
 }
 
+validate_immutable_action_references() {
+  awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      sub(/^-[[:space:]]*/, "", line)
+      if (line !~ /^uses:[[:space:]]+/) {
+        next
+      }
+
+      sub(/^uses:[[:space:]]+/, "", line)
+      sub(/[[:space:]]+#.*$/, "", line)
+      reference = trim(line)
+
+      first_character = substr(reference, 1, 1)
+      last_character = substr(reference, length(reference), 1)
+      if ((first_character == "\"" && last_character == "\"") ||
+          (first_character == "\047" && last_character == "\047")) {
+        reference = substr(reference, 2, length(reference) - 2)
+      }
+
+      if (reference ~ /^\.\//) {
+        next
+      }
+
+      if (reference ~ /^docker:\/\//) {
+        immutable = reference ~ /^docker:\/\/[^@[:space:]]+@sha256:[0-9a-f]{64}$/
+      } else {
+        immutable = reference ~ /^[^@[:space:]]+@[0-9a-f]{40}$/
+      }
+
+      if (!immutable) {
+        printf "Movable nested action reference: %s\n", reference > "/dev/stderr"
+        invalid_reference = 1
+      }
+    }
+
+    END { exit invalid_reference }
+  ' "$@"
+}
+
+immutable_action_fixture='steps:
+  - uses: actions/example@0123456789abcdef0123456789abcdef01234567
+  - uses: "actions/example@0123456789abcdef0123456789abcdef01234567" # v1.2.3
+  - uses: ./.github/actions/local-check
+  - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+
+if ! printf '%s\n' "$immutable_action_fixture" | validate_immutable_action_references; then
+  echo "Immutable action reference validation must accept Git commit pins, local actions, and Docker digests in every valid step form." >&2
+  exit 1
+fi
+
+for movable_action_fixture in \
+  '      uses: actions/example@v1' \
+  '      - uses: actions/example@main' \
+  "      - uses: 'actions/example@v1.2.3' # release" \
+  '      uses: docker://alpine:latest'; do
+  if printf '%s\n' "$movable_action_fixture" | validate_immutable_action_references 2>/dev/null; then
+    echo "Immutable action reference validation accepted a movable reference: $movable_action_fixture" >&2
+    exit 1
+  fi
+done
+
 # Cross-repository callers pin this reusable workflow to a commit, but that
 # pin is only meaningful when every action it invokes is also immutable.
-# Require a full commit SHA for each action reference so a movable tag cannot
-# silently change the code executed by all callers.
-if ! awk '
-  /^[[:space:]]+uses: [^@[:space:]]+@/ {
-    reference = $2
-    sub(/^.*@/, "", reference)
-    if (reference !~ /^[0-9a-f]{40}$/) {
-      printf "Movable nested action reference: %s\n", $2 > "/dev/stderr"
-      invalid_reference = 1
-    }
-  }
-  END { exit invalid_reference }
-' "$REUSABLE_WORKFLOW"; then
-  echo "Reusable Dependabot workflow must pin every nested action to a full commit SHA." >&2
+# Require a full commit SHA for repository actions and a SHA-256 digest for
+# Docker actions so a movable tag cannot silently change the code executed by
+# all callers. Local actions are part of the already-pinned workflow commit.
+if ! validate_immutable_action_references "$REUSABLE_WORKFLOW"; then
+  echo "Reusable Dependabot workflow must pin every nested repository action to a full commit SHA and every Docker action to a SHA-256 digest." >&2
   exit 1
 fi
 
