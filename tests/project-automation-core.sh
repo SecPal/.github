@@ -12,7 +12,7 @@ if [ ! -f "$WORKFLOW" ]; then
   exit 1
 fi
 
-if grep -q '^          app-id:' "$WORKFLOW"; then
+if grep -q '^[[:space:]]*app-id:[[:space:]]*' "$WORKFLOW"; then
   echo "Project automation must not use the deprecated GitHub App app-id input." >&2
   exit 1
 fi
