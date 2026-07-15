@@ -177,14 +177,31 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
 }
 
 validate_immutable_action_references() {
+  local parser=()
+  local source_name yaml_json
+
+  if [[ $# -gt 1 ]]; then
+    echo "Immutable action reference validation accepts at most one workflow path." >&2
+    return 1
+  fi
+
+  if [[ -x "$REPO_ROOT/node_modules/.bin/js-yaml" ]]; then
+    parser=("$REPO_ROOT/node_modules/.bin/js-yaml")
+  elif command -v npx >/dev/null 2>&1; then
+    parser=(npx --yes js-yaml@4.2.0)
+  else
+    echo "Immutable action reference validation requires npm dependencies or npx." >&2
+    return 1
+  fi
+
+  source_name="${1:-standard input}"
+  yaml_json="$("${parser[@]}" "$@")" || return 1
+
+  printf '%s\n' "$yaml_json" |
   node -e '
     const fs = require("node:fs");
-    const yaml = require("js-yaml");
-
-    const inputPaths = process.argv.slice(1);
-    const inputs = inputPaths.length > 0
-      ? inputPaths.map((path) => ({ name: path, source: fs.readFileSync(path, "utf8") }))
-      : [{ name: "standard input", source: fs.readFileSync(0, "utf8") }];
+    const sourceName = process.argv[1];
+    const workflow = JSON.parse(fs.readFileSync(0, "utf8"));
     let invalidReference = false;
 
     function validateReference(reference, location) {
@@ -233,17 +250,9 @@ validate_immutable_action_references() {
       }
     }
 
-    try {
-      for (const input of inputs) {
-        yaml.loadAll(input.source, (workflow) => validateWorkflow(workflow, input.name));
-      }
-    } catch (error) {
-      process.stderr.write(`${error.message}\n`);
-      process.exit(1);
-    }
-
+    validateWorkflow(workflow, sourceName);
     process.exit(invalidReference ? 1 : 0);
-  ' "$@"
+  ' "$source_name"
 }
 
 immutable_action_fixture='jobs:

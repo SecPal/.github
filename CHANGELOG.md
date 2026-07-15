@@ -14,7 +14,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - pinned `lewagon/wait-on-check-action` and both `actions/github-script` invocations in `.github/workflows/reusable-dependabot-auto-merge.yml` to immutable commits, so callers pinned to a reviewed reusable-workflow commit cannot execute code changed through movable nested action tags
-- extended `tests/dependabot-auto-merge.sh` with semantic YAML fixtures that cover named and shorthand steps, quoted and flow-style references, lowercase and uppercase repository commit pins, canonical lowercase Docker digests, and rejection of caller-local actions while retaining Dependabot's daily `github-actions` update configuration
+- extended `tests/dependabot-auto-merge.sh` with semantic YAML fixtures that cover named and shorthand steps, quoted and flow-style references, lowercase and uppercase repository commit pins, canonical lowercase Docker digests, and rejection of caller-local actions; the parser uses the installed dependency when available and the repository's existing pinned-`npx` preflight model in clean checkouts while retaining Dependabot's daily `github-actions` update configuration
 
 ---
 
