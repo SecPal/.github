@@ -13,8 +13,57 @@ trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p "$workspace/bin"
 
-if ! grep -qE '"MD012"[[:space:]]*:[[:space:]]*false' "$REPO_ROOT/.markdownlint.json"; then
-    echo "repository markdownlint configuration must allow extra blank lines in mirrored instruction sections" >&2
+if grep -qE '"MD012"[[:space:]]*:[[:space:]]*false' "$REPO_ROOT/.markdownlint.json"; then
+    echo "repository markdownlint configuration must keep excessive blank-line validation enabled" >&2
+    exit 1
+fi
+
+for instruction_file in AGENTS.md .github/copilot-instructions.md; do
+    if ! grep -q '^<!-- markdownlint-disable MD012 -->$' "$REPO_ROOT/$instruction_file"; then
+        echo "$instruction_file must scope the mirrored-instruction blank-line exception to itself" >&2
+        exit 1
+    fi
+done
+
+run_markdownlint_fixture() {
+    local target="$1"
+
+    if [ -x "$REPO_ROOT/node_modules/.bin/markdownlint" ]; then
+        "$REPO_ROOT/node_modules/.bin/markdownlint" --config "$REPO_ROOT/.markdownlint.json" "$target"
+        return
+    fi
+
+    if command -v npx >/dev/null 2>&1; then
+        npx --yes --package markdownlint-cli@0.49.0 markdownlint \
+            --config "$REPO_ROOT/.markdownlint.json" "$target"
+        return
+    fi
+
+    echo "markdownlint is required; run npm ci" >&2
+    return 127
+}
+
+cat >"$workspace/ordinary-markdown.md" <<'EOF'
+# Ordinary Markdown
+
+
+Excessive blank lines must still fail repository-wide validation.
+EOF
+if run_markdownlint_fixture "$workspace/ordinary-markdown.md" >/dev/null 2>&1; then
+    echo "repository markdownlint configuration unexpectedly allows excessive blank lines" >&2
+    exit 1
+fi
+
+cat >"$workspace/mirrored-instruction.md" <<'EOF'
+<!-- markdownlint-disable MD012 -->
+
+# Mirrored Instruction
+
+
+Formatting-only blank-line differences are allowed in instruction mirrors.
+EOF
+if ! run_markdownlint_fixture "$workspace/mirrored-instruction.md" >/dev/null 2>&1; then
+    echo "file-local mirrored-instruction blank-line exception is ineffective" >&2
     exit 1
 fi
 
@@ -47,6 +96,8 @@ EOF
 SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
+
+<!-- markdownlint-disable MD012 -->
 
 # Test Agent Instructions
 
@@ -81,6 +132,8 @@ EOF
 SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
+
+<!-- markdownlint-disable MD012 -->
 
 # Test Copilot Instructions
 
@@ -177,7 +230,6 @@ touch "$normalized_mirror_repo/composer.json"
 write_common_instruction_file "$normalized_mirror_repo" "$valid_api_extra_ai_lines"
 cat >"$normalized_mirror_repo/.markdownlint.json" <<'EOF'
 {
-  "MD012": false,
   "MD013": false
 }
 EOF

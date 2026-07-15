@@ -3,6 +3,8 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
+<!-- markdownlint-disable MD012 -->
+
 # SecPal/.github Copilot Instructions
 
 This file mirrors the authoritative root `AGENTS.md` for tooling

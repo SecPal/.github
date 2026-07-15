@@ -3,6 +3,8 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
+<!-- markdownlint-disable MD012 -->
+
 # SecPal/.github Agent Instructions
 
 This file is the authoritative, provider-neutral runtime baseline for this repository.

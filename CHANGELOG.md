@@ -13,8 +13,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
-- aligned the tracked markdownlint configuration with instruction mirror validation by allowing extra blank lines, so formatting-only whitespace before mirrored instruction sections no longer blocks validated pushes
-- added a regression assertion that the repository configuration preserves this instruction-validation contract
+- scoped the extra-blank-line exception to the authoritative and mirrored instruction files, so formatting-only whitespace differences no longer block validated pushes without weakening repository-wide Markdown validation
+- added positive and negative regression coverage for the file-local exception and continued enforcement in ordinary Markdown files
 
 ---
 
