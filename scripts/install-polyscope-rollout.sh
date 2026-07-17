@@ -72,6 +72,7 @@ REAPER_TARGET="$BIN_DIR/reap-polyscope-clones.py"
 EXPOSE_WRAPPER_TARGET="$BIN_DIR/polyscope-expose-wrapper.sh"
 GIT_WRAPPER_TARGET="$BIN_DIR/polyscope-git-wrapper.sh"
 CODEX_AGENTS_TARGET="$CODEX_HOME_DIR/AGENTS.md"
+CODEX_AGENTS_OVERRIDE="$CODEX_HOME_DIR/AGENTS.override.md"
 SERVER_UNIT="$UNIT_DIR/polyscope-server.service"
 SERVICE_UNIT="$UNIT_DIR/polyscope-rollout-sync.service"
 PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
@@ -152,6 +153,14 @@ run_privileged() {
     "$SUDO_BIN" -n "$@"
 }
 
+is_managed_codex_agents_link() {
+    local link_target
+
+    [[ -L "$CODEX_AGENTS_TARGET" ]] || return 1
+    link_target="$(readlink "$CODEX_AGENTS_TARGET")" || return 1
+    [[ "$link_target" == "$CODEX_AGENTS_SOURCE" || "$link_target" == /*/templates/polyscope-codex-AGENTS.md ]]
+}
+
 if [[ -z "$POLYSCOPE_SERVER_BIN" ]]; then
     echo "Error: polyscope-server binary not found. Pass --polyscope-server-bin or ensure it is in PATH." >&2
     exit 1
@@ -218,11 +227,15 @@ if [[ ! -f "$CODEX_AGENTS_SOURCE" ]]; then
     exit 1
 fi
 
-if [[ -e "$CODEX_AGENTS_TARGET" || -L "$CODEX_AGENTS_TARGET" ]]; then
-    if [[ ! -L "$CODEX_AGENTS_TARGET" || "$(readlink "$CODEX_AGENTS_TARGET")" != "$CODEX_AGENTS_SOURCE" ]]; then
-        echo "Error: refusing to overwrite existing Codex instructions: $CODEX_AGENTS_TARGET" >&2
-        exit 1
-    fi
+if [[ -f "$CODEX_AGENTS_OVERRIDE" && -s "$CODEX_AGENTS_OVERRIDE" ]]; then
+    echo "Error: AGENTS.override.md takes precedence over the managed AGENTS.md: $CODEX_AGENTS_OVERRIDE" >&2
+    echo "Merge the Polyscope guidance into the override, or remove or empty the override before re-running the installer." >&2
+    exit 1
+fi
+
+if [[ ( -e "$CODEX_AGENTS_TARGET" || -L "$CODEX_AGENTS_TARGET" ) ]] && ! is_managed_codex_agents_link; then
+    echo "Error: refusing to overwrite existing Codex instructions: $CODEX_AGENTS_TARGET" >&2
+    exit 1
 fi
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$CODEX_HOME_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
