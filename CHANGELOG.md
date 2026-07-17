@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-17 - Coordinate Polyscope Plan And Autopilot Modes
+
+**Fixed:**
+
+- provisioned a scoped global Codex instruction that keeps Plan strictly analysis-only, records required GitHub and branch setup as the first dependency-ordered Autopilot stories, and requires execution to continue in the resulting writable context
+- prevented sandbox, approval, or network denials from being misreported as user cancellations or invalid GitHub credentials without corresponding evidence
+- partitioned cross-repository plans by linked workspace root and explicitly delegated each repository scope to its own subagent during Autopilot execution
+- added rollout regression coverage for installing the global instruction without overwriting unrelated user guidance, keeping its source under the existing rollout watcher, and retaining idempotent installs on `readlink` implementations without GNU-style option delimiters
+- hardened global guidance rollout to refresh stale installer-owned links, reject active global `AGENTS.override.md` files that would suppress the managed guidance, and isolate installer tests from an inherited `CODEX_HOME`
+
+---
+
 ## 2026-07-15 - Fix Instruction Validation During Push
 
 **Fixed:**

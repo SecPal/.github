@@ -764,6 +764,7 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -qFx '<!-- markdownlint-disable MD012 -->' "$workspace_root/.github/.github/copilot-instructions.md"
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
 grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
@@ -4644,6 +4645,9 @@ fake_expose_real_log="$workspace/expose-real.log"
 fake_git_real_log="$workspace/git-real.log"
 fake_polyscope_bin_dir="$home_dir/.polyscope/bin"
 fake_polyscope_git_dir="$home_dir/.local/lib/polyscope/bin"
+fake_codex_home="$home_dir/.codex"
+real_readlink_bin="$(command -v readlink)"
+export REAL_READLINK_BIN="$real_readlink_bin"
 mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_sudo_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
 mkdir -p "$(dirname "$fake_server_bin")"
 
@@ -4684,6 +4688,16 @@ exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
 
+cat >"$fake_systemctl_dir/readlink" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--" ]]; then
+    echo "readlink: unsupported option: --" >&2
+    exit 64
+fi
+exec "$REAL_READLINK_BIN" "$@"
+STUB
+chmod +x "$fake_systemctl_dir/readlink"
+
 cat >"$fake_sudo_dir/sudo" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SUDO_LOG"
@@ -4704,6 +4718,7 @@ STUB
 chmod +x "$fake_sudo_dir/sudo"
 
 env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
@@ -4721,6 +4736,13 @@ test -L "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -L "$fake_bin_dir/polyscope-git-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-git-wrapper.sh"
+test -L "$fake_codex_home/AGENTS.md"
+test "$(readlink "$fake_codex_home/AGENTS.md")" = "$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
+grep -qF 'Treat every entry in `workspace_roots` as a separate repository' "$fake_codex_home/AGENTS.md"
+grep -qF 'select **Use plan for Autopilot**' "$fake_codex_home/AGENTS.md"
+grep -qF 'must not attempt any side effect' "$fake_codex_home/AGENTS.md"
+grep -qF 'Never attribute that denial to the user' "$fake_codex_home/AGENTS.md"
 test -L "$fake_polyscope_git_dir/git"
 test -x "$fake_polyscope_git_dir/git"
 test "$(readlink "$fake_polyscope_git_dir/git")" = "$fake_bin_dir/polyscope-git-wrapper.sh"
@@ -4729,8 +4751,96 @@ test -x "$fake_polyscope_bin_dir/expose-linux-x64"
 test -x "$fake_polyscope_bin_dir/expose-linux-x64.real"
 test "$(readlink "$fake_polyscope_bin_dir/expose-linux-x64")" = "$fake_bin_dir/polyscope-expose-wrapper.sh"
 
+# Existing user-managed global guidance must not be replaced by rollout.
+custom_codex_home="$workspace/custom-codex-home"
+mkdir -p "$custom_codex_home"
+printf '# User-managed Codex guidance\n' >"$custom_codex_home/AGENTS.md"
+custom_codex_install_exit=0
+env HOME="$home_dir" \
+    CODEX_HOME="$custom_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null \
+    || custom_codex_install_exit=$?
+if [[ "$custom_codex_install_exit" -eq 0 ]]; then
+    echo "installer must refuse to overwrite user-managed Codex instructions" >&2
+    exit 1
+fi
+grep -qxF '# User-managed Codex guidance' "$custom_codex_home/AGENTS.md"
+
+# A dangling link created by an older checkout must be refreshed, while an
+# unrelated symlink remains protected as user-managed guidance.
+stale_codex_home="$workspace/stale-codex-home"
+stale_codex_target="$workspace/old-checkout/templates/polyscope-codex-AGENTS.md"
+mkdir -p "$stale_codex_home"
+touch "$stale_codex_home/AGENTS.override.md"
+ln -s "$stale_codex_target" "$stale_codex_home/AGENTS.md"
+env HOME="$home_dir" \
+    CODEX_HOME="$stale_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
+test "$(readlink "$stale_codex_home/AGENTS.md")" = "$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
+
+unrelated_codex_home="$workspace/unrelated-codex-home"
+unrelated_codex_source="$workspace/unrelated-guidance.md"
+mkdir -p "$unrelated_codex_home"
+printf '# Unrelated linked guidance\n' >"$unrelated_codex_source"
+ln -s "$unrelated_codex_source" "$unrelated_codex_home/AGENTS.md"
+unrelated_codex_install_exit=0
+env HOME="$home_dir" \
+    CODEX_HOME="$unrelated_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null \
+    || unrelated_codex_install_exit=$?
+if [[ "$unrelated_codex_install_exit" -eq 0 ]]; then
+    echo "installer must refuse to overwrite unrelated linked Codex instructions" >&2
+    exit 1
+fi
+test "$(readlink "$unrelated_codex_home/AGENTS.md")" = "$unrelated_codex_source"
+
+# Non-empty global overrides take precedence over AGENTS.md and must not let
+# the installer report that inactive Polyscope guidance was installed.
+override_codex_home="$workspace/override-codex-home"
+override_codex_error="$workspace/override-codex-error.log"
+mkdir -p "$override_codex_home"
+printf '# User override\n' >"$override_codex_home/AGENTS.override.md"
+override_codex_install_exit=0
+env HOME="$home_dir" \
+    CODEX_HOME="$override_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>"$override_codex_error" \
+    || override_codex_install_exit=$?
+if [[ "$override_codex_install_exit" -eq 0 ]]; then
+    echo "installer must reject a non-empty global Codex override" >&2
+    exit 1
+fi
+grep -qF 'AGENTS.override.md takes precedence' "$override_codex_error"
+grep -qxF '# User override' "$override_codex_home/AGENTS.override.md"
+test ! -e "$override_codex_home/AGENTS.md"
+
 # Re-running the installer after the expose binary has been wrapped must stay idempotent.
 env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
@@ -4746,6 +4856,7 @@ rm -f "$fake_polyscope_bin_dir/expose-linux-x64"
 cp "$fake_polyscope_bin_dir/expose-linux-x64.real" "$fake_polyscope_bin_dir/expose-linux-x64"
 
 env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
@@ -4770,6 +4881,7 @@ printf '#!/usr/bin/env bash\nexit 7\n' >"$fake_guard_expose_real"
 chmod +x "$fake_guard_expose_real"
 install_real_guard_exit=0
 env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$fake_systemctl_log" \
@@ -4808,6 +4920,7 @@ STUB
 chmod +x "$system_polyscope_bin_dir/expose-linux-x64"
 
 env HOME="$system_home_dir" \
+    CODEX_HOME="$system_home_dir/.codex" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$system_systemctl_log" \
@@ -4851,6 +4964,7 @@ system_fallback_dropin_dir="$workspace/system-fallback-service-units/polyscope-s
 mkdir -p "$system_fallback_dropin_dir"
 
 env HOME="$system_home_dir" \
+    CODEX_HOME="$system_home_dir/.codex" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$system_systemctl_log" \
@@ -4882,6 +4996,7 @@ grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
@@ -4965,6 +5080,7 @@ chmod +x "$no_sudo_sudo_dir/sudo"
 
 no_sudo_exit=0
 env HOME="$no_sudo_home_dir" \
+    CODEX_HOME="$no_sudo_home_dir/.codex" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$no_sudo_systemctl_log" \
@@ -4991,6 +5107,7 @@ exit 0
 STUB
 chmod +x "$no_sudo_user_home_dir/.polyscope/bin/expose-linux-x64"
 env HOME="$no_sudo_user_home_dir" \
+    CODEX_HOME="$no_sudo_user_home_dir/.codex" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$no_sudo_systemctl_log" \
@@ -5011,6 +5128,7 @@ test ! -e "$no_sudo_user_unit_dir/polyscope-rollout-sync.service"
 # installer must also refuse when --polyscope-server-scope system is forced but no unit exists
 no_unit_exit=0
 env HOME="$no_sudo_home_dir" \
+    CODEX_HOME="$no_sudo_home_dir/.codex" \
     WORKSPACE_ROOT="$workspace_root" \
     SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
     SYSTEMCTL_LOG="$no_sudo_systemctl_log" \
