@@ -4645,6 +4645,8 @@ fake_expose_real_log="$workspace/expose-real.log"
 fake_git_real_log="$workspace/git-real.log"
 fake_polyscope_bin_dir="$home_dir/.polyscope/bin"
 fake_polyscope_git_dir="$home_dir/.local/lib/polyscope/bin"
+real_readlink_bin="$(command -v readlink)"
+export REAL_READLINK_BIN="$real_readlink_bin"
 mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_sudo_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
 mkdir -p "$(dirname "$fake_server_bin")"
 
@@ -4684,6 +4686,16 @@ fi
 exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
+
+cat >"$fake_systemctl_dir/readlink" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--" ]]; then
+    echo "readlink: unsupported option: --" >&2
+    exit 64
+fi
+exec "$REAL_READLINK_BIN" "$@"
+STUB
+chmod +x "$fake_systemctl_dir/readlink"
 
 cat >"$fake_sudo_dir/sudo" <<'STUB'
 #!/usr/bin/env bash
@@ -4726,7 +4738,7 @@ test -L "$home_dir/.codex/AGENTS.md"
 test "$(readlink "$home_dir/.codex/AGENTS.md")" = "$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
 # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
 grep -qF 'Treat every entry in `workspace_roots` as a separate repository' "$home_dir/.codex/AGENTS.md"
-grep -qF 'Use plan for Autopilot' "$home_dir/.codex/AGENTS.md"
+grep -qF 'select **Use plan for Autopilot**' "$home_dir/.codex/AGENTS.md"
 grep -qF 'must not attempt any side effect' "$home_dir/.codex/AGENTS.md"
 grep -qF 'Never attribute that denial to the user' "$home_dir/.codex/AGENTS.md"
 test -L "$fake_polyscope_git_dir/git"

@@ -41,7 +41,7 @@ Apply these rules only when the session says it is running inside Polyscope.
   that the user cancelled an action or that stored credentials are invalid.
   Never attribute that denial to the user unless the user explicitly cancelled
   it. Report the actual sandbox, approval, network, or authentication evidence.
-- After plan approval, use **Use plan for Autopilot** and continue only in the
+- After plan approval, select **Use plan for Autopilot** and continue only in the
   resulting writable execution context. Verify that context before the first
   side effect, then execute all approved stories instead of remaining in the
   planning workspace.

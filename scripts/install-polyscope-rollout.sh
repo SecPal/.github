@@ -219,7 +219,7 @@ if [[ ! -f "$CODEX_AGENTS_SOURCE" ]]; then
 fi
 
 if [[ -e "$CODEX_AGENTS_TARGET" || -L "$CODEX_AGENTS_TARGET" ]]; then
-    if [[ ! -L "$CODEX_AGENTS_TARGET" || "$(readlink -- "$CODEX_AGENTS_TARGET")" != "$CODEX_AGENTS_SOURCE" ]]; then
+    if [[ ! -L "$CODEX_AGENTS_TARGET" || "$(readlink "$CODEX_AGENTS_TARGET")" != "$CODEX_AGENTS_SOURCE" ]]; then
         echo "Error: refusing to overwrite existing Codex instructions: $CODEX_AGENTS_TARGET" >&2
         exit 1
     fi
