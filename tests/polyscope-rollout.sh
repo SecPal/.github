@@ -764,6 +764,7 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
+grep -qFx '<!-- markdownlint-disable MD012 -->' "$workspace_root/.github/.github/copilot-instructions.md"
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
 grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
@@ -4721,6 +4722,13 @@ test -L "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -L "$fake_bin_dir/polyscope-git-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-git-wrapper.sh"
+test -L "$home_dir/.codex/AGENTS.md"
+test "$(readlink "$home_dir/.codex/AGENTS.md")" = "$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
+grep -qF 'Treat every entry in `workspace_roots` as a separate repository' "$home_dir/.codex/AGENTS.md"
+grep -qF 'Use plan for Autopilot' "$home_dir/.codex/AGENTS.md"
+grep -qF 'must not attempt any side effect' "$home_dir/.codex/AGENTS.md"
+grep -qF 'Never attribute that denial to the user' "$home_dir/.codex/AGENTS.md"
 test -L "$fake_polyscope_git_dir/git"
 test -x "$fake_polyscope_git_dir/git"
 test "$(readlink "$fake_polyscope_git_dir/git")" = "$fake_bin_dir/polyscope-git-wrapper.sh"
@@ -4728,6 +4736,27 @@ test -L "$fake_polyscope_bin_dir/expose-linux-x64"
 test -x "$fake_polyscope_bin_dir/expose-linux-x64"
 test -x "$fake_polyscope_bin_dir/expose-linux-x64.real"
 test "$(readlink "$fake_polyscope_bin_dir/expose-linux-x64")" = "$fake_bin_dir/polyscope-expose-wrapper.sh"
+
+# Existing user-managed global guidance must not be replaced by rollout.
+custom_codex_home="$workspace/custom-codex-home"
+mkdir -p "$custom_codex_home"
+printf '# User-managed Codex guidance\n' >"$custom_codex_home/AGENTS.md"
+custom_codex_install_exit=0
+env HOME="$home_dir" \
+    CODEX_HOME="$custom_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" 2>/dev/null \
+    || custom_codex_install_exit=$?
+if [[ "$custom_codex_install_exit" -eq 0 ]]; then
+    echo "installer must refuse to overwrite user-managed Codex instructions" >&2
+    exit 1
+fi
+grep -qxF '# User-managed Codex guidance' "$custom_codex_home/AGENTS.md"
 
 # Re-running the installer after the expose binary has been wrapped must stay idempotent.
 env HOME="$home_dir" \
@@ -4882,6 +4911,7 @@ grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"

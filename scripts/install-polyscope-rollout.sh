@@ -9,8 +9,10 @@ SOURCE_SCRIPT="$SCRIPT_DIR/polyscope-rollout.py"
 REAPER_SOURCE="$SCRIPT_DIR/reap-polyscope-clones.py"
 WRAPPER_SOURCE="$SCRIPT_DIR/polyscope-expose-wrapper.sh"
 GIT_WRAPPER_SOURCE="$SCRIPT_DIR/polyscope-git-wrapper.sh"
+CODEX_AGENTS_SOURCE="$(cd -- "$SCRIPT_DIR/../templates" && pwd)/polyscope-codex-AGENTS.md"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/code/SecPal}"
 BIN_DIR="$HOME/.local/bin"
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 POLYSCOPE_SERVER_BIN="${POLYSCOPE_SERVER_BIN:-$(command -v polyscope-server || true)}"
@@ -69,6 +71,7 @@ INSTALL_TARGET="$BIN_DIR/polyscope-secpal-rollout.py"
 REAPER_TARGET="$BIN_DIR/reap-polyscope-clones.py"
 EXPOSE_WRAPPER_TARGET="$BIN_DIR/polyscope-expose-wrapper.sh"
 GIT_WRAPPER_TARGET="$BIN_DIR/polyscope-git-wrapper.sh"
+CODEX_AGENTS_TARGET="$CODEX_HOME_DIR/AGENTS.md"
 SERVER_UNIT="$UNIT_DIR/polyscope-server.service"
 SERVICE_UNIT="$UNIT_DIR/polyscope-rollout-sync.service"
 PATH_UNIT="$UNIT_DIR/polyscope-rollout-sync.path"
@@ -169,7 +172,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -210,11 +213,24 @@ if ! can_run_privileged_commands; then
     exit 1
 fi
 
-mkdir -p "$BIN_DIR" "$UNIT_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
+if [[ ! -f "$CODEX_AGENTS_SOURCE" ]]; then
+    echo "Error: Polyscope Codex instructions not found: $CODEX_AGENTS_SOURCE" >&2
+    exit 1
+fi
+
+if [[ -e "$CODEX_AGENTS_TARGET" || -L "$CODEX_AGENTS_TARGET" ]]; then
+    if [[ ! -L "$CODEX_AGENTS_TARGET" || "$(readlink -- "$CODEX_AGENTS_TARGET")" != "$CODEX_AGENTS_SOURCE" ]]; then
+        echo "Error: refusing to overwrite existing Codex instructions: $CODEX_AGENTS_TARGET" >&2
+        exit 1
+    fi
+fi
+
+mkdir -p "$BIN_DIR" "$UNIT_DIR" "$CODEX_HOME_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
 ln -sfn "$REAPER_SOURCE" "$REAPER_TARGET"
 ln -sfn "$WRAPPER_SOURCE" "$EXPOSE_WRAPPER_TARGET"
 ln -sfn "$GIT_WRAPPER_SOURCE" "$GIT_WRAPPER_TARGET"
+ln -sfn "$CODEX_AGENTS_SOURCE" "$CODEX_AGENTS_TARGET"
 
 if [[ -e "$POLYSCOPE_EXPOSE_BIN" && ! -L "$POLYSCOPE_EXPOSE_BIN" ]]; then
     if [[ -e "$POLYSCOPE_EXPOSE_REAL_BIN" ]]; then
@@ -333,6 +349,7 @@ PathChanged=$WORKSPACE_ROOT/changelog/.github/instructions
 PathChanged=$WORKSPACE_ROOT/.github/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/instructions
+PathChanged=$CODEX_AGENTS_SOURCE
 PathChanged=$SOURCE_SCRIPT
 
 [Install]
@@ -450,6 +467,7 @@ echo "Installed $EXPOSE_WRAPPER_TARGET"
 echo "Installed $GIT_WRAPPER_TARGET"
 echo "Installed expose wrapper at $POLYSCOPE_EXPOSE_BIN"
 echo "Installed git wrapper at $POLYSCOPE_GIT_WRAPPER_BIN"
+echo "Installed Codex instructions at $CODEX_AGENTS_TARGET"
 echo "Installed $installed_server_target"
 echo "Installed $SERVICE_UNIT"
 echo "Installed $PATH_UNIT"
