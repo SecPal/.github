@@ -81,7 +81,7 @@ for direct_fixture in \
   tests/reusable-workflow-timeouts.sh; do
   fixture_is_scoped=0
   for instruction_pattern in "${workflow_instruction_patterns[@]}"; do
-    if compgen -G "$instruction_pattern" | grep -Fxq "$direct_fixture"; then
+    if compgen -G "$REPO_ROOT/$instruction_pattern" | grep -Fxq "$REPO_ROOT/$direct_fixture"; then
       fixture_is_scoped=1
       break
     fi
