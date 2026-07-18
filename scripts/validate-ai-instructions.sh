@@ -61,6 +61,37 @@ detect_repo_type() {
     fi
 }
 
+test_instruction_path_boundaries() {
+    local path
+    local symlink
+
+    for path in AGENTS.md .github .github/copilot-instructions.md .github/instructions; do
+        if [ -L "$path" ]; then
+            print_result "instruction paths stay inside the repository" "FAIL" \
+                "Instruction discovery paths must not be symlinks: $path"
+            return 1
+        fi
+    done
+
+    if { [ -e AGENTS.md ] && [ ! -f AGENTS.md ]; } \
+        || { [ -e .github ] && [ ! -d .github ]; } \
+        || { [ -e .github/copilot-instructions.md ] \
+            && [ ! -f .github/copilot-instructions.md ]; } \
+        || { [ -e .github/instructions ] && [ ! -d .github/instructions ]; }; then
+        print_result "instruction paths stay inside the repository" "FAIL" \
+            "Instruction files must be regular files and instruction containers must be regular directories"
+        return 1
+    fi
+
+    while IFS= read -r -d '' symlink; do
+        print_result "instruction paths stay inside the repository" "FAIL" \
+            "Focused instruction directories must not contain symlinks: $symlink"
+        return 1
+    done < <(find .github/instructions -type l -print0 2>/dev/null)
+
+    print_result "instruction paths stay inside the repository" "PASS"
+}
+
 test_required_files() {
     local missing=()
     local required_file
@@ -184,43 +215,66 @@ test_markdown_lint() {
 
 test_instruction_frontmatter() {
     local file
-    local found=0
+    local -a files=()
+    local yaml_module="$SCRIPT_DIR/../node_modules/js-yaml"
 
     while IFS= read -r -d '' file; do
-        found=1
-        if ! python3 - "$file" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
-if not lines or lines[0].strip() != "---":
-    raise SystemExit(1)
-
-try:
-    end = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
-except StopIteration:
-    raise SystemExit(1)
-
-frontmatter = lines[1:end]
-if not any(re.match(r"^name:\s*\S", line) for line in frontmatter):
-    raise SystemExit(1)
-if not any(re.match(r"^applyTo:\s*\S", line) for line in frontmatter):
-    raise SystemExit(1)
-PY
-        then
-            print_result "instruction overlays include valid frontmatter" "FAIL" \
-                "Missing opening/closing delimiters, name, or applyTo in $file"
-            return
-        fi
+        files+=("$file")
     done < <(find .github/instructions -type f -name '*.instructions.md' -print0 2>/dev/null)
 
-    if [ "$found" -eq 0 ]; then
+    if [ "${#files[@]}" -eq 0 ]; then
         print_result "instruction overlays include valid frontmatter" "PASS" \
             "Skipped (no focused instruction files present)"
-    else
-        print_result "instruction overlays include valid frontmatter" "PASS"
+        return
     fi
+
+    if ! command -v node >/dev/null 2>&1 || [ ! -f "$yaml_module/index.js" ]; then
+        print_result "instruction overlays include valid frontmatter" "FAIL" \
+            "repository-pinned js-yaml is unavailable; install the committed lockfile dependencies"
+        return
+    fi
+
+    for file in "${files[@]}"; do
+        if ! node - "$file" "$yaml_module" <<'JS'
+const fs = require("fs");
+
+const file = process.argv[2];
+const yamlModule = process.argv[3];
+
+try {
+    const yaml = require(yamlModule);
+    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    if (lines.length === 0 || lines[0].trim() !== "---") {
+        process.exit(1);
+    }
+
+    const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+    if (end === -1) {
+        process.exit(1);
+    }
+
+    const frontmatter = yaml.load(lines.slice(1, end).join("\n"));
+    if (frontmatter === null || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+        process.exit(1);
+    }
+
+    for (const key of ["name", "applyTo"]) {
+        if (typeof frontmatter[key] !== "string" || frontmatter[key].trim() === "") {
+            process.exit(1);
+        }
+    }
+} catch (_error) {
+    process.exit(1);
+}
+JS
+        then
+            print_result "instruction overlays include valid frontmatter" "FAIL" \
+                "Invalid YAML, delimiters, or non-empty string name/applyTo in $file"
+            return
+        fi
+    done
+
+    print_result "instruction overlays include valid frontmatter" "PASS"
 }
 
 test_instruction_size_limit() {
@@ -255,6 +309,7 @@ main() {
     repo_type="$(detect_repo_type)"
     printf 'Repository Type: %s\n\n' "$repo_type"
 
+    test_instruction_path_boundaries || return 1
     test_required_files
     test_readable_utf8_markdown AGENTS.md AGENTS.md
     test_readable_utf8_markdown \
@@ -262,8 +317,8 @@ main() {
     test_reuse_license AGENTS.md AGENTS.md
     test_reuse_license \
         .github/copilot-instructions.md copilot-instructions.md
-    test_markdown_lint
     test_instruction_frontmatter
+    test_markdown_lint
     test_instruction_size_limit AGENTS.md AGENTS.md "runtime discovery"
     test_instruction_size_limit \
         .github/copilot-instructions.md copilot-instructions.md "instruction discovery"

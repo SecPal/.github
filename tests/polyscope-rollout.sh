@@ -5502,6 +5502,143 @@ exec "$@"
 STUB
 chmod +x "$fake_sudo_dir/sudo"
 
+# A custom rollout source is only executable as an instruction-dependent
+# command when its canonical validator is present beside it. Reject an
+# incomplete source bundle before installing links or systemd units.
+standalone_source_dir="$workspace/standalone-rollout-source"
+standalone_source_script="$standalone_source_dir/polyscope-rollout.py"
+standalone_home_dir="$workspace/standalone-rollout-home"
+standalone_bin_dir="$workspace/standalone-rollout-bin"
+standalone_unit_dir="$workspace/standalone-rollout-units"
+standalone_codex_home="$standalone_home_dir/.codex"
+standalone_error="$workspace/standalone-rollout-install.error"
+mkdir -p "$standalone_source_dir" "$standalone_home_dir/.polyscope/bin"
+cp "$PYTHON_SCRIPT" "$standalone_source_script"
+chmod +x "$standalone_source_script"
+cat >"$standalone_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$standalone_home_dir/.polyscope/bin/expose-linux-x64"
+
+standalone_install_exit=0
+env HOME="$standalone_home_dir" \
+    CODEX_HOME="$standalone_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/standalone-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+    --source-script "$standalone_source_script" \
+    --bin-dir "$standalone_bin_dir" \
+    --unit-dir "$standalone_unit_dir" \
+    --polyscope-server-bin "$fake_server_bin" \
+    2>"$standalone_error" \
+    || standalone_install_exit=$?
+if [[ "$standalone_install_exit" -eq 0 ]]; then
+    echo "installer must reject a rollout source without its canonical validator" >&2
+    exit 1
+fi
+grep -qF 'canonical instruction validator is missing or not executable' \
+    "$standalone_error"
+test ! -e "$standalone_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$standalone_unit_dir/polyscope-rollout-sync.path"
+
+# The sibling validator is not a complete source bundle without its pinned
+# runtime dependencies. Reject that state before reporting an installation.
+missing_toolchain_source_dir="$workspace/missing-toolchain-source/scripts"
+missing_toolchain_source_script="$missing_toolchain_source_dir/polyscope-rollout.py"
+missing_toolchain_home_dir="$workspace/missing-toolchain-home"
+missing_toolchain_bin_dir="$workspace/missing-toolchain-bin"
+missing_toolchain_unit_dir="$workspace/missing-toolchain-units"
+missing_toolchain_error="$workspace/missing-toolchain-install.error"
+mkdir -p "$missing_toolchain_source_dir" \
+    "$missing_toolchain_home_dir/.polyscope/bin"
+cp "$PYTHON_SCRIPT" "$missing_toolchain_source_script"
+cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
+    "$missing_toolchain_source_dir/validate-ai-instructions.sh"
+chmod +x "$missing_toolchain_source_script" \
+    "$missing_toolchain_source_dir/validate-ai-instructions.sh"
+cat >"$missing_toolchain_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$missing_toolchain_home_dir/.polyscope/bin/expose-linux-x64"
+
+missing_toolchain_install_exit=0
+env HOME="$missing_toolchain_home_dir" \
+    CODEX_HOME="$missing_toolchain_home_dir/.codex" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/missing-toolchain-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+    --source-script "$missing_toolchain_source_script" \
+    --bin-dir "$missing_toolchain_bin_dir" \
+    --unit-dir "$missing_toolchain_unit_dir" \
+    --polyscope-server-bin "$fake_server_bin" \
+    2>"$missing_toolchain_error" \
+    || missing_toolchain_install_exit=$?
+if [[ "$missing_toolchain_install_exit" -eq 0 ]]; then
+    echo "installer must reject a rollout validator without its pinned toolchain" >&2
+    exit 1
+fi
+grep -qF 'rollout validator toolchain is incomplete' \
+    "$missing_toolchain_error"
+test ! -e "$missing_toolchain_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$missing_toolchain_unit_dir/polyscope-rollout-sync.path"
+
+# Resolving a no-whitespace alias must not bypass the installer's source-path
+# restrictions and inject an unsafe path into the generated systemd unit.
+spaced_source_dir="$workspace/resolved source bundle"
+spaced_source_script="$spaced_source_dir/polyscope-rollout.py"
+spaced_source_alias="$workspace/resolved-source-alias.py"
+spaced_home_dir="$workspace/spaced-source-home"
+spaced_bin_dir="$workspace/spaced-source-bin"
+spaced_unit_dir="$workspace/spaced-source-units"
+spaced_error="$workspace/spaced-source-install.error"
+mkdir -p "$spaced_source_dir" "$spaced_home_dir/.polyscope/bin"
+cp "$PYTHON_SCRIPT" "$spaced_source_script"
+cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
+    "$spaced_source_dir/validate-ai-instructions.sh"
+chmod +x "$spaced_source_script" \
+    "$spaced_source_dir/validate-ai-instructions.sh"
+ln -s "$spaced_source_script" "$spaced_source_alias"
+cat >"$spaced_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$spaced_home_dir/.polyscope/bin/expose-linux-x64"
+
+spaced_install_exit=0
+env HOME="$spaced_home_dir" \
+    CODEX_HOME="$spaced_home_dir/.codex" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/spaced-source-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+    --source-script "$spaced_source_alias" \
+    --bin-dir "$spaced_bin_dir" \
+    --unit-dir "$spaced_unit_dir" \
+    --polyscope-server-bin "$fake_server_bin" \
+    2>"$spaced_error" \
+    || spaced_install_exit=$?
+if [[ "$spaced_install_exit" -eq 0 ]]; then
+    echo "installer must revalidate a resolved rollout source path" >&2
+    exit 1
+fi
+grep -qF 'resolved rollout source script path must not contain whitespace' \
+    "$spaced_error"
+test ! -e "$spaced_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$spaced_unit_dir/polyscope-rollout-sync.path"
+
 env HOME="$home_dir" \
     CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
@@ -5791,6 +5928,13 @@ grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/node_modules/\.package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
+if grep -qF '/../' "$fake_unit_dir/polyscope-rollout-sync.path"; then
+    echo "rollout sync watcher paths must be normalized" >&2
+    exit 1
+fi
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'StartLimitBurst=5' "$fake_unit_dir/polyscope-worktree-provision.service"

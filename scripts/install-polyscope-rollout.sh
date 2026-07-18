@@ -193,6 +193,49 @@ for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE 
     fi
 done
 
+if [[ ! -x "$SOURCE_SCRIPT" ]]; then
+    echo "Error: rollout source script is missing or not executable: $SOURCE_SCRIPT" >&2
+    exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 is required to resolve the rollout source bundle." >&2
+    exit 1
+fi
+
+SOURCE_SCRIPT="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$SOURCE_SCRIPT")"
+if [[ "$SOURCE_SCRIPT" =~ [[:space:]] ]]; then
+    echo "Error: resolved rollout source script path must not contain whitespace: $SOURCE_SCRIPT" >&2
+    exit 1
+fi
+
+VALIDATOR_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/validate-ai-instructions.sh"
+if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
+    echo "Error: canonical instruction validator is missing or not executable next to the rollout source: $VALIDATOR_SOURCE" >&2
+    exit 1
+fi
+
+VALIDATOR_TOOLCHAIN_ROOT="$(cd -- "$(dirname -- "$SOURCE_SCRIPT")/.." && pwd)"
+VALIDATOR_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/package-lock.json"
+VALIDATOR_INSTALLED_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.package-lock.json"
+VALIDATOR_MARKDOWNLINT="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint"
+VALIDATOR_YAML_MODULE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml/index.js"
+
+for _validator_tool in bash basename dirname find grep head node python3 wc; do
+    if ! PATH="$SERVICE_PATH" command -v "$_validator_tool" >/dev/null 2>&1; then
+        echo "Error: rollout validator toolchain is incomplete: $_validator_tool is unavailable in the service PATH." >&2
+        exit 1
+    fi
+done
+
+if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
+    || ! -f "$VALIDATOR_INSTALLED_PACKAGE_LOCK" \
+    || ! -x "$VALIDATOR_MARKDOWNLINT" \
+    || ! -f "$VALIDATOR_YAML_MODULE" ]]; then
+    echo "Error: rollout validator toolchain is incomplete; install the source bundle's committed npm dependencies before installing the rollout." >&2
+    exit 1
+fi
+
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
 for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE INSTALL_TARGET; do
     _val="${!_var_name}"
@@ -364,6 +407,9 @@ PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/instructions
 PathChanged=$CODEX_AGENTS_SOURCE
 PathChanged=$SOURCE_SCRIPT
+PathChanged=$VALIDATOR_SOURCE
+PathChanged=$VALIDATOR_PACKAGE_LOCK
+PathChanged=$VALIDATOR_INSTALLED_PACKAGE_LOCK
 
 [Install]
 WantedBy=default.target

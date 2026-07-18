@@ -134,6 +134,7 @@ write_valid_repo "$valid_repo"
 valid_output="$workspace/valid-independent-layers.output"
 assert_passes "$valid_repo" "$valid_output"
 grep -qF 'required instruction files exist' "$valid_output"
+grep -qF 'instruction paths stay inside the repository' "$valid_output"
 grep -qF 'AGENTS.md is readable UTF-8 Markdown' "$valid_output"
 grep -qF 'copilot-instructions.md is readable UTF-8 Markdown' "$valid_output"
 grep -qF 'AGENTS.md has REUSE license' "$valid_output"
@@ -157,6 +158,32 @@ fi
 path_argument_output="$workspace/path-argument.output"
 bash "$VALIDATOR" "$valid_repo" >"$path_argument_output" 2>&1
 grep -qF 'Repository Type: org' "$path_argument_output"
+
+symlinked_agents_repo="$workspace/symlinked-agents"
+symlinked_agents_target="$workspace/external-AGENTS.md"
+copy_valid_repo "$valid_repo" "$symlinked_agents_repo"
+mv "$symlinked_agents_repo/AGENTS.md" "$symlinked_agents_target"
+ln -s "$symlinked_agents_target" "$symlinked_agents_repo/AGENTS.md"
+assert_fails_with "$symlinked_agents_repo" \
+    'instruction paths stay inside the repository'
+
+symlinked_github_repo="$workspace/symlinked-github-directory"
+symlinked_github_target="$workspace/external-github-directory"
+copy_valid_repo "$valid_repo" "$symlinked_github_repo"
+mv "$symlinked_github_repo/.github" "$symlinked_github_target"
+ln -s "$symlinked_github_target" "$symlinked_github_repo/.github"
+assert_fails_with "$symlinked_github_repo" \
+    'instruction paths stay inside the repository'
+
+symlinked_copilot_repo="$workspace/symlinked-copilot"
+symlinked_copilot_target="$workspace/external-copilot-instructions.md"
+copy_valid_repo "$valid_repo" "$symlinked_copilot_repo"
+mv "$symlinked_copilot_repo/.github/copilot-instructions.md" \
+    "$symlinked_copilot_target"
+ln -s "$symlinked_copilot_target" \
+    "$symlinked_copilot_repo/.github/copilot-instructions.md"
+assert_fails_with "$symlinked_copilot_repo" \
+    'instruction paths stay inside the repository'
 
 missing_agents_repo="$workspace/missing-agents"
 copy_valid_repo "$valid_repo" "$missing_agents_repo"
@@ -214,6 +241,56 @@ sed -i '/^applyTo:/d' \
 assert_fails_with "$malformed_frontmatter_repo" \
     'instruction overlays include valid frontmatter'
 
+empty_frontmatter_name_repo="$workspace/empty-frontmatter-name"
+copy_valid_repo "$valid_repo" "$empty_frontmatter_name_repo"
+sed -i 's/^name:.*/name: ""/' \
+    "$empty_frontmatter_name_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$empty_frontmatter_name_repo" \
+    'instruction overlays include valid frontmatter'
+
+null_frontmatter_apply_to_repo="$workspace/null-frontmatter-apply-to"
+copy_valid_repo "$valid_repo" "$null_frontmatter_apply_to_repo"
+sed -i 's/^applyTo:.*/applyTo: # no path scope/' \
+    "$null_frontmatter_apply_to_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$null_frontmatter_apply_to_repo" \
+    'instruction overlays include valid frontmatter'
+
+invalid_yaml_frontmatter_repo="$workspace/invalid-yaml-frontmatter"
+copy_valid_repo "$valid_repo" "$invalid_yaml_frontmatter_repo"
+sed -i 's/^applyTo:.*/applyTo: [/' \
+    "$invalid_yaml_frontmatter_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$invalid_yaml_frontmatter_repo" \
+    'instruction overlays include valid frontmatter'
+
+symlinked_frontmatter_repo="$workspace/symlinked-frontmatter"
+symlinked_frontmatter_target="$workspace/external.instructions.md"
+copy_valid_repo "$valid_repo" "$symlinked_frontmatter_repo"
+cat >"$symlinked_frontmatter_target" <<'EOF'
+---
+name: ""
+applyTo: [
+---
+
+# External Instructions
+EOF
+rm "$symlinked_frontmatter_repo/.github/instructions/example.instructions.md"
+ln -s "$symlinked_frontmatter_target" \
+    "$symlinked_frontmatter_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$symlinked_frontmatter_repo" \
+    'instruction paths stay inside the repository'
+
+symlinked_overlay_dir_repo="$workspace/symlinked-overlay-directory"
+symlinked_overlay_dir_target="$workspace/external-instruction-directory"
+copy_valid_repo "$valid_repo" "$symlinked_overlay_dir_repo"
+mkdir -p "$symlinked_overlay_dir_target"
+mv "$symlinked_overlay_dir_repo/.github/instructions/example.instructions.md" \
+    "$symlinked_overlay_dir_target/example.instructions.md"
+rmdir "$symlinked_overlay_dir_repo/.github/instructions"
+ln -s "$symlinked_overlay_dir_target" \
+    "$symlinked_overlay_dir_repo/.github/instructions"
+assert_fails_with "$symlinked_overlay_dir_repo" \
+    'instruction paths stay inside the repository'
+
 unclosed_frontmatter_repo="$workspace/unclosed-frontmatter"
 copy_valid_repo "$valid_repo" "$unclosed_frontmatter_repo"
 sed -i '7d' \
@@ -255,6 +332,52 @@ rm -r "$no_overlays_repo/.github/instructions"
 no_overlays_output="$workspace/no-overlays.output"
 assert_passes "$no_overlays_repo" "$no_overlays_output"
 grep -qF 'Skipped (no focused instruction files present)' "$no_overlays_output"
+
+# Focused frontmatter must fail closed when the repository-pinned YAML parser
+# is unavailable, even if Markdownlint itself is available globally.
+isolated_yaml_root="$workspace/no-frontmatter-yaml-toolchain"
+isolated_yaml_validator="$isolated_yaml_root/scripts/validate-ai-instructions.sh"
+isolated_yaml_bin="$isolated_yaml_root/bin"
+isolated_yaml_repo="$isolated_yaml_root/repository"
+mkdir -p "$isolated_yaml_root/scripts" "$isolated_yaml_bin"
+cp "$VALIDATOR" "$isolated_yaml_validator"
+copy_valid_repo "$valid_repo" "$isolated_yaml_repo"
+for required_tool in dirname grep head find python3 wc node; do
+    ln -s "$(command -v "$required_tool")" "$isolated_yaml_bin/$required_tool"
+done
+
+missing_yaml_output="$workspace/missing-frontmatter-yaml.output"
+set +e
+(
+    cd "$isolated_yaml_repo"
+    PATH="$isolated_yaml_bin:$REPO_ROOT/node_modules/.bin" \
+        REPO_TYPE=org /bin/bash "$isolated_yaml_validator"
+) >"$missing_yaml_output" 2>&1
+missing_yaml_status=$?
+set -e
+
+if [ "$missing_yaml_status" -eq 0 ]; then
+    sed -n '1,240p' "$missing_yaml_output" >&2
+    echo "validator must fail when the frontmatter YAML parser is unavailable" >&2
+    exit 1
+fi
+grep -qF 'repository-pinned js-yaml is unavailable' "$missing_yaml_output"
+
+isolated_yaml_no_overlays_repo="$isolated_yaml_root/repository-without-overlays"
+copy_valid_repo "$valid_repo" "$isolated_yaml_no_overlays_repo"
+rm -r "$isolated_yaml_no_overlays_repo/.github/instructions"
+isolated_yaml_no_overlays_output="$workspace/missing-frontmatter-yaml-no-overlays.output"
+if ! (
+    cd "$isolated_yaml_no_overlays_repo"
+    PATH="$isolated_yaml_bin:$REPO_ROOT/node_modules/.bin" \
+        REPO_TYPE=org /bin/bash "$isolated_yaml_validator"
+) >"$isolated_yaml_no_overlays_output" 2>&1; then
+    sed -n '1,240p' "$isolated_yaml_no_overlays_output" >&2
+    echo "validator must not require a frontmatter parser without focused overlays" >&2
+    exit 1
+fi
+grep -qF 'Skipped (no focused instruction files present)' \
+    "$isolated_yaml_no_overlays_output"
 
 # Execute an unmodified copy of the real validator from a temporary scripts
 # directory so its repository-pinned Markdownlint path is absent. Restrict PATH

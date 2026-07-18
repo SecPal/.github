@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-18 - Harden Instruction Validation Rollout
+
+**Fixed:**
+
+- rejected incomplete custom Polyscope rollout source bundles before installer writes and added the canonical validator and dependency state to the rollout sync watcher
+- enforced repository-local, non-symlinked instruction paths and parsed focused frontmatter as YAML with required non-empty string `name` and `applyTo` values, failing closed when the repository-pinned parser is unavailable
+- applied workflow-specific review rules to their direct permissions, timeout, trust-boundary, and reusable-workflow regression fixtures
+
+---
+
 ## 2026-07-17 - Coordinate Polyscope Plan And Autopilot Modes
 
 **Fixed:**

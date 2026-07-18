@@ -46,7 +46,10 @@ The validator checks:
 - non-empty, readable UTF-8 Markdown with a top-level heading;
 - inline SPDX metadata or an allowed REUSE `.license` sidecar;
 - Markdown structure for runtime, review, and focused instruction files;
-- opening and closing overlay frontmatter with non-empty `name` and `applyTo`;
+- syntactically valid YAML overlay frontmatter with opening and closing
+  delimiters plus non-empty string `name` and `applyTo` values;
+- repository-local regular files and directories rather than symlinks for all
+  instruction discovery paths;
 - the 32 KiB discovery ceiling for each required instruction file.
 
 The validator deliberately does not check:
@@ -67,7 +70,9 @@ The validator uses the repository-pinned `markdownlint` binary when
 `node_modules` is available, then a globally installed `markdownlint` as a
 fallback. It does not download tools. If neither is available, the validator
 fails with a blocked-tool message and a nonzero result. CI installs the
-committed lockfile and is the authoritative lint environment.
+committed lockfile and is the authoritative lint environment. Focused-overlay
+frontmatter is parsed with the repository-pinned `js-yaml`. When focused
+overlays exist, a missing parser also fails closed.
 
 Run the validator and its regression suite with:
 

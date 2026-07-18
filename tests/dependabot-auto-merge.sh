@@ -60,6 +60,38 @@ if [ ! -f "$WORKFLOW_INSTRUCTIONS" ]; then
   exit 1
 fi
 
+workflow_instruction_scope="$(
+  sed -n 's/^applyTo: "\(.*\)"$/\1/p' "$WORKFLOW_INSTRUCTIONS"
+)"
+IFS=',' read -r -a workflow_instruction_patterns <<< "$workflow_instruction_scope"
+for direct_fixture in \
+  tests/codeql-applicability.sh \
+  tests/copilot-review-memory-errors.sh \
+  tests/copilot-review-memory.sh \
+  tests/dependabot-auto-merge.sh \
+  tests/deploy-main-workflow.sh \
+  tests/license-compatibility.sh \
+  tests/prettier-version-alignment.sh \
+  tests/project-automation-core.sh \
+  tests/pull-request-commit-signatures.sh \
+  tests/pull-request-english.sh \
+  tests/pull-request-evidence.sh \
+  tests/reusable-markdown-lint-scope.sh \
+  tests/reusable-workflow-policy.sh \
+  tests/reusable-workflow-timeouts.sh; do
+  fixture_is_scoped=0
+  for instruction_pattern in "${workflow_instruction_patterns[@]}"; do
+    if compgen -G "$instruction_pattern" | grep -Fxq "$direct_fixture"; then
+      fixture_is_scoped=1
+      break
+    fi
+  done
+  if [[ "$fixture_is_scoped" -ne 1 ]]; then
+    echo "Workflow instructions must apply to direct validation fixture: $direct_fixture" >&2
+    exit 1
+  fi
+done
+
 if [ ! -f "$WORKFLOW_EXAMPLE" ]; then
   echo "Expected workflow example was not found: $WORKFLOW_EXAMPLE" >&2
   exit 1
@@ -148,10 +180,13 @@ if awk '
   exit 1
 fi
 
-grep -q 'Reusable-workflow caller jobs that use `jobs\.<job_id>\.uses` cannot set `timeout-minutes` on the caller job' "$WORKFLOW_INSTRUCTIONS" || {
+normalized_workflow_instructions="$(
+  tr '\n' ' ' < "$WORKFLOW_INSTRUCTIONS" | tr -s '[:space:]' ' '
+)"
+if [[ "$normalized_workflow_instructions" != *'A reusable-workflow caller job using `jobs.<job_id>.uses` cannot set a timeout; the called workflow must bound each of its jobs.'* ]]; then
   echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
   exit 1
-}
+fi
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.

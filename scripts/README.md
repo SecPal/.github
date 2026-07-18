@@ -369,6 +369,13 @@ requires either root execution or passwordless, non-interactive `sudo`. The
 installer invalidates cached sudo credentials while checking this prerequisite
 and exits before writing service units when unattended access is unavailable.
 
+`--source-script` accepts a custom rollout implementation only as part of a
+complete source bundle: the script must be executable and have an executable
+`validate-ai-instructions.sh` sibling with the committed npm validator
+dependencies installed. The installer resolves this bundle before any
+installation writes and watches both files and the npm lock state for rollout
+changes and dependency-install recovery.
+
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new
 managed repositories automatically when the canonical repo list changes. The
