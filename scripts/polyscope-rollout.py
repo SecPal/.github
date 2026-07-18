@@ -3289,7 +3289,7 @@ def load_registered_worktree_paths(
     registered: dict[str, set[pathlib.Path]] = {repo_name: set() for repo_name in repo_state}
 
     try:
-        with sqlite3.connect(f"file:{resolved_db_path}?mode=ro", uri=True) as connection:
+        with sqlite3.connect(f"{resolved_db_path.as_uri()}?mode=ro", uri=True) as connection:
             columns = {
                 str(row[1])
                 for row in connection.execute("PRAGMA table_info(worktrees)")

@@ -64,7 +64,10 @@ def run_setup_sequence(root: pathlib.Path, commands: list[str], env: dict[str, s
 # Every generated native setup must enter the real canonical validator before
 # any repository-specific mutation. Execute that boundary rather than merely
 # inspecting source ordering.
-generated_specs = module.build_repo_specs(repo_root.parent)
+native_source_workspace = workspace / "native source roots"
+for repo_name in module.REPO_SETTINGS:
+    write_valid_instructions(native_source_workspace / repo_name)
+generated_specs = module.build_repo_specs(native_source_workspace)
 side_effect_script = (
     "from pathlib import Path; "
     "Path('.env').write_text('mutated\\n'); "
@@ -239,6 +242,37 @@ assert not unregistered_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exi
 assert unregistered_sentinel.read_bytes() == b"unchanged"
 assert str(unregistered_candidate) not in setup_log.read_text()
 assert unregistered_candidate.is_dir()
+
+# SQLite URI mode must quote legal filename characters instead of treating
+# them as URI query, fragment, or percent-escape syntax and selecting or
+# creating a different database.
+for index, unsafe_name in enumerate(
+    ("polyscope?authoritative.db", "polyscope#authoritative.db", "polyscope%25authoritative.db")
+):
+    uri_fixture = workspace / f"sqlite-uri-{index}"
+    uri_fixture.mkdir()
+    uri_db_path = uri_fixture / unsafe_name
+    with sqlite3.connect(uri_db_path) as connection:
+        connection.execute(
+            """
+            create table worktrees (
+                id text primary key,
+                repo_id text not null,
+                branch text not null,
+                path text not null,
+                status text default 'active' not null,
+                created_at text default (datetime('now')) not null
+            )
+            """
+        )
+        connection.execute(
+            "insert into worktrees (id, repo_id, branch, path, status) values (?, ?, ?, ?, 'active')",
+            (f"uri-valid-{index}", repo_state[".github"]["id"], "uri-valid", str(valid_candidate)),
+        )
+
+    uri_registered = module.load_registered_worktree_paths(uri_db_path, repo_state, clone_root)
+    assert uri_registered[".github"] == [valid_candidate.resolve()], uri_registered[".github"]
+    assert sorted(uri_fixture.iterdir()) == [uri_db_path]
 
 with sqlite3.connect(db_path) as connection:
     connection.execute("delete from worktrees")

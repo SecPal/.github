@@ -369,7 +369,8 @@ Run `install-polyscope-system-components.sh` first. This installer remains
 unprivileged and verifies the exact command
 `sudo -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`. It never
 tests generic sudo access and exits before writing user units when the fixed
-helper, system server drop-in, or exact authorization is unavailable.
+helper, fixed manifest path, system server drop-in, or exact authorization is
+unavailable.
 
 `--source-script` accepts a custom rollout implementation only as part of a
 complete source bundle: the script must be executable, have the constrained
@@ -413,11 +414,19 @@ atomically, and restores the previous components if activation fails. It does
 not authorize shells, Python, `systemctl`, file utilities, or user-selected
 paths through passwordless sudo.
 
+Before activation, the installer verifies the executable canonical rollout
+and validator source bundle, committed lockfile, and installed pinned Markdown
+dependencies under `/home/secpal/code/SecPal/.github/`. The system drop-in
+executes that source directly, so a fresh installation does not depend on the
+user-local rollout link created during the following unprivileged installation
+step.
+
 The installed `/usr/local/libexec/secpal-polyscope-nginx-apply` accepts only no
 arguments (apply) or `--check` (non-mutating boundary check). It reads the fixed
 mode-`0600`, `secpal`-owned JSON manifest, rejects links, unsafe ownership,
 unknown fields, non-loopback upstreams, invalid ports, and unsafe repository
-identifiers, then renders one fixed nginx target internally. Activation is
+identifiers, then renders one fixed nginx target internally. The exact
+root-owned manifest library is checked before it is imported. Activation is
 atomic; `nginx -t` precedes reload, and validation or reload failure restores
 the prior configuration.
 

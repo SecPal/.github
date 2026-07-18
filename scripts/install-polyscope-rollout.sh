@@ -32,7 +32,12 @@ POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/s
 SERVICE_PATH="${POLYSCOPE_SERVICE_PATH:-}"
 SUDO_BIN="${SUDO_BIN:-sudo}"
 POLYSCOPE_NGINX_HELPER="${POLYSCOPE_NGINX_HELPER:-/usr/local/libexec/secpal-polyscope-nginx-apply}"
-POLYSCOPE_NGINX_MANIFEST="${POLYSCOPE_NGINX_MANIFEST:-$HOME/.local/state/polyscope/nginx-manifest.json}"
+FIXED_POLYSCOPE_NGINX_MANIFEST="$HOME/.local/state/polyscope/nginx-manifest.json"
+if [[ "${POLYSCOPE_NGINX_MANIFEST:-$FIXED_POLYSCOPE_NGINX_MANIFEST}" != "$FIXED_POLYSCOPE_NGINX_MANIFEST" ]]; then
+    echo "Error: the nginx manifest path is fixed at $FIXED_POLYSCOPE_NGINX_MANIFEST." >&2
+    exit 1
+fi
+POLYSCOPE_NGINX_MANIFEST="$FIXED_POLYSCOPE_NGINX_MANIFEST"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -287,6 +292,14 @@ if [[ "$server_scope" == "system" ]]; then
     done
     if ! grep -qF -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$installed_server_target"; then
         echo "Error: reviewed system server drop-in lacks constrained nginx activation: $installed_server_target" >&2
+        exit 1
+    fi
+    if ! grep -qF -- 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/secpal/code/SecPal' "$installed_server_target"; then
+        echo "Error: reviewed system server drop-in lacks the canonical rollout runtime: $installed_server_target" >&2
+        exit 1
+    fi
+    if grep -qF -- 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$installed_server_target"; then
+        echo "Error: reviewed system server drop-in depends on a user installer target: $installed_server_target" >&2
         exit 1
     fi
 fi

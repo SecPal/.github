@@ -259,9 +259,16 @@ The `secpal` user then installs the user units without sudo:
 POLYSCOPE_SERVER_SCOPE=system bash ./scripts/install-polyscope-rollout.sh
 ```
 
+The system drop-in executes the rollout from the canonical
+`/home/secpal/code/SecPal/.github/scripts/` source bundle, which the
+administrator installer verifies with its pinned validator toolchain before
+activation. The first step therefore
+does not depend on the user-local links created by the second step.
+
 The user installer verifies only the exact noninteractive helper capability;
 it does not require or grant generic passwordless sudo. The rollout writes a
-strict manifest under `~/.local/state/polyscope/`, and the root-owned helper
+strict manifest at the fixed `~/.local/state/polyscope/nginx-manifest.json`
+path, and the root-owned helper
 validates and renders the one fixed preview nginx target before testing and
 reloading nginx. Failed validation or reload restores the previous target.
 

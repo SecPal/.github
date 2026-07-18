@@ -128,6 +128,9 @@ migration, seed, or any other native setup command runs.
 The external worktree provisioner derives its allowlist only from active
 `worktrees` registrations in the current Polyscope SQLite database. Registered
 paths are resolved and constrained to the matching repository clone root;
+the read-only SQLite URI percent-encodes the resolved database path before
+adding URI parameters, so legal filename characters cannot select or create a
+different database;
 unregistered directories are ignored and remain available only to the
 conservative clone reaper. Candidate worktrees are validated before
 instruction-dependent metadata synchronization, local configuration, hooks,
@@ -156,7 +159,9 @@ size-bounded JSON manifest to one fixed user-owned path. The root-owned
 non-mutating `--check`. It validates manifest type, ownership, mode, keys,
 repository identifiers, fixed preview domain and clone root, and loopback-only
 PHP upstream before rendering the fixed nginx target from its root-owned
-template bundle.
+template bundle. The helper validates the manifest library's exact path,
+ownership, and mode before importing it, so an unsafe dependency cannot run
+privileged top-level code before rejection.
 
 Only the exact helper command forms are eligible for passwordless sudo. The
 user service cannot invoke a shell, Python interpreter, `systemctl`, or general
@@ -168,10 +173,15 @@ necessary.
 Installation is deliberately split. An administrator runs
 `scripts/install-polyscope-system-components.sh` through a real interactive
 sudo prompt to install the root-owned helper bundle, exact sudoers drop-in, and
-system server drop-in. The `secpal` user then runs
+system server drop-in. Before activation it verifies the canonical rollout
+source bundle under `/home/secpal/code/SecPal/.github/scripts/`; the drop-in
+executes that source directly after its pinned Markdown validator dependencies
+have been checked and does not depend on a user-local link that has not been
+installed yet. The `secpal` user then runs
 `scripts/install-polyscope-rollout.sh` without sudo to install and enable the
 rollout path, worktree provision path and timer, and clone reaper timer. The
-user installer checks the exact helper `--check`; a missing helper,
+user installer checks the exact helper `--check`; a non-fixed manifest path,
+missing helper,
 authorization, validator dependency, or Markdownlint blocks installation.
 
 The rollout sync path watches the rollout, canonical validator, manifest

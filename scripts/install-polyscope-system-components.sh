@@ -9,6 +9,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_SOURCE="$SCRIPT_DIR/secpal-polyscope-nginx-apply.py"
 LIBRARY_SOURCE="$SCRIPT_DIR/polyscope_nginx.py"
 ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
+RUNTIME_ROLLOUT_SOURCE="/home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py"
+RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
+RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
 DESTDIR="${DESTDIR:-}"
 STAGE_ONLY=0
 
@@ -33,6 +36,27 @@ for source_file in "$HELPER_SOURCE" "$LIBRARY_SOURCE" "$ROLLOUT_SOURCE"; do
         exit 1
     fi
 done
+
+if [[ "$STAGE_ONLY" -eq 0 ]]; then
+    for runtime_file in \
+        "$RUNTIME_ROLLOUT_SOURCE" \
+        "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
+        "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
+        "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
+        "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.package-lock.json" \
+        "$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml/index.js"; do
+        if [[ ! -f "$runtime_file" ]]; then
+            echo "Error: canonical Polyscope runtime source is missing: $runtime_file" >&2
+            exit 1
+        fi
+    done
+    if [[ ! -x "$RUNTIME_ROLLOUT_SOURCE" \
+        || ! -x "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
+        || ! -x "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ]]; then
+        echo "Error: canonical Polyscope runtime scripts and pinned validator must be executable below $RUNTIME_TOOLCHAIN_ROOT." >&2
+        exit 1
+    fi
+fi
 
 if ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
     echo "Error: required service user 'secpal' does not exist." >&2
@@ -68,7 +92,7 @@ User=secpal
 ExecStart=
 ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321
 ExecStartPost=
-ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec /home/secpal/.local/bin/polyscope-secpal-rollout.py --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
+ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
 Environment=PATH=/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Environment=SSH_AUTH_SOCK=/run/user/$SECPAL_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git

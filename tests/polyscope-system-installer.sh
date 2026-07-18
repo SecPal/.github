@@ -45,6 +45,11 @@ fi
 
 grep -q '^User=secpal$' "$dropin"
 grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$dropin"
+grep -q 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py ' "$dropin"
+if grep -qF 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$dropin"; then
+    echo "system installer must not depend on a target created by the later user installer" >&2
+    exit 1
+fi
 grep -q -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$dropin"
 
 if command -v visudo >/dev/null 2>&1; then

@@ -34,6 +34,24 @@ helper = importlib.util.module_from_spec(helper_spec)
 assert helper_spec.loader is not None
 helper_spec.loader.exec_module(helper)
 
+# A privileged dependency must be rejected before Python executes any of its
+# top-level code. Mode 0666 keeps this negative case unsafe even under a
+# root-owned test checkout.
+unsafe_library = workspace / "unsafe-polyscope-nginx.py"
+unsafe_import_marker = workspace / "unsafe-library-imported"
+unsafe_library.write_text(
+    "from pathlib import Path\n"
+    f"Path({str(unsafe_import_marker)!r}).write_text('executed\\n')\n"
+)
+unsafe_library.chmod(0o666)
+try:
+    helper.load_nginx_library(unsafe_library, require_root_ownership=True)
+except RuntimeError as error:
+    assert "root-owned and mode-safe" in str(error), error
+else:
+    raise AssertionError("unsafe privileged helper library was imported")
+assert not unsafe_import_marker.exists()
+
 manifest = {
     "version": 1,
     "preview_domain": "preview.secpal.dev",

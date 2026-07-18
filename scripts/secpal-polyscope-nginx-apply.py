@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import pathlib
 import pwd
@@ -14,8 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-
-import polyscope_nginx
+from typing import Any
 
 
 ALLOWED_USER = "secpal"
@@ -23,6 +23,8 @@ MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest
 TARGET_PATH = pathlib.Path("/etc/nginx/sites-available/preview.secpal.dev")
 NGINX_BIN = pathlib.Path("/usr/sbin/nginx")
 SYSTEMCTL_BIN = pathlib.Path("/usr/bin/systemctl")
+LIBRARY_PATH = pathlib.Path(__file__).with_name("polyscope_nginx.py").absolute()
+RENDERER_PATH = pathlib.Path(__file__).with_name("polyscope-rollout.py").absolute()
 
 
 def _safe_regular_root_file(path: pathlib.Path) -> bool:
@@ -53,6 +55,26 @@ def check_helper_components(
             raise RuntimeError(f"required fixed executable is missing or not executable: {executable}")
 
 
+def load_nginx_library(
+    library_path: pathlib.Path = LIBRARY_PATH,
+    *,
+    require_root_ownership: bool,
+) -> Any:
+    """Validate, then load the exact privileged manifest library."""
+    if require_root_ownership and not _safe_regular_root_file(library_path):
+        raise RuntimeError(f"privileged helper component is not root-owned and mode-safe: {library_path}")
+
+    module_spec = importlib.util.spec_from_file_location("secpal_polyscope_nginx", library_path)
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError(f"unable to load privileged nginx manifest library: {library_path}")
+    library = importlib.util.module_from_spec(module_spec)
+    try:
+        module_spec.loader.exec_module(library)
+    except Exception as error:
+        raise RuntimeError(f"unable to load privileged nginx manifest library {library_path}: {error}") from error
+    return library
+
+
 def check_environment(
     *,
     manifest_path: pathlib.Path,
@@ -68,7 +90,8 @@ def check_environment(
         helper_paths=helper_paths,
         require_root_ownership=require_root_ownership,
     )
-    return polyscope_nginx.load_manifest(manifest_path, expected_uid=expected_uid)
+    nginx_library = load_nginx_library(require_root_ownership=require_root_ownership)
+    return nginx_library.load_manifest(manifest_path, expected_uid=expected_uid)
 
 
 def _atomic_replace(path: pathlib.Path, content: bytes, mode: int) -> None:
@@ -101,9 +124,11 @@ def apply_manifest(
     nginx_bin: pathlib.Path,
     systemctl_bin: pathlib.Path,
     expected_uid: int,
+    nginx_library: Any | None = None,
 ) -> None:
-    manifest = polyscope_nginx.load_manifest(manifest_path, expected_uid=expected_uid)
-    rendered = polyscope_nginx.render_nginx_config(manifest).encode("utf-8")
+    nginx_library = nginx_library or load_nginx_library(require_root_ownership=False)
+    manifest = nginx_library.load_manifest(manifest_path, expected_uid=expected_uid)
+    rendered = nginx_library.render_nginx_config(manifest).encode("utf-8")
 
     if target.is_symlink():
         raise RuntimeError(f"refusing to replace symbolic-link nginx target: {target}")
@@ -158,11 +183,7 @@ def main() -> int:
         print(f"helper may only be invoked through sudo by {ALLOWED_USER}", file=sys.stderr)
         return 1
 
-    helper_paths = (
-        pathlib.Path(__file__).resolve(),
-        pathlib.Path(polyscope_nginx.__file__).resolve(),
-        pathlib.Path(__file__).with_name("polyscope-rollout.py").resolve(),
-    )
+    helper_paths = (pathlib.Path(__file__).absolute(), RENDERER_PATH)
     try:
         check_helper_components(
             nginx_bin=NGINX_BIN,
@@ -170,6 +191,7 @@ def main() -> int:
             helper_paths=helper_paths,
             require_root_ownership=True,
         )
+        nginx_library = load_nginx_library(require_root_ownership=True)
         if not args.check:
             apply_manifest(
                 manifest_path=MANIFEST_PATH,
@@ -177,6 +199,7 @@ def main() -> int:
                 nginx_bin=NGINX_BIN,
                 systemctl_bin=SYSTEMCTL_BIN,
                 expected_uid=expected_user.pw_uid,
+                nginx_library=nginx_library,
             )
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Polyscope nginx helper failed: {error}", file=sys.stderr)

@@ -5662,6 +5662,43 @@ grep -qF 'resolved rollout source script path must not contain whitespace' \
 test ! -e "$spaced_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$spaced_unit_dir/polyscope-rollout-sync.path"
 
+# The privileged helper accepts one fixed manifest path. Reject an override
+# before installing a user unit that could never complete successfully.
+custom_manifest_home_dir="$workspace/custom-manifest-home"
+custom_manifest_bin_dir="$workspace/custom-manifest-bin"
+custom_manifest_unit_dir="$workspace/custom-manifest-units"
+custom_manifest_error="$workspace/custom-manifest-install.error"
+custom_manifest_exit=0
+mkdir -p "$custom_manifest_home_dir/.polyscope/bin"
+cat >"$custom_manifest_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$custom_manifest_home_dir/.polyscope/bin/expose-linux-x64"
+env HOME="$custom_manifest_home_dir" \
+    CODEX_HOME="$custom_manifest_home_dir/.codex" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/custom-manifest-sudo.log" \
+    POLYSCOPE_NGINX_HELPER="$fake_nginx_helper" \
+    POLYSCOPE_NGINX_MANIFEST="$custom_manifest_home_dir/custom-manifest.json" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$custom_manifest_bin_dir" \
+        --unit-dir "$custom_manifest_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$custom_manifest_error" \
+    || custom_manifest_exit=$?
+if [[ "$custom_manifest_exit" -eq 0 ]]; then
+    echo "installer must reject a non-fixed nginx manifest path" >&2
+    exit 1
+fi
+grep -qF 'nginx manifest path is fixed' "$custom_manifest_error"
+test ! -e "$custom_manifest_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$custom_manifest_unit_dir/polyscope-rollout-sync.service"
+
 env HOME="$home_dir" \
     CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
