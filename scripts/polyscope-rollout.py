@@ -1318,6 +1318,12 @@ def cleanup_removed_api_preview_databases(
     api_validation_commands = render_local_config(api_spec).get("scripts", {}).get("setup", [])
     active_targets: set[str] = set()
     for worktree_path in registered_api_worktrees:
+        active_targets.add(
+            build_preview_database_name(
+                base_database,
+                resolve_current_workspace_name(worktree_path, db_path=db_path),
+            )
+        )
         if not worktree_path.is_dir() or worktree_path.is_symlink():
             continue
 
@@ -1333,12 +1339,6 @@ def cleanup_removed_api_preview_databases(
             protects_storage_target = True
 
         if protects_storage_target:
-            active_targets.add(
-                build_preview_database_name(
-                    base_database,
-                    resolve_current_workspace_name(worktree_path, db_path=db_path),
-                )
-            )
             env_path = worktree_path / ".env"
             if env_path.exists():
                 active_targets.update(discover_existing_api_preview_targets(load_env_assignments(env_path), base_database))

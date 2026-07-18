@@ -4808,6 +4808,82 @@ PY
 
 grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__fix" WITH (FORCE)' "$fake_psql_log"
 
+# An active API registration may briefly precede its filesystem materialization.
+# Its deterministic preview target remains live until the registration itself
+# becomes inactive, regardless of provisioning eligibility.
+missing_active_api_clone="$home_dir/.polyscope/clones/api12345/pending-otter"
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+state['databases'].append('secpal__preview__pending_otter')
+open(sys.argv[1], 'w').write(json.dumps(state))
+PY
+
+missing_active_summary_json="$workspace/missing-active-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "api12345" "$missing_active_api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$missing_active_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$missing_active_summary_json" "$fake_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+assert summary.get('cleaned_preview_storage_targets', []) == [], summary
+assert 'secpal__preview__pending_otter' in state['databases'], state['databases']
+PY
+
+missing_removed_summary_json="$workspace/missing-removed-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$missing_removed_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$missing_removed_summary_json" "$fake_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__pending_otter'], summary
+assert 'secpal__preview__pending_otter' not in state['databases'], state['databases']
+PY
+
 legacy_hashed_api_clone="$home_dir/.polyscope/clones/api12345/legacy-hawk-165552b7"
 mkdir -p "$legacy_hashed_api_clone/.git/info" "$legacy_hashed_api_clone/.git/hooks" "$legacy_hashed_api_clone/scripts"
 seed_api_worktree_files "$legacy_hashed_api_clone"
@@ -5502,7 +5578,9 @@ if [[ "${1:-}" == "-n" && "${2:-}" == "true" ]]; then
     exit 98
 fi
 
-if [[ "${1:-}" == "-n" ]]; then
+if [[ "${1:-}" == "-k" && "${2:-}" == "-n" ]]; then
+    shift 2
+elif [[ "${1:-}" == "-n" ]]; then
     shift
 fi
 
@@ -5519,6 +5597,31 @@ exit 64
 STUB
 chmod +x "$fake_nginx_helper"
 export POLYSCOPE_NGINX_HELPER="$fake_nginx_helper"
+export POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE=1
+
+# Production installation must persist the one fixed root-owned helper path,
+# even if an older broad sudo rule would make an arbitrary override executable.
+custom_helper_home_dir="$workspace/custom-helper-home"
+custom_helper_bin_dir="$workspace/custom-helper-bin"
+custom_helper_unit_dir="$workspace/custom-helper-units"
+custom_helper_error="$workspace/custom-helper-install.error"
+custom_helper_exit=0
+mkdir -p "$custom_helper_home_dir/.polyscope/bin"
+env HOME="$custom_helper_home_dir" \
+    POLYSCOPE_NGINX_HELPER="$fake_nginx_helper" \
+    POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE=0 \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$custom_helper_bin_dir" \
+        --unit-dir "$custom_helper_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$custom_helper_error" \
+    || custom_helper_exit=$?
+if [[ "$custom_helper_exit" -eq 0 ]]; then
+    echo "installer must reject a non-fixed nginx helper path" >&2
+    exit 1
+fi
+grep -qF 'nginx helper path is fixed' "$custom_helper_error"
+test ! -e "$custom_helper_unit_dir/polyscope-rollout-sync.service"
 
 # A custom rollout source is only executable as an instruction-dependent
 # command when its canonical validator is present beside it. Reject an
@@ -6005,7 +6108,7 @@ grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q "Environment=POLYSCOPE_NGINX_HELPER=$fake_nginx_helper" "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
@@ -6073,7 +6176,7 @@ if grep -qF -- '-n -k true' "$workspace/user-sudo.log"; then
   echo "installer must not test generic passwordless sudo" >&2
   exit 1
 fi
-grep -qF -- "-n $fake_nginx_helper --check" "$workspace/user-sudo.log"
+grep -qF -- "-k -n $fake_nginx_helper --check" "$workspace/user-sudo.log"
 
 # installer must refuse when system scope is detected but sudo is unavailable
 no_sudo_home_dir="$workspace/no-sudo-home"

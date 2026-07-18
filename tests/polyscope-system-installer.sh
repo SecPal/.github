@@ -10,13 +10,29 @@ INSTALLER="$REPO_ROOT/scripts/install-polyscope-system-components.sh"
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-system-installer.XXXXXX")"
 trap 'rm -rf "$WORKSPACE"' EXIT
 
-if "$INSTALLER" >"$WORKSPACE/non-root.out" 2>"$WORKSPACE/non-root.err"; then
-    echo "system installer must require an interactive root invocation" >&2
-    exit 1
+if [[ "$(id -u)" -ne 0 ]]; then
+    if "$INSTALLER" >"$WORKSPACE/non-root.out" 2>"$WORKSPACE/non-root.err"; then
+        echo "system installer must require an interactive root invocation" >&2
+        exit 1
+    fi
+    grep -q 'must be run as root' "$WORKSPACE/non-root.err"
 fi
-grep -q 'must be run as root' "$WORKSPACE/non-root.err"
 
-DESTDIR="$WORKSPACE/stage" "$INSTALLER" --stage-only
+real_id_bin="$(command -v id)"
+fake_id_dir="$WORKSPACE/fake-id"
+mkdir -p "$fake_id_dir"
+cat >"$fake_id_dir/id" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
+    echo "stage-only must not inspect the target service account" >&2
+    exit 67
+fi
+exec "$REAL_ID_BIN" "$@"
+STUB
+chmod +x "$fake_id_dir/id"
+
+REAL_ID_BIN="$real_id_bin" PATH="$fake_id_dir:$PATH" \
+    DESTDIR="$WORKSPACE/stage" "$INSTALLER" --stage-only
 
 helper="$WORKSPACE/stage/usr/local/libexec/secpal-polyscope-nginx-apply"
 library="$WORKSPACE/stage/usr/local/libexec/polyscope_nginx.py"
@@ -44,6 +60,7 @@ if cut -d: -f2- "$sudoers" | grep -Eq 'ALL[[:space:]]*$|\*|/(usr/)?bin/(ba)?sh([
 fi
 
 grep -q '^User=secpal$' "$dropin"
+grep -q '^Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent$' "$dropin"
 grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$dropin"
 grep -q 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py ' "$dropin"
 if grep -qF 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$dropin"; then

@@ -34,6 +34,34 @@ helper = importlib.util.module_from_spec(helper_spec)
 assert helper_spec.loader is not None
 helper_spec.loader.exec_module(helper)
 
+# Direct root execution is a supported troubleshooting and root-rollout path,
+# while any invocation carrying sudo identity must come from the one allowed
+# service account.
+helper.validate_invoker(euid=0, sudo_user="", sudo_uid="", expected_uid=os.getuid())
+helper.validate_invoker(
+    euid=0,
+    sudo_user=helper.ALLOWED_USER,
+    sudo_uid=str(os.getuid()),
+    expected_uid=os.getuid(),
+)
+for euid, sudo_user, sudo_uid, expected_error in (
+    (os.getuid() or 1, "", "", "must run as root"),
+    (0, "other", str(os.getuid()), "through sudo"),
+    (0, helper.ALLOWED_USER, str(os.getuid() + 1), "through sudo"),
+    (0, helper.ALLOWED_USER, "", "through sudo"),
+):
+    try:
+        helper.validate_invoker(
+            euid=euid,
+            sudo_user=sudo_user,
+            sudo_uid=sudo_uid,
+            expected_uid=os.getuid(),
+        )
+    except RuntimeError as error:
+        assert expected_error in str(error), error
+    else:
+        raise AssertionError((euid, sudo_user, sudo_uid))
+
 # A privileged dependency must be rejected before Python executes any of its
 # top-level code. Mode 0666 keeps this negative case unsafe even under a
 # root-owned test checkout.

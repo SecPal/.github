@@ -168,7 +168,9 @@ user service cannot invoke a shell, Python interpreter, `systemctl`, or general
 file utility through that rule. The helper writes the fixed target atomically,
 runs `/usr/sbin/nginx -t`, and reloads nginx only on success. A validation or
 reload failure restores the prior configuration and reactivates it when
-necessary.
+necessary. Direct root execution remains available for the root-driven rollout
+and administrator troubleshooting; when sudo identity is present, it must
+match the exact `secpal` account and UID.
 
 Installation is deliberately split. An administrator runs
 `scripts/install-polyscope-system-components.sh` through a real interactive
@@ -180,8 +182,8 @@ have been checked and does not depend on a user-local link that has not been
 installed yet. The `secpal` user then runs
 `scripts/install-polyscope-rollout.sh` without sudo to install and enable the
 rollout path, worktree provision path and timer, and clone reaper timer. The
-user installer checks the exact helper `--check`; a non-fixed manifest path,
-missing helper,
+user installer resets cached sudo credentials before checking the exact fixed
+helper `--check`; a helper override, non-fixed manifest path, missing helper,
 authorization, validator dependency, or Markdownlint blocks installation.
 
 The rollout sync path watches the rollout, canonical validator, manifest

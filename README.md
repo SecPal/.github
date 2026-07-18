@@ -265,8 +265,9 @@ administrator installer verifies with its pinned validator toolchain before
 activation. The first step therefore
 does not depend on the user-local links created by the second step.
 
-The user installer verifies only the exact noninteractive helper capability;
-it does not require or grant generic passwordless sudo. The rollout writes a
+The user installer clears cached sudo credentials and verifies only the exact
+noninteractive fixed-helper capability; it rejects helper-path overrides and
+does not require or grant generic passwordless sudo. The rollout writes a
 strict manifest at the fixed `~/.local/state/polyscope/nginx-manifest.json`
 path, and the root-owned helper
 validates and renders the one fixed preview nginx target before testing and

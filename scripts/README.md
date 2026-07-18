@@ -367,10 +367,12 @@ POLYSCOPE_SERVER_SCOPE=system bash .github/scripts/install-polyscope-rollout.sh
 
 Run `install-polyscope-system-components.sh` first. This installer remains
 unprivileged and verifies the exact command
-`sudo -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`. It never
-tests generic sudo access and exits before writing user units when the fixed
-helper, fixed manifest path, system server drop-in, or exact authorization is
-unavailable.
+`sudo -k -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`. The
+credential reset ensures the check proves the exact `NOPASSWD` rule rather than
+a cached interactive sudo timestamp. It never tests generic sudo access,
+rejects helper-path overrides, and exits before writing user units when the
+fixed helper, fixed manifest path, system server drop-in, or exact
+authorization is unavailable.
 
 `--source-script` accepts a custom rollout implementation only as part of a
 complete source bundle: the script must be executable, have the constrained
@@ -414,6 +416,11 @@ atomically, and restores the previous components if activation fails. It does
 not authorize shells, Python, `systemctl`, file utilities, or user-selected
 paths through passwordless sudo.
 
+`DESTDIR=/path scripts/install-polyscope-system-components.sh --stage-only`
+renders a deterministic packaging fixture without root or a local `secpal`
+account. Its UID 1000 systemd value is for validation only; a real installation
+always resolves the target host's `secpal` UID before activation.
+
 Before activation, the installer verifies the executable canonical rollout
 and validator source bundle, committed lockfile, and installed pinned Markdown
 dependencies under `/home/secpal/code/SecPal/.github/`. The system drop-in
@@ -428,12 +435,13 @@ unknown fields, non-loopback upstreams, invalid ports, and unsafe repository
 identifiers, then renders one fixed nginx target internally. The exact
 root-owned manifest library is checked before it is imported. Activation is
 atomic; `nginx -t` precedes reload, and validation or reload failure restores
-the prior configuration.
+the prior configuration. Root may invoke the helper directly; invocations
+carrying sudo identity are accepted only from `secpal` with its exact UID.
 
 After both installation steps, verify the steady state:
 
 ```bash
-sudo -n /usr/local/libexec/secpal-polyscope-nginx-apply --check
+sudo -k -n /usr/local/libexec/secpal-polyscope-nginx-apply --check
 systemctl --user is-active polyscope-rollout-sync.path
 systemctl --user is-active polyscope-worktree-provision.path
 systemctl --user is-active polyscope-worktree-provision.timer

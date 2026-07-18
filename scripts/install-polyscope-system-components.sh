@@ -58,7 +58,9 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     fi
 fi
 
-if ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
+if [[ "$STAGE_ONLY" -eq 1 ]]; then
+    SECPAL_UID=1000
+elif ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
     echo "Error: required service user 'secpal' does not exist." >&2
     exit 1
 fi

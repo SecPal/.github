@@ -75,6 +75,16 @@ def load_nginx_library(
     return library
 
 
+def validate_invoker(*, euid: int, sudo_user: str, sudo_uid: str, expected_uid: int) -> None:
+    """Allow direct root or the exact service account through sudo."""
+    if euid != 0:
+        raise RuntimeError("helper must run as root")
+    if (sudo_user or sudo_uid) and (
+        sudo_user != ALLOWED_USER or sudo_uid != str(expected_uid)
+    ):
+        raise RuntimeError(f"helper may only be invoked through sudo by {ALLOWED_USER}")
+
+
 def check_environment(
     *,
     manifest_path: pathlib.Path,
@@ -176,11 +186,16 @@ def main() -> int:
     if os.geteuid() != 0:
         print("helper must run as root", file=sys.stderr)
         return 1
-    sudo_user = os.environ.get("SUDO_USER", "")
-    sudo_uid = os.environ.get("SUDO_UID", "")
     expected_user = pwd.getpwnam(ALLOWED_USER)
-    if sudo_user != ALLOWED_USER or sudo_uid != str(expected_user.pw_uid):
-        print(f"helper may only be invoked through sudo by {ALLOWED_USER}", file=sys.stderr)
+    try:
+        validate_invoker(
+            euid=os.geteuid(),
+            sudo_user=os.environ.get("SUDO_USER", ""),
+            sudo_uid=os.environ.get("SUDO_UID", ""),
+            expected_uid=expected_user.pw_uid,
+        )
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
         return 1
 
     helper_paths = (pathlib.Path(__file__).absolute(), RENDERER_PATH)
