@@ -122,6 +122,17 @@ mutation, so one invalid candidate cannot leave another candidate partially
 provisioned. Validator failures remain errors and include the affected root and
 the canonical validator output.
 
+The direct `--prepare-api-worktree`, `--bootstrap-api-worktree`,
+`--refresh-api-worktree`, and `--run-api-worktree` commands share one
+instruction-dependent dispatch boundary. It validates the resolved source
+repository first and the resolved target worktree second, then passes those same
+roots to the selected operation. A failure returns nonzero with the canonical
+diagnostics before `.env` or database changes, dependency installation,
+migrations, imports, seeds, refreshes, or runtime process execution. Missing
+Markdownlint therefore blocks these direct operations as well as normal
+rollout. No instruction-independent direct command currently bypasses this
+boundary.
+
 Rollout requires both independent files, always reads runtime policy from
 `AGENTS.md`, and never treats the Copilot review profile as runtime
 instructions. It must not generate, reconstruct, or overwrite

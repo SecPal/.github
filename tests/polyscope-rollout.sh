@@ -901,6 +901,268 @@ assert_rollout_rejects_instruction_contract \
     "frontend" ".github/instructions/org-shared.instructions.md" \
     "malformed-frontmatter" 'instruction overlays include valid frontmatter'
 
+# All direct API-worktree CLI modes are instruction-dependent. Exercise their
+# shared validation boundary through the real CLI and canonical validator before
+# the normal rollout creates any local configuration or metadata.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
+import importlib.util
+import itertools
+import os
+import pathlib
+import shlex
+import shutil
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+repo_root = pathlib.Path(sys.argv[3])
+fixture_root = workspace / "direct API CLI validation with spaces"
+fake_bin = fixture_root / "fake bin"
+side_effect_log = fixture_root / "command-side-effects.log"
+fake_bin.mkdir(parents=True)
+
+for executable in ("composer", "php", "psql"):
+    executable_path = fake_bin / executable
+    executable_path.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' '{executable}:$*' >>\"$SIDE_EFFECT_LOG\"\n"
+        "exit 0\n"
+    )
+    executable_path.chmod(0o755)
+
+
+def write_valid_instruction_root(root: pathlib.Path) -> None:
+    (root / ".github").mkdir(parents=True)
+    shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
+    (root / "AGENTS.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Runtime Instructions\n\n"
+        "## Scope and Safety\n\n"
+        "- Preserve existing work.\n"
+    )
+    (root / ".github" / "copilot-instructions.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Review Profile\n\n"
+        "- Review the complete diff.\n"
+    )
+    (root / ".env.example").write_text(
+        "APP_ENV=local\n"
+        "APP_KEY=base64:test-key\n"
+        "APP_URL=http://localhost\n"
+        "FRONTEND_URL=http://localhost\n"
+        "DB_CONNECTION=sqlite\n"
+    )
+
+
+def invalidate_instruction(root: pathlib.Path, instruction_kind: str) -> str:
+    if instruction_kind == "agents":
+        with (root / "AGENTS.md").open("a") as handle:
+            handle.write("\n# Duplicate Top-Level Heading\n")
+        return "instruction Markdown passes lint"
+
+    copilot_path = root / ".github" / "copilot-instructions.md"
+    copilot_path.write_text(
+        copilot_path.read_text().replace(
+            "SPDX-License" "-Identifier: CC0-1.0\n",
+            "",
+        )
+    )
+    return "Missing inline SPDX header or .license sidecar"
+
+
+def cli_arguments(
+    mode: str,
+    target: pathlib.Path,
+    source: pathlib.Path,
+    run_marker: pathlib.Path,
+    db_path: pathlib.Path,
+) -> list[str]:
+    arguments = [
+        sys.executable,
+        str(script_path),
+        f"--{mode.replace('_', '-')}",
+        str(target),
+        "--source-repo-path",
+        str(source),
+        "--db-path",
+        str(db_path),
+    ]
+    if mode == "run_api_worktree":
+        arguments.extend(["--shell-command", f"touch {shlex.quote(str(run_marker))}"])
+    return arguments
+
+
+def cli_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["PATH"] = str(fake_bin) + os.pathsep + environment["PATH"]
+    environment["SIDE_EFFECT_LOG"] = str(side_effect_log)
+    return environment
+
+
+modes = (
+    "prepare_api_worktree",
+    "bootstrap_api_worktree",
+    "refresh_api_worktree",
+    "run_api_worktree",
+)
+failure_classes = tuple(itertools.product(("source", "target"), ("agents", "copilot")))
+
+for mode in modes:
+    for invalid_root_kind, instruction_kind in failure_classes:
+        case_root = fixture_root / f"{mode}-{invalid_root_kind}-{instruction_kind}"
+        source = case_root / "source repository"
+        target = case_root / "target worktree"
+        run_marker = case_root / "runtime-command-ran"
+        unrelated = case_root / "unrelated-state"
+        db_path = case_root / "polyscope.db"
+        write_valid_instruction_root(source)
+        write_valid_instruction_root(target)
+        unrelated.write_text("unchanged\n")
+
+        env_path = target / ".env"
+        if mode == "run_api_worktree" or instruction_kind == "copilot":
+            env_path.write_text(
+                "APP_ENV=local\n"
+                "APP_KEY=base64:existing-key\n"
+                "DB_CONNECTION=sqlite\n"
+            )
+        env_existed = env_path.exists()
+        env_before = env_path.read_bytes() if env_existed else None
+        unrelated_before = unrelated.read_bytes()
+
+        invalid_root = source if invalid_root_kind == "source" else target
+        expected_reason = invalidate_instruction(invalid_root, instruction_kind)
+        side_effect_log.unlink(missing_ok=True)
+
+        result = subprocess.run(
+            cli_arguments(mode, target, source, run_marker, db_path),
+            env=cli_environment(),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0, (
+            f"{mode} accepted invalid {invalid_root_kind} {instruction_kind}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert str(invalid_root.resolve()) in result.stderr, result.stderr
+        assert "canonical AI-instruction validation failed" in result.stderr, result.stderr
+        assert expected_reason in result.stderr, result.stderr
+        assert "Healed api worktree" not in result.stdout, result.stdout
+        assert "[api:" not in result.stdout, result.stdout
+        assert env_path.exists() is env_existed
+        if env_existed:
+            assert env_path.read_bytes() == env_before
+        assert unrelated.read_bytes() == unrelated_before
+        assert not side_effect_log.exists(), side_effect_log.read_text() if side_effect_log.exists() else ""
+        assert not run_marker.exists()
+        assert not db_path.exists()
+        assert not (target / ".polyscope-secpal-provisioned.json").exists()
+
+# Fully valid source and target roots must retain successful CLI behavior for
+# every classified mode.
+positive_source = fixture_root / "positive source repository"
+write_valid_instruction_root(positive_source)
+for mode in modes:
+    positive_case = fixture_root / f"positive-{mode}"
+    positive_target = positive_case / "target worktree"
+    positive_run_marker = positive_case / "runtime-command-ran"
+    positive_db_path = positive_case / "polyscope.db"
+    write_valid_instruction_root(positive_target)
+    if mode != "prepare_api_worktree":
+        (positive_target / ".env").write_text(
+            "APP_ENV=local\n"
+            "APP_KEY=base64:existing-key\n"
+            "DB_CONNECTION=sqlite\n"
+        )
+    side_effect_log.unlink(missing_ok=True)
+
+    result = subprocess.run(
+        cli_arguments(mode, positive_target, positive_source, positive_run_marker, positive_db_path),
+        env=cli_environment(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"valid {mode} failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    if mode == "prepare_api_worktree":
+        assert (positive_target / ".env").exists()
+    elif mode in {"bootstrap_api_worktree", "refresh_api_worktree"}:
+        assert side_effect_log.exists()
+        assert "php:" in side_effect_log.read_text()
+    else:
+        assert positive_run_marker.exists()
+
+# The explicit classification is shared by argument registration and dispatch;
+# adding another direct instruction-dependent mode requires extending this set.
+module_spec = importlib.util.spec_from_file_location("polyscope_rollout_direct_modes", script_path)
+module = importlib.util.module_from_spec(module_spec)
+assert module_spec.loader is not None
+module_spec.loader.exec_module(module)
+assert module.INSTRUCTION_DEPENDENT_DIRECT_API_MODES == modes
+
+# A copied real validator with no pinned node_modules and an isolated PATH must
+# block a direct mode before any target mutation instead of downloading tooling.
+isolated_root = fixture_root / "missing markdownlint toolchain"
+isolated_script_root = isolated_root / "governance"
+isolated_bin = isolated_root / "bin"
+isolated_source = isolated_root / "source repository"
+isolated_target = isolated_root / "target worktree"
+isolated_script_root.mkdir(parents=True)
+isolated_bin.mkdir()
+isolated_source.mkdir()
+isolated_target.mkdir()
+isolated_rollout = isolated_script_root / "polyscope-rollout.py"
+isolated_validator = isolated_script_root / "validate-ai-instructions.sh"
+shutil.copy2(script_path, isolated_rollout)
+shutil.copy2(repo_root / "scripts" / "validate-ai-instructions.sh", isolated_validator)
+write_valid_instruction_root(isolated_source)
+write_valid_instruction_root(isolated_target)
+isolated_env_path = isolated_target / ".env"
+isolated_env_path.write_text("APP_KEY=base64:unchanged\nDB_CONNECTION=sqlite\n")
+isolated_env_before = isolated_env_path.read_bytes()
+
+for required_tool in ("bash", "basename", "dirname", "find", "grep", "head", "python3", "wc"):
+    tool_path = shutil.which(required_tool)
+    assert tool_path is not None, required_tool
+    (isolated_bin / required_tool).symlink_to(tool_path)
+
+isolated_environment = os.environ.copy()
+isolated_environment["PATH"] = str(isolated_bin)
+isolated_environment["SIDE_EFFECT_LOG"] = str(side_effect_log)
+side_effect_log.unlink(missing_ok=True)
+isolated_result = subprocess.run(
+    [
+        sys.executable,
+        str(isolated_rollout),
+        "--prepare-api-worktree",
+        str(isolated_target),
+        "--source-repo-path",
+        str(isolated_source),
+        "--db-path",
+        str(isolated_root / "polyscope.db"),
+    ],
+    env=isolated_environment,
+    capture_output=True,
+    text=True,
+)
+assert isolated_result.returncode != 0, isolated_result.stdout + isolated_result.stderr
+assert str(isolated_source.resolve()) in isolated_result.stderr, isolated_result.stderr
+assert "Markdownlint is unavailable" in isolated_result.stderr, isolated_result.stderr
+assert isolated_env_path.read_bytes() == isolated_env_before
+assert not side_effect_log.exists()
+assert not (isolated_root / "polyscope.db").exists()
+assert "All tests passed" not in isolated_result.stderr
+PY
+
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --db-path "$db_path" \
@@ -1184,7 +1446,7 @@ if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
 import os
 import pathlib
@@ -1197,6 +1459,7 @@ import time
 
 script_path = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
+repo_root = pathlib.Path(sys.argv[3])
 fixture = workspace / "linked-preview-fixture"
 db_path = fixture / "polyscope.db"
 frontend_worktree = fixture / "clones" / "fe123456" / "azure-cheetah"
@@ -1209,6 +1472,26 @@ relinked_api_worktree.mkdir(parents=True)
 source_api.mkdir(parents=True)
 fake_bin = fixture / "fake-bin"
 fake_bin.mkdir()
+
+for instruction_root in (source_api, api_worktree):
+    instruction_root.joinpath(".github").mkdir(exist_ok=True)
+    shutil.copy2(repo_root / ".markdownlint.json", instruction_root / ".markdownlint.json")
+    instruction_root.joinpath("AGENTS.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Runtime Instructions\n\n"
+        "- Preserve existing work.\n"
+    )
+    instruction_root.joinpath(".github", "copilot-instructions.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Review Profile\n\n"
+        "- Review the complete diff.\n"
+    )
 
 source_api.joinpath(".env").write_text(
     "\n".join(

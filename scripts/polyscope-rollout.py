@@ -76,6 +76,12 @@ API_RUNTIME_PREVIEW_COMMANDS = frozenset(
         API_PAIL_COMMAND,
     }
 )
+INSTRUCTION_DEPENDENT_DIRECT_API_MODES = (
+    "prepare_api_worktree",
+    "bootstrap_api_worktree",
+    "refresh_api_worktree",
+    "run_api_worktree",
+)
 
 
 class CanonicalInstructionValidationError(RuntimeError):
@@ -4282,12 +4288,90 @@ def install_nginx_config(
         raise
 
 
+def validate_direct_api_worktree_roots(
+    source_repo_path: pathlib.Path,
+    worktree_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """Validate and resolve the exact source and target roots consumed by a direct mode."""
+    validated_instruction_roots: set[pathlib.Path] = set()
+    resolved_source_repo = validate_instruction_root(source_repo_path, validated_instruction_roots)
+    resolved_worktree = validate_instruction_root(worktree_path, validated_instruction_roots)
+    return resolved_source_repo, resolved_worktree
+
+
+def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> int | None:
+    """Validate, then dispatch the selected instruction-dependent direct CLI mode."""
+    selected_modes = [
+        (mode, getattr(args, mode))
+        for mode in INSTRUCTION_DEPENDENT_DIRECT_API_MODES
+        if getattr(args, mode) is not None
+    ]
+    if not selected_modes:
+        return None
+    if len(selected_modes) != 1:
+        raise SystemExit("direct API-worktree modes are mutually exclusive")
+
+    mode, requested_worktree = selected_modes[0]
+    option = f"--{mode.replace('_', '-')}"
+    if args.source_repo_path is None:
+        raise SystemExit(f"--source-repo-path is required with {option}")
+    if mode == "run_api_worktree" and not args.shell_command:
+        raise SystemExit("--shell-command is required with --run-api-worktree")
+
+    source_repo_path, worktree_path = validate_direct_api_worktree_roots(
+        args.source_repo_path,
+        requested_worktree,
+    )
+
+    if mode == "prepare_api_worktree":
+        ready, _preview_storage_target = ensure_api_worktree_ready(
+            worktree_path,
+            source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if mode == "bootstrap_api_worktree":
+        ready, _preview_storage_target = bootstrap_api_worktree(
+            worktree_path,
+            source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if mode == "refresh_api_worktree":
+        ready, _preview_storage_target = refresh_api_worktree(
+            worktree_path,
+            source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if mode == "run_api_worktree":
+        run_api_worktree_shell_command(
+            worktree_path,
+            source_repo_path,
+            args.shell_command,
+            db_path=args.db_path,
+        )
+        return 0
+
+    raise RuntimeError(f"unsupported direct API-worktree mode: {mode}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
-    parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
-    parser.add_argument("--bootstrap-api-worktree", type=pathlib.Path)
-    parser.add_argument("--refresh-api-worktree", type=pathlib.Path)
-    parser.add_argument("--run-api-worktree", type=pathlib.Path)
+    # These are the only direct early-return modes. All consume repository
+    # instructions and therefore share one validated dispatch boundary. The
+    # normal rollout is the sole fallthrough path; no instruction-independent
+    # direct mode currently exists.
+    direct_mode_group = parser.add_mutually_exclusive_group()
+    for mode in INSTRUCTION_DEPENDENT_DIRECT_API_MODES:
+        direct_mode_group.add_argument(
+            f"--{mode.replace('_', '-')}",
+            dest=mode,
+            type=pathlib.Path,
+        )
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--shell-command")
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
@@ -4317,48 +4401,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    if args.prepare_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --prepare-api-worktree")
-        ready, _preview_storage_target = ensure_api_worktree_ready(
-            args.prepare_api_worktree,
-            args.source_repo_path,
-            db_path=args.db_path,
-        )
-        return 0 if ready else 1
-
-    if args.bootstrap_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --bootstrap-api-worktree")
-        ready, _preview_storage_target = bootstrap_api_worktree(
-            args.bootstrap_api_worktree,
-            args.source_repo_path,
-            db_path=args.db_path,
-        )
-        return 0 if ready else 1
-
-    if args.refresh_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --refresh-api-worktree")
-        ready, _preview_storage_target = refresh_api_worktree(
-            args.refresh_api_worktree,
-            args.source_repo_path,
-            db_path=args.db_path,
-        )
-        return 0 if ready else 1
-
-    if args.run_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --run-api-worktree")
-        if not args.shell_command:
-            raise SystemExit("--shell-command is required with --run-api-worktree")
-        run_api_worktree_shell_command(
-            args.run_api_worktree,
-            args.source_repo_path,
-            args.shell_command,
-            db_path=args.db_path,
-        )
-        return 0
+    try:
+        direct_mode_result = dispatch_instruction_dependent_direct_api_mode(args)
+    except CanonicalInstructionValidationError as error:
+        print(error, file=sys.stderr)
+        return 1
+    if direct_mode_result is not None:
+        return direct_mode_result
 
     repo_specs = build_repo_specs(args.workspace_root)
     validated_instruction_roots: set[pathlib.Path] = set()
