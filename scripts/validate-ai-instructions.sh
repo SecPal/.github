@@ -157,6 +157,7 @@ markdownlint_runner() {
 test_markdown_lint() {
     local targets=()
     local file
+    local lint_output
 
     for file in AGENTS.md .github/copilot-instructions.md; do
         if [ -f "$file" ]; then
@@ -173,11 +174,11 @@ test_markdown_lint() {
     elif ! markdownlint_available; then
         print_result "instruction Markdown passes lint" "FAIL" \
             "Markdownlint is unavailable; provide it with the committed lockfile dependencies or a compatible global markdownlint"
-    elif markdownlint_runner "${targets[@]}" >/dev/null 2>&1; then
+    elif lint_output="$(markdownlint_runner "${targets[@]}" 2>&1)"; then
         print_result "instruction Markdown passes lint" "PASS"
     else
         print_result "instruction Markdown passes lint" "FAIL" \
-            "Run the repository-pinned markdownlint on the instruction files"
+            "${lint_output:-Run the repository-pinned markdownlint on the instruction files}"
     fi
 }
 
@@ -222,22 +223,25 @@ PY
     fi
 }
 
-test_agents_size_limit() {
+test_instruction_size_limit() {
+    local file="$1"
+    local label="$2"
+    local limit_name="$3"
     local max_bytes=32768
     local byte_count
 
-    if [ ! -f AGENTS.md ]; then
-        print_result "AGENTS.md stays under runtime discovery size limit" "FAIL" \
-            "Missing AGENTS.md"
+    if [ ! -f "$file" ]; then
+        print_result "$label stays under $limit_name size limit" "FAIL" \
+            "Missing $file"
         return
     fi
 
-    byte_count="$(wc -c <AGENTS.md)"
+    byte_count="$(wc -c <"$file")"
     if [ "$byte_count" -le "$max_bytes" ]; then
-        print_result "AGENTS.md stays under runtime discovery size limit" "PASS"
+        print_result "$label stays under $limit_name size limit" "PASS"
     else
-        print_result "AGENTS.md stays under runtime discovery size limit" "FAIL" \
-            "$byte_count bytes exceeds $max_bytes bytes"
+        print_result "$label stays under $limit_name size limit" "FAIL" \
+            "$file: $byte_count bytes exceeds $max_bytes bytes"
     fi
 }
 
@@ -260,7 +264,9 @@ main() {
         .github/copilot-instructions.md copilot-instructions.md
     test_markdown_lint
     test_instruction_frontmatter
-    test_agents_size_limit
+    test_instruction_size_limit AGENTS.md AGENTS.md "runtime discovery"
+    test_instruction_size_limit \
+        .github/copilot-instructions.md copilot-instructions.md "instruction discovery"
 
     printf '\n%s\n' '========================================='
     printf '%s\n' 'Summary'

@@ -28,6 +28,8 @@ from typing import Any
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
+CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
+CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
 PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE"
@@ -74,6 +76,10 @@ API_RUNTIME_PREVIEW_COMMANDS = frozenset(
         API_PAIL_COMMAND,
     }
 )
+
+
+class CanonicalInstructionValidationError(RuntimeError):
+    """Raised when a repository root fails the shared AI-instruction contract."""
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -1273,6 +1279,7 @@ def cleanup_removed_api_preview_databases(
     clone_root: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    validated_instruction_roots: set[pathlib.Path],
 ) -> list[str]:
     api_clone_root = clone_root / repo_state["api"]["id"]
     if not api_clone_root.exists():
@@ -1302,9 +1309,10 @@ def cleanup_removed_api_preview_databases(
                 "api",
                 worktree_path,
                 api_validation_commands,
+                validated_instruction_roots=validated_instruction_roots,
                 log_skip_reason=False,
             )
-        except (OSError, SystemExit):
+        except (CanonicalInstructionValidationError, OSError, SystemExit):
             protects_storage_target = True
 
         if protects_storage_target:
@@ -2817,49 +2825,79 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
     return repo_specs
 
 
-def read_instruction_file(path: pathlib.Path) -> tuple[str | None, str | None]:
-    if not path.is_file():
-        return None, "missing"
-    if not os.access(path, os.R_OK):
-        return None, "unreadable"
+def validate_instruction_root(
+    root: pathlib.Path,
+    validated_instruction_roots: set[pathlib.Path],
+) -> pathlib.Path:
+    resolved_root = root.resolve()
+    if resolved_root in validated_instruction_roots:
+        return resolved_root
+
+    validator_path = CANONICAL_AI_INSTRUCTIONS_VALIDATOR
+    if not validator_path.is_file() or not os.access(validator_path, os.X_OK):
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_root}: "
+            f"validator is missing or not executable at {validator_path}"
+        )
 
     try:
-        contents = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return None, "unreadable or invalid UTF-8"
+        result = subprocess.run(
+            [str(validator_path), str(resolved_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_root}: "
+            f"could not execute {validator_path}: {error}"
+        ) from error
 
-    if not contents.strip():
-        return None, "empty"
-    return contents, None
+    if result.returncode != 0:
+        validator_output = "\n".join(
+            output.strip()
+            for output in (result.stdout, result.stderr)
+            if output.strip()
+        )
+        details = validator_output or f"validator exited with status {result.returncode} without output"
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_root} "
+            f"(exit {result.returncode}):\n{details}"
+        )
+
+    validated_instruction_roots.add(resolved_root)
+    return resolved_root
 
 
-def require_repo_instruction_files(spec: dict[str, Any]) -> str:
+def require_repo_instruction_files(
+    spec: dict[str, Any],
+    validated_instruction_roots: set[pathlib.Path] | None = None,
+) -> str:
     repo_path = pathlib.Path(spec["path"])
-    runtime_contents: str | None = None
+    resolved_repo_path = repo_path.resolve()
+    if spec.get(CANONICAL_VALIDATION_SPEC_KEY) != resolved_repo_path:
+        validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
+        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(repo_path, validation_cache)
 
-    for key in ("agent_instructions", "copilot_instructions"):
-        instruction_path = pathlib.Path(spec[key])
-        contents, problem = read_instruction_file(instruction_path)
-        if problem is not None:
-            try:
-                relative_path = instruction_path.relative_to(repo_path)
-            except ValueError:
-                relative_path = instruction_path
-            raise SystemExit(
-                f"Managed repository root {repo_path}: both independent instruction files are required; "
-                f"{relative_path} is {problem}"
-            )
-        if key == "agent_instructions":
-            runtime_contents = contents
-
-    if runtime_contents is None:
-        raise RuntimeError("validated AGENTS.md contents were not loaded")
-    return runtime_contents
+    try:
+        return pathlib.Path(spec["agent_instructions"]).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise CanonicalInstructionValidationError(
+            f"validated runtime instructions for {resolved_repo_path} could not be loaded from "
+            f"{spec['agent_instructions']}: {error}"
+        ) from error
 
 
-def validate_repo_instruction_files(repo_specs: dict[str, dict[str, Any]]) -> None:
+def validate_repo_instruction_files(
+    repo_specs: dict[str, dict[str, Any]],
+    validated_instruction_roots: set[pathlib.Path],
+) -> None:
     for spec in repo_specs.values():
-        require_repo_instruction_files(spec)
+        repo_path = pathlib.Path(spec["path"])
+        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
+            repo_path,
+            validated_instruction_roots,
+        )
 
 
 def instruction_reference(spec: dict[str, Any]) -> str:
@@ -3177,6 +3215,7 @@ def is_provisionable_worktree(
     worktree_path: pathlib.Path,
     validation_commands: list[str],
     *,
+    validated_instruction_roots: set[pathlib.Path],
     log_skip_reason: bool = True,
 ) -> bool:
     def skip(reason: str) -> bool:
@@ -3198,17 +3237,7 @@ def is_provisionable_worktree(
         if not (android_project_dir / "settings.gradle").is_file():
             return skip("missing committed native Android Gradle project")
 
-    required_instruction_paths = (
-        pathlib.Path("AGENTS.md"),
-        pathlib.Path(REPO_SETTINGS[repo_name]["copilot_instructions"]),
-    )
-    for relative_path in required_instruction_paths:
-        _contents, problem = read_instruction_file(worktree_path / relative_path)
-        if problem is not None:
-            return skip(
-                f"required independent instruction file {relative_path} is {problem}; "
-                "both AGENTS.md and .github/copilot-instructions.md are required"
-            )
+    validate_instruction_root(worktree_path, validated_instruction_roots)
 
     package_scripts = load_package_scripts(worktree_path)
     composer_scripts = load_composer_scripts(worktree_path)
@@ -3519,15 +3548,16 @@ def provision_worktrees(
     clone_root: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    validated_instruction_roots: set[pathlib.Path] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
-    provisioned_worktrees: list[str] = []
-    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
-        repo_state,
-        repo_specs,
-        clone_root,
-        db_path=db_path,
-    )
+    validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
+    validate_repo_instruction_files(repo_specs, validation_cache)
+
+    provisionable_worktrees: list[
+        tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
+    ] = []
     failed_provision_worktrees: list[dict[str, str]] = []
+    canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
         repo_clone_root = clone_root / repo_state[repo_name]["id"]
@@ -3542,58 +3572,19 @@ def provision_worktrees(
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir() and not path.is_symlink()):
             try:
-                if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
-                    continue
-
-                normalize_registered_workspace_path(worktree_path, db_path=db_path)
-                config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
-                sync_worktree_local_config(worktree_path, config_text)
-                ensure_workspace_alias(worktree_path, db_path=db_path)
-                sync_worktree_auxiliary_files(repo_name, worktree_path)
-                ensure_worktree_hooks(worktree_path)
-                linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
-                workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
-                setup_hash = build_setup_hash(
+                if not is_provisionable_worktree(
+                    repo_name,
                     worktree_path,
-                    setup_commands,
-                    db_path=db_path,
-                    linked_context=linked_setup_context,
-                )
-
-                preview_storage_target: str | None = None
-                if repo_name == "api":
-                    ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"], db_path=db_path)
-                    if not ready:
-                        continue
-
-                marker_path = worktree_path / PROVISION_MARKER_FILENAME
-                marker = load_provision_marker(marker_path)
-                if marker is not None and marker.get("setup_hash") == setup_hash:
-                    if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
-                        continue
-
-                if setup_commands:
-                    print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
-                    run_setup_commands(worktree_path, setup_commands, db_path=db_path)
-
-                marker_payload: dict[str, Any] = {
-                    "repo": repo_name,
-                    "workspace": workspace,
-                    "physical_workspace": worktree_path.name,
-                    "setup_hash": setup_hash,
-                    "provisioned_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if repo_name == "api" and preview_storage_target is not None:
-                    marker_payload["preview_storage_target"] = preview_storage_target
-                if linked_setup_context:
-                    marker_payload["linked_workspaces"] = linked_setup_context
-
-                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
-                provisioned_worktrees.append(f"{repo_name}:{workspace}")
-            except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+                    validation_commands,
+                    validated_instruction_roots=validation_cache,
+                ):
+                    continue
+            except CanonicalInstructionValidationError as error:
+                canonical_validation_failed = True
                 error_message = str(error)
                 print(
-                    f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
+                    f"Failed to provision {repo_name} worktree {worktree_path.name} at "
+                    f"{worktree_path}: {error_message}",
                     file=sys.stderr,
                 )
                 failed_provision_worktrees.append(
@@ -3604,6 +3595,101 @@ def provision_worktrees(
                         "error": error_message,
                     }
                 )
+                continue
+            except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+                error_message = str(error)
+                print(
+                    f"Failed to provision {repo_name} worktree {worktree_path.name} at "
+                    f"{worktree_path}: {error_message}",
+                    file=sys.stderr,
+                )
+                failed_provision_worktrees.append(
+                    {
+                        "repo": repo_name,
+                        "workspace": worktree_path.name,
+                        "path": str(worktree_path),
+                        "error": error_message,
+                    }
+                )
+                continue
+
+            provisionable_worktrees.append(
+                (repo_name, spec, worktree_path, validation_commands, setup_commands)
+            )
+
+    if canonical_validation_failed:
+        return [], [], failed_provision_worktrees
+
+    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
+        repo_state,
+        repo_specs,
+        clone_root,
+        db_path=db_path,
+        validated_instruction_roots=validation_cache,
+    )
+    provisioned_worktrees: list[str] = []
+
+    for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
+        try:
+            normalize_registered_workspace_path(worktree_path, db_path=db_path)
+            config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
+            sync_worktree_local_config(worktree_path, config_text)
+            ensure_workspace_alias(worktree_path, db_path=db_path)
+            sync_worktree_auxiliary_files(repo_name, worktree_path)
+            ensure_worktree_hooks(worktree_path)
+            linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
+            workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
+            setup_hash = build_setup_hash(
+                worktree_path,
+                setup_commands,
+                db_path=db_path,
+                linked_context=linked_setup_context,
+            )
+
+            preview_storage_target: str | None = None
+            if repo_name == "api":
+                ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"], db_path=db_path)
+                if not ready:
+                    continue
+
+            marker_path = worktree_path / PROVISION_MARKER_FILENAME
+            marker = load_provision_marker(marker_path)
+            if marker is not None and marker.get("setup_hash") == setup_hash:
+                if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                    continue
+
+            if setup_commands:
+                print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
+                run_setup_commands(worktree_path, setup_commands, db_path=db_path)
+
+            marker_payload: dict[str, Any] = {
+                "repo": repo_name,
+                "workspace": workspace,
+                "physical_workspace": worktree_path.name,
+                "setup_hash": setup_hash,
+                "provisioned_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if repo_name == "api" and preview_storage_target is not None:
+                marker_payload["preview_storage_target"] = preview_storage_target
+            if linked_setup_context:
+                marker_payload["linked_workspaces"] = linked_setup_context
+
+            marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+            provisioned_worktrees.append(f"{repo_name}:{workspace}")
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            error_message = str(error)
+            print(
+                f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
+                file=sys.stderr,
+            )
+            failed_provision_worktrees.append(
+                {
+                    "repo": repo_name,
+                    "workspace": worktree_path.name,
+                    "path": str(worktree_path),
+                    "error": error_message,
+                }
+            )
 
     return provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees
 
@@ -4275,8 +4361,13 @@ def main() -> int:
         return 0
 
     repo_specs = build_repo_specs(args.workspace_root)
+    validated_instruction_roots: set[pathlib.Path] = set()
 
-    validate_repo_instruction_files(repo_specs)
+    try:
+        validate_repo_instruction_files(repo_specs, validated_instruction_roots)
+    except CanonicalInstructionValidationError as error:
+        print(error, file=sys.stderr)
+        return 1
     validate_repo_local_configs(repo_specs)
     if not args.skip_local_configs:
         write_local_configs(repo_specs)
@@ -4308,6 +4399,7 @@ def main() -> int:
             repo_specs,
             args.clone_root,
             db_path=args.db_path,
+            validated_instruction_roots=validated_instruction_roots,
         )
 
     summary = build_summary(

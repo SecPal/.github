@@ -47,9 +47,10 @@ create_repo() {
 
     local repo_dir="$workspace_root/$repo_name"
     mkdir -p "$repo_dir/.github/instructions" "$repo_dir/.git/info"
-    printf '%s\n' "$copilot_body" > "$repo_dir/.github/copilot-instructions.md"
-    printf '%s\n' "$focus_body" > "$repo_dir/.github/instructions/$focus_filename"
-    printf '%s\n' "---
+    cp "$REPO_ROOT/.markdownlint.json" "$repo_dir/.markdownlint.json"
+    printf '%s' "$copilot_body" > "$repo_dir/.github/copilot-instructions.md"
+    printf '%s' "$focus_body" > "$repo_dir/.github/instructions/$focus_filename"
+    printf '%s' "---
 name: Org Shared Rules
 applyTo: '**'
 ---
@@ -80,13 +81,24 @@ def strip_html_comment_header(text: str) -> str:
     return text
 
 
+def strip_top_level_heading(text: str) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if line.startswith("# "):
+            del lines[index]
+        break
+    return "\n".join(lines).lstrip()
+
+
 for repo_dir in workspace_root.iterdir():
     if not repo_dir.is_dir():
         continue
     copilot_path = repo_dir / ".github" / "copilot-instructions.md"
     if not copilot_path.exists():
         continue
-    body = strip_html_comment_header(copilot_path.read_text()).lstrip()
+    body = strip_top_level_heading(strip_html_comment_header(copilot_path.read_text()))
     overlay_lines = []
     for overlay_path in sorted((repo_dir / ".github" / "instructions").glob("*.instructions.md")):
         if overlay_path.name == "org-shared.instructions.md":
@@ -107,7 +119,7 @@ for repo_dir in workspace_root.iterdir():
         "## Core Runtime Baseline\n\n"
         f"{body.lstrip()}"
     )
-    (repo_dir / "AGENTS.md").write_text(agents_text)
+    (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
 
 (workspace_root / "api" / "composer.json").write_text("{}\n")
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
@@ -213,9 +225,7 @@ PY
 seed_api_worktree_files() {
     local worktree_dir="$1"
 
-    mkdir -p "$worktree_dir/.github"
-    printf '# test runtime instructions\n' > "$worktree_dir/AGENTS.md"
-    printf '# test clone\n' > "$worktree_dir/.github/copilot-instructions.md"
+    write_valid_worktree_instructions "$worktree_dir"
     printf '{}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
     chmod +x "$worktree_dir/artisan"
@@ -225,11 +235,38 @@ seed_node_worktree_files() {
     local worktree_dir="$1"
     local package_name="$2"
 
-    mkdir -p "$worktree_dir/.github"
-    printf '# test runtime instructions\n' > "$worktree_dir/AGENTS.md"
-    printf '# test clone\n' > "$worktree_dir/.github/copilot-instructions.md"
+    write_valid_worktree_instructions "$worktree_dir"
     printf '{\n  "name": "%s",\n  "private": true,\n  "scripts": {\n    "build": "vite build"\n  }\n}\n' "$package_name" > "$worktree_dir/package.json"
     printf '{\n  "name": "%s",\n  "lockfileVersion": 3,\n  "requires": true,\n  "packages": {}\n}\n' "$package_name" > "$worktree_dir/package-lock.json"
+}
+
+write_valid_worktree_instructions() {
+    local worktree_dir="$1"
+
+    mkdir -p "$worktree_dir/.github"
+    cp "$REPO_ROOT/.markdownlint.json" "$worktree_dir/.markdownlint.json"
+    cat >"$worktree_dir/AGENTS.md" <<'EOF'
+<!--
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: CC0-1.0
+-->
+
+# Test Runtime Instructions
+
+## Scope and Safety
+
+- Preserve existing work.
+EOF
+    cat >"$worktree_dir/.github/copilot-instructions.md" <<'EOF'
+<!--
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: CC0-1.0
+-->
+
+# Test Review Profile
+
+- Review the complete diff.
+EOF
 }
 
 assert_rollout_rejects_invalid_local_config() {
@@ -239,6 +276,7 @@ assert_rollout_rejects_invalid_local_config() {
     local expected_error="$4"
     local script_basename
     local script_copy
+    local script_root
     local db_copy="$workspace/invalid-polyscope.db"
     local nginx_copy="$workspace/invalid-preview.secpal.dev.conf"
     local summary_copy="$workspace/invalid-summary.json"
@@ -246,11 +284,18 @@ assert_rollout_rejects_invalid_local_config() {
     local invalid_err
 
     script_basename="$(basename "$source_script" .py)"
-    script_copy="$workspace/${script_basename}-invalid.py"
+    script_root="$workspace/${script_basename}-invalid"
+    script_copy="$script_root/scripts/polyscope-rollout.py"
     invalid_out="${script_copy%.py}.stdout"
     invalid_err="${script_copy%.py}.stderr"
 
+    mkdir -p "$script_root/scripts"
     cp "$source_script" "$script_copy"
+    cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
+        "$script_root/scripts/validate-ai-instructions.sh"
+    if [ ! -e "$script_root/node_modules" ]; then
+        ln -s "$REPO_ROOT/node_modules" "$script_root/node_modules"
+    fi
 
     python3 - <<'PY' "$script_copy" "$old_text" "$new_text"
 import sys
@@ -287,6 +332,7 @@ assert_rollout_rejects_instruction_contract() {
     local repo_name="$1"
     local relative_path="$2"
     local fixture_mode="$3"
+    local expected_reason="$4"
     local instruction_path="$workspace_root/$repo_name/$relative_path"
     local saved_path="$instruction_path.required-fixture"
     local fixture_slug="${repo_name//./-}-${relative_path//\//-}-$fixture_mode"
@@ -294,11 +340,59 @@ assert_rollout_rejects_instruction_contract() {
     local failure_err="$workspace/$fixture_slug.stderr"
     local failure_nginx="$workspace/$fixture_slug.nginx"
     local failure_summary="$workspace/$fixture_slug.summary.json"
+    local db_hash_before
+    local repo_state_hash_before
+    local unrelated_hash_before
 
     mv "$instruction_path" "$saved_path"
-    if [ "$fixture_mode" = "invalid-utf8" ]; then
-        printf '\377' > "$instruction_path"
-    fi
+    case "$fixture_mode" in
+        missing)
+            ;;
+        invalid-utf8)
+            printf '\377' >"$instruction_path"
+            ;;
+        no-heading)
+            cat >"$instruction_path" <<'EOF'
+<!--
+SPDX-FileCopyrightText: 2026 SecPal
+SPDX-License-Identifier: CC0-1.0
+-->
+
+This readable instruction file has no top-level heading.
+EOF
+            ;;
+        markdown-invalid)
+            cp "$saved_path" "$instruction_path"
+            printf '\n# Duplicate Top-Level Heading\n' >>"$instruction_path"
+            ;;
+        missing-spdx)
+            sed '/SPDX-License''-Identifier:/d' "$saved_path" >"$instruction_path"
+            ;;
+        invalid-spdx)
+            sed 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: MIT/' \
+                "$saved_path" >"$instruction_path"
+            ;;
+        oversized)
+            cp "$saved_path" "$instruction_path"
+            {
+                printf '\n## Oversized Fixture\n\n'
+                for _ in $(seq 1 700); do
+                    printf '%s\n' '- filler line that exceeds the canonical instruction discovery ceiling.'
+                done
+            } >>"$instruction_path"
+            ;;
+        malformed-frontmatter)
+            sed '/^applyTo:/d' "$saved_path" >"$instruction_path"
+            ;;
+        *)
+            echo "unsupported instruction-contract fixture mode: $fixture_mode" >&2
+            exit 1
+            ;;
+    esac
+
+    db_hash_before="$(file_sha256 "$db_path")"
+    repo_state_hash_before="$(file_sha256 "$repos_json")"
+    unrelated_hash_before="$(file_sha256 "$workspace_root/api/AGENTS.md")"
 
     if python3 "$PYTHON_SCRIPT" \
             --workspace-root "$workspace_root" \
@@ -306,18 +400,33 @@ assert_rollout_rejects_instruction_contract() {
             --repo-state-file "$repos_json" \
             --nginx-output "$failure_nginx" \
             --summary-output "$failure_summary" \
-            --skip-local-configs \
-            --skip-db-sync \
             >"$failure_out" 2>"$failure_err"; then
         echo "rollout must reject $fixture_mode $relative_path in $repo_name" >&2
         exit 1
     fi
 
-    grep -qF "Managed repository root $workspace_root/$repo_name" "$failure_err"
+    if ! grep -qF "canonical AI-instruction validation failed for $workspace_root/$repo_name" \
+        "$failure_err"; then
+        sed -n '1,240p' "$failure_err" >&2
+        echo "canonical validation failure did not identify $workspace_root/$repo_name" >&2
+        exit 1
+    fi
     grep -qF "$relative_path" "$failure_err"
-    grep -qF 'both independent instruction files are required' "$failure_err"
+    grep -qF 'canonical AI-instruction validation failed' "$failure_err"
+    grep -qF "$expected_reason" "$failure_err"
     test ! -e "$failure_nginx"
     test ! -e "$failure_summary"
+    test "$(file_sha256 "$db_path")" = "$db_hash_before"
+    test "$(file_sha256 "$repos_json")" = "$repo_state_hash_before"
+    test "$(file_sha256 "$workspace_root/api/AGENTS.md")" = "$unrelated_hash_before"
+    if find "$workspace_root" -name 'polyscope.local.json' -print -quit | grep -q .; then
+        echo "failed canonical validation must precede local configuration writes" >&2
+        exit 1
+    fi
+    if find "$workspace" -name '.polyscope-secpal-provisioned.json' -print -quit | grep -q .; then
+        echo "failed canonical validation must not mark a worktree provisioned" >&2
+        exit 1
+    fi
 
     if [ "$fixture_mode" = "missing" ]; then
         test ! -e "$instruction_path"
@@ -451,7 +560,7 @@ applyTo: 'resources/js/**/*.tsx'
 - shadcn/ui is the exclusive UI baseline.
 "
 
-printf '%s\n' "---
+printf '%s' "---
 name: Laravel PHP Rules
 applyTo: '**/*.php'
 ---
@@ -764,10 +873,33 @@ conn.close()
 repos_json.write_text(json.dumps(repo_state, indent=2))
 PY
 
-assert_rollout_rejects_instruction_contract "GuardGuide" "AGENTS.md" "missing"
-assert_rollout_rejects_instruction_contract "GuardGuide" "AGENTS.md" "invalid-utf8"
 assert_rollout_rejects_instruction_contract \
-    "frontend" ".github/copilot-instructions.md" "missing"
+    "GuardGuide" "AGENTS.md" "missing" 'Missing: AGENTS.md'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "invalid-utf8" \
+    'File must be non-empty UTF-8 Markdown with a top-level heading'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "no-heading" \
+    'File must be non-empty UTF-8 Markdown with a top-level heading'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "markdown-invalid" 'instruction Markdown passes lint'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "missing-spdx" 'Missing inline SPDX header or .license sidecar'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "invalid-spdx" 'Missing inline SPDX header or .license sidecar'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "oversized" 'bytes exceeds 32768 bytes'
+assert_rollout_rejects_instruction_contract \
+    "frontend" ".github/copilot-instructions.md" "missing" \
+    'Missing: .github/copilot-instructions.md'
+assert_rollout_rejects_instruction_contract \
+    "frontend" ".github/copilot-instructions.md" "markdown-invalid" \
+    'instruction Markdown passes lint'
+assert_rollout_rejects_instruction_contract \
+    "frontend" ".github/copilot-instructions.md" "oversized" 'bytes exceeds 32768 bytes'
+assert_rollout_rejects_instruction_contract \
+    "frontend" ".github/instructions/org-shared.instructions.md" \
+    "malformed-frontmatter" 'instruction overlays include valid frontmatter'
 
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
@@ -796,20 +928,140 @@ workspace = pathlib.Path(sys.argv[2])
 fixture = workspace / "instruction-contract-worktree"
 (fixture / ".git").mkdir(parents=True)
 (fixture / ".github").mkdir()
-(fixture / "AGENTS.md").write_text("# Runtime instructions\n")
-(fixture / ".github" / "copilot-instructions.md").write_text("# Review profile\n")
+(fixture / ".markdownlint.json").write_text('{"default": true}\n')
+(fixture / "AGENTS.md").write_text(
+    "<!--\n"
+    "SPDX-FileCopyrightText: 2026 SecPal\n"
+    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "-->\n\n"
+    "# Runtime Instructions\n"
+)
+(fixture / ".github" / "copilot-instructions.md").write_text(
+    "<!--\n"
+    "SPDX-FileCopyrightText: 2026 SecPal\n"
+    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "-->\n\n"
+    "# Review Profile\n"
+)
 
 spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
-assert module.is_provisionable_worktree("frontend", fixture, [], log_skip_reason=False)
-(fixture / "AGENTS.md").unlink()
-assert not module.is_provisionable_worktree("frontend", fixture, [], log_skip_reason=False)
-(fixture / "AGENTS.md").write_text("# Runtime instructions\n")
-(fixture / ".github" / "copilot-instructions.md").unlink()
-assert not module.is_provisionable_worktree("frontend", fixture, [], log_skip_reason=False)
+assert module.is_provisionable_worktree(
+    "frontend",
+    fixture,
+    [],
+    validated_instruction_roots=set(),
+    log_skip_reason=False,
+)
+
+valid_agents = (fixture / "AGENTS.md").read_text()
+(fixture / "AGENTS.md").write_text(valid_agents + "\n# Duplicate Heading\n")
+try:
+    module.is_provisionable_worktree(
+        "frontend",
+        fixture,
+        [],
+        validated_instruction_roots=set(),
+        log_skip_reason=False,
+    )
+except module.CanonicalInstructionValidationError as error:
+    assert str(fixture) in str(error), error
+    assert "instruction Markdown passes lint" in str(error), error
+else:
+    raise AssertionError("Markdown-invalid AGENTS.md must fail canonical worktree validation")
+(fixture / "AGENTS.md").write_text(valid_agents)
+
+copilot_path = fixture / ".github" / "copilot-instructions.md"
+valid_copilot = copilot_path.read_text()
+copilot_path.write_text(valid_copilot.replace("SPDX-License" "-Identifier: CC0-1.0\n", ""))
+try:
+    module.is_provisionable_worktree(
+        "frontend",
+        fixture,
+        [],
+        validated_instruction_roots=set(),
+        log_skip_reason=False,
+    )
+except module.CanonicalInstructionValidationError as error:
+    assert str(fixture) in str(error), error
+    assert "Missing inline SPDX header or .license sidecar" in str(error), error
+else:
+    raise AssertionError("unlicensed Copilot instructions must fail canonical worktree validation")
+
+assert not (fixture / "polyscope.local.json").exists()
+assert not (fixture / ".polyscope-secpal-provisioned.json").exists()
+PY
+
+# Canonical validation uses argv-safe paths, caches each resolved root after a
+# real successful run, and fails closed when its validator cannot execute.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
+import importlib.util
+import pathlib
+import shutil
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+repo_root = pathlib.Path(sys.argv[3])
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout_validator", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+fixture = workspace / "instruction root with shell $ characters"
+(fixture / ".github").mkdir(parents=True)
+(fixture / ".markdownlint.json").write_text((repo_root / ".markdownlint.json").read_text())
+(fixture / "AGENTS.md").write_text(
+    "<!--\n"
+    "SPDX-FileCopyrightText: 2026 SecPal\n"
+    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "-->\n\n"
+    "# Runtime Instructions\n"
+)
+(fixture / ".github" / "copilot-instructions.md").write_text(
+    "<!--\n"
+    "SPDX-FileCopyrightText: 2026 SecPal\n"
+    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "-->\n\n"
+    "# Review Profile\n"
+)
+
+validated_roots: set[pathlib.Path] = set()
+resolved_fixture = module.validate_instruction_root(fixture, validated_roots)
+assert resolved_fixture == fixture.resolve()
+assert validated_roots == {fixture.resolve()}
+
+original_validator = module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR
+missing_validator = workspace / "missing-validate-ai-instructions.sh"
+module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = missing_validator
+assert module.validate_instruction_root(fixture, validated_roots) == fixture.resolve()
+
+uncached_fixture = workspace / "uncached instruction root"
+shutil.copytree(fixture, uncached_fixture)
+try:
+    module.validate_instruction_root(uncached_fixture, validated_roots)
+except module.CanonicalInstructionValidationError as error:
+    assert str(uncached_fixture) in str(error), error
+    assert str(missing_validator) in str(error), error
+    assert "missing or not executable" in str(error), error
+else:
+    raise AssertionError("a missing canonical validator must block an uncached root")
+
+nonexecutable_validator = workspace / "nonexecutable-validate-ai-instructions.sh"
+nonexecutable_validator.write_text("#!/usr/bin/env bash\nexit 0\n")
+module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = nonexecutable_validator
+try:
+    module.validate_instruction_root(uncached_fixture, validated_roots)
+except module.CanonicalInstructionValidationError as error:
+    assert "missing or not executable" in str(error), error
+else:
+    raise AssertionError("a non-executable canonical validator must block validation")
+
+module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = original_validator
 PY
 
 assert_rollout_rejects_invalid_local_config \
@@ -1974,7 +2226,7 @@ PY
 
 # Legacy hash-suffixed worktree directory names must not leak into preview hostnames
 # when the Polyscope DB and git branch are unavailable.
-python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
 import os
 import pathlib
@@ -1983,6 +2235,7 @@ import sys
 
 script_path = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
+repo_root = pathlib.Path(sys.argv[3])
 fixture = workspace / "legacy-preview-hostname-fixture"
 source_api = fixture / "source-api"
 api_worktree = fixture / "clones" / "api12345" / "azure-cheetah-165552b7"
@@ -2029,9 +2282,22 @@ assert "https://api-azure-cheetah-165552b7.preview.secpal.dev" not in frontend_e
 
 repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
 (repo_spec_frontend / ".github").mkdir(parents=True)
-(repo_spec_frontend / "AGENTS.md").write_text("# Frontend runtime instructions\n")
+(repo_spec_frontend / ".markdownlint.json").write_text(
+    (repo_root / ".markdownlint.json").read_text()
+)
+(repo_spec_frontend / "AGENTS.md").write_text(
+    "<!--\n"
+    "SPDX-FileCopyrightText: 2026 SecPal\n"
+    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "-->\n\n"
+    "# Frontend Runtime Instructions\n"
+)
 (repo_spec_frontend / ".github" / "copilot-instructions.md").write_text(
-    "# Frontend review profile\n"
+    "<!--\n"
+    "SPDX-FileCopyrightText: 2026 SecPal\n"
+    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "-->\n\n"
+    "# Frontend Review Profile\n"
 )
 repo_specs = module.build_repo_specs(workspace / "repo-spec-root")
 rendered_local_config = module.render_worktree_local_config(repo_specs["frontend"], frontend_worktree)
@@ -3982,6 +4248,7 @@ CORS_ALLOWED_ORIGINS=https://app.secpal.dev
 EOF
 
 seed_api_worktree_files "$api_clone"
+write_valid_worktree_instructions "$broken_api_clone"
 seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
 seed_node_worktree_files "$broken_android_clone" "android-feat"
 seed_node_worktree_files "$android_clone" "android-auto-hawk"
@@ -4028,9 +4295,103 @@ exit 0
 EOF
 chmod +x "$frontend_clone/scripts/preflight.sh"
 
-provision_summary_json="$workspace/provision-summary.json"
 shared_android_sdk_root="$workspace/shared-android-sdk"
 mkdir -p "$shared_android_sdk_root/platform-tools" "$shared_android_sdk_root/cmdline-tools/latest"
+
+# Canonical validation of all candidate worktrees must finish before the first
+# worktree-local configuration, setup, alias, hook, or provision-marker write.
+assert_invalid_candidate_blocks_provisioning() {
+    local fixture_name="$1"
+    local target_file="$2"
+    local fixture_mode="$3"
+    local expected_reason="$4"
+    local invalid_instruction_clone="$home_dir/.polyscope/clones/fe123456/$fixture_name"
+    local invalid_candidate_summary="$workspace/$fixture_name-summary.json"
+    local invalid_candidate_stdout="$workspace/$fixture_name.stdout"
+    local invalid_candidate_stderr="$workspace/$fixture_name.stderr"
+    local api_env_hash_before_invalid_candidate
+    local db_hash_before_invalid_candidate
+    local pg_state_hash_before_invalid_candidate
+
+    mkdir -p "$invalid_instruction_clone/.git/info"
+    seed_node_worktree_files "$invalid_instruction_clone" "frontend-$fixture_name"
+    case "$fixture_mode" in
+        duplicate-heading)
+            printf '\n# Duplicate Top-Level Heading\n' \
+                >>"$invalid_instruction_clone/$target_file"
+            ;;
+        missing-spdx)
+            sed -i '/SPDX-License''-Identifier:/d' \
+                "$invalid_instruction_clone/$target_file"
+            ;;
+        *)
+            echo "unsupported invalid candidate fixture: $fixture_mode" >&2
+            exit 1
+            ;;
+    esac
+
+    api_env_hash_before_invalid_candidate="$(file_sha256 "$api_clone/.env")"
+    db_hash_before_invalid_candidate="$(file_sha256 "$db_path")"
+    pg_state_hash_before_invalid_candidate="$(file_sha256 "$fake_pg_state")"
+
+    if env HOME="$home_dir" \
+            PATH="$service_path" \
+            POLYSCOPE_ANDROID_SDK_ROOT="$shared_android_sdk_root" \
+            PROVISION_LOG="$provision_log" \
+            FAKE_PSQL_LOG="$fake_psql_log" \
+            FAKE_PSQL_STATE="$fake_pg_state" \
+            python3 "$PYTHON_SCRIPT" \
+            --workspace-root "$workspace_root" \
+            --db-path "$db_path" \
+            --repo-state-file "$repos_json" \
+            --nginx-output "$nginx_output" \
+            --summary-output "$invalid_candidate_summary" \
+            --skip-local-configs \
+            --skip-db-sync \
+            --provision-worktrees \
+            >"$invalid_candidate_stdout" 2>"$invalid_candidate_stderr"; then
+        echo "rollout must fail when candidate $fixture_name has invalid instructions" >&2
+        exit 1
+    fi
+
+    grep -qF "canonical AI-instruction validation failed for $invalid_instruction_clone" \
+        "$invalid_candidate_stderr"
+    grep -qF "$(basename "$target_file")" "$invalid_candidate_stderr"
+    grep -qF "$expected_reason" "$invalid_candidate_stderr"
+    test "$(file_sha256 "$api_clone/.env")" = "$api_env_hash_before_invalid_candidate"
+    test "$(file_sha256 "$db_path")" = "$db_hash_before_invalid_candidate"
+    test "$(file_sha256 "$fake_pg_state")" = "$pg_state_hash_before_invalid_candidate"
+    test ! -s "$provision_log"
+    test ! -e "$api_clone/polyscope.local.json"
+    test ! -e "$api_clone/.polyscope-secpal-provisioned.json"
+    test ! -e "$frontend_clone/polyscope.local.json"
+    test ! -e "$frontend_clone/.polyscope-secpal-provisioned.json"
+    test ! -e "$invalid_instruction_clone/polyscope.local.json"
+    test ! -e "$invalid_instruction_clone/.polyscope-secpal-provisioned.json"
+    python3 - "$invalid_candidate_summary" "$invalid_instruction_clone" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary = json.loads(Path(sys.argv[1]).read_text())
+invalid_path = sys.argv[2]
+assert summary.get("provisioned_worktrees", []) == [], summary
+failures = summary.get("failed_provision_worktrees", [])
+assert len(failures) == 1, failures
+assert failures[0]["path"] == invalid_path, failures
+assert "canonical AI-instruction validation failed" in failures[0]["error"], failures
+PY
+    rm -rf "$invalid_instruction_clone"
+}
+
+assert_invalid_candidate_blocks_provisioning \
+    "invalid-agents" "AGENTS.md" "duplicate-heading" \
+    "instruction Markdown passes lint"
+assert_invalid_candidate_blocks_provisioning \
+    "invalid-copilot" ".github/copilot-instructions.md" "missing-spdx" \
+    "Missing inline SPDX header or .license sidecar"
+
+provision_summary_json="$workspace/provision-summary.json"
 env HOME="$home_dir" \
     PATH="$service_path" \
     POLYSCOPE_ANDROID_SDK_ROOT="$shared_android_sdk_root" \

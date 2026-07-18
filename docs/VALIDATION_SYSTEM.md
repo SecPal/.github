@@ -47,7 +47,7 @@ The validator checks:
 - inline SPDX metadata or an allowed REUSE `.license` sidecar;
 - Markdown structure for runtime, review, and focused instruction files;
 - opening and closing overlay frontmatter with non-empty `name` and `applyTo`;
-- the 32 KiB `AGENTS.md` discovery ceiling.
+- the 32 KiB discovery ceiling for each required instruction file.
 
 The validator deliberately does not check:
 
@@ -98,25 +98,41 @@ Copilot review profile fails through the same canonical contract.
 - mirror phrases, copied overlay content, and policy keywords are unnecessary;
 - repository-path arguments continue to work.
 
-`tests/polyscope-rollout.sh` separately proves that rollout preserves an
-independent Copilot profile and continues to manage the direct global Codex
-`AGENTS.md` symlink without introducing copied runtime sources or instruction
-modes.
+`tests/polyscope-rollout.sh` separately proves that rollout applies the
+canonical contract to managed roots and candidate worktrees before dependent
+writes, preserves an independent Copilot profile, and continues to manage the
+direct global Codex `AGENTS.md` symlink without introducing copied runtime
+sources or instruction modes.
 
 ## Polyscope Behavior
 
 `scripts/polyscope-rollout.py` may discover `AGENTS.md`, the independent
 Copilot profile, and focused overlays to build repository metadata and prompts.
-It requires both independent files before dependent configuration or metadata
-synchronization, always reads runtime policy from `AGENTS.md`, and never treats
-the Copilot review profile as runtime instructions. It must not generate,
-reconstruct, or overwrite `.github/copilot-instructions.md` from `AGENTS.md`.
+The standalone validator and the rollout boundaries use the same canonical
+contract; the Python rollout does not duplicate a weaker set of Markdown,
+licensing, frontmatter, or size rules. All managed source roots are validated
+before any instruction-dependent local configuration or repository metadata is
+written. A missing validator or missing Markdown tooling blocks rollout.
+
+Candidate worktrees are validated with that same contract before worktree
+registration, instruction-dependent metadata synchronization, local
+configuration installation, setup, or provision markers. Canonical validation
+finishes for all provisionable candidates before the first such candidate
+mutation, so one invalid candidate cannot leave another candidate partially
+provisioned. Validator failures remain errors and include the affected root and
+the canonical validator output.
+
+Rollout requires both independent files, always reads runtime policy from
+`AGENTS.md`, and never treats the Copilot review profile as runtime
+instructions. It must not generate, reconstruct, or overwrite
+`.github/copilot-instructions.md` from `AGENTS.md`.
 
 During sibling migration, prompt extraction may recognize the legacy headings
 `Always-On Rules`, `Required Validation`, `AI Findings Triage`, and
 `Issue And PR Discipline` inside an existing `AGENTS.md`. Modern headings take
 precedence. This read-only heading compatibility never permits either required
-file to be absent and never copies content between instruction layers.
+file to be absent, never bypasses canonical file validity, and never copies
+content between instruction layers.
 
 The editable global Polyscope instructions remain in
 `templates/polyscope-codex-AGENTS.md`. The installer links the configured Codex

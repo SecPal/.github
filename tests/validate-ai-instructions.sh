@@ -238,6 +238,17 @@ copy_valid_repo "$valid_repo" "$oversized_agents_repo"
 assert_fails_with "$oversized_agents_repo" \
     'AGENTS.md stays under runtime discovery size limit'
 
+oversized_copilot_repo="$workspace/oversized-copilot"
+copy_valid_repo "$valid_repo" "$oversized_copilot_repo"
+{
+    printf '\n## Oversized Fixture\n\n'
+    for _ in $(seq 1 700); do
+        printf '%s\n' '- filler line to exceed the Copilot instruction discovery byte limit.'
+    done
+} >>"$oversized_copilot_repo/.github/copilot-instructions.md"
+assert_fails_with "$oversized_copilot_repo" \
+    'copilot-instructions.md stays under instruction discovery size limit'
+
 no_overlays_repo="$workspace/no-overlays"
 copy_valid_repo "$valid_repo" "$no_overlays_repo"
 rm -r "$no_overlays_repo/.github/instructions"
