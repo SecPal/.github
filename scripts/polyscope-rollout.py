@@ -2829,58 +2829,6 @@ def load_runtime_instructions_text(spec: dict[str, Any]) -> str:
     return spec["copilot_instructions"].read_text()
 
 
-def extract_agents_runtime_body(text: str) -> str:
-    body = strip_html_comment_header(text)
-    core_index = body.find("## Core Runtime Baseline")
-    if core_index != -1:
-        return body[core_index:].strip()
-    heading = re.search(r"^##\s+", body, re.MULTILINE)
-    if heading is None:
-        raise SystemExit("AGENTS.md is missing a section heading after the repository preamble")
-    return body[heading.start() :].strip()
-
-
-def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
-    if not spec["agent_instructions"].exists():
-        raise FileNotFoundError(spec["agent_instructions"])
-    body = extract_agents_runtime_body(spec["agent_instructions"].read_text())
-    focus_lines = "\n".join(
-        f"- `{path.relative_to(spec['path']).as_posix()}`" for path in spec["focus_instruction_paths"]
-    )
-    rendered = "\n".join(
-        [
-            "<!--",
-            "SPDX-FileCopyrightText: 2026 SecPal",
-            "SPDX-License" + "-Identifier: AGPL-3.0-or-later",
-            "-->",
-            "",
-            "<!-- markdownlint-disable MD012 -->",
-            "",
-            f"# {spec['display_name']} Copilot Instructions",
-            "",
-            "This file mirrors the authoritative root `AGENTS.md` for tooling",
-            "that automatically loads `.github/copilot-instructions.md`.",
-            "Edit `AGENTS.md` first. Keep the focused overlay files aligned",
-            "for path-specific or stack-specific rules.",
-            "",
-            "## Authoritative Sources",
-            "",
-            "- `AGENTS.md`",
-            *([focus_lines] if focus_lines else []),
-            "",
-            body,
-        ]
-    ).rstrip() + "\n"
-    return re.sub(r"\n{3,}", "\n\n", rendered)
-
-
-def write_copilot_compat_instructions(repo_specs: dict[str, dict[str, Any]]) -> None:
-    for spec in repo_specs.values():
-        if not spec["agent_instructions"].exists():
-            continue
-        write_text_if_changed(spec["copilot_instructions"], render_copilot_compat_instructions(spec))
-
-
 def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     agents_text = load_runtime_instructions_text(spec)
     sections = parse_sections(agents_text)
@@ -2888,19 +2836,61 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     for focus_path in spec["focus_instruction_paths"]:
         focus_bullets.extend(extract_all_bullets(pathlib.Path(focus_path).read_text()))
 
-    always_on = select_bullets(
-        sections.get("Always-On Rules", []),
-        ["git status", "tdd", "validate-first", "one topic", "bypass", "changelog", "issue immediately", "domain policy"],
+    modern_runtime = sections.get("Scope and Safety", []) + sections.get("Implementation", [])
+    runtime_source = modern_runtime or sections.get("Always-On Rules", [])
+    runtime_rules = select_bullets(
+        runtime_source,
+        [
+            "preserve",
+            "git status",
+            "test-driven",
+            "tdd",
+            "coherent topic",
+            "one topic",
+            "scope",
+            "untrusted",
+            "reuse",
+            "spdx",
+            "bypass",
+        ],
         7,
     )
+    modern_validation = sections.get("Validation and Review", [])
+    validation_source = modern_validation or sections.get("Required Validation", [])
     validation = select_bullets(
-        sections.get("Required Validation", []),
-        ["scope", "tdd", "validation", "lint", "typecheck", "build", "pest", "preflight", "changelog", "issue", "gpg", "reuse", "no bypass"],
+        validation_source,
+        [
+            "smallest relevant",
+            "complete required",
+            "correctness",
+            "security",
+            "risk",
+            "complexity",
+            "green ci",
+            "validation",
+            "lint",
+            "typecheck",
+            "build",
+            "pest",
+            "reuse",
+            "no bypass",
+        ],
         8,
     )
+    modern_triage = sections.get("Implementation", []) + sections.get("Validation and Review", [])
+    triage_source = modern_triage or sections.get("AI Findings Triage", [])
     triage = select_bullets(
-        sections.get("AI Findings Triage", []),
-        ["prove the defect", "green ci", "compatibility", "refactor", "regression", "security"],
+        triage_source,
+        [
+            "untrusted",
+            "failing test",
+            "reproduction",
+            "invariant",
+            "green ci",
+            "compatibility",
+            "complexity",
+            "security",
+        ],
         5,
     )
     focus = select_bullets(
@@ -2908,44 +2898,49 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         ["test", "validation", "strict typescript", "generated api types", "bridge", "openapi 3.1", "semantic", "permissions", "timeout-minutes", "pint", "form requests", "client-side javascript", "server actions"],
         6,
     )
-    issue_pr = select_bullets(
-        sections.get("Issue And PR Discipline", []),
-        ["draft", "english", "body-file", "one topic", "self-review"],
+    modern_change_tracking = sections.get("Changelog and Tracking", []) + sections.get(
+        "Commits and Communication", []
+    )
+    change_tracking_source = modern_change_tracking or sections.get("Issue And PR Discipline", [])
+    change_tracking = select_bullets(
+        change_tracking_source,
+        ["changelog", "issue", "epic", "english", "signed", "one topic", "draft", "body-file"],
         5,
     )
 
     instruction_ref = instruction_reference(spec)
     review_prompt = collapse_spaces(
         f"Apply the current SecPal instructions from {instruction_ref}. "
-        f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(always_on)}. "
+        f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(runtime_rules)}. "
         f"Repository focus: {spec['review_focus']} "
         f"Targeted file-scope rules: {format_bullets(focus)}. "
         f"Review and AI-triage bar: {format_bullets(triage)}. "
-        "If shared auth, contract, mobile, or release behavior crosses repo boundaries, pull the relevant linked workspaces before proposing changes."
+        "When shared behavior crosses repository boundaries, inspect affected linked roots that are in scope and identify dependency-ordered rollout risks."
     )
     pr_prompt = collapse_spaces(
         f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Keep the PR to one topic and reflect the PR discipline: {format_bullets(issue_pr)}. "
-        "Lead with the failing test, validation, or reproduced defect. Then summarize the user-, API-, contract-, or governance-visible change, the validations run, CHANGELOG impact, linked-repo impact, and any out-of-scope issues filed."
+        f"Keep the PR to one topic and apply these change-reporting rules: {format_bullets(change_tracking)}. "
+        "Summarize the problem and evidence, the user-, API-, contract-, or governance-visible change, validations actually run, changelog applicability, linked-repository impact, and proven tracked follow-ups when applicable."
     )
     draft_pr_prompt = collapse_spaces(
         f"Create a draft PR in English for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Keep one topic per branch and follow: {format_bullets(issue_pr)}. "
-        "Lead with the failing test, validation, or reproduced defect, summarize the current change and validations already run, and note any linked workspaces or unresolved checks that still need follow-up before marking the PR ready."
+        f"Keep one topic per branch and apply: {format_bullets(change_tracking)}. "
+        "Summarize the current problem and evidence, the change, validations already run, and any in-scope dependency or unresolved check that prevents readiness."
     )
     merge_prompt = collapse_spaces(
         f"Before merge for {spec['display_name']}, stop on the first failed check and enforce the current SecPal instructions from {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
         f"Required validation gate: {format_bullets(validation)}. "
-        f"Also enforce: {format_bullets(select_bullets(always_on, ['one topic', 'bypass', 'changelog', 'issue immediately'], 4))}."
+        f"Also enforce: {format_bullets(select_bullets(runtime_rules, ['coherent topic', 'one topic', 'scope', 'bypass'], 4))}."
     )
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Run or re-run the touched checks demanded by the repo instructions, then verify: {format_bullets(select_bullets(validation, ['validation', 'lint', 'typecheck', 'build', 'pest', 'preflight', 'changelog', 'issue', 'gpg', 'reuse'], 7))}. "
-        "Do not bypass hooks or force operations, and after merge return the repo to the ready state described in the repo instructions."
+        f"Run or re-run the touched checks demanded by the repo instructions, then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
+        f"Apply the commit and communication rules: {format_bullets(change_tracking)}. "
+        "Do not bypass hooks or force operations."
     )
 
     return {
@@ -4233,8 +4228,6 @@ def main() -> int:
     repo_specs = build_repo_specs(args.workspace_root)
 
     validate_repo_local_configs(repo_specs)
-    write_copilot_compat_instructions(repo_specs)
-
     if not args.skip_local_configs:
         write_local_configs(repo_specs)
 

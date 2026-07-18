@@ -5,7 +5,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Development Principles & Best Practices
 
-> **Note:** This is the **human-readable** version of our development principles. Each repository's authoritative AI baseline lives in its root `AGENTS.md`; `.github/copilot-instructions.md` is a compatibility mirror for tooling that auto-loads that path, and `.github/instructions/*.instructions.md` remain focused overlays where supported.
+> **Note:** This is the **human-readable** version of our development
+> principles. Repository AI guidance is split between a concise runtime
+> `AGENTS.md`, an independent `.github/copilot-instructions.md` review profile,
+> and focused `.github/instructions/*.instructions.md` overlays.
 
 This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `api`, `frontend`, `contracts`, `android`, `secpal.app`, `changelog`, `GuardGuide`, and `guardguide.de`.
 
@@ -617,7 +620,7 @@ npm run lint
 ### Organization-Wide (`.github` repo)
 
 - `AGENTS.md` - Authoritative agent-facing runtime baseline in each repository root
-- [copilot-instructions.md](../.github/copilot-instructions.md) - Compatibility mirror for tooling that auto-loads GitHub Copilot instructions
+- [copilot-instructions.md](../.github/copilot-instructions.md) - Independent GitHub code-review profile
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - How to contribute
 - [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) - Community standards
 

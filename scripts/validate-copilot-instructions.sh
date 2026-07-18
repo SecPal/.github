@@ -35,14 +35,6 @@ run_legacy_repo_validation() {
             "$SCRIPT_DIR/../node_modules/.bin/markdownlint" --config .markdownlint.json .github/copilot-instructions.md >/dev/null
         fi
 
-        pseudo_inheritance_hits="$(
-            grep -RniE '@?extends|inherit[[:space:]]+from|inherits[[:space:]]+from|auto[-[:space:]]*inherit|base[_ -]?instructions?[^[:alpha:]]*(apply|load|import)|parent[_ -]?instructions?[^[:alpha:]]*(apply|load|import)' \
-                .github/copilot-instructions.md .github/instructions 2>/dev/null || true
-        )"
-        if [ -n "$pseudo_inheritance_hits" ] && printf '%s\n' "$pseudo_inheritance_hits" | grep -viE 'do not .*inherit|do not automatically inherit|without inheriting' >/dev/null; then
-            echo "Legacy copilot instructions must remain self-contained at runtime in $repo_path" >&2
-            exit 1
-        fi
     )
 }
 

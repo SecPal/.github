@@ -206,30 +206,29 @@ Install `actionlint` via your package manager or a release binary if you want to
 
 SecPal uses a provider-neutral **AI instructions system**:
 
-1. **Authoritative repo baseline** (`AGENTS.md` in each repository)
-2. **Focused overlays** (`.github/instructions/*.instructions.md` where supported)
-3. **Copilot compatibility mirror** (`.github/copilot-instructions.md`, generated or maintained as a mirror where tooling expects that path)
+1. **Repository runtime baseline** (`AGENTS.md`)
+2. **GitHub code-review profile** (`.github/copilot-instructions.md`)
+3. **Focused overlays** (`.github/instructions/*.instructions.md`)
 
-**All repository-specific runtime baselines MUST keep `AGENTS.md` authoritative.**
+Each layer has a separate responsibility. The Copilot review profile is not a
+copy of `AGENTS.md`, and focused overlay bodies are not duplicated into either
+always-on file.
 
 #### Setup Model
 
 When setting up AI instructions in a new repository:
 
-1. **Create or update** `AGENTS.md` as the authoritative baseline
-2. **Add focused overlays** under `.github/instructions/` only when path- or stack-specific rules need to stay separate
-3. **Keep `.github/copilot-instructions.md` aligned** as a compatibility mirror for tools that auto-load that path
-4. **Create a PR** with title pattern: `docs: align ai instructions`
-
-**Example Implementations:**
-
-- [SecPal/api #76](https://github.com/SecPal/api/pull/76) ✅ Merged
-- [SecPal/frontend #54](https://github.com/SecPal/frontend/pull/54) ✅ Merged
-- [SecPal/contracts #38](https://github.com/SecPal/contracts/pull/38) ✅ Merged
+1. Create a concise `AGENTS.md` containing universal runtime invariants and
+   repository essentials.
+2. Create an independent `.github/copilot-instructions.md` containing only
+   concise, evidence-based code-review criteria.
+3. Add focused overlays only for path- or stack-specific criteria.
+4. Put deterministic rules in tests, linters, scripts, or CI instead of
+   requiring matching policy phrases.
 
 #### Validation
 
-The AI runtime baseline is validated in CI:
+The instruction structure is validated in CI:
 
 ```bash
 bash .github/scripts/validate-ai-instructions.sh
@@ -237,16 +236,11 @@ bash .github/scripts/validate-ai-instructions.sh
 
 See: [`.github/workflows/validate-ai-instructions.yml`](.github/workflows/validate-ai-instructions.yml)
 
-#### Why This Matters
-
-**Without a clear authoritative baseline:** AI assistants might read a compatibility mirror or a partial overlay without the full repo runtime policy, leading to:
-
-- Quality gate bypasses
-- Missing review or governance expectations
-- TDD policy violations
-- Security requirement oversights
-
-**With `AGENTS.md` as source of truth:** AI tooling gets one stable runtime baseline first, with overlays and compatibility mirrors only extending or reflecting it.
+The validator checks required files, UTF-8 Markdown, REUSE metadata, overlay
+frontmatter, and the runtime discovery ceiling. It intentionally does not
+require textual equality, mirror declarations, copied overlays, inheritance
+markers, or arbitrary policy keywords. See
+[`docs/VALIDATION_SYSTEM.md`](docs/VALIDATION_SYSTEM.md) for the full contract.
 
 ## Build & Test Commands
 

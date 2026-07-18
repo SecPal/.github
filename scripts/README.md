@@ -140,8 +140,8 @@ node scripts/check-openapi-verified-endpoints.mjs <path-to-openapi.yaml>
 
 ### `validate-ai-instructions.sh`
 
-Validates the authoritative `AGENTS.md` baseline, the Copilot compatibility
-mirror, and focused instruction overlays across all repositories.
+Validates the independent `AGENTS.md` runtime baseline, Copilot review profile,
+and focused instruction overlays across all repositories.
 
 **Usage:**
 
@@ -155,37 +155,34 @@ mirror, and focused instruction overlays across all repositories.
 1. **File Existence**
 
    - Checks for `AGENTS.md`
-   - Checks for `.github/copilot-instructions.md` as compatibility mirror
-   - `copilot-config.yaml` check always skips (file removed 2026-04-11)
+   - Checks for the independent `.github/copilot-instructions.md` review profile
 
 2. **REUSE Compliance**
 
    - Validates `AGENTS.md` REUSE metadata
-   - Validates `copilot-instructions.md.license` exists when a sidecar is used
-   - `copilot-config.yaml.license` check always skips (file removed 2026-04-11)
-   - Verifies CC0-1.0 license
+   - Accepts allowed inline SPDX metadata or a valid `.license` sidecar
 
 3. **Markdown Linting**
 
    - Runs markdownlint-cli on instructions
    - Uses the repo-pinned `markdownlint-cli` installed by `npm ci`
-   - Suggests auto-fix command on failure
+   - Does not download a fallback tool
 
-4. **Legacy YAML Syntax**
+4. **UTF-8 Markdown Structure**
 
-   - Legacy `copilot-config.yaml` syntax check always skips
+   - Rejects unreadable, empty, malformed UTF-8, or heading-less files
 
-5. **Runtime Model Check**
+5. **Focused Overlay Structure**
 
-   - Verifies `AGENTS.md` is the self-contained authoritative baseline
-   - Verifies the Copilot file mirrors `AGENTS.md`
+   - Requires opening and closing frontmatter delimiters
+   - Requires non-empty `name` and `applyTo` values
 
-6. **Content Validation**
-   - Ensures critical rules/principles section exists
-   - Ensures `AGENTS.md` stays below the runtime discovery size limit
-   - Ensures AI findings triage guidance exists
-   - Ensures provider-neutral review guidelines and no-attribution guidance exist
-   - Validates repo-specific risk guardrails and overlay frontmatter
+6. **Discovery Size**
+
+   - Ensures `AGENTS.md` stays below the 32 KiB runtime discovery ceiling
+
+The validator does not require textual equality, mirror declarations, copied
+overlay bodies, inheritance markers, or arbitrary policy keywords.
 
 **Exit Codes:**
 
@@ -201,17 +198,14 @@ SecPal AI Instructions Validation
 
 Repository Type: api
 
-✓ AGENTS.md exists
-✓ copilot-instructions.md exists
-✓ copilot-config.yaml exists (Skipped - removed 2026-04-11)
+✓ required instruction files exist
+✓ AGENTS.md is readable UTF-8 Markdown
+✓ copilot-instructions.md is readable UTF-8 Markdown
 ✓ AGENTS.md has REUSE license
 ✓ copilot-instructions.md has REUSE license
-✓ copilot-config.yaml has REUSE license (Skipped - removed 2026-04-11)
-✓ AGENTS.md passes markdown lint
-✓ copilot-instructions.md passes markdown lint
-✓ copilot-config.yaml has valid syntax (Skipped - removed 2026-04-11)
-✓ repo instructions are self-contained
-✓ instructions contain critical rules
+✓ instruction Markdown passes lint
+✓ instruction overlays include valid frontmatter
+✓ AGENTS.md stays under runtime discovery size limit
 
 =========================================
 Summary

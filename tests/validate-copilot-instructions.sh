@@ -35,6 +35,7 @@ SPDX-License-Identifier: CC0-1.0
 
 These instructions are self-contained for this repository at runtime.
 Do not automatically inherit from sibling repositories.
+The literal `@extends` token is ordinary Markdown, not a validation contract.
 EOF
 
 PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-copilot-instructions.sh" "$legacy_repo"

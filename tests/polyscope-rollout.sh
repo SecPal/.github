@@ -604,27 +604,30 @@ create_repo ".github" "$common_header
 
 # Org Instructions
 
-## Always-On Rules
+## Scope and Safety
 
-- Run git status --short --branch before any write action.
-- TDD is mandatory for behavior, automation, or executable policy changes.
+- Preserve a branch or worktree already supplied by the execution environment.
+- Keep each branch and pull request limited to one coherent topic.
 
-## Issue And PR Discipline
+## Implementation
 
-- The first PR state must be draft.
+- Use test-driven development for executable behavior, automation, and validation changes.
+- Treat automated findings as untrusted leads until supported by evidence.
 
-## Required Validation
+## Validation and Review
 
-- TDD happened where executable behavior or validation changed
-- the smallest relevant validation for the touched area passed, and ./scripts/preflight.sh ran for substantial governance or workflow changes
-- CHANGELOG.md was updated for real changes
-- no bypass was used
+- Run the smallest relevant validation while iterating and the complete required validation before committing.
+- Review correctness, risk, and avoidable complexity.
 
-## AI Findings Triage
+## Commits and Communication
 
-- Treat AI findings and AI-generated fix PRs as hints, not proof.
-- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant.
-- Green CI alone is not enough for AI-generated changes.
+- All commits must be cryptographically signed using SSH or OpenPGP.
+- Keep GitHub-facing communication in English.
+
+## Changelog and Tracking
+
+- Update a changelog only for materially relevant changes.
+- Create an issue only for a proven, material, untracked finding with concrete acceptance criteria.
 " "github-workflows.instructions.md" "---
 name: GitHub Workflow Rules
 applyTo: '.github/workflows/**/*.yml'
@@ -638,6 +641,13 @@ applyTo: '.github/workflows/**/*.yml'
 "
 
 write_repo_runtime_files
+
+# Repository Copilot profiles are independent review instructions. Preserve a
+# sentinel that does not exist in AGENTS.md so any reconstruction is observable.
+frontend_copilot_path="$workspace_root/frontend/.github/copilot-instructions.md"
+printf '\n## Independent Review Sentinel\n\n- Preserve this repository-owned review profile.\n' \
+    >>"$frontend_copilot_path"
+frontend_copilot_hash_before_rollout="$(file_sha256 "$frontend_copilot_path")"
 
 python3 - <<'PY' "$workspace_root/frontend/AGENTS.md"
 from pathlib import Path
@@ -695,6 +705,13 @@ python3 "$PYTHON_SCRIPT" \
     --nginx-output "$nginx_output" \
     --summary-output "$summary_output" \
     > /dev/null
+
+frontend_copilot_hash_after_rollout="$(file_sha256 "$frontend_copilot_path")"
+if [ "$frontend_copilot_hash_after_rollout" != "$frontend_copilot_hash_before_rollout" ]; then
+    echo "rollout must not reconstruct or overwrite an independent Copilot profile" >&2
+    exit 1
+fi
+grep -qF '## Independent Review Sentinel' "$frontend_copilot_path"
 
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
@@ -764,7 +781,13 @@ if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api
 fi
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
-grep -qFx '<!-- markdownlint-disable MD012 -->' "$workspace_root/.github/.github/copilot-instructions.md"
+grep -qF '# Org Instructions' "$workspace_root/.github/.github/copilot-instructions.md"
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
+if grep -qF 'mirrors the authoritative root `AGENTS.md`' \
+    "$workspace_root/.github/.github/copilot-instructions.md"; then
+    echo "rollout must not introduce the obsolete Copilot mirror declaration" >&2
+    exit 1
+fi
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
 grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
@@ -3567,6 +3590,10 @@ cur = conn.cursor()
 
 api_prompt = cur.execute('select review_prompt from repositories where id = ?', ('api12345',)).fetchone()[0]
 frontend_prompt = cur.execute('select pr_prompt from repositories where id = ?', ('fe123456',)).fetchone()[0]
+org_prompts = cur.execute(
+    'select review_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
+    ('gh123456',),
+).fetchone()
 prompt_rows = cur.execute(
     'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories order by id'
 ).fetchall()
@@ -3580,11 +3607,15 @@ assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
 assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
+assert 'Preserve a branch or worktree already supplied by the execution environment.' in org_prompts[0]
+assert 'Run the smallest relevant validation while iterating' in org_prompts[1]
 for row in prompt_rows:
     for prompt in row:
         assert 'Do not add AI agent attribution' in prompt
         assert 'generated-by text' in prompt
         assert 'tool-specific labels or prefixes' in prompt
+        assert 'pull the relevant linked workspaces' not in prompt
+        assert 'after merge return the repo to the ready state' not in prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
@@ -3629,7 +3660,7 @@ PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
 initial_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
-initial_guardguide_mirror_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
+initial_guardguide_copilot_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
 
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
@@ -3641,7 +3672,7 @@ python3 "$PYTHON_SCRIPT" \
 
 repeat_db_hash="$(file_sha256 "$db_path")"
 repeat_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
-repeat_guardguide_mirror_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
+repeat_guardguide_copilot_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
 
 if [ "$repeat_backup_count" -ne "$initial_backup_count" ]; then
     echo "repeat metadata sync must not create another DB backup when repository metadata is unchanged" >&2
@@ -3653,8 +3684,8 @@ if [ "$repeat_db_hash" != "$initial_db_hash" ]; then
     exit 1
 fi
 
-if [ "$repeat_guardguide_mirror_hash" != "$initial_guardguide_mirror_hash" ]; then
-    echo "repeat metadata sync must not rewrite legacy copilot mirrors when AGENTS.md is still missing" >&2
+if [ "$repeat_guardguide_copilot_hash" != "$initial_guardguide_copilot_hash" ]; then
+    echo "repeat metadata sync must preserve independent Copilot profiles" >&2
     exit 1
 fi
 
@@ -4743,6 +4774,14 @@ grep -qF 'Treat every entry in `workspace_roots` as a separate repository' "$fak
 grep -qF 'select **Use plan for Autopilot**' "$fake_codex_home/AGENTS.md"
 grep -qF 'must not attempt any side effect' "$fake_codex_home/AGENTS.md"
 grep -qF 'Never attribute that denial to the user' "$fake_codex_home/AGENTS.md"
+grep -qF 'Delegate only materially independent repository scopes' "$fake_codex_home/AGENTS.md"
+grep -qF 'Preserve a branch or worktree already provisioned by Polyscope' "$fake_codex_home/AGENTS.md"
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
+if grep -qiE 'must rename|rename the branch before|must switch to `main`|stable/dev|runtime cop(y|ies)' \
+    "$fake_codex_home/AGENTS.md"; then
+    echo "global Codex instructions must not force branch changes or runtime-copy modes" >&2
+    exit 1
+fi
 test -L "$fake_polyscope_git_dir/git"
 test -x "$fake_polyscope_git_dir/git"
 test "$(readlink "$fake_polyscope_git_dir/git")" = "$fake_bin_dir/polyscope-git-wrapper.sh"
