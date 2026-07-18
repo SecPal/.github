@@ -28,6 +28,8 @@ from typing import Any
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
+CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
+CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
 PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE"
@@ -74,6 +76,16 @@ API_RUNTIME_PREVIEW_COMMANDS = frozenset(
         API_PAIL_COMMAND,
     }
 )
+INSTRUCTION_DEPENDENT_DIRECT_API_MODES = (
+    "prepare_api_worktree",
+    "bootstrap_api_worktree",
+    "refresh_api_worktree",
+    "run_api_worktree",
+)
+
+
+class CanonicalInstructionValidationError(RuntimeError):
+    """Raised when a repository root fails the shared AI-instruction contract."""
 
 
 def default_polyscope_db_path() -> pathlib.Path:
@@ -1273,6 +1285,7 @@ def cleanup_removed_api_preview_databases(
     clone_root: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    validated_instruction_roots: set[pathlib.Path],
 ) -> list[str]:
     api_clone_root = clone_root / repo_state["api"]["id"]
     if not api_clone_root.exists():
@@ -1302,9 +1315,10 @@ def cleanup_removed_api_preview_databases(
                 "api",
                 worktree_path,
                 api_validation_commands,
+                validated_instruction_roots=validated_instruction_roots,
                 log_skip_reason=False,
             )
-        except (OSError, SystemExit):
+        except (CanonicalInstructionValidationError, OSError, SystemExit):
             protects_storage_target = True
 
         if protects_storage_target:
@@ -2817,68 +2831,87 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
     return repo_specs
 
 
+def validate_instruction_root(
+    root: pathlib.Path,
+    validated_instruction_roots: set[pathlib.Path],
+) -> pathlib.Path:
+    resolved_root = root.resolve()
+    if resolved_root in validated_instruction_roots:
+        return resolved_root
+
+    validator_path = CANONICAL_AI_INSTRUCTIONS_VALIDATOR
+    if not validator_path.is_file() or not os.access(validator_path, os.X_OK):
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_root}: "
+            f"validator is missing or not executable at {validator_path}"
+        )
+
+    try:
+        result = subprocess.run(
+            [str(validator_path), str(resolved_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_root}: "
+            f"could not execute {validator_path}: {error}"
+        ) from error
+
+    if result.returncode != 0:
+        validator_output = "\n".join(
+            output.strip()
+            for output in (result.stdout, result.stderr)
+            if output.strip()
+        )
+        details = validator_output or f"validator exited with status {result.returncode} without output"
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_root} "
+            f"(exit {result.returncode}):\n{details}"
+        )
+
+    validated_instruction_roots.add(resolved_root)
+    return resolved_root
+
+
+def require_repo_instruction_files(
+    spec: dict[str, Any],
+    validated_instruction_roots: set[pathlib.Path] | None = None,
+) -> str:
+    repo_path = pathlib.Path(spec["path"])
+    resolved_repo_path = repo_path.resolve()
+    if spec.get(CANONICAL_VALIDATION_SPEC_KEY) != resolved_repo_path:
+        validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
+        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(repo_path, validation_cache)
+
+    try:
+        return pathlib.Path(spec["agent_instructions"]).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise CanonicalInstructionValidationError(
+            f"validated runtime instructions for {resolved_repo_path} could not be loaded from "
+            f"{spec['agent_instructions']}: {error}"
+        ) from error
+
+
+def validate_repo_instruction_files(
+    repo_specs: dict[str, dict[str, Any]],
+    validated_instruction_roots: set[pathlib.Path],
+) -> None:
+    for spec in repo_specs.values():
+        repo_path = pathlib.Path(spec["path"])
+        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
+            repo_path,
+            validated_instruction_roots,
+        )
+
+
 def instruction_reference(spec: dict[str, Any]) -> str:
-    if spec["agent_instructions"].exists():
-        return str(spec["agent_instructions"])
-    return str(spec["copilot_instructions"])
+    return str(spec["agent_instructions"])
 
 
 def load_runtime_instructions_text(spec: dict[str, Any]) -> str:
-    if spec["agent_instructions"].exists():
-        return spec["agent_instructions"].read_text()
-    return spec["copilot_instructions"].read_text()
-
-
-def extract_agents_runtime_body(text: str) -> str:
-    body = strip_html_comment_header(text)
-    core_index = body.find("## Core Runtime Baseline")
-    if core_index != -1:
-        return body[core_index:].strip()
-    heading = re.search(r"^##\s+", body, re.MULTILINE)
-    if heading is None:
-        raise SystemExit("AGENTS.md is missing a section heading after the repository preamble")
-    return body[heading.start() :].strip()
-
-
-def render_copilot_compat_instructions(spec: dict[str, Any]) -> str:
-    if not spec["agent_instructions"].exists():
-        raise FileNotFoundError(spec["agent_instructions"])
-    body = extract_agents_runtime_body(spec["agent_instructions"].read_text())
-    focus_lines = "\n".join(
-        f"- `{path.relative_to(spec['path']).as_posix()}`" for path in spec["focus_instruction_paths"]
-    )
-    rendered = "\n".join(
-        [
-            "<!--",
-            "SPDX-FileCopyrightText: 2026 SecPal",
-            "SPDX-License" + "-Identifier: AGPL-3.0-or-later",
-            "-->",
-            "",
-            "<!-- markdownlint-disable MD012 -->",
-            "",
-            f"# {spec['display_name']} Copilot Instructions",
-            "",
-            "This file mirrors the authoritative root `AGENTS.md` for tooling",
-            "that automatically loads `.github/copilot-instructions.md`.",
-            "Edit `AGENTS.md` first. Keep the focused overlay files aligned",
-            "for path-specific or stack-specific rules.",
-            "",
-            "## Authoritative Sources",
-            "",
-            "- `AGENTS.md`",
-            *([focus_lines] if focus_lines else []),
-            "",
-            body,
-        ]
-    ).rstrip() + "\n"
-    return re.sub(r"\n{3,}", "\n\n", rendered)
-
-
-def write_copilot_compat_instructions(repo_specs: dict[str, dict[str, Any]]) -> None:
-    for spec in repo_specs.values():
-        if not spec["agent_instructions"].exists():
-            continue
-        write_text_if_changed(spec["copilot_instructions"], render_copilot_compat_instructions(spec))
+    return require_repo_instruction_files(spec)
 
 
 def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
@@ -2888,19 +2921,61 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     for focus_path in spec["focus_instruction_paths"]:
         focus_bullets.extend(extract_all_bullets(pathlib.Path(focus_path).read_text()))
 
-    always_on = select_bullets(
-        sections.get("Always-On Rules", []),
-        ["git status", "tdd", "validate-first", "one topic", "bypass", "changelog", "issue immediately", "domain policy"],
+    modern_runtime = sections.get("Scope and Safety", []) + sections.get("Implementation", [])
+    runtime_source = modern_runtime or sections.get("Always-On Rules", [])
+    runtime_rules = select_bullets(
+        runtime_source,
+        [
+            "preserve",
+            "git status",
+            "test-driven",
+            "tdd",
+            "coherent topic",
+            "one topic",
+            "scope",
+            "untrusted",
+            "reuse",
+            "spdx",
+            "bypass",
+        ],
         7,
     )
+    modern_validation = sections.get("Validation and Review", [])
+    validation_source = modern_validation or sections.get("Required Validation", [])
     validation = select_bullets(
-        sections.get("Required Validation", []),
-        ["scope", "tdd", "validation", "lint", "typecheck", "build", "pest", "preflight", "changelog", "issue", "gpg", "reuse", "no bypass"],
+        validation_source,
+        [
+            "smallest relevant",
+            "complete required",
+            "correctness",
+            "security",
+            "risk",
+            "complexity",
+            "green ci",
+            "validation",
+            "lint",
+            "typecheck",
+            "build",
+            "pest",
+            "reuse",
+            "no bypass",
+        ],
         8,
     )
+    modern_triage = sections.get("Implementation", []) + sections.get("Validation and Review", [])
+    triage_source = modern_triage or sections.get("AI Findings Triage", [])
     triage = select_bullets(
-        sections.get("AI Findings Triage", []),
-        ["prove the defect", "green ci", "compatibility", "refactor", "regression", "security"],
+        triage_source,
+        [
+            "untrusted",
+            "failing test",
+            "reproduction",
+            "invariant",
+            "green ci",
+            "compatibility",
+            "complexity",
+            "security",
+        ],
         5,
     )
     focus = select_bullets(
@@ -2908,44 +2983,49 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         ["test", "validation", "strict typescript", "generated api types", "bridge", "openapi 3.1", "semantic", "permissions", "timeout-minutes", "pint", "form requests", "client-side javascript", "server actions"],
         6,
     )
-    issue_pr = select_bullets(
-        sections.get("Issue And PR Discipline", []),
-        ["draft", "english", "body-file", "one topic", "self-review"],
+    modern_change_tracking = sections.get("Changelog and Tracking", []) + sections.get(
+        "Commits and Communication", []
+    )
+    change_tracking_source = modern_change_tracking or sections.get("Issue And PR Discipline", [])
+    change_tracking = select_bullets(
+        change_tracking_source,
+        ["changelog", "issue", "epic", "english", "signed", "one topic", "draft", "body-file"],
         5,
     )
 
     instruction_ref = instruction_reference(spec)
     review_prompt = collapse_spaces(
         f"Apply the current SecPal instructions from {instruction_ref}. "
-        f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(always_on)}. "
+        f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(runtime_rules)}. "
         f"Repository focus: {spec['review_focus']} "
         f"Targeted file-scope rules: {format_bullets(focus)}. "
         f"Review and AI-triage bar: {format_bullets(triage)}. "
-        "If shared auth, contract, mobile, or release behavior crosses repo boundaries, pull the relevant linked workspaces before proposing changes."
+        "When shared behavior crosses repository boundaries, inspect affected linked roots that are in scope and identify dependency-ordered rollout risks."
     )
     pr_prompt = collapse_spaces(
         f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Keep the PR to one topic and reflect the PR discipline: {format_bullets(issue_pr)}. "
-        "Lead with the failing test, validation, or reproduced defect. Then summarize the user-, API-, contract-, or governance-visible change, the validations run, CHANGELOG impact, linked-repo impact, and any out-of-scope issues filed."
+        f"Keep the PR to one topic and apply these change-reporting rules: {format_bullets(change_tracking)}. "
+        "Summarize the problem and evidence, the user-, API-, contract-, or governance-visible change, validations actually run, changelog applicability, linked-repository impact, and proven tracked follow-ups when applicable."
     )
     draft_pr_prompt = collapse_spaces(
         f"Create a draft PR in English for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Keep one topic per branch and follow: {format_bullets(issue_pr)}. "
-        "Lead with the failing test, validation, or reproduced defect, summarize the current change and validations already run, and note any linked workspaces or unresolved checks that still need follow-up before marking the PR ready."
+        f"Keep one topic per branch and apply: {format_bullets(change_tracking)}. "
+        "Summarize the current problem and evidence, the change, validations already run, and any in-scope dependency or unresolved check that prevents readiness."
     )
     merge_prompt = collapse_spaces(
         f"Before merge for {spec['display_name']}, stop on the first failed check and enforce the current SecPal instructions from {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
         f"Required validation gate: {format_bullets(validation)}. "
-        f"Also enforce: {format_bullets(select_bullets(always_on, ['one topic', 'bypass', 'changelog', 'issue immediately'], 4))}."
+        f"Also enforce: {format_bullets(select_bullets(runtime_rules, ['coherent topic', 'one topic', 'scope', 'bypass'], 4))}."
     )
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Run or re-run the touched checks demanded by the repo instructions, then verify: {format_bullets(select_bullets(validation, ['validation', 'lint', 'typecheck', 'build', 'pest', 'preflight', 'changelog', 'issue', 'gpg', 'reuse'], 7))}. "
-        "Do not bypass hooks or force operations, and after merge return the repo to the ready state described in the repo instructions."
+        f"Run or re-run the touched checks demanded by the repo instructions, then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
+        f"Apply the commit and communication rules: {format_bullets(change_tracking)}. "
+        "Do not bypass hooks or force operations."
     )
 
     return {
@@ -2958,6 +3038,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
 
 
 def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
+    require_repo_instruction_files(spec)
     config = copy.deepcopy(spec["local_config"])
     config = enrich_local_config(spec["path"].name, spec, config)
     preamble = collapse_spaces(
@@ -3140,6 +3221,7 @@ def is_provisionable_worktree(
     worktree_path: pathlib.Path,
     validation_commands: list[str],
     *,
+    validated_instruction_roots: set[pathlib.Path],
     log_skip_reason: bool = True,
 ) -> bool:
     def skip(reason: str) -> bool:
@@ -3161,10 +3243,7 @@ def is_provisionable_worktree(
         if not (android_project_dir / "settings.gradle").is_file():
             return skip("missing committed native Android Gradle project")
 
-    copilot_instructions_rel = REPO_SETTINGS[repo_name]["copilot_instructions"]
-    copilot_instructions_path = worktree_path / copilot_instructions_rel
-    if not copilot_instructions_path.is_file():
-        return skip(f"missing required repo file {copilot_instructions_rel}")
+    validate_instruction_root(worktree_path, validated_instruction_roots)
 
     package_scripts = load_package_scripts(worktree_path)
     composer_scripts = load_composer_scripts(worktree_path)
@@ -3475,15 +3554,16 @@ def provision_worktrees(
     clone_root: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    validated_instruction_roots: set[pathlib.Path] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
-    provisioned_worktrees: list[str] = []
-    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
-        repo_state,
-        repo_specs,
-        clone_root,
-        db_path=db_path,
-    )
+    validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
+    validate_repo_instruction_files(repo_specs, validation_cache)
+
+    provisionable_worktrees: list[
+        tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
+    ] = []
     failed_provision_worktrees: list[dict[str, str]] = []
+    canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
         repo_clone_root = clone_root / repo_state[repo_name]["id"]
@@ -3498,58 +3578,19 @@ def provision_worktrees(
 
         for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir() and not path.is_symlink()):
             try:
-                if not is_provisionable_worktree(repo_name, worktree_path, validation_commands):
-                    continue
-
-                normalize_registered_workspace_path(worktree_path, db_path=db_path)
-                config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
-                sync_worktree_local_config(worktree_path, config_text)
-                ensure_workspace_alias(worktree_path, db_path=db_path)
-                sync_worktree_auxiliary_files(repo_name, worktree_path)
-                ensure_worktree_hooks(worktree_path)
-                linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
-                workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
-                setup_hash = build_setup_hash(
+                if not is_provisionable_worktree(
+                    repo_name,
                     worktree_path,
-                    setup_commands,
-                    db_path=db_path,
-                    linked_context=linked_setup_context,
-                )
-
-                preview_storage_target: str | None = None
-                if repo_name == "api":
-                    ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"], db_path=db_path)
-                    if not ready:
-                        continue
-
-                marker_path = worktree_path / PROVISION_MARKER_FILENAME
-                marker = load_provision_marker(marker_path)
-                if marker is not None and marker.get("setup_hash") == setup_hash:
-                    if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
-                        continue
-
-                if setup_commands:
-                    print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
-                    run_setup_commands(worktree_path, setup_commands, db_path=db_path)
-
-                marker_payload: dict[str, Any] = {
-                    "repo": repo_name,
-                    "workspace": workspace,
-                    "physical_workspace": worktree_path.name,
-                    "setup_hash": setup_hash,
-                    "provisioned_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if repo_name == "api" and preview_storage_target is not None:
-                    marker_payload["preview_storage_target"] = preview_storage_target
-                if linked_setup_context:
-                    marker_payload["linked_workspaces"] = linked_setup_context
-
-                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
-                provisioned_worktrees.append(f"{repo_name}:{workspace}")
-            except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+                    validation_commands,
+                    validated_instruction_roots=validation_cache,
+                ):
+                    continue
+            except CanonicalInstructionValidationError as error:
+                canonical_validation_failed = True
                 error_message = str(error)
                 print(
-                    f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
+                    f"Failed to provision {repo_name} worktree {worktree_path.name} at "
+                    f"{worktree_path}: {error_message}",
                     file=sys.stderr,
                 )
                 failed_provision_worktrees.append(
@@ -3560,6 +3601,101 @@ def provision_worktrees(
                         "error": error_message,
                     }
                 )
+                continue
+            except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+                error_message = str(error)
+                print(
+                    f"Failed to provision {repo_name} worktree {worktree_path.name} at "
+                    f"{worktree_path}: {error_message}",
+                    file=sys.stderr,
+                )
+                failed_provision_worktrees.append(
+                    {
+                        "repo": repo_name,
+                        "workspace": worktree_path.name,
+                        "path": str(worktree_path),
+                        "error": error_message,
+                    }
+                )
+                continue
+
+            provisionable_worktrees.append(
+                (repo_name, spec, worktree_path, validation_commands, setup_commands)
+            )
+
+    if canonical_validation_failed:
+        return [], [], failed_provision_worktrees
+
+    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
+        repo_state,
+        repo_specs,
+        clone_root,
+        db_path=db_path,
+        validated_instruction_roots=validation_cache,
+    )
+    provisioned_worktrees: list[str] = []
+
+    for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
+        try:
+            normalize_registered_workspace_path(worktree_path, db_path=db_path)
+            config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
+            sync_worktree_local_config(worktree_path, config_text)
+            ensure_workspace_alias(worktree_path, db_path=db_path)
+            sync_worktree_auxiliary_files(repo_name, worktree_path)
+            ensure_worktree_hooks(worktree_path)
+            linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
+            workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
+            setup_hash = build_setup_hash(
+                worktree_path,
+                setup_commands,
+                db_path=db_path,
+                linked_context=linked_setup_context,
+            )
+
+            preview_storage_target: str | None = None
+            if repo_name == "api":
+                ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"], db_path=db_path)
+                if not ready:
+                    continue
+
+            marker_path = worktree_path / PROVISION_MARKER_FILENAME
+            marker = load_provision_marker(marker_path)
+            if marker is not None and marker.get("setup_hash") == setup_hash:
+                if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                    continue
+
+            if setup_commands:
+                print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
+                run_setup_commands(worktree_path, setup_commands, db_path=db_path)
+
+            marker_payload: dict[str, Any] = {
+                "repo": repo_name,
+                "workspace": workspace,
+                "physical_workspace": worktree_path.name,
+                "setup_hash": setup_hash,
+                "provisioned_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if repo_name == "api" and preview_storage_target is not None:
+                marker_payload["preview_storage_target"] = preview_storage_target
+            if linked_setup_context:
+                marker_payload["linked_workspaces"] = linked_setup_context
+
+            marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+            provisioned_worktrees.append(f"{repo_name}:{workspace}")
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            error_message = str(error)
+            print(
+                f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
+                file=sys.stderr,
+            )
+            failed_provision_worktrees.append(
+                {
+                    "repo": repo_name,
+                    "workspace": worktree_path.name,
+                    "path": str(worktree_path),
+                    "error": error_message,
+                }
+            )
 
     return provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees
 
@@ -4152,12 +4288,90 @@ def install_nginx_config(
         raise
 
 
+def validate_direct_api_worktree_roots(
+    source_repo_path: pathlib.Path,
+    worktree_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """Validate and resolve the exact source and target roots consumed by a direct mode."""
+    validated_instruction_roots: set[pathlib.Path] = set()
+    resolved_source_repo = validate_instruction_root(source_repo_path, validated_instruction_roots)
+    resolved_worktree = validate_instruction_root(worktree_path, validated_instruction_roots)
+    return resolved_source_repo, resolved_worktree
+
+
+def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> int | None:
+    """Validate, then dispatch the selected instruction-dependent direct CLI mode."""
+    selected_modes = [
+        (mode, getattr(args, mode))
+        for mode in INSTRUCTION_DEPENDENT_DIRECT_API_MODES
+        if getattr(args, mode) is not None
+    ]
+    if not selected_modes:
+        return None
+    if len(selected_modes) != 1:
+        raise SystemExit("direct API-worktree modes are mutually exclusive")
+
+    mode, requested_worktree = selected_modes[0]
+    option = f"--{mode.replace('_', '-')}"
+    if args.source_repo_path is None:
+        raise SystemExit(f"--source-repo-path is required with {option}")
+    if mode == "run_api_worktree" and not args.shell_command:
+        raise SystemExit("--shell-command is required with --run-api-worktree")
+
+    source_repo_path, worktree_path = validate_direct_api_worktree_roots(
+        args.source_repo_path,
+        requested_worktree,
+    )
+
+    if mode == "prepare_api_worktree":
+        ready, _preview_storage_target = ensure_api_worktree_ready(
+            worktree_path,
+            source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if mode == "bootstrap_api_worktree":
+        ready, _preview_storage_target = bootstrap_api_worktree(
+            worktree_path,
+            source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if mode == "refresh_api_worktree":
+        ready, _preview_storage_target = refresh_api_worktree(
+            worktree_path,
+            source_repo_path,
+            db_path=args.db_path,
+        )
+        return 0 if ready else 1
+
+    if mode == "run_api_worktree":
+        run_api_worktree_shell_command(
+            worktree_path,
+            source_repo_path,
+            args.shell_command,
+            db_path=args.db_path,
+        )
+        return 0
+
+    raise RuntimeError(f"unsupported direct API-worktree mode: {mode}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
-    parser.add_argument("--prepare-api-worktree", type=pathlib.Path)
-    parser.add_argument("--bootstrap-api-worktree", type=pathlib.Path)
-    parser.add_argument("--refresh-api-worktree", type=pathlib.Path)
-    parser.add_argument("--run-api-worktree", type=pathlib.Path)
+    # These are the only direct early-return modes. All consume repository
+    # instructions and therefore share one validated dispatch boundary. The
+    # normal rollout is the sole fallthrough path; no instruction-independent
+    # direct mode currently exists.
+    direct_mode_group = parser.add_mutually_exclusive_group()
+    for mode in INSTRUCTION_DEPENDENT_DIRECT_API_MODES:
+        direct_mode_group.add_argument(
+            f"--{mode.replace('_', '-')}",
+            dest=mode,
+            type=pathlib.Path,
+        )
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--shell-command")
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
@@ -4187,54 +4401,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    if args.prepare_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --prepare-api-worktree")
-        ready, _preview_storage_target = ensure_api_worktree_ready(
-            args.prepare_api_worktree,
-            args.source_repo_path,
-            db_path=args.db_path,
-        )
-        return 0 if ready else 1
-
-    if args.bootstrap_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --bootstrap-api-worktree")
-        ready, _preview_storage_target = bootstrap_api_worktree(
-            args.bootstrap_api_worktree,
-            args.source_repo_path,
-            db_path=args.db_path,
-        )
-        return 0 if ready else 1
-
-    if args.refresh_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --refresh-api-worktree")
-        ready, _preview_storage_target = refresh_api_worktree(
-            args.refresh_api_worktree,
-            args.source_repo_path,
-            db_path=args.db_path,
-        )
-        return 0 if ready else 1
-
-    if args.run_api_worktree is not None:
-        if args.source_repo_path is None:
-            raise SystemExit("--source-repo-path is required with --run-api-worktree")
-        if not args.shell_command:
-            raise SystemExit("--shell-command is required with --run-api-worktree")
-        run_api_worktree_shell_command(
-            args.run_api_worktree,
-            args.source_repo_path,
-            args.shell_command,
-            db_path=args.db_path,
-        )
-        return 0
+    try:
+        direct_mode_result = dispatch_instruction_dependent_direct_api_mode(args)
+    except CanonicalInstructionValidationError as error:
+        print(error, file=sys.stderr)
+        return 1
+    if direct_mode_result is not None:
+        return direct_mode_result
 
     repo_specs = build_repo_specs(args.workspace_root)
+    validated_instruction_roots: set[pathlib.Path] = set()
 
+    try:
+        validate_repo_instruction_files(repo_specs, validated_instruction_roots)
+    except CanonicalInstructionValidationError as error:
+        print(error, file=sys.stderr)
+        return 1
     validate_repo_local_configs(repo_specs)
-    write_copilot_compat_instructions(repo_specs)
-
     if not args.skip_local_configs:
         write_local_configs(repo_specs)
 
@@ -4265,6 +4448,7 @@ def main() -> int:
             repo_specs,
             args.clone_root,
             db_path=args.db_path,
+            validated_instruction_roots=validated_instruction_roots,
         )
 
     summary = build_summary(

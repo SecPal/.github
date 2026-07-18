@@ -7,24 +7,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURES_DIR="$REPO_ROOT/tests/fixtures/validate-ai-instructions"
+VALIDATOR="$REPO_ROOT/scripts/validate-ai-instructions.sh"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/validate-ai-instructions.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
-
-mkdir -p "$workspace/bin"
-
-if grep -qE '"MD012"[[:space:]]*:[[:space:]]*false' "$REPO_ROOT/.markdownlint.json"; then
-    echo "repository markdownlint configuration must keep excessive blank-line validation enabled" >&2
-    exit 1
-fi
-
-for instruction_file in AGENTS.md .github/copilot-instructions.md; do
-    if ! sed -n '1,10p' "$REPO_ROOT/$instruction_file" \
-        | grep -q '^<!-- markdownlint-disable MD012 -->$'; then
-        echo "$instruction_file must scope the mirrored-instruction blank-line exception in its header" >&2
-        exit 1
-    fi
-done
 
 MARKDOWNLINT="$REPO_ROOT/node_modules/.bin/markdownlint"
 if [ ! -x "$MARKDOWNLINT" ]; then
@@ -32,94 +18,28 @@ if [ ! -x "$MARKDOWNLINT" ]; then
     exit 1
 fi
 
-run_markdownlint_fixture() {
-    local target="$1"
-
-    "$MARKDOWNLINT" --config "$REPO_ROOT/.markdownlint.json" "$target"
-}
-
-cat >"$workspace/ordinary-markdown.md" <<'EOF'
-# Ordinary Markdown
-
-
-Excessive blank lines must still fail repository-wide validation.
-EOF
-if run_markdownlint_fixture "$workspace/ordinary-markdown.md" >/dev/null 2>&1; then
-    echo "repository markdownlint configuration unexpectedly allows excessive blank lines" >&2
-    exit 1
-fi
-
-cat >"$workspace/mirrored-instruction.md" <<'EOF'
-<!-- markdownlint-disable MD012 -->
-
-# Mirrored Instruction
-
-
-Formatting-only blank-line differences are allowed in instruction mirrors.
-EOF
-if ! run_markdownlint_fixture "$workspace/mirrored-instruction.md" >/dev/null 2>&1; then
-    echo "file-local mirrored-instruction blank-line exception is ineffective" >&2
-    exit 1
-fi
-
-cat >"$workspace/bin/npx" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-chmod +x "$workspace/bin/npx"
-
-cat >"$workspace/bin/ruby" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-chmod +x "$workspace/bin/ruby"
-
-write_common_instruction_file() {
+write_valid_repo() {
     local target_dir="$1"
-    local extra_ai_lines="$2"
 
     mkdir -p "$target_dir/.github/instructions"
+    cp "$REPO_ROOT/.markdownlint.json" "$target_dir/.markdownlint.json"
 
-    cat >"$target_dir/.markdownlint.json" <<'EOF'
-{
-  "MD013": false
-}
-EOF
-
-    cat >"$target_dir/AGENTS.md" <<EOF
+    cat >"$target_dir/AGENTS.md" <<'EOF'
 <!--
 SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-<!-- markdownlint-disable MD012 -->
+# Repository Runtime Instructions
 
-# Test Agent Instructions
+## Runtime Safety
 
-These instructions are self-contained for this repository at runtime.
-Do not automatically inherit from sibling repositories.
+- Preserve existing work before making changes.
+- Validate executable changes with the smallest relevant check.
 
-## Always-On Rules
+## Repository Contract
 
-- Quality first.
-
-## Required Validation
-
-- run the relevant checks
-
-## AI Findings Triage
-
-- Treat AI findings and AI-generated fix PRs as hints, not proof.
-- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant and why the current code violates it.
-- Green CI alone is not enough for AI-generated changes.
-$extra_ai_lines
-
-## Review guidelines
-
-- Review for correctness, security, privacy, data integrity, lifecycle ordering, missing tests, and policy drift before style.
-- Treat findings from any AI reviewer as untrusted leads until the defect is proven by a failing test, reproduction, or violated invariant.
-- Keep review comments provider-neutral: describe the issue, evidence, impact, and fix path instead of the tool that found it.
-- Reject self-referential AI wording, generated-by text, tool promotion, or AI attribution unless the task is explicitly about AI tooling.
+- Keep changes focused on one coherent topic.
 EOF
 
     cat >"$target_dir/.github/copilot-instructions.md" <<'EOF'
@@ -128,406 +48,372 @@ SPDX-FileCopyrightText: 2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
-<!-- markdownlint-disable MD012 -->
+# Code Review Profile
 
-# Test Copilot Instructions
+Inspect the complete diff and affected execution paths. Report only concise,
+actionable findings supported by evidence.
 
-This file mirrors the authoritative root `AGENTS.md` for tooling that automatically loads `.github/copilot-instructions.md`.
-Edit `AGENTS.md` first. Keep the focused overlay files aligned for path-specific or stack-specific rules.
+## Review Priorities
 
-## Authoritative Sources
-
-- `AGENTS.md`
-- `.github/instructions/example.instructions.md`
-
-## Always-On Rules
-
-- Quality first.
-
-## Required Validation
-
-- run the relevant checks
-
-## AI Findings Triage
-
-- Treat AI findings and AI-generated fix PRs as hints, not proof.
-- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant and why the current code violates it.
-- Green CI alone is not enough for AI-generated changes.
-__EXTRA_AI_LINES__
-
-## Review guidelines
-
-- Review for correctness, security, privacy, data integrity, lifecycle ordering, missing tests, and policy drift before style.
-- Treat findings from any AI reviewer as untrusted leads until the defect is proven by a failing test, reproduction, or violated invariant.
-- Keep review comments provider-neutral: describe the issue, evidence, impact, and fix path instead of the tool that found it.
-- Reject self-referential AI wording, generated-by text, tool promotion, or AI attribution unless the task is explicitly about AI tooling.
+- Prioritize correctness, security, privacy, and data integrity.
+- Identify missing tests and avoidable complexity.
 EOF
-    python3 - <<'PY' "$target_dir/.github/copilot-instructions.md" "$extra_ai_lines"
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-extra_ai_lines = sys.argv[2]
-path.write_text(path.read_text().replace("__EXTRA_AI_LINES__", extra_ai_lines))
-PY
 
     cat >"$target_dir/.github/instructions/example.instructions.md" <<'EOF'
 ---
-name: Example
-applyTo: "**"
+# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-License-Identifier: CC0-1.0
+name: Example Workflow Rules
+description: Applies focused checks to workflow files.
+applyTo: ".github/workflows/**/*.yml"
 ---
 
-# Example Instruction
+# Example Workflow Rules
 
-- Do not automatically inherit from sibling repositories.
+- Set explicit permissions for each workflow.
 EOF
+}
+
+copy_valid_repo() {
+    local source_dir="$1"
+    local target_dir="$2"
+
+    mkdir -p "$target_dir"
+    cp -R "$source_dir/." "$target_dir/"
 }
 
 run_validator() {
-    local repo_type="$1"
+    local repo_dir="$1"
     local output_file="$2"
 
+    (
+        cd "$repo_dir"
+        REPO_TYPE=org bash "$VALIDATOR"
+    ) >"$output_file" 2>&1
+}
+
+assert_passes() {
+    local repo_dir="$1"
+    local output_file="$2"
+
+    if ! run_validator "$repo_dir" "$output_file"; then
+        sed -n '1,240p' "$output_file" >&2
+        echo "validator unexpectedly rejected $repo_dir" >&2
+        exit 1
+    fi
+}
+
+assert_fails_with() {
+    local repo_dir="$1"
+    local expected="$2"
+    local output_file
     local exit_code
-    if PATH="$workspace/bin:$PATH" REPO_TYPE="$repo_type" \
-        bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" >"$output_file" 2>&1; then
-        exit_code=0
-    else
-        exit_code=$?
+
+    output_file="$workspace/$(basename "$repo_dir").output"
+
+    set +e
+    run_validator "$repo_dir" "$output_file"
+    exit_code=$?
+    set -e
+
+    if [ "$exit_code" -eq 0 ]; then
+        sed -n '1,240p' "$output_file" >&2
+        echo "validator unexpectedly accepted $repo_dir" >&2
+        exit 1
     fi
 
-    return "$exit_code"
+    if ! grep -qF "$expected" "$output_file"; then
+        sed -n '1,240p' "$output_file" >&2
+        echo "validator failure did not include expected result: $expected" >&2
+        exit 1
+    fi
 }
 
-valid_api_repo="$workspace/valid-api"
-mkdir -p "$valid_api_repo"
-touch "$valid_api_repo/composer.json"
-valid_api_extra_ai_lines="$(cat <<'EOF'
-- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.
-- Reject AI-generated key or constraint changes that derive identifiers from mutable display names or ignore tenant-scoped uniqueness and database constraints.
-EOF
-)"
-write_common_instruction_file "$valid_api_repo" "$valid_api_extra_ai_lines"
+valid_repo="$workspace/valid-independent-layers"
+write_valid_repo "$valid_repo"
+valid_output="$workspace/valid-independent-layers.output"
+assert_passes "$valid_repo" "$valid_output"
+grep -qF 'required instruction files exist' "$valid_output"
+grep -qF 'instruction paths stay inside the repository' "$valid_output"
+grep -qF 'AGENTS.md is readable UTF-8 Markdown' "$valid_output"
+grep -qF 'copilot-instructions.md is readable UTF-8 Markdown' "$valid_output"
+grep -qF 'AGENTS.md has REUSE license' "$valid_output"
+grep -qF 'instruction Markdown passes lint' "$valid_output"
+grep -qF 'instruction overlays include valid frontmatter' "$valid_output"
+grep -qF 'AGENTS.md stays under runtime discovery size limit' "$valid_output"
 
-valid_output="$workspace/valid-output.txt"
-(
-    cd "$valid_api_repo"
-    run_validator api "$valid_output"
-)
-grep -q 'copilot-instructions.md has REUSE license' "$valid_output"
-grep -q 'AGENTS.md exists' "$valid_output"
-grep -q 'AGENTS.md stays under runtime discovery size limit' "$valid_output"
-grep -q 'instructions contain provider-neutral review guidelines' "$valid_output"
-grep -q 'copilot instructions mirror AGENTS.md' "$valid_output"
-
-normalized_mirror_repo="$workspace/normalized-mirror"
-mkdir -p "$normalized_mirror_repo"
-touch "$normalized_mirror_repo/composer.json"
-write_common_instruction_file "$normalized_mirror_repo" "$valid_api_extra_ai_lines"
-cat >"$normalized_mirror_repo/.markdownlint.json" <<'EOF'
-{
-  "MD013": false
-}
-EOF
-python3 - <<'PY' "$normalized_mirror_repo/AGENTS.md"
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-path.write_text(text.replace("\n\n## Review guidelines", "\n\n\n## Review guidelines", 1))
-PY
-
-normalized_mirror_output="$workspace/normalized-mirror-output.txt"
-if ! (
-    cd "$normalized_mirror_repo"
-    run_validator api "$normalized_mirror_output"
-); then
-    cat "$normalized_mirror_output"
-    echo "validator unexpectedly failed when AGENTS.md only adds extra blank lines before a mirrored section" >&2
+# The positive fixture deliberately has different runtime and review content,
+# no mirror declaration, no copied overlay body, and none of the former policy
+# keywords. Its success is the behavioral contract for independent layers.
+if cmp -s "$valid_repo/AGENTS.md" "$valid_repo/.github/copilot-instructions.md"; then
+    echo "positive fixture must keep runtime and review instructions independent" >&2
     exit 1
 fi
-grep -q 'copilot instructions mirror AGENTS.md' "$normalized_mirror_output"
-
-stale_mirror_repo="$workspace/stale-mirror"
-mkdir -p "$stale_mirror_repo"
-touch "$stale_mirror_repo/composer.json"
-write_common_instruction_file "$stale_mirror_repo" "$valid_api_extra_ai_lines"
-python3 - <<'PY' "$stale_mirror_repo/.github/copilot-instructions.md"
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-path.write_text(path.read_text().replace("Quality first.", "Quality eventually.", 1))
-PY
-
-stale_mirror_output="$workspace/stale-mirror-output.txt"
-set +e
-(
-    cd "$stale_mirror_repo"
-    run_validator api "$stale_mirror_output"
-)
-stale_mirror_exit=$?
-set -e
-if [ "$stale_mirror_exit" -eq 0 ]; then
-    cat "$stale_mirror_output"
-    echo "validator unexpectedly passed with stale mirrored copilot instructions" >&2
+if grep -qiE 'mirror|authoritative sources|always-on rules|AI findings triage' \
+    "$valid_repo/.github/copilot-instructions.md"; then
+    echo "positive Copilot fixture unexpectedly contains the obsolete mirror contract" >&2
     exit 1
 fi
-grep -q 'copilot instructions mirror AGENTS.md' "$stale_mirror_output"
 
-path_argument_output="$workspace/path-argument-output.txt"
-bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" "$valid_api_repo" >"$path_argument_output" 2>&1
-grep -q 'Repository Type: api' "$path_argument_output"
+path_argument_output="$workspace/path-argument.output"
+bash "$VALIDATOR" "$valid_repo" >"$path_argument_output" 2>&1
+grep -qF 'Repository Type: org' "$path_argument_output"
 
-missing_generic_repo="$workspace/missing-generic"
-mkdir -p "$missing_generic_repo/.github"
-touch "$missing_generic_repo/composer.json"
-cat >"$missing_generic_repo/.github/copilot-instructions.md" <<'EOF'
-<!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
--->
+symlinked_agents_repo="$workspace/symlinked-agents"
+symlinked_agents_target="$workspace/external-AGENTS.md"
+copy_valid_repo "$valid_repo" "$symlinked_agents_repo"
+mv "$symlinked_agents_repo/AGENTS.md" "$symlinked_agents_target"
+ln -s "$symlinked_agents_target" "$symlinked_agents_repo/AGENTS.md"
+assert_fails_with "$symlinked_agents_repo" \
+    'instruction paths stay inside the repository'
 
-# Broken Copilot Instructions
+symlinked_github_repo="$workspace/symlinked-github-directory"
+symlinked_github_target="$workspace/external-github-directory"
+copy_valid_repo "$valid_repo" "$symlinked_github_repo"
+mv "$symlinked_github_repo/.github" "$symlinked_github_target"
+ln -s "$symlinked_github_target" "$symlinked_github_repo/.github"
+assert_fails_with "$symlinked_github_repo" \
+    'instruction paths stay inside the repository'
 
-This file mirrors the authoritative root `AGENTS.md` for tooling that automatically loads `.github/copilot-instructions.md`.
-Edit `AGENTS.md` first. Keep the focused overlay files aligned for path-specific or stack-specific rules.
+symlinked_copilot_repo="$workspace/symlinked-copilot"
+symlinked_copilot_target="$workspace/external-copilot-instructions.md"
+copy_valid_repo "$valid_repo" "$symlinked_copilot_repo"
+mv "$symlinked_copilot_repo/.github/copilot-instructions.md" \
+    "$symlinked_copilot_target"
+ln -s "$symlinked_copilot_target" \
+    "$symlinked_copilot_repo/.github/copilot-instructions.md"
+assert_fails_with "$symlinked_copilot_repo" \
+    'instruction paths stay inside the repository'
 
-## Authoritative Sources
+missing_agents_repo="$workspace/missing-agents"
+copy_valid_repo "$valid_repo" "$missing_agents_repo"
+rm "$missing_agents_repo/AGENTS.md"
+assert_fails_with "$missing_agents_repo" 'required instruction files exist'
 
-- `AGENTS.md`
+missing_copilot_repo="$workspace/missing-copilot"
+copy_valid_repo "$valid_repo" "$missing_copilot_repo"
+rm "$missing_copilot_repo/.github/copilot-instructions.md"
+assert_fails_with "$missing_copilot_repo" 'required instruction files exist'
+
+empty_agents_repo="$workspace/empty-agents"
+copy_valid_repo "$valid_repo" "$empty_agents_repo"
+: >"$empty_agents_repo/AGENTS.md"
+assert_fails_with "$empty_agents_repo" 'AGENTS.md is readable UTF-8 Markdown'
+
+empty_copilot_repo="$workspace/empty-copilot"
+copy_valid_repo "$valid_repo" "$empty_copilot_repo"
+: >"$empty_copilot_repo/.github/copilot-instructions.md"
+assert_fails_with "$empty_copilot_repo" 'copilot-instructions.md is readable UTF-8 Markdown'
+
+invalid_utf8_repo="$workspace/invalid-utf8"
+copy_valid_repo "$valid_repo" "$invalid_utf8_repo"
+printf '\377' >>"$invalid_utf8_repo/AGENTS.md"
+assert_fails_with "$invalid_utf8_repo" 'AGENTS.md is readable UTF-8 Markdown'
+
+missing_agents_license_repo="$workspace/missing-agents-license"
+copy_valid_repo "$valid_repo" "$missing_agents_license_repo"
+sed -i '/SPDX-License''-Identifier:/d' "$missing_agents_license_repo/AGENTS.md"
+assert_fails_with "$missing_agents_license_repo" 'AGENTS.md has REUSE license'
+
+missing_copilot_license_repo="$workspace/missing-copilot-license"
+copy_valid_repo "$valid_repo" "$missing_copilot_license_repo"
+sed -i '/SPDX-License''-Identifier:/d' \
+    "$missing_copilot_license_repo/.github/copilot-instructions.md"
+assert_fails_with "$missing_copilot_license_repo" 'copilot-instructions.md has REUSE license'
+
+wrong_sidecar_repo="$workspace/wrong-sidecar-license"
+copy_valid_repo "$valid_repo" "$wrong_sidecar_repo"
+cp "$FIXTURES_DIR/wrong-ai-instructions-license-fixture.txt" \
+    "$wrong_sidecar_repo/.github/copilot-instructions.md.license"
+assert_fails_with "$wrong_sidecar_repo" \
+    'Sidecar .license exists but does not declare an allowed license'
+
+malformed_markdown_repo="$workspace/malformed-markdown"
+copy_valid_repo "$valid_repo" "$malformed_markdown_repo"
+printf '\n# Second Top-Level Heading\n' \
+    >>"$malformed_markdown_repo/.github/copilot-instructions.md"
+assert_fails_with "$malformed_markdown_repo" 'instruction Markdown passes lint'
+
+malformed_frontmatter_repo="$workspace/malformed-frontmatter"
+copy_valid_repo "$valid_repo" "$malformed_frontmatter_repo"
+sed -i '/^applyTo:/d' \
+    "$malformed_frontmatter_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$malformed_frontmatter_repo" \
+    'instruction overlays include valid frontmatter'
+
+empty_frontmatter_name_repo="$workspace/empty-frontmatter-name"
+copy_valid_repo "$valid_repo" "$empty_frontmatter_name_repo"
+sed -i 's/^name:.*/name: ""/' \
+    "$empty_frontmatter_name_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$empty_frontmatter_name_repo" \
+    'instruction overlays include valid frontmatter'
+
+null_frontmatter_apply_to_repo="$workspace/null-frontmatter-apply-to"
+copy_valid_repo "$valid_repo" "$null_frontmatter_apply_to_repo"
+sed -i 's/^applyTo:.*/applyTo: # no path scope/' \
+    "$null_frontmatter_apply_to_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$null_frontmatter_apply_to_repo" \
+    'instruction overlays include valid frontmatter'
+
+invalid_yaml_frontmatter_repo="$workspace/invalid-yaml-frontmatter"
+copy_valid_repo "$valid_repo" "$invalid_yaml_frontmatter_repo"
+sed -i 's/^applyTo:.*/applyTo: [/' \
+    "$invalid_yaml_frontmatter_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$invalid_yaml_frontmatter_repo" \
+    'instruction overlays include valid frontmatter'
+
+symlinked_frontmatter_repo="$workspace/symlinked-frontmatter"
+symlinked_frontmatter_target="$workspace/external.instructions.md"
+copy_valid_repo "$valid_repo" "$symlinked_frontmatter_repo"
+cat >"$symlinked_frontmatter_target" <<'EOF'
+---
+name: ""
+applyTo: [
+---
+
+# External Instructions
 EOF
-cat >"$missing_generic_repo/AGENTS.md" <<'EOF'
-<!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
--->
+rm "$symlinked_frontmatter_repo/.github/instructions/example.instructions.md"
+ln -s "$symlinked_frontmatter_target" \
+    "$symlinked_frontmatter_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$symlinked_frontmatter_repo" \
+    'instruction paths stay inside the repository'
 
-# Broken Agent Instructions
+symlinked_overlay_dir_repo="$workspace/symlinked-overlay-directory"
+symlinked_overlay_dir_target="$workspace/external-instruction-directory"
+copy_valid_repo "$valid_repo" "$symlinked_overlay_dir_repo"
+mkdir -p "$symlinked_overlay_dir_target"
+mv "$symlinked_overlay_dir_repo/.github/instructions/example.instructions.md" \
+    "$symlinked_overlay_dir_target/example.instructions.md"
+rmdir "$symlinked_overlay_dir_repo/.github/instructions"
+ln -s "$symlinked_overlay_dir_target" \
+    "$symlinked_overlay_dir_repo/.github/instructions"
+assert_fails_with "$symlinked_overlay_dir_repo" \
+    'instruction paths stay inside the repository'
 
-These instructions are self-contained for this repository at runtime.
+unclosed_frontmatter_repo="$workspace/unclosed-frontmatter"
+copy_valid_repo "$valid_repo" "$unclosed_frontmatter_repo"
+sed -i '7d' \
+    "$unclosed_frontmatter_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$unclosed_frontmatter_repo" \
+    'instruction overlays include valid frontmatter'
 
-## Always-On Rules
-
-- Quality first.
-
-## Required Validation
-
-- run the relevant checks
-EOF
-
-missing_generic_output="$workspace/missing-generic-output.txt"
-set +e
-(
-    cd "$missing_generic_repo"
-    run_validator api "$missing_generic_output"
-)
-missing_generic_exit=$?
-set -e
-if [ "$missing_generic_exit" -eq 0 ]; then
-    cat "$missing_generic_output"
-    echo "validator unexpectedly passed without generic AI findings guidance" >&2
-    exit 1
-fi
-grep -q 'instructions contain AI findings triage guidance' "$missing_generic_output"
-
-missing_review_repo="$workspace/missing-review"
-mkdir -p "$missing_review_repo"
-touch "$missing_review_repo/composer.json"
-write_common_instruction_file "$missing_review_repo" "$valid_api_extra_ai_lines"
-awk '
-    /^## Review guidelines$/ { skip = 1; next }
-    skip == 1 { next }
-    { print }
-' "$missing_review_repo/AGENTS.md" >"$missing_review_repo/AGENTS.md.tmp"
-mv "$missing_review_repo/AGENTS.md.tmp" "$missing_review_repo/AGENTS.md"
-
-missing_review_output="$workspace/missing-review-output.txt"
-set +e
-(
-    cd "$missing_review_repo"
-    run_validator api "$missing_review_output"
-)
-missing_review_exit=$?
-set -e
-if [ "$missing_review_exit" -eq 0 ]; then
-    cat "$missing_review_output"
-    echo "validator unexpectedly passed without provider-neutral review guidelines" >&2
-    exit 1
-fi
-grep -q 'instructions contain provider-neutral review guidelines' "$missing_review_output"
+malformed_overlay_markdown_repo="$workspace/malformed-overlay-markdown"
+copy_valid_repo "$valid_repo" "$malformed_overlay_markdown_repo"
+printf '\n# Duplicate Overlay Heading\n' \
+    >>"$malformed_overlay_markdown_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$malformed_overlay_markdown_repo" 'instruction Markdown passes lint'
 
 oversized_agents_repo="$workspace/oversized-agents"
-mkdir -p "$oversized_agents_repo"
-touch "$oversized_agents_repo/composer.json"
-write_common_instruction_file "$oversized_agents_repo" "$valid_api_extra_ai_lines"
+copy_valid_repo "$valid_repo" "$oversized_agents_repo"
 {
     printf '\n## Oversized Fixture\n\n'
     for _ in $(seq 1 700); do
         printf '%s\n' '- filler line to exceed the AGENTS.md runtime discovery byte limit.'
     done
 } >>"$oversized_agents_repo/AGENTS.md"
+assert_fails_with "$oversized_agents_repo" \
+    'AGENTS.md stays under runtime discovery size limit'
 
-oversized_agents_output="$workspace/oversized-agents-output.txt"
-set +e
-(
-    cd "$oversized_agents_repo"
-    run_validator api "$oversized_agents_output"
-)
-oversized_agents_exit=$?
-set -e
-if [ "$oversized_agents_exit" -eq 0 ]; then
-    cat "$oversized_agents_output"
-    echo "validator unexpectedly passed with oversized AGENTS.md" >&2
-    exit 1
-fi
-grep -q 'AGENTS.md stays under runtime discovery size limit' "$oversized_agents_output"
-
-missing_api_specific_repo="$workspace/missing-api-specific"
-mkdir -p "$missing_api_specific_repo"
-touch "$missing_api_specific_repo/composer.json"
-write_common_instruction_file "$missing_api_specific_repo" '- Reject AI-generated refactors that resolve services inside API resources or serializers, move business logic into presentation code, or repeat request-scoped work that should run once per request.'
-
-missing_api_specific_output="$workspace/missing-api-specific-output.txt"
-set +e
-(
-    cd "$missing_api_specific_repo"
-    run_validator api "$missing_api_specific_output"
-)
-missing_api_specific_exit=$?
-set -e
-if [ "$missing_api_specific_exit" -eq 0 ]; then
-    cat "$missing_api_specific_output"
-    echo "validator unexpectedly passed without API-specific AI risk guidance" >&2
-    exit 1
-fi
-grep -q 'instructions contain repo-specific AI risk guidance' "$missing_api_specific_output"
-
-wrong_license_repo="$workspace/wrong-license"
-mkdir -p "$wrong_license_repo"
-touch "$wrong_license_repo/composer.json"
-write_common_instruction_file "$wrong_license_repo" "$valid_api_extra_ai_lines"
-# Keep an Apache-2.0 sidecar fixture here because this validator must reject
-# Apache-2.0 for .github/copilot-instructions.md.license.
-cp "$FIXTURES_DIR/wrong-ai-instructions-license-fixture.txt" \
-    "$wrong_license_repo/.github/copilot-instructions.md.license"
-
-wrong_license_output="$workspace/wrong-license-output.txt"
-set +e
-(
-    cd "$wrong_license_repo"
-    run_validator api "$wrong_license_output"
-)
-wrong_license_exit=$?
-set -e
-if [ "$wrong_license_exit" -eq 0 ]; then
-    cat "$wrong_license_output"
-    echo "validator unexpectedly accepted wrong copilot-instructions sidecar license" >&2
-    exit 1
-fi
-grep -q 'Sidecar .license exists but does not declare an allowed license' "$wrong_license_output"
-
-negative_inherit_repo="$workspace/negative-inherit"
-mkdir -p "$negative_inherit_repo"
-touch "$negative_inherit_repo/composer.json"
-negative_inherit_extra_ai_lines="$valid_api_extra_ai_lines"
-write_common_instruction_file "$negative_inherit_repo" "$negative_inherit_extra_ai_lines"
-cat >"$negative_inherit_repo/.github/instructions/negative.instructions.md" <<'EOF'
----
-name: Negative Inherit Example
-applyTo: "**"
----
-
-# Negative Inherit Example
-
-- Do not inherit from sibling repositories.
-EOF
-
-negative_inherit_output="$workspace/negative-inherit-output.txt"
-set +e
-(
-    cd "$negative_inherit_repo"
-    run_validator api "$negative_inherit_output"
-)
-negative_inherit_exit=$?
-set -e
-if [ "$negative_inherit_exit" -ne 0 ]; then
-    cat "$negative_inherit_output"
-    echo "validator falsely rejected negative do-not-inherit wording" >&2
-    exit 1
-fi
-grep -q 'instructions avoid pseudo-inheritance markers' "$negative_inherit_output"
-
-android_repo="$workspace/android-repo"
-mkdir -p "$android_repo"
-touch "$android_repo/capacitor.config.ts"
-write_common_instruction_file "$android_repo" '- Reject AI-generated bridge changes that alter listener handles or teardown ordering without focused tests.
-- Reject AI-generated back-navigation or managed-mode changes that do not prove WebView history and owner-state invariants.'
-
-android_output="$workspace/android-output.txt"
-set +e
-(
-    cd "$android_repo"
-    run_validator android "$android_output"
-)
-android_exit=$?
-set -e
-if [ "$android_exit" -ne 0 ]; then
-    cat "$android_output"
-    echo "validator failed for valid android fixture" >&2
-    exit 1
-fi
-grep -q 'Repository Type: android' "$android_output"
-
-guardguide_repo="$workspace/monolith-fixture"
-mkdir -p "$guardguide_repo"
-cat >"$guardguide_repo/composer.json" <<'EOF'
+oversized_copilot_repo="$workspace/oversized-copilot"
+copy_valid_repo "$valid_repo" "$oversized_copilot_repo"
 {
-  "name": "secpal/guardguide"
-}
-EOF
-write_common_instruction_file "$guardguide_repo" '- Reject AI-generated UI refactors that drift away from shadcn/ui, weaken Lingui localization coverage, or reduce accessibility semantics.
-- Reject AI-generated persistence or auth changes that bypass application-layer encryption, store unhashed acknowledgement tokens, persist IP addresses or user-agent strings, or couple standard paths to only one database engine.
-- Reject AI-generated identifier or tenancy changes that derive stable keys from mutable display names or ignore tenant-scoped uniqueness constraints.
-- Reject AI-generated acknowledgement flow changes that weaken QR, magic-link, or supervised fallback auditability across MariaDB and PostgreSQL.'
+    printf '\n## Oversized Fixture\n\n'
+    for _ in $(seq 1 700); do
+        printf '%s\n' '- filler line to exceed the Copilot instruction discovery byte limit.'
+    done
+} >>"$oversized_copilot_repo/.github/copilot-instructions.md"
+assert_fails_with "$oversized_copilot_repo" \
+    'copilot-instructions.md stays under instruction discovery size limit'
 
-guardguide_output="$workspace/guardguide-output.txt"
+no_overlays_repo="$workspace/no-overlays"
+copy_valid_repo "$valid_repo" "$no_overlays_repo"
+rm -r "$no_overlays_repo/.github/instructions"
+no_overlays_output="$workspace/no-overlays.output"
+assert_passes "$no_overlays_repo" "$no_overlays_output"
+grep -qF 'Skipped (no focused instruction files present)' "$no_overlays_output"
+
+# Focused frontmatter must fail closed when the repository-pinned YAML parser
+# is unavailable, even if Markdownlint itself is available globally.
+isolated_yaml_root="$workspace/no-frontmatter-yaml-toolchain"
+isolated_yaml_validator="$isolated_yaml_root/scripts/validate-ai-instructions.sh"
+isolated_yaml_bin="$isolated_yaml_root/bin"
+isolated_yaml_repo="$isolated_yaml_root/repository"
+mkdir -p "$isolated_yaml_root/scripts" "$isolated_yaml_bin"
+cp "$VALIDATOR" "$isolated_yaml_validator"
+copy_valid_repo "$valid_repo" "$isolated_yaml_repo"
+for required_tool in dirname grep head find python3 wc node; do
+    ln -s "$(command -v "$required_tool")" "$isolated_yaml_bin/$required_tool"
+done
+
+missing_yaml_output="$workspace/missing-frontmatter-yaml.output"
 set +e
 (
-    cd "$guardguide_repo"
-    PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" >"$guardguide_output" 2>&1
-)
-guardguide_exit=$?
+    cd "$isolated_yaml_repo"
+    PATH="$isolated_yaml_bin:$REPO_ROOT/node_modules/.bin" \
+        REPO_TYPE=org /bin/bash "$isolated_yaml_validator"
+) >"$missing_yaml_output" 2>&1
+missing_yaml_status=$?
 set -e
-if [ "$guardguide_exit" -ne 0 ]; then
-    cat "$guardguide_output"
-    echo "validator failed for valid GuardGuide fixture" >&2
+
+if [ "$missing_yaml_status" -eq 0 ]; then
+    sed -n '1,240p' "$missing_yaml_output" >&2
+    echo "validator must fail when the frontmatter YAML parser is unavailable" >&2
     exit 1
 fi
-grep -q 'Repository Type: guardguide' "$guardguide_output"
+grep -qF 'repository-pinned js-yaml is unavailable' "$missing_yaml_output"
 
-guardguide_de_repo="$workspace/guardguide.de"
-mkdir -p "$guardguide_de_repo"
-touch "$guardguide_de_repo/astro.config.mjs"
-cat >"$guardguide_de_repo/package.json" <<'EOF'
-{
-  "name": "guardguide-de"
-}
-EOF
-write_common_instruction_file "$guardguide_de_repo" '- Reject AI-generated static rendering or accessibility changes that weaken metadata, structured data, keyboard navigation, or semantic landmark coverage.
-- Reject AI-generated page, asset, or build-pipeline changes that break deterministic static output, localized content parity, or deploy-time verification.'
+isolated_yaml_no_overlays_repo="$isolated_yaml_root/repository-without-overlays"
+copy_valid_repo "$valid_repo" "$isolated_yaml_no_overlays_repo"
+rm -r "$isolated_yaml_no_overlays_repo/.github/instructions"
+isolated_yaml_no_overlays_output="$workspace/missing-frontmatter-yaml-no-overlays.output"
+if ! (
+    cd "$isolated_yaml_no_overlays_repo"
+    PATH="$isolated_yaml_bin:$REPO_ROOT/node_modules/.bin" \
+        REPO_TYPE=org /bin/bash "$isolated_yaml_validator"
+) >"$isolated_yaml_no_overlays_output" 2>&1; then
+    sed -n '1,240p' "$isolated_yaml_no_overlays_output" >&2
+    echo "validator must not require a frontmatter parser without focused overlays" >&2
+    exit 1
+fi
+grep -qF 'Skipped (no focused instruction files present)' \
+    "$isolated_yaml_no_overlays_output"
 
-guardguide_de_output="$workspace/guardguide-de-output.txt"
+# Execute an unmodified copy of the real validator from a temporary scripts
+# directory so its repository-pinned Markdownlint path is absent. Restrict PATH
+# to the validator's other required tools and deliberately omit any global
+# Markdownlint command.
+isolated_root="$workspace/no-markdownlint-toolchain"
+isolated_validator="$isolated_root/scripts/validate-ai-instructions.sh"
+isolated_bin="$isolated_root/bin"
+isolated_repo="$isolated_root/repository"
+mkdir -p "$isolated_root/scripts" "$isolated_bin"
+cp "$VALIDATOR" "$isolated_validator"
+copy_valid_repo "$valid_repo" "$isolated_repo"
+for required_tool in dirname grep head find python3 wc; do
+    ln -s "$(command -v "$required_tool")" "$isolated_bin/$required_tool"
+done
+
+missing_markdownlint_output="$workspace/missing-markdownlint.output"
 set +e
 (
-    cd "$guardguide_de_repo"
-    PATH="$workspace/bin:$PATH" bash "$REPO_ROOT/scripts/validate-ai-instructions.sh" >"$guardguide_de_output" 2>&1
-)
-guardguide_de_exit=$?
+    cd "$isolated_repo"
+    PATH="$isolated_bin" REPO_TYPE=org /bin/bash "$isolated_validator"
+) >"$missing_markdownlint_output" 2>&1
+missing_markdownlint_status=$?
 set -e
-if [ "$guardguide_de_exit" -ne 0 ]; then
-    cat "$guardguide_de_output"
-    echo "validator failed for valid guardguide.de website fixture" >&2
+
+if [ "$missing_markdownlint_status" -eq 0 ]; then
+    sed -n '1,240p' "$missing_markdownlint_output" >&2
+    echo "validator must fail when Markdownlint is unavailable" >&2
     exit 1
 fi
-grep -q 'Repository Type: website' "$guardguide_de_output"
+grep -qF 'Markdownlint is unavailable' "$missing_markdownlint_output"
+grep -qF 'provide it with the committed lockfile dependencies or a compatible global markdownlint' \
+    "$missing_markdownlint_output"
+if grep -qF 'All tests passed' "$missing_markdownlint_output"; then
+    echo "missing Markdownlint must not report overall validation success" >&2
+    exit 1
+fi
+
+printf 'validate-ai-instructions tests passed\n'
