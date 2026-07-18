@@ -242,6 +242,36 @@ require textual equality, mirror declarations, copied overlays, inheritance
 markers, or arbitrary policy keywords. See
 [`docs/VALIDATION_SYSTEM.md`](docs/VALIDATION_SYSTEM.md) for the full contract.
 
+#### Polyscope Operational Installation
+
+Polyscope uses a two-part installation. An administrator first installs the
+fixed root-owned nginx helper, its exact sudoers rules, and the system server
+drop-in through an interactive terminal prompt:
+
+```bash
+sudo -k
+sudo ./scripts/install-polyscope-system-components.sh
+```
+
+The `secpal` user then installs the user units without sudo:
+
+```bash
+POLYSCOPE_SERVER_SCOPE=system bash ./scripts/install-polyscope-rollout.sh
+```
+
+The user installer verifies only the exact noninteractive helper capability;
+it does not require or grant generic passwordless sudo. The rollout writes a
+strict manifest under `~/.local/state/polyscope/`, and the root-owned helper
+validates and renders the one fixed preview nginx target before testing and
+reloading nginx. Failed validation or reload restores the previous target.
+
+Every generated workspace setup starts with canonical instruction validation.
+The external provisioner considers only active worktrees registered in the
+Polyscope database, while unregistered clone directories remain solely under
+the conservative seven-day clone-reaper policy. See
+[`scripts/README.md`](scripts/README.md) for installation and verification
+details.
+
 ## Build & Test Commands
 
 Quick reference commands for local development across SecPal projects.

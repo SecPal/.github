@@ -9,6 +9,8 @@ SOURCE_SCRIPT="$SCRIPT_DIR/polyscope-rollout.py"
 REAPER_SOURCE="$SCRIPT_DIR/reap-polyscope-clones.py"
 WRAPPER_SOURCE="$SCRIPT_DIR/polyscope-expose-wrapper.sh"
 GIT_WRAPPER_SOURCE="$SCRIPT_DIR/polyscope-git-wrapper.sh"
+NGINX_LIBRARY_SOURCE="$SCRIPT_DIR/polyscope_nginx.py"
+NGINX_HELPER_SOURCE="$SCRIPT_DIR/secpal-polyscope-nginx-apply.py"
 CODEX_AGENTS_SOURCE="$(cd -- "$SCRIPT_DIR/../templates" && pwd)/polyscope-codex-AGENTS.md"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/code/SecPal}"
 BIN_DIR="$HOME/.local/bin"
@@ -29,6 +31,8 @@ POLYSCOPE_SYSTEM_SERVER_UNIT="${POLYSCOPE_SYSTEM_SERVER_UNIT:-polyscope-server.s
 POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/systemd/system/$POLYSCOPE_SYSTEM_SERVER_UNIT.d}"
 SERVICE_PATH="${POLYSCOPE_SERVICE_PATH:-}"
 SUDO_BIN="${SUDO_BIN:-sudo}"
+POLYSCOPE_NGINX_HELPER="${POLYSCOPE_NGINX_HELPER:-/usr/local/libexec/secpal-polyscope-nginx-apply}"
+POLYSCOPE_NGINX_MANIFEST="${POLYSCOPE_NGINX_MANIFEST:-$HOME/.local/state/polyscope/nginx-manifest.json}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -95,23 +99,6 @@ detect_user_server_fragment_path() {
     "$SYSTEMCTL_BIN" --user show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
 }
 
-resolve_system_server_ssh_auth_sock() {
-    local system_server_user system_server_uid
-
-    system_server_user="$(detect_system_server_user)"
-    if [[ -z "$system_server_user" ]]; then
-        printf '/run/user/0/openssh_agent\n'
-        return
-    fi
-
-    if ! system_server_uid="$(id -u "$system_server_user" 2>/dev/null)"; then
-        echo "Error: could not resolve uid for system server user '$system_server_user'." >&2
-        exit 1
-    fi
-
-    printf '/run/user/%s/openssh_agent\n' "$system_server_uid"
-}
-
 resolve_server_scope() {
     case "$POLYSCOPE_SERVER_SCOPE" in
         auto)
@@ -134,23 +121,9 @@ resolve_server_scope() {
     esac
 }
 
-can_run_privileged_commands() {
-    if [[ "$(id -u)" -eq 0 ]]; then
-        return 0
-    fi
-
-    # Invalidate cached credentials so success proves the future user service
-    # can authenticate without a terminal, not merely reuse this shell's ticket.
-    "$SUDO_BIN" -n -k true >/dev/null 2>&1
-}
-
-run_privileged() {
-    if [[ "$(id -u)" -eq 0 ]]; then
-        "$@"
-        return
-    fi
-
-    "$SUDO_BIN" -n "$@"
+can_apply_nginx_non_interactively() {
+    [[ -x "$POLYSCOPE_NGINX_HELPER" ]] || return 1
+    "$SUDO_BIN" -n "$POLYSCOPE_NGINX_HELPER" --check >/dev/null 2>&1
 }
 
 is_managed_codex_agents_link() {
@@ -181,7 +154,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_MANIFEST; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -212,6 +185,12 @@ fi
 VALIDATOR_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/validate-ai-instructions.sh"
 if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
     echo "Error: canonical instruction validator is missing or not executable next to the rollout source: $VALIDATOR_SOURCE" >&2
+    exit 1
+fi
+NGINX_LIBRARY_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/polyscope_nginx.py"
+NGINX_HELPER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal-polyscope-nginx-apply.py"
+if [[ ! -f "$NGINX_LIBRARY_SOURCE" || ! -x "$NGINX_HELPER_SOURCE" ]]; then
+    echo "Error: constrained nginx source bundle is incomplete next to the rollout: $(dirname -- "$SOURCE_SCRIPT")" >&2
     exit 1
 fi
 
@@ -247,21 +226,16 @@ done
 
 server_scope="$(resolve_server_scope)"
 system_server_fragment_path="$(detect_system_server_fragment_path)"
-system_server_ssh_auth_sock=""
-
-if [[ "$server_scope" == "system" ]]; then
-    system_server_ssh_auth_sock="$(resolve_system_server_ssh_auth_sock)"
-fi
-
 if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]]; then
     echo "Error: --polyscope-server-scope system was requested but no system $POLYSCOPE_SYSTEM_SERVER_UNIT unit was found." >&2
     echo "Hint: use --polyscope-server-scope user to install the user-managed server unit instead." >&2
     exit 1
 fi
 
-if ! can_run_privileged_commands; then
-    echo "Error: automatic nginx rollout requires non-interactive sudo or root access." >&2
-    echo "Refusing to install a rollout service that cannot update and reload nginx unattended." >&2
+if ! can_apply_nginx_non_interactively; then
+    echo "Error: the exact constrained nginx helper capability is unavailable." >&2
+    echo "Expected: sudo -n $POLYSCOPE_NGINX_HELPER --check" >&2
+    echo "Run scripts/install-polyscope-system-components.sh interactively as root, then retry." >&2
     exit 1
 fi
 
@@ -279,6 +253,42 @@ fi
 if [[ ( -e "$CODEX_AGENTS_TARGET" || -L "$CODEX_AGENTS_TARGET" ) ]] && ! is_managed_codex_agents_link; then
     echo "Error: refusing to overwrite existing Codex instructions: $CODEX_AGENTS_TARGET" >&2
     exit 1
+fi
+
+rollout_sync_after='After=polyscope-server.service'
+installed_server_target="$SERVER_UNIT"
+if [[ "$server_scope" == "system" ]]; then
+    rollout_sync_after='After=network-online.target'
+    installed_server_target="$POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR/zz-secpal-runtime.conf"
+    if [[ ! -f "$installed_server_target" ]]; then
+        echo "Error: reviewed system server drop-in is not installed: $installed_server_target" >&2
+        echo "Run scripts/install-polyscope-system-components.sh interactively as root first." >&2
+        exit 1
+    fi
+    if [[ "$(detect_system_server_user)" != "secpal" ]]; then
+        echo "Error: the system Polyscope server must run as secpal before user units are installed." >&2
+        exit 1
+    fi
+    if ! system_server_uid="$(id -u secpal 2>/dev/null)"; then
+        echo "Error: required system Polyscope service user 'secpal' does not exist." >&2
+        exit 1
+    fi
+    for _required_dropin_line in \
+        "User=secpal" \
+        "ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
+        "Environment=PATH=/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
+        "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" \
+        "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git"; do
+        if ! grep -qxF "$_required_dropin_line" "$installed_server_target"; then
+            echo "Error: reviewed system server drop-in is incomplete: $installed_server_target" >&2
+            echo "Missing: $_required_dropin_line" >&2
+            exit 1
+        fi
+    done
+    if ! grep -qF -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$installed_server_target"; then
+        echo "Error: reviewed system server drop-in lacks constrained nginx activation: $installed_server_target" >&2
+        exit 1
+    fi
 fi
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$CODEX_HOME_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
@@ -305,9 +315,6 @@ fi
 ln -sfn "$EXPOSE_WRAPPER_TARGET" "$POLYSCOPE_EXPOSE_BIN"
 ln -sfn "$GIT_WRAPPER_TARGET" "$POLYSCOPE_GIT_WRAPPER_BIN"
 
-rollout_sync_after='After=polyscope-server.service'
-installed_server_target="$SERVER_UNIT"
-
 if [[ "$server_scope" == "user" ]]; then
 cat >"$SERVER_UNIT" <<EOF
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
@@ -332,26 +339,6 @@ WantedBy=default.target
 EOF
 else
     rm -f "$SERVER_UNIT"
-    rollout_sync_after='After=network-online.target'
-    installed_server_target="$POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR/zz-secpal-runtime.conf"
-
-    system_dropin_tmp="$(mktemp)"
-    cat >"$system_dropin_tmp" <<EOF
-# SPDX-FileCopyrightText: 2026 SecPal Contributors
-# SPDX-License-Identifier: MIT
-[Service]
-ExecStart=
-ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
-ExecStartPost=
-ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
-Environment=PATH=$SERVICE_PATH
-Environment=SSH_AUTH_SOCK=$system_server_ssh_auth_sock
-Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-EOF
-
-    run_privileged install -d -m 0755 "$POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR"
-    run_privileged install -m 0644 "$system_dropin_tmp" "$installed_server_target"
-    rm -f "$system_dropin_tmp"
 fi
 
 cat >"$SERVICE_UNIT" <<EOF
@@ -368,7 +355,8 @@ Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --install-nginx
+Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --install-nginx
 EOF
 
 cat >"$PATH_UNIT" <<EOF
@@ -410,6 +398,8 @@ PathChanged=$SOURCE_SCRIPT
 PathChanged=$VALIDATOR_SOURCE
 PathChanged=$VALIDATOR_PACKAGE_LOCK
 PathChanged=$VALIDATOR_INSTALLED_PACKAGE_LOCK
+PathChanged=$NGINX_LIBRARY_SOURCE
+PathChanged=$NGINX_HELPER_SOURCE
 
 [Install]
 WantedBy=default.target
@@ -509,9 +499,6 @@ if [[ "$server_scope" == "user" ]]; then
     "$SYSTEMCTL_BIN" --user enable --now polyscope-server.service
     "$SYSTEMCTL_BIN" --user restart polyscope-server.service
 else
-    run_privileged "$SYSTEMCTL_BIN" daemon-reload
-    run_privileged "$SYSTEMCTL_BIN" enable --now "$POLYSCOPE_SYSTEM_SERVER_UNIT"
-    run_privileged "$SYSTEMCTL_BIN" restart "$POLYSCOPE_SYSTEM_SERVER_UNIT"
     "$SYSTEMCTL_BIN" --user disable --now polyscope-server.service >/dev/null 2>&1 || true
 fi
 

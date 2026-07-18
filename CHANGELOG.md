@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-18 - Close Polyscope Workspace Lifecycle Gaps
+
+**Fixed:**
+
+- placed canonical AI-instruction validation first in every generated native workspace setup, preventing dependency, environment, database, and repository setup side effects for invalid candidates
+- restricted automatic provisioning and preview-state retention to active Polyscope database registrations, leaving unregistered clones exclusively to the conservative reaper
+- replaced generic unattended sudo assumptions with a fixed root-owned nginx manifest helper, exact command authorization, atomic activation and rollback, and separate interactive system and unprivileged user installers
+- converged rollout, provision path and timer, clone reaper, source watchers, and system-server intent with focused security and lifecycle regression coverage
+
 ## 2026-07-18 - Harden Instruction Validation Rollout
 
 **Fixed:**

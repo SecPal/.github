@@ -353,34 +353,83 @@ reaper daily after startup. The reaper prints reclaimed bytes and supports
 
 ### `install-polyscope-rollout.sh`
 
-Installs the SecPal Polyscope rollout systemd units that keep workspace clones,
-prompts, and preview config in sync. Run this from the workspace root when
-`setup-hooks.sh` reports a managed repo as **skipped (missing directory)** so
-the rollout-managed workspace can sync back to the expected repository set.
+Installs the unprivileged SecPal Polyscope rollout systemd units that keep
+registered workspace clones, prompts, and preview config in sync. Run this
+from the workspace root when `setup-hooks.sh` reports a managed repo as
+**skipped (missing directory)** so the rollout-managed workspace can sync back
+to the expected repository set.
 
 **Usage:**
 
 ```bash
-bash .github/scripts/install-polyscope-rollout.sh
+POLYSCOPE_SERVER_SCOPE=system bash .github/scripts/install-polyscope-rollout.sh
 ```
 
-Automatic nginx deployment runs from a user systemd service and therefore
-requires either root execution or passwordless, non-interactive `sudo`. The
-installer invalidates cached sudo credentials while checking this prerequisite
-and exits before writing service units when unattended access is unavailable.
+Run `install-polyscope-system-components.sh` first. This installer remains
+unprivileged and verifies the exact command
+`sudo -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`. It never
+tests generic sudo access and exits before writing user units when the fixed
+helper, system server drop-in, or exact authorization is unavailable.
 
 `--source-script` accepts a custom rollout implementation only as part of a
-complete source bundle: the script must be executable and have an executable
-`validate-ai-instructions.sh` sibling with the committed npm validator
-dependencies installed. The installer resolves this bundle before any
-installation writes and watches both files and the npm lock state for rollout
-changes and dependency-install recovery.
+complete source bundle: the script must be executable, have the constrained
+`polyscope_nginx.py` library and executable nginx helper beside it, and have an
+executable `validate-ai-instructions.sh` sibling with the committed npm
+validator dependencies installed. The installer resolves this bundle before
+any installation writes and watches these files and the npm lock state for
+rollout changes and dependency-install recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new
-managed repositories automatically when the canonical repo list changes. The
-paired daily `polyscope-clone-reaper.timer` removes only aged orphan clone
-roots after checking the live database allowlist, locks, and processes.
+managed repositories automatically when the canonical repo list changes. Both
+the provision path and the three-minute fallback timer are enabled. The
+provisioner reads only active `worktrees` registrations from `polyscope.db`,
+resolves them beneath the matching repository clone root, and never scans an
+unregistered clone as a setup candidate. The paired daily
+`polyscope-clone-reaper.timer` removes only aged orphan clone roots after
+checking the live database allowlist, locks, and processes.
+
+Every generated repository setup sequence starts with the validation-only
+`--validate-instruction-worktree` command. It validates the actual candidate
+root synchronously before npm, Composer, `.env`, database, migration, seed, or
+repository setup commands can run. The external provisioner applies the same
+canonical contract before its local configuration, hook, alias, setup, and
+marker writes.
+
+### `install-polyscope-system-components.sh`
+
+Installs only the root-owned Polyscope system boundary: the constrained nginx
+helper and renderer bundle, two exact sudoers command forms, and the system
+Polyscope server drop-in. Review the script, then run it interactively:
+
+```bash
+sudo -k
+sudo .github/scripts/install-polyscope-system-components.sh
+```
+
+The administrator enters the password only at the terminal prompt. The script
+validates sudoers syntax before activation, writes fixed root-owned targets
+atomically, and restores the previous components if activation fails. It does
+not authorize shells, Python, `systemctl`, file utilities, or user-selected
+paths through passwordless sudo.
+
+The installed `/usr/local/libexec/secpal-polyscope-nginx-apply` accepts only no
+arguments (apply) or `--check` (non-mutating boundary check). It reads the fixed
+mode-`0600`, `secpal`-owned JSON manifest, rejects links, unsafe ownership,
+unknown fields, non-loopback upstreams, invalid ports, and unsafe repository
+identifiers, then renders one fixed nginx target internally. Activation is
+atomic; `nginx -t` precedes reload, and validation or reload failure restores
+the prior configuration.
+
+After both installation steps, verify the steady state:
+
+```bash
+sudo -n /usr/local/libexec/secpal-polyscope-nginx-apply --check
+systemctl --user is-active polyscope-rollout-sync.path
+systemctl --user is-active polyscope-worktree-provision.path
+systemctl --user is-active polyscope-worktree-provision.timer
+systemctl --user is-active polyscope-clone-reaper.timer
+```
 
 ### `setup-hooks.sh`
 
