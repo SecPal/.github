@@ -14,12 +14,14 @@ deterministic file contracts belong in the validator and its regression tests.
 
 ## Independent Instruction Layers
 
-Each managed repository can use three independent layers:
+Each managed repository uses two required independent files and may add focused
+overlays as a third layer. One required file may never replace the other:
 
-1. `AGENTS.md` is the concise, provider-neutral runtime baseline for agents
-   working in that repository.
+1. `AGENTS.md` is the required, concise, provider-neutral runtime baseline for
+   agents working in that repository.
 2. `.github/copilot-instructions.md` is a compact GitHub code-review profile.
-   It is not generated from and does not mirror `AGENTS.md`.
+   It is required, review-only, and is not generated from or interpreted as a
+   replacement for `AGENTS.md`.
 3. `.github/instructions/*.instructions.md` contains focused path- or
    stack-specific review criteria. These files use `name` and `applyTo`
    frontmatter.
@@ -64,8 +66,8 @@ instead protect the deterministic contract.
 The validator uses the repository-pinned `markdownlint` binary when
 `node_modules` is available, then a globally installed `markdownlint` as a
 fallback. It does not download tools. If neither is available, the validator
-reports the lint check as skipped; CI installs the committed lockfile and is
-the authoritative lint environment.
+fails with a blocked-tool message and a nonzero result. CI installs the
+committed lockfile and is the authoritative lint environment.
 
 Run the validator and its regression suite with:
 
@@ -80,10 +82,10 @@ To validate another checked-out repository with this implementation:
 bash scripts/validate-ai-instructions.sh /path/to/repository
 ```
 
-The legacy `validate-copilot-instructions.sh` entry point delegates to this
-validator whenever a repository has `AGENTS.md`. Its limited no-`AGENTS.md`
-path remains a compatibility boundary and does not define the current
-three-layer architecture.
+The compatibility entry point `validate-copilot-instructions.sh` always
+delegates to this canonical validator, including for repository-path arguments.
+It has no Copilot-only validation model, so a missing `AGENTS.md` or missing
+Copilot review profile fails through the same canonical contract.
 
 ## Regression Coverage
 
@@ -105,8 +107,16 @@ modes.
 
 `scripts/polyscope-rollout.py` may discover `AGENTS.md`, the independent
 Copilot profile, and focused overlays to build repository metadata and prompts.
-It must not generate, reconstruct, or overwrite
-`.github/copilot-instructions.md` from `AGENTS.md`.
+It requires both independent files before dependent configuration or metadata
+synchronization, always reads runtime policy from `AGENTS.md`, and never treats
+the Copilot review profile as runtime instructions. It must not generate,
+reconstruct, or overwrite `.github/copilot-instructions.md` from `AGENTS.md`.
+
+During sibling migration, prompt extraction may recognize the legacy headings
+`Always-On Rules`, `Required Validation`, `AI Findings Triage`, and
+`Issue And PR Discipline` inside an existing `AGENTS.md`. Modern headings take
+precedence. This read-only heading compatibility never permits either required
+file to be absent and never copies content between instruction layers.
 
 The editable global Polyscope instructions remain in
 `templates/polyscope-codex-AGENTS.md`. The installer links the configured Codex

@@ -171,8 +171,8 @@ test_markdown_lint() {
         print_result "instruction Markdown passes lint" "FAIL" \
             "No instruction Markdown files found"
     elif ! markdownlint_available; then
-        print_result "instruction Markdown passes lint" "PASS" \
-            "Skipped (install repository dependencies to enforce Markdown lint)"
+        print_result "instruction Markdown passes lint" "FAIL" \
+            "Markdownlint is unavailable; provide it with the committed lockfile dependencies or a compatible global markdownlint"
     elif markdownlint_runner "${targets[@]}" >/dev/null 2>&1; then
         print_result "instruction Markdown passes lint" "PASS"
     else

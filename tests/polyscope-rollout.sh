@@ -214,6 +214,7 @@ seed_api_worktree_files() {
     local worktree_dir="$1"
 
     mkdir -p "$worktree_dir/.github"
+    printf '# test runtime instructions\n' > "$worktree_dir/AGENTS.md"
     printf '# test clone\n' > "$worktree_dir/.github/copilot-instructions.md"
     printf '{}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
@@ -225,6 +226,7 @@ seed_node_worktree_files() {
     local package_name="$2"
 
     mkdir -p "$worktree_dir/.github"
+    printf '# test runtime instructions\n' > "$worktree_dir/AGENTS.md"
     printf '# test clone\n' > "$worktree_dir/.github/copilot-instructions.md"
     printf '{\n  "name": "%s",\n  "private": true,\n  "scripts": {\n    "build": "vite build"\n  }\n}\n' "$package_name" > "$worktree_dir/package.json"
     printf '{\n  "name": "%s",\n  "lockfileVersion": 3,\n  "requires": true,\n  "packages": {}\n}\n' "$package_name" > "$worktree_dir/package-lock.json"
@@ -279,6 +281,50 @@ if python3 "$script_copy" \
     fi
 
     grep -q "$expected_error" "$invalid_err"
+}
+
+assert_rollout_rejects_instruction_contract() {
+    local repo_name="$1"
+    local relative_path="$2"
+    local fixture_mode="$3"
+    local instruction_path="$workspace_root/$repo_name/$relative_path"
+    local saved_path="$instruction_path.required-fixture"
+    local fixture_slug="${repo_name//./-}-${relative_path//\//-}-$fixture_mode"
+    local failure_out="$workspace/$fixture_slug.stdout"
+    local failure_err="$workspace/$fixture_slug.stderr"
+    local failure_nginx="$workspace/$fixture_slug.nginx"
+    local failure_summary="$workspace/$fixture_slug.summary.json"
+
+    mv "$instruction_path" "$saved_path"
+    if [ "$fixture_mode" = "invalid-utf8" ]; then
+        printf '\377' > "$instruction_path"
+    fi
+
+    if python3 "$PYTHON_SCRIPT" \
+            --workspace-root "$workspace_root" \
+            --db-path "$db_path" \
+            --repo-state-file "$repos_json" \
+            --nginx-output "$failure_nginx" \
+            --summary-output "$failure_summary" \
+            --skip-local-configs \
+            --skip-db-sync \
+            >"$failure_out" 2>"$failure_err"; then
+        echo "rollout must reject $fixture_mode $relative_path in $repo_name" >&2
+        exit 1
+    fi
+
+    grep -qF "Managed repository root $workspace_root/$repo_name" "$failure_err"
+    grep -qF "$relative_path" "$failure_err"
+    grep -qF 'both independent instruction files are required' "$failure_err"
+    test ! -e "$failure_nginx"
+    test ! -e "$failure_summary"
+
+    if [ "$fixture_mode" = "missing" ]; then
+        test ! -e "$instruction_path"
+    else
+        rm "$instruction_path"
+    fi
+    mv "$saved_path" "$instruction_path"
 }
 
 common_header='<!--
@@ -416,8 +462,6 @@ applyTo: '**/*.php'
 - Add or update the smallest relevant Pest test for each PHP change, then run the affected tests.
 - Use vendor/bin/pint --dirty after changes.
 " > "$workspace_root/GuardGuide/.github/instructions/php-laravel.instructions.md"
-
-rm -f "$workspace_root/GuardGuide/AGENTS.md"
 
 create_repo "contracts" "$common_header
 
@@ -642,6 +686,28 @@ applyTo: '.github/workflows/**/*.yml'
 
 write_repo_runtime_files
 
+# Modern sections must win when an existing AGENTS.md also carries legacy
+# migration headings. The legacy-only sibling fixtures below remain covered by
+# their generated prompts.
+cat >>"$workspace_root/.github/AGENTS.md" <<'EOF'
+
+## Always-On Rules
+
+- LEGACY RUNTIME MARKER MUST NOT REACH MODERN PROMPTS.
+
+## Required Validation
+
+- LEGACY VALIDATION MARKER MUST NOT REACH MODERN PROMPTS.
+
+## AI Findings Triage
+
+- LEGACY TRIAGE MARKER MUST NOT REACH MODERN PROMPTS.
+
+## Issue And PR Discipline
+
+- LEGACY TRACKING MARKER MUST NOT REACH MODERN PROMPTS.
+EOF
+
 # Repository Copilot profiles are independent review instructions. Preserve a
 # sentinel that does not exist in AGENTS.md so any reconstruction is observable.
 frontend_copilot_path="$workspace_root/frontend/.github/copilot-instructions.md"
@@ -698,6 +764,11 @@ conn.close()
 repos_json.write_text(json.dumps(repo_state, indent=2))
 PY
 
+assert_rollout_rejects_instruction_contract "GuardGuide" "AGENTS.md" "missing"
+assert_rollout_rejects_instruction_contract "GuardGuide" "AGENTS.md" "invalid-utf8"
+assert_rollout_rejects_instruction_contract \
+    "frontend" ".github/copilot-instructions.md" "missing"
+
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --db-path "$db_path" \
@@ -712,6 +783,34 @@ if [ "$frontend_copilot_hash_after_rollout" != "$frontend_copilot_hash_before_ro
     exit 1
 fi
 grep -qF '## Independent Review Sentinel' "$frontend_copilot_path"
+
+# Provisionability requires both independent instruction files in each
+# worktree, not merely the Copilot review profile.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "instruction-contract-worktree"
+(fixture / ".git").mkdir(parents=True)
+(fixture / ".github").mkdir()
+(fixture / "AGENTS.md").write_text("# Runtime instructions\n")
+(fixture / ".github" / "copilot-instructions.md").write_text("# Review profile\n")
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+assert module.is_provisionable_worktree("frontend", fixture, [], log_skip_reason=False)
+(fixture / "AGENTS.md").unlink()
+assert not module.is_provisionable_worktree("frontend", fixture, [], log_skip_reason=False)
+(fixture / "AGENTS.md").write_text("# Runtime instructions\n")
+(fixture / ".github" / "copilot-instructions.md").unlink()
+assert not module.is_provisionable_worktree("frontend", fixture, [], log_skip_reason=False)
+PY
 
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
@@ -1928,6 +2027,12 @@ frontend_env = frontend_worktree.joinpath(".env.local").read_text()
 assert "https://api-azure-cheetah.preview.secpal.dev" in frontend_env, frontend_env
 assert "https://api-azure-cheetah-165552b7.preview.secpal.dev" not in frontend_env, frontend_env
 
+repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
+(repo_spec_frontend / ".github").mkdir(parents=True)
+(repo_spec_frontend / "AGENTS.md").write_text("# Frontend runtime instructions\n")
+(repo_spec_frontend / ".github" / "copilot-instructions.md").write_text(
+    "# Frontend review profile\n"
+)
 repo_specs = module.build_repo_specs(workspace / "repo-spec-root")
 rendered_local_config = module.render_worktree_local_config(repo_specs["frontend"], frontend_worktree)
 assert "https://frontend-azure-cheetah.preview.secpal.dev" in rendered_local_config, rendered_local_config
@@ -3616,6 +3721,11 @@ for row in prompt_rows:
         assert 'tool-specific labels or prefixes' in prompt
         assert 'pull the relevant linked workspaces' not in prompt
         assert 'after merge return the repo to the ready state' not in prompt
+        assert 'Preserve this repository-owned review profile.' not in prompt
+        assert 'LEGACY RUNTIME MARKER' not in prompt
+        assert 'LEGACY VALIDATION MARKER' not in prompt
+        assert 'LEGACY TRIAGE MARKER' not in prompt
+        assert 'LEGACY TRACKING MARKER' not in prompt
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links

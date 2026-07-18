@@ -2817,16 +2817,57 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
     return repo_specs
 
 
+def read_instruction_file(path: pathlib.Path) -> tuple[str | None, str | None]:
+    if not path.is_file():
+        return None, "missing"
+    if not os.access(path, os.R_OK):
+        return None, "unreadable"
+
+    try:
+        contents = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None, "unreadable or invalid UTF-8"
+
+    if not contents.strip():
+        return None, "empty"
+    return contents, None
+
+
+def require_repo_instruction_files(spec: dict[str, Any]) -> str:
+    repo_path = pathlib.Path(spec["path"])
+    runtime_contents: str | None = None
+
+    for key in ("agent_instructions", "copilot_instructions"):
+        instruction_path = pathlib.Path(spec[key])
+        contents, problem = read_instruction_file(instruction_path)
+        if problem is not None:
+            try:
+                relative_path = instruction_path.relative_to(repo_path)
+            except ValueError:
+                relative_path = instruction_path
+            raise SystemExit(
+                f"Managed repository root {repo_path}: both independent instruction files are required; "
+                f"{relative_path} is {problem}"
+            )
+        if key == "agent_instructions":
+            runtime_contents = contents
+
+    if runtime_contents is None:
+        raise RuntimeError("validated AGENTS.md contents were not loaded")
+    return runtime_contents
+
+
+def validate_repo_instruction_files(repo_specs: dict[str, dict[str, Any]]) -> None:
+    for spec in repo_specs.values():
+        require_repo_instruction_files(spec)
+
+
 def instruction_reference(spec: dict[str, Any]) -> str:
-    if spec["agent_instructions"].exists():
-        return str(spec["agent_instructions"])
-    return str(spec["copilot_instructions"])
+    return str(spec["agent_instructions"])
 
 
 def load_runtime_instructions_text(spec: dict[str, Any]) -> str:
-    if spec["agent_instructions"].exists():
-        return spec["agent_instructions"].read_text()
-    return spec["copilot_instructions"].read_text()
+    return require_repo_instruction_files(spec)
 
 
 def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
@@ -2953,6 +2994,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
 
 
 def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
+    require_repo_instruction_files(spec)
     config = copy.deepcopy(spec["local_config"])
     config = enrich_local_config(spec["path"].name, spec, config)
     preamble = collapse_spaces(
@@ -3156,10 +3198,17 @@ def is_provisionable_worktree(
         if not (android_project_dir / "settings.gradle").is_file():
             return skip("missing committed native Android Gradle project")
 
-    copilot_instructions_rel = REPO_SETTINGS[repo_name]["copilot_instructions"]
-    copilot_instructions_path = worktree_path / copilot_instructions_rel
-    if not copilot_instructions_path.is_file():
-        return skip(f"missing required repo file {copilot_instructions_rel}")
+    required_instruction_paths = (
+        pathlib.Path("AGENTS.md"),
+        pathlib.Path(REPO_SETTINGS[repo_name]["copilot_instructions"]),
+    )
+    for relative_path in required_instruction_paths:
+        _contents, problem = read_instruction_file(worktree_path / relative_path)
+        if problem is not None:
+            return skip(
+                f"required independent instruction file {relative_path} is {problem}; "
+                "both AGENTS.md and .github/copilot-instructions.md are required"
+            )
 
     package_scripts = load_package_scripts(worktree_path)
     composer_scripts = load_composer_scripts(worktree_path)
@@ -4227,6 +4276,7 @@ def main() -> int:
 
     repo_specs = build_repo_specs(args.workspace_root)
 
+    validate_repo_instruction_files(repo_specs)
     validate_repo_local_configs(repo_specs)
     if not args.skip_local_configs:
         write_local_configs(repo_specs)

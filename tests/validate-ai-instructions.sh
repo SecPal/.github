@@ -245,4 +245,41 @@ no_overlays_output="$workspace/no-overlays.output"
 assert_passes "$no_overlays_repo" "$no_overlays_output"
 grep -qF 'Skipped (no focused instruction files present)' "$no_overlays_output"
 
+# Execute an unmodified copy of the real validator from a temporary scripts
+# directory so its repository-pinned Markdownlint path is absent. Restrict PATH
+# to the validator's other required tools and deliberately omit any global
+# Markdownlint command.
+isolated_root="$workspace/no-markdownlint-toolchain"
+isolated_validator="$isolated_root/scripts/validate-ai-instructions.sh"
+isolated_bin="$isolated_root/bin"
+isolated_repo="$isolated_root/repository"
+mkdir -p "$isolated_root/scripts" "$isolated_bin"
+cp "$VALIDATOR" "$isolated_validator"
+copy_valid_repo "$valid_repo" "$isolated_repo"
+for required_tool in dirname grep head find python3 wc; do
+    ln -s "$(command -v "$required_tool")" "$isolated_bin/$required_tool"
+done
+
+missing_markdownlint_output="$workspace/missing-markdownlint.output"
+set +e
+(
+    cd "$isolated_repo"
+    PATH="$isolated_bin" REPO_TYPE=org /bin/bash "$isolated_validator"
+) >"$missing_markdownlint_output" 2>&1
+missing_markdownlint_status=$?
+set -e
+
+if [ "$missing_markdownlint_status" -eq 0 ]; then
+    sed -n '1,240p' "$missing_markdownlint_output" >&2
+    echo "validator must fail when Markdownlint is unavailable" >&2
+    exit 1
+fi
+grep -qF 'Markdownlint is unavailable' "$missing_markdownlint_output"
+grep -qF 'provide it with the committed lockfile dependencies or a compatible global markdownlint' \
+    "$missing_markdownlint_output"
+if grep -qF 'All tests passed' "$missing_markdownlint_output"; then
+    echo "missing Markdownlint must not report overall validation success" >&2
+    exit 1
+fi
+
 printf 'validate-ai-instructions tests passed\n'
