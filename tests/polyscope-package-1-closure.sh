@@ -51,14 +51,20 @@ def write_valid_instructions(root: pathlib.Path) -> None:
     )
 
 
-def run_setup_sequence(root: pathlib.Path, commands: list[str], env: dict[str, str]) -> None:
-    for command in commands:
-        subprocess.run(
-            ["bash", "-c", "set -euo pipefail; " + command],
-            cwd=root,
-            env=env,
-            check=True,
-        )
+def run_polyscope_setup(
+    root: pathlib.Path,
+    commands: list[str],
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Execute setup exactly as Polyscope joins the generated entries."""
+    return subprocess.run(
+        ["bash", "-c", " && ".join(commands)],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 # Every generated native setup must enter the real canonical validator before
@@ -66,53 +72,188 @@ def run_setup_sequence(root: pathlib.Path, commands: list[str], env: dict[str, s
 # inspecting source ordering.
 native_source_workspace = workspace / "native source roots"
 for repo_name in module.REPO_SETTINGS:
-    write_valid_instructions(native_source_workspace / repo_name)
+    source_root = native_source_workspace / repo_name
+    write_valid_instructions(source_root)
+    source_root.joinpath("package.json").write_text(
+        json.dumps({"name": f"source-{repo_name}", "private": True}) + "\n"
+    )
+    source_root.joinpath("package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": f"source-{repo_name}",
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {},
+            }
+        )
+        + "\n"
+    )
+    source_root.joinpath(".env.example").write_text(
+        "APP_KEY=base64:test-key\nDB_CONNECTION=sqlite\nDB_DATABASE=database/database.sqlite\n"
+    )
 generated_specs = module.build_repo_specs(native_source_workspace)
-side_effect_script = (
-    "from pathlib import Path; "
-    "Path('.env').write_text('mutated\\n'); "
-    "Path('node_modules').mkdir(); "
-    "Path('vendor').mkdir(); "
-    "Path('database.sqlite').write_text('mutated'); "
-    "Path('.setup-side-effect').write_text('ran'); "
-    "Path('.polyscope-secpal-provisioned.json').write_text('{}')"
-)
-side_effect_command = f"python3 -c {shlex.quote(side_effect_script)}"
+native_fake_bin = workspace / "native fake bin"
+native_fake_bin.mkdir()
+native_setup_log = workspace / "native-setup.log"
+for executable in ("composer", "npm", "php"):
+    fake_executable = native_fake_bin / executable
+    fake_executable.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"printf '{executable}:%s\\n' \"$*\" >>\"$NATIVE_SETUP_LOG\"\n"
+        f"touch .native-{executable}-invoked\n"
+        + (
+            "mkdir -p node_modules\n"
+            "printf '{}\\n' >node_modules/.package-lock.json\n"
+            "if [[ \"${1:-}\" == run && \"${2:-}\" == build && -n \"${VITE_POLYSCOPE_OUTPUT_DIR:-}\" ]]; then\n"
+            "    mkdir -p \"$VITE_POLYSCOPE_OUTPUT_DIR\"\n"
+            "    printf '<html></html>\\n' >\"$VITE_POLYSCOPE_OUTPUT_DIR/index.html\"\n"
+            "fi\n"
+            "previous=''\n"
+            "for argument in \"$@\"; do\n"
+            "    if [[ \"$previous\" == --outDir ]]; then\n"
+            "        mkdir -p \"$argument\"\n"
+            "        printf '<html></html>\\n' >\"$argument/index.html\"\n"
+            "    fi\n"
+            "    previous=\"$argument\"\n"
+            "done\n"
+            if executable == "npm"
+            else "mkdir -p vendor; touch vendor/autoload.php\n"
+            if executable == "composer"
+            else ""
+        )
+        + "exit 0\n"
+    )
+    fake_executable.chmod(0o755)
+
+native_env = os.environ.copy()
+native_env["PATH"] = f"{native_fake_bin}:{native_env['PATH']}"
+native_env["NATIVE_SETUP_LOG"] = str(native_setup_log)
+native_env["POLYSCOPE_DB_PATH"] = str(workspace / "native-polyscope.db")
 
 for repo_name, generated_spec in generated_specs.items():
     setup_commands = module.render_local_config(generated_spec).get("scripts", {}).get("setup", [])
     assert setup_commands, repo_name
-    validation_command = setup_commands[0]
-    assert "--validate-instruction-worktree" in validation_command, (repo_name, validation_command)
+    assert "--validate-instruction-worktree" in setup_commands[0], (repo_name, setup_commands)
 
     invalid_root = workspace / "native setup ; invalid roots" / repo_name
     write_valid_instructions(invalid_root)
     invalid_root.joinpath("AGENTS.md").write_text("# Missing SPDX metadata\n")
+    invalid_root.joinpath("package.json").write_text(
+        json.dumps({"name": f"invalid-{repo_name}", "private": True}) + "\n"
+    )
+    invalid_root.joinpath("package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": f"invalid-{repo_name}",
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {},
+            }
+        )
+        + "\n"
+    )
     unrelated = invalid_root / "unrelated-sentinel"
     unrelated.write_bytes(b"unchanged")
-    try:
-        run_setup_sequence(invalid_root, [validation_command, side_effect_command], os.environ.copy())
-    except subprocess.CalledProcessError:
-        pass
-    else:
-        raise AssertionError(f"invalid {repo_name} instructions reached native setup")
+    result = run_polyscope_setup(invalid_root, setup_commands, native_env)
+    assert result.returncode != 0, (repo_name, result.stdout, result.stderr)
+    assert "canonical AI-instruction validation failed" in result.stderr, (
+        repo_name,
+        result.stdout,
+        result.stderr,
+    )
+    assert "Canonical AI-instruction validation passed" not in result.stdout, result.stdout
 
     for forbidden in (
         ".env",
         "node_modules",
         "vendor",
         "database.sqlite",
-        ".setup-side-effect",
+        ".native-composer-invoked",
+        ".native-npm-invoked",
+        ".native-php-invoked",
         ".polyscope-secpal-provisioned.json",
     ):
-        assert not invalid_root.joinpath(forbidden).exists(), (repo_name, forbidden)
+        assert not invalid_root.joinpath(forbidden).exists(), (
+            repo_name,
+            forbidden,
+            setup_commands,
+            result.stdout,
+            result.stderr,
+            native_setup_log.read_text() if native_setup_log.exists() else "",
+        )
     assert unrelated.read_bytes() == b"unchanged"
 
-valid_root = workspace / "native setup valid root with spaces"
-write_valid_instructions(valid_root)
-valid_validation_command = module.render_local_config(generated_specs[".github"])["scripts"]["setup"][0]
-run_setup_sequence(valid_root, [valid_validation_command, side_effect_command], os.environ.copy())
-assert valid_root.joinpath(".setup-side-effect").read_text() == "ran"
+# The generated setup contract must be a single native-runner entry. Within
+# that entry, multiline commands remain ordered and any failure stops every
+# later command.
+for repo_name, generated_spec in generated_specs.items():
+    setup_commands = module.render_local_config(generated_spec)["scripts"]["setup"]
+    assert len(setup_commands) == 1, (repo_name, setup_commands)
+
+ordered_root = workspace / "ordered setup root with spaces ; and shell chars"
+ordered_root.mkdir(parents=True)
+ordered_log = ordered_root / "order.log"
+ordered_commands = [
+    "printf 'first\\n' >>order.log",
+    "for item in second; do printf '%s\\n' \"$item\" >>order.log; done",
+    "printf 'third\\n' >>order.log",
+]
+ordered_setup = module.build_fail_closed_setup_command(ordered_commands)
+ordered_result = run_polyscope_setup(ordered_root, [ordered_setup], os.environ.copy())
+assert ordered_result.returncode == 0, ordered_result.stderr
+assert ordered_log.read_text().splitlines() == ["first", "second", "third"]
+
+failing_commands = [
+    "printf 'first\\n' >failure-order.log",
+    "printf 'failed\\n' >>failure-order.log\nfalse",
+    "printf 'must-not-run\\n' >>failure-order.log",
+]
+failing_setup = module.build_fail_closed_setup_command(failing_commands)
+failing_result = run_polyscope_setup(ordered_root, [failing_setup], os.environ.copy())
+assert failing_result.returncode != 0
+assert ordered_root.joinpath("failure-order.log").read_text().splitlines() == ["first", "failed"]
+
+# Fully valid candidates retain the generated setup behavior for every managed
+# repository after entering the single fail-closed boundary.
+for repo_name, generated_spec in generated_specs.items():
+    valid_root = workspace / "native setup valid roots with spaces" / repo_name
+    write_valid_instructions(valid_root)
+    valid_root.joinpath("package.json").write_text(
+        json.dumps({"name": f"valid-{repo_name}", "private": True}) + "\n"
+    )
+    valid_root.joinpath("package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": f"valid-{repo_name}",
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {},
+            }
+        )
+        + "\n"
+    )
+    valid_root.joinpath("composer.json").write_text(
+        json.dumps({"name": f"secpal/{repo_name.lower().replace('.', '-')}", "scripts": {}}) + "\n"
+    )
+    valid_root.joinpath("composer.lock").write_text("{}\n")
+    valid_root.joinpath(".env.example").write_text(
+        "APP_KEY=base64:test-key\nDB_CONNECTION=sqlite\nDB_DATABASE=database/database.sqlite\n"
+    )
+    valid_root.joinpath("database").mkdir()
+
+    setup_commands = module.render_local_config(generated_spec)["scripts"]["setup"]
+    result = run_polyscope_setup(valid_root, setup_commands, native_env)
+    assert result.returncode == 0, (repo_name, result.stdout, result.stderr)
+
+    native_commands = generated_spec[module.NATIVE_SETUP_COMMANDS_KEY]
+    command_text = "\n".join(native_commands)
+    if "npm " in command_text:
+        assert valid_root.joinpath(".native-npm-invoked").is_file(), repo_name
+    if "composer " in command_text:
+        assert valid_root.joinpath(".native-composer-invoked").is_file(), repo_name
+    if "php " in command_text or "--bootstrap-api-worktree" in command_text:
+        assert valid_root.joinpath(".native-php-invoked").is_file(), repo_name
 
 
 # Provisioning must use current active database registrations as its allowlist.

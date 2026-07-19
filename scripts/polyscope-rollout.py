@@ -35,6 +35,8 @@ DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
 NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
+NATIVE_SETUP_COMMANDS_KEY = "_native_setup_commands"
+WORKSPACE_ALIAS_REGISTRY_FILENAME = ".polyscope-secpal-workspace-aliases.json"
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
 PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE"
@@ -519,6 +521,23 @@ def build_workspace_instruction_validation_command() -> str:
     """Return the synchronous guard used by Polyscope's native setup runner."""
     rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
     return f"python3 {rollout_script} --validate-instruction-worktree \"$PWD\""
+
+
+def build_fail_closed_setup_command(commands: list[str]) -> str:
+    """Render the complete Polyscope-native setup as one strict shell unit."""
+    if not commands:
+        raise ValueError("native setup requires at least one command")
+
+    grouped_commands = []
+    for command in commands:
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("native setup commands must be non-empty strings")
+        # Preserve command bytes exactly. Several commands contain quoted
+        # multiline Python whose indentation is semantically significant.
+        grouped_commands.append("(\n" + command + "\n)")
+
+    setup_script = "set -euo pipefail\n" + "\n".join(grouped_commands)
+    return f"bash -c {shlex.quote(setup_script)}"
 
 
 def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
@@ -1309,7 +1328,7 @@ def cleanup_removed_api_preview_databases(
         return []
 
     api_spec = repo_specs["api"]
-    api_validation_commands = render_local_config(api_spec).get("scripts", {}).get("setup", [])
+    api_validation_commands = list(api_spec[NATIVE_SETUP_COMMANDS_KEY])
     active_targets: set[str] = set()
     for worktree_path in registered_api_worktrees:
         active_targets.add(
@@ -2832,10 +2851,13 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
                     continue
                 if run_action.get("command") in API_RUNTIME_PREVIEW_COMMANDS:
                     run_action["command"] = build_api_preview_runtime_shell_command(run_action["command"], repo_path)
-        spec["local_config"]["scripts"]["setup"].insert(
-            0,
-            build_workspace_instruction_validation_command(),
-        )
+        native_setup_commands = list(spec["local_config"]["scripts"]["setup"])
+        spec[NATIVE_SETUP_COMMANDS_KEY] = native_setup_commands
+        spec["local_config"]["scripts"]["setup"] = [
+            build_fail_closed_setup_command(
+                [build_workspace_instruction_validation_command(), *native_setup_commands]
+            )
+        ]
         repo_specs[repo_name] = spec
     return repo_specs
 
@@ -3216,7 +3238,10 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
         package_scripts = load_package_scripts(repo_path)
         composer_scripts = load_composer_scripts(repo_path)
 
-        for command in config.get("scripts", {}).get("setup", []):
+        for command in spec.get(
+            NATIVE_SETUP_COMMANDS_KEY,
+            config.get("scripts", {}).get("setup", []),
+        ):
             validate_local_config_command(repo_name, repo_path, package_scripts, composer_scripts, command)
 
         for item in config.get("scripts", {}).get("run", []):
@@ -3652,14 +3677,13 @@ def provision_worktrees(
     canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
-        local_config = render_local_config(spec)
-        validation_commands = local_config.get("scripts", {}).get("setup", [])
+        validation_commands = list(spec[NATIVE_SETUP_COMMANDS_KEY])
         setup_commands = validation_commands
         if repo_name == "api":
             # The external provisioner already validated the candidate and the
             # API bootstrap command performs its own readiness preparation.
-            # Skip the native-runner validation and prepare entries here.
-            setup_commands = setup_commands[2:]
+            # Skip the native runner's prepare entry here.
+            setup_commands = setup_commands[1:]
 
         for worktree_path in registered_worktrees[repo_name]:
             if not worktree_path.is_dir() or worktree_path.is_symlink():
