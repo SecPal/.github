@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-19 - Add Deterministic PR Evidence State Layer
+
+**Added:**
+
+- added a standard-library Python helper that captures canonical, digest-bound
+  PR evidence with complete bounded review, thread, reply, reaction, commit,
+  and check pagination while blocking on partial state or head movement
+- added read-only local-head, exact commit-set, SSH/OpenPGP signature, applicable
+  rule, branch-protection, and required-check verification without polling,
+  GitHub mutations, Git writes, review requests, or merge authority
+- added versioned snapshot and repository-configuration schemas, safely escaped
+  derived Markdown, atomic private outputs, and offline fake-GitHub/fake-Git
+  regression coverage for the Package 2.1 data contract
+
 ## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
 
 **Fixed:**
