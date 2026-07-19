@@ -59,7 +59,17 @@ PROHIBITED_GIT_SUBCOMMANDS = {
 }
 SUCCESSFUL_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL"}
 PENDING_CHECK_STATUSES = {"EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"}
-MERGE_STATE_STATUSES = {"DIRTY", "UNKNOWN", "BLOCKED", "BEHIND", "UNSTABLE", "HAS_HOOKS", "CLEAN"}
+MERGE_STATE_STATUSES = {
+    "DIRTY",
+    "UNKNOWN",
+    "BLOCKED",
+    "BEHIND",
+    "DRAFT",
+    "UNSTABLE",
+    "HAS_HOOKS",
+    "CLEAN",
+}
+ANCHOR_CONNECTIONS = ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits")
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -162,11 +172,7 @@ def validate_external_command(arguments: list[str]) -> None:
         dynamic_command = (
             len(arguments) == 4
             and (
-                (
-                    subcommand == "cat-file"
-                    and arguments[2] == "-e"
-                    and re.fullmatch(rf"{oid}\^\{{commit\}}", arguments[3])
-                )
+                (subcommand == "cat-file" and arguments[2] == "commit" and re.fullmatch(oid, arguments[3]))
                 or (subcommand == "verify-commit" and arguments[2] == "--raw" and re.fullmatch(oid, arguments[3]))
                 or (
                     subcommand == "rev-list"
@@ -186,8 +192,10 @@ def validate_external_command(arguments: list[str]) -> None:
         raise CommandPolicyError(f"GitHub PR operation is not allowlisted: {arguments[2]}")
     if arguments[1] != "api":
         raise CommandPolicyError(f"GitHub CLI operation is not allowlisted: {arguments[1]}")
-    if arguments[2] == "graphql":
-        fields = arguments[3:]
+    if len(arguments) < 5 or arguments[2:4] != ["--hostname", "github.com"]:
+        raise CommandPolicyError("GitHub API host must be explicitly pinned to github.com")
+    if arguments[4] == "graphql":
+        fields = arguments[5:]
         if len(fields) % 2:
             raise CommandPolicyError("GraphQL arguments must be exact flag/value pairs")
         query = ""
@@ -217,11 +225,11 @@ def validate_external_command(arguments: list[str]) -> None:
         if not re.match(r"^\s*query\b", query) or re.search(r"\bmutation\b", query, re.IGNORECASE):
             raise CommandPolicyError("Only static GraphQL query operations are allowed")
         return
-    if len(arguments) != 5 or arguments[2:4] != ["--method", "GET"]:
+    if len(arguments) != 7 or arguments[4:6] != ["--method", "GET"]:
         raise CommandPolicyError("REST requests must use the exact explicit GET command shape")
     repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     encoded_ref = r"[A-Za-z0-9._~%-]+"
-    endpoint = arguments[4]
+    endpoint = arguments[6]
     allowed_endpoint = re.fullmatch(
         rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page=100&page=[1-9][0-9]*",
         endpoint,
@@ -241,6 +249,7 @@ class CommandRunner:
         environment = os.environ.copy()
         environment["PAGER"] = "cat"
         environment["GH_PAGER"] = "cat"
+        environment["GH_HOST"] = "github.com"
         environment["GIT_NO_LAZY_FETCH"] = "1"
         completed = subprocess.run(
             arguments,
@@ -1346,6 +1355,8 @@ def graphql_arguments(
     arguments = [
         "gh",
         "api",
+        "--hostname",
+        "github.com",
         "graphql",
         "-f",
         f"query={query_document}",
@@ -1421,6 +1432,23 @@ def extract_anchor(payload: dict[str, Any]) -> dict[str, Any]:
             "pull_request.anchor",
             None,
         )
+    if not isinstance(pull_request.get("updatedAt"), str) or not pull_request.get("updatedAt"):
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Pull request update sentinel is unavailable",
+            "pull_request.anchor",
+            None,
+        )
+    for connection in ANCHOR_CONNECTIONS:
+        value = pull_request.get(connection)
+        total_count = value.get("totalCount") if isinstance(value, dict) else None
+        if not isinstance(total_count, int) or isinstance(total_count, bool) or total_count < 0:
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                f"Pull request {connection} count sentinel is unavailable",
+                "pull_request.anchor",
+                None,
+            )
     base_repository = pull_request.get("baseRepository")
     if not isinstance(base_repository, dict) or any(
         not isinstance(base_repository.get(key), str) or not base_repository.get(key)
@@ -1450,6 +1478,18 @@ def ensure_unchanged_anchor(before: dict[str, Any], after: dict[str, Any]) -> No
         )
 
 
+def ensure_anchor_counts_match(pull_request: dict[str, Any], captured: dict[str, int]) -> None:
+    for connection in ANCHOR_CONNECTIONS:
+        expected = pull_request[connection]["totalCount"]
+        if captured.get(connection) != expected:
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                f"Captured {connection} count does not match pull request anchor",
+                connection,
+                None,
+            )
+
+
 def _empty_signer() -> dict[str, Any]:
     return copy.deepcopy(ZERO_AUTHOR)
 
@@ -1468,9 +1508,37 @@ def _local_signature_format(output: str) -> str:
     return "unknown"
 
 
-def interpret_local_signature(returncode: int, output: str) -> dict[str, Any]:
+def _commit_signature_format(commit_object: str) -> str:
+    header = commit_object.partition("\n\n")[0]
+    formats = {
+        {
+            "PGP SIGNATURE": "openpgp",
+            "PGP MESSAGE": "openpgp",
+            "SSH SIGNATURE": "ssh",
+            "SIGNED MESSAGE": "smime",
+        }[match]
+        for match in re.findall(
+            r"(?m)^gpgsig(?:-sha256)? -----BEGIN (PGP SIGNATURE|PGP MESSAGE|SSH SIGNATURE|SIGNED MESSAGE)-----$",
+            header,
+        )
+    }
+    return next(iter(formats)) if len(formats) == 1 else "unknown"
+
+
+def interpret_local_signature(
+    returncode: int,
+    output: str,
+    *,
+    signature_format_hint: str = "unknown",
+) -> dict[str, Any]:
     lowered = output.lower()
-    signature_format = _local_signature_format(lowered)
+    reported_format = _local_signature_format(lowered)
+    if reported_format == "unknown":
+        signature_format = signature_format_hint
+    elif signature_format_hint in {"unknown", reported_format}:
+        signature_format = reported_format
+    else:
+        signature_format = "unknown"
     if returncode == 0:
         return {
             "state": "valid",
@@ -1533,8 +1601,8 @@ def normalize_github_signature(value: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def local_signature_for_commit(runner: Any, oid: str) -> dict[str, Any]:
-    available = runner.run(["git", "cat-file", "-e", f"{oid}^{{commit}}"], allow_failure=True)
-    if available.returncode != 0:
+    commit_object = runner.run(["git", "cat-file", "commit", oid], allow_failure=True)
+    if commit_object.returncode != 0:
         return {
             "state": "object_unavailable",
             "verified": False,
@@ -1543,7 +1611,11 @@ def local_signature_for_commit(runner: Any, oid: str) -> dict[str, Any]:
             "signer": _empty_signer(),
         }
     verified = runner.run(["git", "verify-commit", "--raw", oid], allow_failure=True)
-    return interpret_local_signature(verified.returncode, f"{verified.stdout}\n{verified.stderr}")
+    return interpret_local_signature(
+        verified.returncode,
+        f"{verified.stdout}\n{verified.stderr}",
+        signature_format_hint=_commit_signature_format(commit_object.stdout),
+    )
 
 
 def _check_application() -> dict[str, Any]:
@@ -2055,6 +2127,13 @@ query PullRequestAnchor($owner:String!, $name:String!, $number:Int!) {
       mergeable
       mergeStateStatus
       reviewDecision
+      updatedAt
+      labels { totalCount }
+      reviewRequests { totalCount }
+      reviews { totalCount }
+      comments { totalCount }
+      reviewThreads { totalCount }
+      commits { totalCount }
       author {
         __typename
         login
@@ -2464,7 +2543,7 @@ class GitHubClient:
 
     def rest(self, endpoint: str, connection: str, cursor: str | None = None) -> Any:
         self.budget.note_api_call(connection, cursor)
-        arguments = ["gh", "api", "--method", "GET", endpoint]
+        arguments = ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint]
         try:
             result = self.runner.run(arguments)
         except CommandFailure as exc:
@@ -2659,7 +2738,6 @@ def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
         name = str(value.get("name") or "")
         if not name:
             raise BlockedError(BLOCKED_INCOMPLETE, "Check run name is unavailable", "checks", None)
-        app_id = application["database_id"]
         return {
             "stable_id": f"check_run:{node_id}",
             "name": name,
@@ -2929,6 +3007,18 @@ def capture_snapshot(
         required_specs,
         configuration["check_policy"],
         rule_sources,
+    )
+
+    ensure_anchor_counts_match(
+        before_pr,
+        {
+            "labels": len(labels_raw),
+            "reviewRequests": len(requests_raw),
+            "reviews": len(reviews_raw),
+            "comments": len(conversation_raw),
+            "reviewThreads": len(threads_raw),
+            "commits": len(commits_raw),
+        },
     )
 
     after_payload = client.graphql(PULL_REQUEST_ANCHOR_QUERY, "pull_request.anchor.after")

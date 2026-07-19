@@ -129,7 +129,16 @@
         "is_merged": { "type": "boolean" },
         "mergeable": { "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null] },
         "merge_state_status": {
-          "enum": ["DIRTY", "UNKNOWN", "BLOCKED", "BEHIND", "UNSTABLE", "HAS_HOOKS", "CLEAN"]
+          "enum": [
+            "DIRTY",
+            "UNKNOWN",
+            "BLOCKED",
+            "BEHIND",
+            "DRAFT",
+            "UNSTABLE",
+            "HAS_HOOKS",
+            "CLEAN"
+          ]
         },
         "review_decision": { "enum": ["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", null] },
         "author": { "$ref": "#/$defs/author" },

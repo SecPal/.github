@@ -22,6 +22,7 @@
               "mergeable": "MERGEABLE",
               "mergeStateStatus": "CLEAN",
               "reviewDecision": null,
+              "updatedAt": "2026-07-19T00:08:00Z",
               "author": {
                 "__typename": "User",
                 "id": "USER_AUTHOR",
@@ -44,13 +45,19 @@
               "headRefName": "feat/test",
               "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "labels": {
+                "totalCount": 0,
                 "nodes": [],
                 "pageInfo": { "hasNextPage": false, "endCursor": null }
               },
               "reviewRequests": {
+                "totalCount": 0,
                 "nodes": [],
                 "pageInfo": { "hasNextPage": false, "endCursor": null }
-              }
+              },
+              "reviews": { "totalCount": 2 },
+              "comments": { "totalCount": 1 },
+              "reviewThreads": { "totalCount": 2 },
+              "commits": { "totalCount": 1 }
             }
           }
         }

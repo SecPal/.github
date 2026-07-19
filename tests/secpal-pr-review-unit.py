@@ -309,7 +309,11 @@ class FakeGitRunner:
             ("git", "rev-list", "--reverse", f"{'b' * 40}..{HEAD}"): review.CommandResult(
                 0, f"{HEAD}\n", ""
             ),
-            ("git", "cat-file", "-e", f"{HEAD}^{{commit}}"): review.CommandResult(0, "", ""),
+            ("git", "cat-file", "commit", HEAD): review.CommandResult(
+                0,
+                "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n signature\n -----END SSH SIGNATURE-----\n\nmessage\n",
+                "",
+            ),
             ("git", "verify-commit", "--raw", HEAD): review.CommandResult(
                 0, "", 'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
             ),
@@ -609,6 +613,21 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         anchor = review.extract_anchor(fixture)
         self.assertEqual(anchor["pull_request"]["state"], "MERGED")
 
+    def test_draft_merge_state_is_captured_and_blocked_by_lifecycle_gate(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        fixture["data"]["repository"]["pullRequest"]["isDraft"] = True
+        fixture["data"]["repository"]["pullRequest"]["mergeStateStatus"] = "DRAFT"
+        anchor = review.extract_anchor(fixture)
+        self.assertEqual(anchor["pull_request"]["mergeStateStatus"], "DRAFT")
+
+        value = snapshot()
+        value["pull_request"]["is_draft"] = True
+        value["pull_request"]["merge_state_status"] = "DRAFT"
+        result = review.verify_snapshot_gate(review.attach_digest(value), config())
+        self.assertIn("BLOCKED_UNSAFE_GITHUB_STATE", [item["code"] for item in result["blockers"]])
+
     def test_19_deleted_author_is_explicit(self) -> None:
         self.assertEqual(review.normalize_actor(None), actor(None))
 
@@ -682,6 +701,45 @@ class LocalGitTests(unittest.TestCase):
         with self.assertRaises(review.BlockedError):
             review.ensure_unchanged_anchor(before, after)
 
+    def test_anchor_query_captures_review_update_sentinels(self) -> None:
+        self.assertIn("updatedAt", review.PULL_REQUEST_ANCHOR_QUERY)
+        for connection in ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits"):
+            with self.subTest(connection=connection):
+                self.assertIn(f"{connection} {{ totalCount }}", review.PULL_REQUEST_ANCHOR_QUERY)
+
+    def test_anchor_requires_review_update_sentinels(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        pull_request = fixture["data"]["repository"]["pullRequest"]
+        pull_request["updatedAt"] = "2026-07-19T00:00:00Z"
+        for connection in ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits"):
+            pull_request[connection] = {"totalCount": 0}
+        before = review.extract_anchor(copy.deepcopy(fixture))
+        changed = copy.deepcopy(fixture)
+        changed["data"]["repository"]["pullRequest"]["updatedAt"] = "2026-07-19T00:01:00Z"
+        after = review.extract_anchor(changed)
+        with self.assertRaises(review.BlockedError):
+            review.ensure_unchanged_anchor(before, after)
+
+        del fixture["data"]["repository"]["pullRequest"]["updatedAt"]
+        with self.assertRaises(review.BlockedError):
+            review.extract_anchor(fixture)
+
+    def test_anchor_counts_must_match_captured_collections(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        pull_request = review.extract_anchor(fixture)["pull_request"]
+        captured = {
+            connection: pull_request[connection]["totalCount"]
+            for connection in review.ANCHOR_CONNECTIONS
+        }
+        review.ensure_anchor_counts_match(pull_request, captured)
+        captured["reviews"] -= 1
+        with self.assertRaises(review.BlockedError):
+            review.ensure_anchor_counts_match(pull_request, captured)
+
     def test_30_unexpected_base_branch(self) -> None:
         value = snapshot()
         value["pull_request"]["base_ref"] = "develop"
@@ -690,7 +748,7 @@ class LocalGitTests(unittest.TestCase):
 
     def test_31_unavailable_commit_object(self) -> None:
         runner = FakeGitRunner()
-        runner.set(["git", "cat-file", "-e", f"{HEAD}^{{commit}}"], 1, stderr="missing")
+        runner.set(["git", "cat-file", "commit", HEAD], 1, stderr="missing")
         result = review.verify_local_against_snapshot(snapshot(), config(), runner, None)
         self.assertEqual(result["commit_signatures"][0]["state"], "object_unavailable")
 
@@ -740,6 +798,36 @@ class SignatureAndCheckTests(unittest.TestCase):
             "[GNUPG:] GOODSIG 0123456789ABCDEF signer@example.com",
         )
         self.assertEqual((value["state"], value["format"]), ("valid", "unknown"))
+
+    def test_raw_openpgp_status_uses_commit_signature_envelope(self) -> None:
+        runner = FakeGitRunner()
+        runner.set(
+            ["git", "cat-file", "commit", HEAD],
+            0,
+            "tree deadbeef\ngpgsig -----BEGIN PGP SIGNATURE-----\n signature\n -----END PGP SIGNATURE-----\n\nmessage\n",
+        )
+        runner.set(
+            ["git", "verify-commit", "--raw", HEAD],
+            0,
+            stderr="[GNUPG:] GOODSIG 0123456789ABCDEF signer@example.com",
+        )
+        value = review.local_signature_for_commit(runner, HEAD)
+        self.assertEqual((value["state"], value["format"]), ("valid", "openpgp"))
+
+    def test_raw_x509_status_uses_commit_signature_envelope(self) -> None:
+        runner = FakeGitRunner()
+        runner.set(
+            ["git", "cat-file", "commit", HEAD],
+            0,
+            "tree deadbeef\ngpgsig -----BEGIN SIGNED MESSAGE-----\n signature\n -----END SIGNED MESSAGE-----\n\nmessage\n",
+        )
+        runner.set(
+            ["git", "verify-commit", "--raw", HEAD],
+            0,
+            stderr="[GNUPG:] GOODSIG 0123456789ABCDEF signer@example.com",
+        )
+        value = review.local_signature_for_commit(runner, HEAD)
+        self.assertEqual((value["state"], value["format"]), ("valid", "smime"))
 
     def test_failed_x509_signature_is_not_mislabeled_openpgp(self) -> None:
         value = review.interpret_local_signature(1, "gpgsm: BAD signature from user")
@@ -985,9 +1073,31 @@ class SecurityAndOutputTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_56_read_only_api_policy_rejects_mutations(self) -> None:
-        review.validate_external_command(["gh", "api", "graphql", "-f", "query=query X { viewer { login } }"])
+        query_arguments = review.graphql_arguments(
+            "SecPal",
+            ".github",
+            1,
+            None,
+            "query X { viewer { login } }",
+        )
+        self.assertEqual(query_arguments[2:4], ["--hostname", "github.com"])
+        review.validate_external_command(query_arguments)
         with self.assertRaises(review.CommandPolicyError):
-            review.validate_external_command(["gh", "api", "--method", "POST", "repos/SecPal/.github/issues"])
+            review.validate_external_command(
+                ["gh", "api", "graphql", "-f", "query=query X { viewer { login } }"]
+            )
+        with self.assertRaises(review.CommandPolicyError):
+            review.validate_external_command(
+                [
+                    "gh",
+                    "api",
+                    "--hostname",
+                    "github.com",
+                    "--method",
+                    "POST",
+                    "repos/SecPal/.github/issues",
+                ]
+            )
         with self.assertRaises(review.CommandPolicyError):
             review.validate_external_command(["gh", "pr", "view"])
         for arguments in (
@@ -1011,6 +1121,21 @@ class SecurityAndOutputTests(unittest.TestCase):
         index = arguments.index("after=@/etc/passwd")
         self.assertEqual(arguments[index - 1], "-f")
         review.validate_external_command(arguments)
+
+    def test_command_runner_pins_github_host(self) -> None:
+        arguments = review.graphql_arguments(
+            "SecPal",
+            ".github",
+            1,
+            None,
+            "query X { viewer { login } }",
+        )
+        completed = mock.Mock(returncode=0, stdout="{}", stderr="")
+        with mock.patch.object(review.subprocess, "run", return_value=completed) as run:
+            review.CommandRunner().run(arguments)
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment["GH_HOST"], "github.com")
+        self.assertEqual(run.call_args.args[0][2:4], ["--hostname", "github.com"])
 
     def test_disabled_rule_sources_are_not_called(self) -> None:
         configuration = config()
@@ -1050,8 +1175,11 @@ class SecurityAndOutputTests(unittest.TestCase):
                 review.validate_external_command(["git", command])
 
     def test_git_allowlist_rejects_unexpected_read_subcommand_arguments(self) -> None:
+        review.validate_external_command(["git", "cat-file", "commit", HEAD])
         with self.assertRaises(review.CommandPolicyError):
             review.validate_external_command(["git", "show", "--output=/tmp/unexpected", "HEAD"])
+        with self.assertRaises(review.CommandPolicyError):
+            review.validate_external_command(["git", "cat-file", "commit", "HEAD"])
         with self.assertRaises(review.CommandPolicyError):
             review.validate_external_command(["git", "status", "--porcelain=v2", "--ignored"])
 

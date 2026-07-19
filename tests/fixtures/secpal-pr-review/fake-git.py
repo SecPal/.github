@@ -34,7 +34,11 @@ responses = {
     ("rev-parse", "HEAD"): f"{HEAD}\n",
     ("rev-parse", "@{upstream}"): f"{HEAD}\n",
     ("rev-list", "--reverse", f"{'b' * 40}..{HEAD}"): f"{HEAD}\n",
-    ("cat-file", "-e", f"{HEAD}^{{commit}}"): "",
+    (
+        "cat-file",
+        "commit",
+        HEAD,
+    ): "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n signature\n -----END SSH SIGNATURE-----\n\nmessage\n",
 }
 
 key = tuple(arguments)

@@ -133,8 +133,11 @@ Every rendering states:
 
 The snapshot anchors the repository and PR before reading any collection,
 advances each connection independently, and reads the complete anchor once more
-after all evidence is captured. Any anchor change blocks the capture. It fully
-paginates:
+after all evidence is captured. The anchor includes the PR `updatedAt` value and
+the total counts for labels, review requests, reviews, conversation comments,
+review threads, and commits. Any lifecycle, identity, update-time, or count
+change blocks the capture, and every count must match its fully paginated
+collection. It fully paginates:
 
 - labels and requested reviewers or teams;
 - review submissions, including informational, approved, dismissed, and
@@ -165,7 +168,9 @@ API call is one terminal blocker.
 Each PR commit records two independent observations:
 
 1. GitHub's signature type, state, signer, and verification result;
-2. local `git verify-commit --raw` evidence when the commit object exists.
+2. local `git verify-commit --raw` evidence when the commit object exists,
+   with the signature format derived from the commit's standard ASCII-armor
+   header rather than potentially ambiguous verifier status text.
 
 Valid SSH and OpenPGP signatures are accepted when configuration permits them.
 The evidence distinguishes `valid`, `invalid`, `unsigned`, `unknown_key`,
@@ -217,8 +222,10 @@ credential-helper output.
 
 External processes use argument arrays and exact command-shape validation.
 There is no `shell=True`, shell interpolation, dynamic query construction,
-retry loop, or configuration execution. GraphQL operations are static query
-documents with variables.
+retry loop, or configuration execution. GitHub CLI calls pin `GH_HOST` to
+`github.com` and pass `--hostname github.com` explicitly; caller-provided host
+overrides and repository-context inference cannot redirect evidence reads.
+GraphQL operations are static query documents with variables.
 
 The helper exposes no operation for:
 
@@ -243,7 +250,8 @@ handling are explicit non-goals.
 
 Offline tests use fake `gh` and fake Git executables. They cover deterministic
 serialization, outer and nested pagination with unequal page counts, reactions,
-caps, partial failures, signatures, full-anchor races, strict stale-base state,
-required checks, hostile rendering, atomic outputs, and executable-call spies
-that reject GitHub and Git writes. Live acceptance is a separately identified
-read-only phase and never requests an AI review.
+caps, partial failures, signature-envelope classification, update-time and
+connection-count anchor races, strict stale-base state, required checks, hostile
+rendering, atomic outputs, host pinning, and executable-call spies that reject
+GitHub and Git writes. Live acceptance is a separately identified read-only
+phase and never requests an AI review.

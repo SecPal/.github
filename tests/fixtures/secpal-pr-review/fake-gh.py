@@ -24,6 +24,8 @@ if log_path:
 
 if not arguments or arguments[0] != "api":
     fail(f"fake gh rejected non-api operation: {arguments!r}")
+if arguments[1:3] != ["--hostname", "github.com"]:
+    fail(f"fake gh rejected unpinned API host: {arguments!r}")
 
 method = "GET"
 for index, value in enumerate(arguments):
@@ -37,7 +39,7 @@ if not fixture_path:
     fail("FAKE_GH_FIXTURE is required")
 fixture = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
 
-if len(arguments) > 1 and arguments[1] == "graphql":
+if len(arguments) > 3 and arguments[3] == "graphql":
     query = next((value.split("=", 1)[1] for value in arguments if value.startswith("query=")), "")
     if re.search(r"\bmutation\b", query, re.IGNORECASE):
         fail("fake gh rejected GraphQL mutation")
