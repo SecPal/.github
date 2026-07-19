@@ -399,6 +399,44 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         result = review.verify_snapshot_gate(review.attach_digest(value), config())
         self.assertNotIn("BLOCKED_HEAD_BEHIND_BASE", [item["code"] for item in result["blockers"]])
 
+    def test_unsafe_merge_states_block_the_gate(self) -> None:
+        for merge_state in ("DIRTY", "UNKNOWN", "BLOCKED", "DRAFT"):
+            with self.subTest(merge_state=merge_state):
+                value = snapshot()
+                value["pull_request"]["merge_state_status"] = merge_state
+                result = review.verify_snapshot_gate(review.attach_digest(value), config())
+                self.assertIn(
+                    "BLOCKED_UNSAFE_GITHUB_STATE",
+                    [item["code"] for item in result["blockers"]],
+                )
+
+    def test_merge_states_delegated_to_granular_checks_do_not_add_a_state_blocker(self) -> None:
+        for merge_state in ("CLEAN", "HAS_HOOKS", "UNSTABLE"):
+            with self.subTest(merge_state=merge_state):
+                value = snapshot()
+                value["pull_request"]["merge_state_status"] = merge_state
+                result = review.verify_snapshot_gate(review.attach_digest(value), config())
+                self.assertNotIn(
+                    "BLOCKED_UNSAFE_GITHUB_STATE",
+                    [item["code"] for item in result["blockers"]],
+                )
+
+    def test_merge_state_policy_covers_the_authoritative_enum(self) -> None:
+        self.assertEqual(
+            review.MERGE_STATE_POLICY,
+            {
+                "DIRTY": "block",
+                "UNKNOWN": "block",
+                "BLOCKED": "block",
+                "BEHIND": "strict_base",
+                "DRAFT": "block",
+                "UNSTABLE": "required_checks",
+                "HAS_HOOKS": "allow",
+                "CLEAN": "allow",
+            },
+        )
+        self.assertEqual(review.MERGE_STATE_STATUSES, set(review.MERGE_STATE_POLICY))
+
     def test_strict_policy_without_required_checks_does_not_require_current_base(self) -> None:
         value = snapshot()
         value["applicable_rules"]["rulesets"][0]["required_checks"] = []
@@ -501,6 +539,20 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value = review.attach_digest(value)
         with self.assertRaises(review.ContractError):
             review.validate_snapshot(value)
+
+    def test_snapshot_rejects_commit_evidence_without_the_head_commit(self) -> None:
+        value = snapshot()
+        value["commits"][0]["oid"] = PARENT
+        with self.assertRaisesRegex(review.ContractError, "head commit"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_duplicate_commit_oids(self) -> None:
+        value = snapshot()
+        duplicate = copy.deepcopy(value["commits"][0])
+        duplicate["oid"] = duplicate["oid"].upper()
+        value["commits"].append(duplicate)
+        with self.assertRaisesRegex(review.ContractError, "duplicate commit OID"):
+            review.validate_snapshot(finalize_snapshot(value))
 
     def test_07_copilot_and_codex_are_distinct_configured_identities(self) -> None:
         identities = review.index_reviewer_identities(config())
@@ -677,7 +729,8 @@ class LocalGitTests(unittest.TestCase):
         value = snapshot()
         value["pull_request"]["head_oid_before"] = "d" * 40
         value["pull_request"]["head_oid_after"] = "d" * 40
-        value = review.attach_digest(value)
+        value["commits"][0]["oid"] = "d" * 40
+        value = finalize_snapshot(value)
         self.assert_blocker(review.verify_local_against_snapshot(value, config(), FakeGitRunner(), None), "BLOCKED_HEAD_MOVED")
 
     def test_28_pr_head_mismatch(self) -> None:
@@ -1136,6 +1189,58 @@ class SecurityAndOutputTests(unittest.TestCase):
         environment = run.call_args.kwargs["env"]
         self.assertEqual(environment["GH_HOST"], "github.com")
         self.assertEqual(run.call_args.args[0][2:4], ["--hostname", "github.com"])
+
+    def test_command_runner_sanitizes_git_repository_and_object_overrides(self) -> None:
+        repository_overrides = {
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_DIR",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_EXEC_PATH",
+            "GIT_GRAFT_FILE",
+            "GIT_IMPLICIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_NAMESPACE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_PREFIX",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_SHALLOW_FILE",
+            "GIT_WORK_TREE",
+        }
+        poisoned_environment = {key: f"hostile-{key.lower()}" for key in repository_overrides}
+        poisoned_environment |= {
+            "GIT_CONFIG_KEY_0": "core.sshCommand",
+            "GIT_CONFIG_VALUE_0": "hostile-command",
+            "GIT_NO_REPLACE_OBJECTS": "0",
+            "GIT_OPTIONAL_LOCKS": "1",
+            "GIT_TRACE": "/tmp/hostile-trace",
+            "GIT_TRACE2_EVENT": "/tmp/hostile-trace2",
+        }
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.dict(review.os.environ, poisoned_environment, clear=True), mock.patch.object(
+            review.subprocess, "run", return_value=completed
+        ) as run:
+            review.CommandRunner().run(["git", "status", "--porcelain=v2", "--untracked-files=all"])
+
+        environment = run.call_args.kwargs["env"]
+        inherited_overrides = repository_overrides | {
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_TRACE",
+            "GIT_TRACE2_EVENT",
+        }
+        self.assertEqual(sorted(inherited_overrides & environment.keys()), [])
+        self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
+        self.assertEqual(environment["GIT_OPTIONAL_LOCKS"], "0")
+        self.assertEqual(environment["GIT_NO_LAZY_FETCH"], "1")
 
     def test_disabled_rule_sources_are_not_called(self) -> None:
         configuration = config()

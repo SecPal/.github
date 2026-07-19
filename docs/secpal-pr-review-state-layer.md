@@ -27,9 +27,10 @@ is a derived, non-authoritative view.
 
 The helper validates both structures against these checked-in schemas and then
 applies semantic validation such as unique reviewer aliases and evidence digest
-verification. Configuration supports a stable canonical identity with GraphQL,
-REST/event, numeric, and node-ID aliases; no suffix-sensitive login is the sole
-identity contract.
+verification. Commit evidence must use unique object IDs and contain the
+captured PR head commit. Configuration supports a stable canonical identity
+with GraphQL, REST/event, numeric, and node-ID aliases; no suffix-sensitive
+login is the sole identity contract.
 
 Package 2.1 does not add a production multi-repository registry. Package 2.2
 will supply the authoritative runtime registry and must validate each selected
@@ -95,8 +96,12 @@ repository and branch, exact base-to-head commit set, commit-object
 availability, and every local commit signature.
 
 It never fetches automatically. The helper also sets `GIT_NO_LAZY_FETCH=1` so
-a partial clone cannot silently fetch a missing object. The `fetched` result is
-always `false`.
+a partial clone cannot silently fetch a missing object. It disables replacement
+refs and optional locks, and removes inherited Git variables that could select
+another repository, worktree, index, object database, shallow boundary,
+namespace, injected configuration, subcommand path, or trace-output target.
+Normal system, global, and repository configuration still loads from its
+standard locations. The `fetched` result is always `false`.
 
 ### Verify the mechanical gate
 
@@ -115,7 +120,11 @@ items exist and whether Package 2.2 technical classification remains necessary.
 
 A clean mechanical result is named `PACKAGE_2_2_CLASSIFICATION_REQUIRED`; it is
 not merge readiness or merge authorization. Draft, closed, merged, conflicting,
-or not-yet-computed mergeability states block the mechanical gate.
+or not-yet-computed mergeability states block the mechanical gate. GitHub merge
+states `DIRTY`, `UNKNOWN`, `BLOCKED`, and `DRAFT` fail closed. `UNSTABLE`
+continues through the granular required-check policy so an optional failure is
+not promoted into a required failure; `CLEAN` and `HAS_HOOKS` add no merge-state
+blocker, while `BEHIND` follows the configured strict up-to-date-base policy.
 
 ### Render Markdown
 
@@ -225,7 +234,11 @@ There is no `shell=True`, shell interpolation, dynamic query construction,
 retry loop, or configuration execution. GitHub CLI calls pin `GH_HOST` to
 `github.com` and pass `--hostname github.com` explicitly; caller-provided host
 overrides and repository-context inference cannot redirect evidence reads.
-GraphQL operations are static query documents with variables.
+GraphQL operations are static query documents with variables. Git commands run
+with pagers pinned, optional locking disabled, replacement refs ignored, lazy
+fetches disabled, and repository- or object-selection environment overrides
+removed before process creation. Trace-file and executable-path overrides are
+removed as part of the same boundary.
 
 The helper exposes no operation for:
 
@@ -252,6 +265,7 @@ Offline tests use fake `gh` and fake Git executables. They cover deterministic
 serialization, outer and nested pagination with unequal page counts, reactions,
 caps, partial failures, signature-envelope classification, update-time and
 connection-count anchor races, strict stale-base state, required checks, hostile
-rendering, atomic outputs, host pinning, and executable-call spies that reject
+rendering, atomic outputs, host pinning, merge-state policy coverage, commit-set
+invariants, sanitized Git environments, and executable-call spies that reject
 GitHub and Git writes. Live acceptance is a separately identified read-only
 phase and never requests an AI review.

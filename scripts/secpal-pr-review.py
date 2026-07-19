@@ -59,18 +59,44 @@ PROHIBITED_GIT_SUBCOMMANDS = {
 }
 SUCCESSFUL_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL"}
 PENDING_CHECK_STATUSES = {"EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"}
-MERGE_STATE_STATUSES = {
-    "DIRTY",
-    "UNKNOWN",
-    "BLOCKED",
-    "BEHIND",
-    "DRAFT",
-    "UNSTABLE",
-    "HAS_HOOKS",
-    "CLEAN",
+MERGE_STATE_POLICY = {
+    "DIRTY": "block",
+    "UNKNOWN": "block",
+    "BLOCKED": "block",
+    "BEHIND": "strict_base",
+    "DRAFT": "block",
+    "UNSTABLE": "required_checks",
+    "HAS_HOOKS": "allow",
+    "CLEAN": "allow",
+}
+MERGE_STATE_STATUSES = set(MERGE_STATE_POLICY)
+GIT_ENVIRONMENT_OVERRIDES = {
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_DIR",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_EXEC_PATH",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NAMESPACE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
 }
 ANCHOR_CONNECTIONS = ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits")
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+GIT_CONFIG_PAIR = re.compile(r"^GIT_CONFIG_(?:KEY|VALUE)_[0-9]+$")
+GIT_TRACE_VARIABLE = re.compile(r"^GIT_TRACE(?:2)?(?:$|_)")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -246,11 +272,7 @@ class CommandRunner:
 
     def run(self, arguments: list[str], *, allow_failure: bool = False) -> CommandResult:
         validate_external_command(arguments)
-        environment = os.environ.copy()
-        environment["PAGER"] = "cat"
-        environment["GH_PAGER"] = "cat"
-        environment["GH_HOST"] = "github.com"
-        environment["GIT_NO_LAZY_FETCH"] = "1"
+        environment = command_environment(Path(arguments[0]).name)
         completed = subprocess.run(
             arguments,
             check=False,
@@ -264,6 +286,27 @@ class CommandRunner:
         if result.returncode != 0 and not allow_failure:
             raise CommandFailure(arguments, result)
         return result
+
+
+def command_environment(executable: str) -> dict[str, str]:
+    """Build a deterministic environment for an allowlisted external command."""
+
+    environment = os.environ.copy()
+    environment["PAGER"] = "cat"
+    if executable == "gh":
+        environment["GH_PAGER"] = "cat"
+        environment["GH_HOST"] = "github.com"
+    elif executable == "git":
+        for key in GIT_ENVIRONMENT_OVERRIDES:
+            environment.pop(key, None)
+        for key in tuple(environment):
+            if GIT_CONFIG_PAIR.fullmatch(key) or GIT_TRACE_VARIABLE.match(key):
+                environment.pop(key)
+        environment["GIT_PAGER"] = "cat"
+        environment["GIT_NO_LAZY_FETCH"] = "1"
+        environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+        environment["GIT_OPTIONAL_LOCKS"] = "0"
+    return environment
 
 
 class Budget:
@@ -1033,6 +1076,35 @@ def validate_completeness(snapshot: dict[str, Any]) -> None:
         raise ContractError("Completeness totals exceed configured item-kind caps")
 
 
+def validate_commit_evidence(pull_request: dict[str, Any], commits: list[dict[str, Any]]) -> None:
+    """Require a unique, well-formed commit set that contains the captured head."""
+
+    if not commits:
+        raise ContractError("Snapshot must include at least one PR commit")
+    commit_oids: set[str] = set()
+    for commit in commits:
+        oid = str(commit.get("oid", ""))
+        if not OID_PATTERN.fullmatch(oid):
+            raise ContractError("Snapshot contains an invalid commit OID")
+        normalized_oid = oid.lower()
+        if normalized_oid in commit_oids:
+            raise ContractError(f"Snapshot contains a duplicate commit OID: {oid}")
+        commit_oids.add(normalized_oid)
+        for signature_name in ("github_signature", "local_signature"):
+            signature = commit.get(signature_name)
+            if not isinstance(signature, dict) or signature.get("state") not in {
+                "valid",
+                "invalid",
+                "unsigned",
+                "unknown_key",
+                "object_unavailable",
+                "verification_pending",
+            }:
+                raise ContractError(f"Invalid {signature_name} evidence")
+    if pull_request["head_oid_after"].lower() not in commit_oids:
+        raise ContractError("Snapshot commit evidence does not include the pull request head commit")
+
+
 def validate_snapshot(snapshot: dict[str, Any]) -> None:
     if not isinstance(snapshot, dict):
         raise ContractError("Snapshot must be a JSON object")
@@ -1103,22 +1175,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
     for collection in ("reviews", "conversation_comments", "review_threads", "commits", "checks"):
         if not isinstance(snapshot[collection], list):
             raise ContractError(f"{collection} must be an array")
-    if not snapshot["commits"]:
-        raise ContractError("Snapshot must include at least one PR commit")
-    for commit in snapshot["commits"]:
-        if not OID_PATTERN.fullmatch(str(commit.get("oid", ""))):
-            raise ContractError("Snapshot contains an invalid commit OID")
-        for signature_name in ("github_signature", "local_signature"):
-            signature = commit.get(signature_name)
-            if not isinstance(signature, dict) or signature.get("state") not in {
-                "valid",
-                "invalid",
-                "unsigned",
-                "unknown_key",
-                "object_unavailable",
-                "verification_pending",
-            }:
-                raise ContractError(f"Invalid {signature_name} evidence")
+    validate_commit_evidence(pr, snapshot["commits"])
     completeness = snapshot["completeness"]
     _require_keys(
         completeness,
@@ -1839,6 +1896,24 @@ def strict_checks_require_current_base(snapshot: dict[str, Any], policy: dict[st
     return ruleset_strict or branch_protection_strict
 
 
+def merge_state_blocker(snapshot: dict[str, Any], policy: dict[str, Any]) -> dict[str, str] | None:
+    """Apply the complete fail-closed policy for GitHub merge-state evidence."""
+
+    merge_state = snapshot["pull_request"]["merge_state_status"]
+    disposition = MERGE_STATE_POLICY[merge_state]
+    if disposition == "block":
+        return {
+            "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+            "reason": f"GitHub reports a non-ready merge state: {merge_state}",
+        }
+    if disposition == "strict_base" and strict_checks_require_current_base(snapshot, policy):
+        return {
+            "code": "BLOCKED_HEAD_BEHIND_BASE",
+            "reason": "Strict required checks require the pull request head to include the current base",
+        }
+    return None
+
+
 def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
     validate_config(configuration)
     validate_snapshot(snapshot)
@@ -1876,6 +1951,9 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
         )
     if pr["mergeable"] != "MERGEABLE":
         blockers.append({"code": "BLOCKED_UNSAFE_GITHUB_STATE", "reason": "PR mergeability is conflicting or unknown"})
+    check_policy = configuration["check_policy"]
+    if blocker := merge_state_blocker(snapshot, check_policy):
+        blockers.append(blocker)
     signature_policy = configuration["signature_policy"]
     accepted_formats = set(signature_policy["accepted_formats"])
     for commit in snapshot["commits"]:
@@ -1899,14 +1977,6 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
                     "reason": f"Local signature invalid for {commit['oid']}",
                 }
             )
-    check_policy = configuration["check_policy"]
-    if pr["merge_state_status"] == "BEHIND" and strict_checks_require_current_base(snapshot, check_policy):
-        blockers.append(
-            {
-                "code": "BLOCKED_HEAD_BEHIND_BASE",
-                "reason": "Strict required checks require the pull request head to include the current base",
-            }
-        )
     required_sources = {
         source
         for source, required in (
