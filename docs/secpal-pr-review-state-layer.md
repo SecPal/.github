@@ -37,6 +37,9 @@ Stored anchor counts must exactly match all supplied top-level PR collections,
 including the complete commit set. Configuration
 supports a stable canonical identity with GraphQL, REST/event, numeric, and
 node-ID aliases; no suffix-sensitive login is the sole identity contract.
+Configuration and snapshot files must have JSON objects at their roots; every
+other valid JSON root produces the same structured invalid-input response as a
+schema violation.
 
 Package 2.1 does not add a production multi-repository registry. Package 2.2
 will supply the authoritative runtime registry and must validate each selected
@@ -139,6 +142,13 @@ strict up-to-date-base requirements, check outcomes, required or requested
 reviews, and raw unresolved thread state. It reports separately whether raw
 unresolved items exist and whether Package 2.2 technical classification remains
 necessary.
+
+The current repository configuration is authoritative at gate time. Recorded
+API calls, aggregate items, threads, comments, and reactions must fit its current
+caps even when the snapshot was captured under looser limits. If a rule source
+required by the current configuration was not captured, the gate retains the
+snapshot digest and all accumulated blockers in its structured report and does
+not attempt to infer missing required checks from placeholder evidence.
 
 A clean mechanical result is named `PACKAGE_2_2_CLASSIFICATION_REQUIRED`; it is
 not merge readiness or merge authorization. Draft, closed, merged, conflicting,

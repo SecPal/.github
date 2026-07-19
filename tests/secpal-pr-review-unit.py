@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 import stat
@@ -552,6 +553,48 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         result = review.verify_snapshot_gate(value, config())
         self.assertIn(review.BLOCKED_INCOMPLETE, [item["code"] for item in result["blockers"]])
 
+    def test_gate_preserves_report_when_current_branch_protection_evidence_is_absent(self) -> None:
+        value = snapshot()
+        value["required_check_evidence"]["sources"] = ["rulesets"]
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": None,
+            "contexts": [],
+            "checks": [],
+        }
+        value = finalize_snapshot(value)
+
+        result = review.verify_snapshot_gate(value, config())
+
+        self.assertEqual(result["snapshot_digest"], value["snapshot_digest"])
+        self.assertIn(review.BLOCKED_INCOMPLETE, [item["code"] for item in result["blockers"]])
+
+    def test_gate_enforces_all_current_capture_caps(self) -> None:
+        value = snapshot()
+        comment = review_comment()
+        comment["reactions"] = [
+            {
+                "id": "REACTION_CAP",
+                "content": "EYES",
+                "created_at": "2026-07-19T00:01:00Z",
+                "user": actor("reactor"),
+            }
+        ]
+        value["review_threads"] = [thread(comments=[comment])]
+        value = finalize_snapshot(value)
+        for cap in (
+            "maximum_api_calls",
+            "maximum_items",
+            "maximum_threads",
+            "maximum_comments",
+            "maximum_reactions",
+        ):
+            with self.subTest(cap=cap):
+                configuration = config()
+                configuration[cap] = 1
+                result = review.verify_snapshot_gate(value, configuration)
+                blockers = [item for item in result["blockers"] if item["code"] == review.BLOCKED_INCOMPLETE]
+                self.assertTrue(any(cap in item["reason"] for item in blockers), blockers)
+
     def test_gate_accepts_intentionally_disabled_rule_sources(self) -> None:
         value = snapshot()
         value["required_check_evidence"] = {
@@ -574,6 +617,48 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         configuration["check_policy"]["require_branch_protection_evidence"] = False
         result = review.verify_snapshot_gate(value, configuration)
         self.assertEqual(result["blockers"], [])
+
+    def test_gate_source_policy_transition_matrix_is_fail_closed_without_exceptions(self) -> None:
+        source_names = {"rulesets", "branch_protection"}
+        source_sets = (
+            set(),
+            {"rulesets"},
+            {"branch_protection"},
+            source_names,
+        )
+        for captured_sources in source_sets:
+            value = snapshot()
+            value["required_check_evidence"]["sources"] = sorted(captured_sources)
+            if "rulesets" not in captured_sources:
+                value["applicable_rules"]["rulesets"] = []
+            if "branch_protection" not in captured_sources:
+                value["applicable_rules"]["branch_protection"] = {
+                    "strict": None,
+                    "contexts": [],
+                    "checks": [],
+                }
+            if not captured_sources:
+                value["required_check_evidence"]["required"] = []
+                value["checks"][0]["requiredness"] = "non_required"
+                value["checks"][0]["evidence_state"] = "non_required_successful"
+            value = finalize_snapshot(value)
+            for required_sources in source_sets:
+                with self.subTest(
+                    captured=sorted(captured_sources),
+                    required=sorted(required_sources),
+                ):
+                    configuration = config()
+                    configuration["check_policy"]["require_ruleset_evidence"] = (
+                        "rulesets" in required_sources
+                    )
+                    configuration["check_policy"]["require_branch_protection_evidence"] = (
+                        "branch_protection" in required_sources
+                    )
+                    result = review.verify_snapshot_gate(value, configuration)
+                    incomplete = review.BLOCKED_INCOMPLETE in {
+                        item["code"] for item in result["blockers"]
+                    }
+                    self.assertEqual(incomplete, bool(required_sources - captured_sources))
 
     def test_snapshot_rejects_mismatched_connection_item_count(self) -> None:
         value = snapshot()
@@ -1432,6 +1517,39 @@ class SignatureAndCheckTests(unittest.TestCase):
 
 
 class SecurityAndOutputTests(unittest.TestCase):
+    def test_non_object_json_roots_return_structured_invalid_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, value in enumerate(([], None, "configuration", 1, True)):
+                with self.subTest(config=value):
+                    config_path = root / f"config-{index}.json"
+                    config_path.write_text(json.dumps(value), encoding="utf-8")
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        exit_code = review.main(
+                            [
+                                "snapshot",
+                                "--repo",
+                                "SecPal/.github",
+                                "--pr",
+                                "1",
+                                "--config",
+                                str(config_path),
+                            ]
+                        )
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(
+                        json.loads(stderr.getvalue())["status"],
+                        "INVALID_OR_UNSAFE_INPUT",
+                    )
+            snapshot_path = root / "snapshot.json"
+            snapshot_path.write_text("[]\n", encoding="utf-8")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = review.main(["verify-gate", "--snapshot", str(snapshot_path)])
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(json.loads(stderr.getvalue())["status"], "INVALID_OR_UNSAFE_INPUT")
+
     def test_46_hostile_markdown_is_escaped(self) -> None:
         self.assertNotIn("<script>", review.escape_markdown("<script>alert(1)</script>"))
 

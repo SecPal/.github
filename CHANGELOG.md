@@ -37,6 +37,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   command search paths, closed standard input, bounded each invocation, captured
   direct PR and review-summary reactions, and rejected unknown required-check
   reasons or duplicate stable review-state identities
+- preserved structured gate reports when a newly required rule source is absent,
+  enforced every current capture cap against stored usage, and rejected non-object
+  JSON configuration roots without an unhandled exception
 
 ## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
 

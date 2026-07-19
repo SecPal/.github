@@ -804,6 +804,8 @@ def load_config(
             raise ContractError(f"Cannot load repository configuration: {redact_diagnostic(str(exc))}") from exc
         configuration = loaded
     configuration = copy.deepcopy(configuration)
+    if not isinstance(configuration, dict):
+        raise ContractError("Repository configuration must be a JSON object")
     if configuration.get("repository") != repository:
         raise ContractError(
             f"Configuration repository {configuration.get('repository')!r} does not match {repository!r}"
@@ -1153,6 +1155,39 @@ def expected_api_calls(connections: list[dict[str, Any]]) -> int:
     return calls
 
 
+def capture_resource_usage(
+    snapshot: dict[str, Any],
+    expected: dict[str, int] | None = None,
+) -> dict[str, int]:
+    """Return aggregate and item-kind work represented by a complete snapshot."""
+
+    connection_items = expected if expected is not None else expected_connection_items(snapshot)
+    logical_connections = {
+        connection: connection.removesuffix(REVALIDATION_SUFFIX)
+        for connection in connection_items
+    }
+    return {
+        "maximum_api_calls": snapshot["completeness"]["api_calls"],
+        "maximum_items": snapshot["completeness"]["items"],
+        "maximum_threads": sum(
+            connection_items[connection]
+            for connection, logical in logical_connections.items()
+            if logical == "review_threads"
+        ),
+        "maximum_comments": sum(
+            connection_items[connection]
+            for connection, logical in logical_connections.items()
+            if logical == "conversation_comments"
+            or (logical.startswith("review_thread.") and logical.endswith(".comments"))
+        ),
+        "maximum_reactions": sum(
+            connection_items[connection]
+            for connection, logical in logical_connections.items()
+            if logical.endswith(".reactions")
+        ),
+    }
+
+
 def ensure_revalidated_evidence(label: str, before: Any, after: Any) -> None:
     """Reject volatile evidence that changed between bounded observations."""
 
@@ -1191,33 +1226,9 @@ def validate_completeness(snapshot: dict[str, Any]) -> None:
     if completeness["api_calls"] != expected_api_calls(completeness["fully_paginated_connections"]):
         raise ContractError("Completeness API-call total does not match pagination evidence")
     caps = completeness["configured_caps"]
-    if completeness["api_calls"] > caps["maximum_api_calls"] or completeness["items"] > caps["maximum_items"]:
-        raise ContractError("Completeness totals exceed configured aggregate caps")
-    logical_connections = {
-        connection: connection.removesuffix(REVALIDATION_SUFFIX) for connection in expected
-    }
-    thread_items = sum(
-        expected[connection]
-        for connection, logical in logical_connections.items()
-        if logical == "review_threads"
-    )
-    comment_items = sum(
-        expected[connection]
-        for connection, logical in logical_connections.items()
-        if logical == "conversation_comments"
-        or (logical.startswith("review_thread.") and logical.endswith(".comments"))
-    )
-    reaction_items = sum(
-        expected[connection]
-        for connection, logical in logical_connections.items()
-        if logical.endswith(".reactions")
-    )
-    if (
-        thread_items > caps["maximum_threads"]
-        or comment_items > caps["maximum_comments"]
-        or reaction_items > caps["maximum_reactions"]
-    ):
-        raise ContractError("Completeness totals exceed configured item-kind caps")
+    usage = capture_resource_usage(snapshot, expected)
+    if any(usage[key] > caps[key] for key in usage):
+        raise ContractError("Completeness totals exceed configured capture caps")
 
 
 def validate_commit_evidence(pull_request: dict[str, Any], commits: list[dict[str, Any]]) -> None:
@@ -2294,6 +2305,18 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
     validate_snapshot(snapshot)
     blockers: list[dict[str, str]] = []
     pr = snapshot["pull_request"]
+    current_usage = capture_resource_usage(snapshot)
+    for cap, used in current_usage.items():
+        if used > configuration[cap]:
+            blockers.append(
+                {
+                    "code": BLOCKED_INCOMPLETE,
+                    "reason": (
+                        f"Snapshot {cap} usage {used} exceeds current limit "
+                        f"{configuration[cap]}"
+                    ),
+                }
+            )
     if snapshot["repository"]["name_with_owner"] != configuration["repository"]:
         blockers.append(
             {
@@ -2363,7 +2386,8 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
         if required
     }
     captured_sources = set(snapshot["required_check_evidence"]["sources"])
-    for source in sorted(required_sources - captured_sources):
+    missing_sources = required_sources - captured_sources
+    for source in sorted(missing_sources):
         blockers.append(
             {
                 "code": BLOCKED_INCOMPLETE,
@@ -2385,28 +2409,29 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
         for item in snapshot["checks"]
         if item["status"] != "MISSING"
     ]
-    required_specs = required_specs_from_snapshot(snapshot, check_policy)
-    evaluated_checks, _ = evaluate_checks(
-        raw_checks,
-        required_specs,
-        check_policy,
-        sorted(required_sources),
-    )
-    for item in evaluated_checks:
-        if item["evidence_state"] in {
-            "required_pending",
-            "required_failed",
-            "required_missing",
-            "requiredness_unknown",
-        }:
-            blockers.append(
-                {
-                    "code": BLOCKED_INCOMPLETE
-                    if item["evidence_state"] == "requiredness_unknown"
-                    else "BLOCKED_FAILED_OR_PENDING_CI",
-                    "reason": f"{item['name']}: {item['evidence_state']}",
-                }
-            )
+    if not missing_sources:
+        required_specs = required_specs_from_snapshot(snapshot, check_policy)
+        evaluated_checks, _ = evaluate_checks(
+            raw_checks,
+            required_specs,
+            check_policy,
+            sorted(required_sources),
+        )
+        for item in evaluated_checks:
+            if item["evidence_state"] in {
+                "required_pending",
+                "required_failed",
+                "required_missing",
+                "requiredness_unknown",
+            }:
+                blockers.append(
+                    {
+                        "code": BLOCKED_INCOMPLETE
+                        if item["evidence_state"] == "requiredness_unknown"
+                        else "BLOCKED_FAILED_OR_PENDING_CI",
+                        "reason": f"{item['name']}: {item['evidence_state']}",
+                    }
+                )
     unresolved = [item for item in snapshot["review_threads"] if not item["is_resolved"]]
     requested_changes = pr["review_decision"] == "CHANGES_REQUESTED"
     review_required = pr["review_decision"] == "REVIEW_REQUIRED"
