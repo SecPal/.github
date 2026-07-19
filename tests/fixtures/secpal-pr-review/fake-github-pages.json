@@ -1,0 +1,205 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "graphql": {
+    "PullRequestAnchor": {
+      "null": {
+        "data": {
+          "repository": {
+            "id": "REPO_1",
+            "name": ".github",
+            "nameWithOwner": "SecPal/.github",
+            "url": "https://github.com/SecPal/.github",
+            "defaultBranchRef": { "name": "main" },
+            "pullRequest": {
+              "id": "PR_1",
+              "databaseId": 1,
+              "number": 1,
+              "url": "https://github.com/SecPal/.github/pull/1",
+              "title": "Fixture pull request",
+              "state": "OPEN",
+              "isDraft": false,
+              "merged": false,
+              "mergeable": "MERGEABLE",
+              "reviewDecision": null,
+              "author": {
+                "__typename": "User",
+                "id": "USER_AUTHOR",
+                "databaseId": 8,
+                "login": "author",
+                "url": "https://github.com/author"
+              },
+              "baseRepository": {
+                "id": "REPO_1",
+                "nameWithOwner": "SecPal/.github",
+                "url": "https://github.com/SecPal/.github"
+              },
+              "baseRefName": "main",
+              "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "headRepository": {
+                "id": "REPO_1",
+                "nameWithOwner": "SecPal/.github",
+                "url": "https://github.com/SecPal/.github"
+              },
+              "headRefName": "feat/test",
+              "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "labels": {
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              },
+              "reviewRequests": {
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestReviews": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviews": {
+                "nodes": [
+                  {
+                    "id": "REVIEW_1",
+                    "databaseId": 11,
+                    "author": {
+                      "__typename": "Bot",
+                      "id": "BOT_COPILOT",
+                      "databaseId": 12,
+                      "login": "copilot-pull-request-reviewer",
+                      "url": "https://github.com/apps/copilot-pull-request-reviewer"
+                    },
+                    "state": "COMMENTED",
+                    "body": "Informational review only.",
+                    "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-11",
+                    "submittedAt": "2026-07-19T00:00:00Z",
+                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": "review-1" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ConversationComments": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "comments": {
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ReviewThreads": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviewThreads": {
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestCommits": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "authoredDate": "2026-07-19T00:00:00Z",
+                      "committedDate": "2026-07-19T00:00:00Z",
+                      "parents": {
+                        "nodes": [{ "oid": "cccccccccccccccccccccccccccccccccccccccc" }],
+                        "pageInfo": { "hasNextPage": false, "endCursor": "parent-1" }
+                      },
+                      "signature": {
+                        "__typename": "SshSignature",
+                        "isValid": true,
+                        "state": "VALID",
+                        "wasSignedByGitHub": false,
+                        "signer": {
+                          "__typename": "User",
+                          "id": "USER_AUTHOR",
+                          "databaseId": 8,
+                          "login": "author",
+                          "url": "https://github.com/author"
+                        }
+                      }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": "commit-1" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "CommitChecks": {
+      "null": {
+        "data": {
+          "repository": {
+            "object": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "id": "CHECK_1",
+                      "name": "tests",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS",
+                      "detailsUrl": "https://github.com/SecPal/.github/actions/runs/1",
+                      "checkSuite": {
+                        "app": {
+                          "id": "APP_1",
+                          "databaseId": 1,
+                          "name": "GitHub Actions",
+                          "slug": "github-actions"
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": { "hasNextPage": false, "endCursor": "check-1" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "rest": {
+    "repos/SecPal/.github/rules/branches/main": [
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "required_status_checks": [{ "context": "tests", "integration_id": 1 }]
+        }
+      }
+    ],
+    "repos/SecPal/.github/branches/main/protection/required_status_checks": {
+      "strict": true,
+      "contexts": ["tests"],
+      "checks": [{ "context": "tests", "app_id": 1 }]
+    }
+  }
+}

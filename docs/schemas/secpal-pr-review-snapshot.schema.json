@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/.github/blob/main/docs/schemas/secpal-pr-review-snapshot.schema.json",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "title": "SecPal deterministic pull request evidence snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot_digest_algorithm",
+    "snapshot_digest",
+    "repository",
+    "pull_request",
+    "reviews",
+    "conversation_comments",
+    "review_threads",
+    "commits",
+    "checks",
+    "applicable_rules",
+    "required_check_evidence",
+    "completeness"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "snapshot_digest_algorithm": { "const": "sha256" },
+    "snapshot_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "repository": { "$ref": "#/$defs/repository" },
+    "pull_request": { "$ref": "#/$defs/pull_request" },
+    "reviews": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/review" }
+    },
+    "conversation_comments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/conversation_comment" }
+    },
+    "review_threads": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/review_thread" }
+    },
+    "commits": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/commit" }
+    },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "applicable_rules": { "$ref": "#/$defs/applicable_rules" },
+    "required_check_evidence": { "$ref": "#/$defs/required_check_evidence" },
+    "completeness": { "$ref": "#/$defs/completeness" }
+  },
+  "$defs": {
+    "nullable_string": { "type": ["string", "null"] },
+    "nullable_integer": { "type": ["integer", "null"] },
+    "author": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "login", "database_id", "node_id", "url"],
+      "properties": {
+        "kind": {
+          "enum": ["user", "bot", "organization", "mannequin", "deleted_or_unavailable"]
+        },
+        "login": { "$ref": "#/$defs/nullable_string" },
+        "database_id": { "$ref": "#/$defs/nullable_integer" },
+        "node_id": { "$ref": "#/$defs/nullable_string" },
+        "url": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "repository_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name_with_owner", "url"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nullable_string" },
+        "name_with_owner": { "$ref": "#/$defs/nullable_string" },
+        "url": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner", "name", "name_with_owner", "url", "default_branch"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "name_with_owner": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "url": { "type": "string", "minLength": 1 },
+        "default_branch": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pull_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "database_id",
+        "number",
+        "url",
+        "title",
+        "state",
+        "is_draft",
+        "is_merged",
+        "mergeable",
+        "review_decision",
+        "author",
+        "base_repository",
+        "base_ref",
+        "base_oid",
+        "head_repository",
+        "head_ref",
+        "head_oid_before",
+        "head_oid_after",
+        "labels",
+        "requested_reviewers",
+        "requested_teams"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "database_id": { "$ref": "#/$defs/nullable_integer" },
+        "number": { "type": "integer", "minimum": 1 },
+        "url": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "state": { "enum": ["OPEN", "CLOSED", "MERGED"] },
+        "is_draft": { "type": "boolean" },
+        "is_merged": { "type": "boolean" },
+        "mergeable": { "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null] },
+        "review_decision": { "enum": ["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", null] },
+        "author": { "$ref": "#/$defs/author" },
+        "base_repository": { "$ref": "#/$defs/repository_ref" },
+        "base_ref": { "type": "string", "minLength": 1 },
+        "base_oid": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+        "head_repository": { "$ref": "#/$defs/repository_ref" },
+        "head_ref": { "$ref": "#/$defs/nullable_string" },
+        "head_oid_before": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+        "head_oid_after": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "requested_reviewers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/author" }
+        },
+        "requested_teams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "slug", "name", "url"],
+            "properties": {
+              "id": { "$ref": "#/$defs/nullable_string" },
+              "slug": { "$ref": "#/$defs/nullable_string" },
+              "name": { "$ref": "#/$defs/nullable_string" },
+              "url": { "$ref": "#/$defs/nullable_string" }
+            }
+          }
+        }
+      }
+    },
+    "reaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "content", "created_at", "user"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nullable_string" },
+        "content": { "type": "string", "minLength": 1 },
+        "created_at": { "$ref": "#/$defs/nullable_string" },
+        "user": { "$ref": "#/$defs/author" }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "database_id",
+        "author",
+        "state",
+        "body",
+        "url",
+        "submitted_at",
+        "commit_oid"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "database_id": { "$ref": "#/$defs/nullable_integer" },
+        "author": { "$ref": "#/$defs/author" },
+        "state": { "enum": ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"] },
+        "body": { "type": "string" },
+        "url": { "type": "string" },
+        "submitted_at": { "$ref": "#/$defs/nullable_string" },
+        "commit_oid": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "conversation_comment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "database_id",
+        "author",
+        "body",
+        "url",
+        "created_at",
+        "updated_at",
+        "reactions"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "database_id": { "$ref": "#/$defs/nullable_integer" },
+        "author": { "$ref": "#/$defs/author" },
+        "body": { "type": "string" },
+        "url": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "reactions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reaction" }
+        }
+      }
+    },
+    "review_comment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "database_id",
+        "author",
+        "body",
+        "url",
+        "created_at",
+        "updated_at",
+        "reply_to_id",
+        "review_id",
+        "reactions"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "database_id": { "$ref": "#/$defs/nullable_integer" },
+        "author": { "$ref": "#/$defs/author" },
+        "body": { "type": "string" },
+        "url": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "reply_to_id": { "$ref": "#/$defs/nullable_string" },
+        "review_id": { "$ref": "#/$defs/nullable_string" },
+        "reactions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reaction" }
+        }
+      }
+    },
+    "review_thread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "is_resolved",
+        "is_outdated",
+        "path",
+        "line",
+        "original_line",
+        "side",
+        "start_line",
+        "start_side",
+        "comments"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "is_resolved": { "type": "boolean" },
+        "is_outdated": { "type": "boolean" },
+        "path": { "$ref": "#/$defs/nullable_string" },
+        "line": { "$ref": "#/$defs/nullable_integer" },
+        "original_line": { "$ref": "#/$defs/nullable_integer" },
+        "side": { "$ref": "#/$defs/nullable_string" },
+        "start_line": { "$ref": "#/$defs/nullable_integer" },
+        "start_side": { "$ref": "#/$defs/nullable_string" },
+        "comments": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/review_comment" }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "verified", "format", "reason", "signer"],
+      "properties": {
+        "state": {
+          "enum": [
+            "valid",
+            "invalid",
+            "unsigned",
+            "unknown_key",
+            "object_unavailable",
+            "verification_pending"
+          ]
+        },
+        "verified": { "type": "boolean" },
+        "format": { "enum": ["ssh", "openpgp", "smime", "unknown", null] },
+        "reason": { "$ref": "#/$defs/nullable_string" },
+        "signer": { "$ref": "#/$defs/author" }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "oid",
+        "parents",
+        "authored_at",
+        "committed_at",
+        "github_signature",
+        "local_signature"
+      ],
+      "properties": {
+        "oid": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+        "parents": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" }
+        },
+        "authored_at": { "type": "string" },
+        "committed_at": { "type": "string" },
+        "github_signature": { "$ref": "#/$defs/signature" },
+        "local_signature": { "$ref": "#/$defs/signature" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stable_id",
+        "name",
+        "application",
+        "status",
+        "conclusion",
+        "requiredness",
+        "evidence_state",
+        "details_url"
+      ],
+      "properties": {
+        "stable_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "database_id", "name", "slug"],
+          "properties": {
+            "id": { "$ref": "#/$defs/nullable_string" },
+            "database_id": { "$ref": "#/$defs/nullable_integer" },
+            "name": { "$ref": "#/$defs/nullable_string" },
+            "slug": { "$ref": "#/$defs/nullable_string" }
+          }
+        },
+        "status": { "$ref": "#/$defs/nullable_string" },
+        "conclusion": { "$ref": "#/$defs/nullable_string" },
+        "requiredness": { "enum": ["required", "non_required", "unknown"] },
+        "evidence_state": {
+          "enum": [
+            "required_successful",
+            "required_pending",
+            "required_failed",
+            "required_missing",
+            "non_required_successful",
+            "non_required_pending",
+            "non_required_failed",
+            "requiredness_unknown"
+          ]
+        },
+        "details_url": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "applicable_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rulesets", "branch_protection", "evidence_complete"],
+      "properties": {
+        "rulesets": { "type": "array", "items": { "type": "object" } },
+        "branch_protection": { "type": "object" },
+        "evidence_complete": { "type": "boolean" }
+      }
+    },
+    "required_check_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["determination", "required", "missing", "sources", "unknown_reasons"],
+      "properties": {
+        "determination": { "enum": ["complete", "incomplete"] },
+        "required": { "type": "array", "items": { "type": "string" } },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "unknown_reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "connection_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connection", "pages", "items"],
+      "properties": {
+        "connection": { "type": "string", "minLength": 1 },
+        "pages": { "type": "integer", "minimum": 1 },
+        "items": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_calls",
+        "items",
+        "configured_caps",
+        "fully_paginated_connections",
+        "warnings",
+        "blocked_reason"
+      ],
+      "properties": {
+        "api_calls": { "type": "integer", "minimum": 1 },
+        "items": { "type": "integer", "minimum": 0 },
+        "configured_caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maximum_api_calls",
+            "maximum_items",
+            "maximum_threads",
+            "maximum_comments",
+            "maximum_reactions"
+          ],
+          "properties": {
+            "maximum_api_calls": { "type": "integer", "minimum": 1 },
+            "maximum_items": { "type": "integer", "minimum": 1 },
+            "maximum_threads": { "type": "integer", "minimum": 1 },
+            "maximum_comments": { "type": "integer", "minimum": 1 },
+            "maximum_reactions": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "fully_paginated_connections": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/connection_evidence" }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "blocked_reason": { "type": "null" }
+      }
+    }
+  }
+}
