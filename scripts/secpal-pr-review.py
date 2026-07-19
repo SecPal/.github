@@ -60,6 +60,7 @@ PROHIBITED_GIT_SUBCOMMANDS = {
 }
 SUCCESSFUL_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL"}
 PENDING_CHECK_STATUSES = {"EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"}
+UNSUPPORTED_REQUIRED_CHECK_RULE_TYPES = {"workflows"}
 MERGE_STATE_POLICY = {
     "DIRTY": "block",
     "UNKNOWN": "block",
@@ -694,7 +695,7 @@ def validate_config(configuration: dict[str, Any]) -> None:
     if not isinstance(identities, list):
         raise ContractError("reviewer_identities must be a list")
     canonical: set[str] = set()
-    aliases: set[str] = set()
+    aliases: dict[Any, str] = {}
     for identity in identities:
         expected = {
             "canonical_identity",
@@ -719,15 +720,18 @@ def validate_config(configuration: dict[str, Any]) -> None:
             if len(values) != len(set(values)):
                 raise ContractError(f"{key} contains duplicates")
             for value in values:
-                token = f"{key}:{value}"
-                if token in aliases:
+                if value in aliases and aliases[value] != name:
                     raise ContractError(f"Reviewer identity alias is duplicated: {value}")
-                aliases.add(token)
+                aliases[value] = name
         database_ids = identity["database_ids"]
         if not isinstance(database_ids, list) or any(
             isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in database_ids
         ):
             raise ContractError("database_ids must contain positive integers")
+        for value in database_ids:
+            if value in aliases and aliases[value] != name:
+                raise ContractError(f"Reviewer identity alias is duplicated: {value}")
+            aliases[value] = name
     signature_policy = configuration["signature_policy"]
     if not isinstance(signature_policy, dict) or set(signature_policy) != {
         "require_github_verified",
@@ -819,6 +823,7 @@ def load_config(
 
 
 def index_reviewer_identities(configuration: dict[str, Any]) -> dict[Any, str]:
+    validate_config(configuration)
     result: dict[Any, str] = {}
     for identity in configuration["reviewer_identities"]:
         canonical = identity["canonical_identity"]
@@ -2106,7 +2111,15 @@ def require_rule_evidence(
     for rule in rulesets or []:
         if not isinstance(rule, dict):
             raise BlockedError(BLOCKED_INCOMPLETE, "Malformed applicable rule", "rulesets", None)
-        if rule.get("type") != "required_status_checks":
+        rule_type = rule.get("type")
+        if rule_type in UNSUPPORTED_REQUIRED_CHECK_RULE_TYPES:
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                f"Required {rule_type} rule cannot be mapped to complete check evidence",
+                "rulesets",
+                None,
+            )
+        if rule_type != "required_status_checks":
             continue
         parameters = rule.get("parameters")
         checks = parameters.get("required_status_checks") if isinstance(parameters, dict) else None
@@ -2192,6 +2205,8 @@ def required_specs_from_snapshot(
                     },
                 }
             )
+        else:
+            rulesets.append({"type": rule.get("type")})
     branch_protection = snapshot["applicable_rules"]["branch_protection"]
     return require_rule_evidence(
         rulesets if policy["require_ruleset_evidence"] else None,

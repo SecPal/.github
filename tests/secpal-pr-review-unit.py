@@ -46,6 +46,13 @@ def uncontrolled_git_test_environment() -> dict[str, str]:
     return environment
 
 
+def fake_executable(directory: str, name: str) -> str:
+    path = Path(directory) / name
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o700)
+    return str(path)
+
+
 def actor(login: str | None = "reviewer", kind: str = "user") -> dict[str, Any]:
     if login is None:
         kind = "deleted_or_unavailable"
@@ -1475,6 +1482,33 @@ class SignatureAndCheckTests(unittest.TestCase):
         with self.assertRaises(review.BlockedError):
             review.require_rule_evidence(None, {}, config()["check_policy"])
 
+    def test_required_workflow_rule_blocks_as_unsupported_requiredness(self) -> None:
+        with self.assertRaisesRegex(review.BlockedError, "workflow"):
+            review.require_rule_evidence(
+                [
+                    {
+                        "type": "workflows",
+                        "parameters": {
+                            "workflows": [
+                                {
+                                    "path": ".github/workflows/quality.yml",
+                                    "repository_id": 1,
+                                }
+                            ]
+                        },
+                    }
+                ],
+                {"strict": True, "contexts": [], "checks": []},
+                config()["check_policy"],
+            )
+
+    def test_normalized_required_workflow_rule_cannot_bypass_gate_validation(self) -> None:
+        value = snapshot()
+        value["applicable_rules"]["rulesets"] = [{"type": "workflows"}]
+        value = review.attach_digest(value)
+        with self.assertRaisesRegex(review.ContractError, "workflow"):
+            review.validate_snapshot(value)
+
     def test_branch_protection_preserves_required_check_with_null_app_id(self) -> None:
         required = review.require_rule_evidence(
             [],
@@ -1696,9 +1730,10 @@ class SecurityAndOutputTests(unittest.TestCase):
             None,
             "query X { viewer { login } }",
         )
-        completed = mock.Mock(returncode=0, stdout="{}", stderr="")
-        with mock.patch.object(review.subprocess, "run", return_value=completed) as run:
-            review.CommandRunner().run(arguments)
+        with tempfile.TemporaryDirectory() as directory:
+            completed = mock.Mock(returncode=0, stdout="{}", stderr="")
+            with mock.patch.object(review.subprocess, "run", return_value=completed) as run:
+                review.CommandRunner({"gh": fake_executable(directory, "gh")}).run(arguments)
         environment = run.call_args.kwargs["env"]
         self.assertEqual(environment["GH_HOST"], "github.com")
         self.assertEqual(environment["PATH"], review.TRUSTED_COMMAND_PATH)
@@ -1723,10 +1758,13 @@ class SecurityAndOutputTests(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     def test_command_runner_bounds_execution_and_closes_stdin(self) -> None:
-        expired = review.subprocess.TimeoutExpired(["git", "rev-parse", "HEAD"], 1)
-        with mock.patch.object(review.subprocess, "run", side_effect=expired) as run:
-            with self.assertRaises(review.CommandFailure):
-                review.CommandRunner().run(["git", "rev-parse", "HEAD"])
+        with tempfile.TemporaryDirectory() as directory:
+            expired = review.subprocess.TimeoutExpired(["git", "rev-parse", "HEAD"], 1)
+            with mock.patch.object(review.subprocess, "run", side_effect=expired) as run:
+                with self.assertRaises(review.CommandFailure):
+                    review.CommandRunner({"git": fake_executable(directory, "git")}).run(
+                        ["git", "rev-parse", "HEAD"]
+                    )
         self.assertEqual(run.call_args.kwargs["stdin"], review.subprocess.DEVNULL)
         self.assertEqual(
             run.call_args.kwargs["timeout"],
@@ -1770,10 +1808,12 @@ class SecurityAndOutputTests(unittest.TestCase):
         }
         completed = mock.Mock(returncode=0, stdout="", stderr="")
 
-        with mock.patch.dict(review.os.environ, poisoned_environment, clear=True), mock.patch.object(
-            review.subprocess, "run", return_value=completed
-        ) as run:
-            review.CommandRunner().run(["git", "status", "--porcelain=v2", "--untracked-files=all"])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            review.os.environ, poisoned_environment, clear=True
+        ), mock.patch.object(review.subprocess, "run", return_value=completed) as run:
+            review.CommandRunner({"git": fake_executable(directory, "git")}).run(
+                ["git", "status", "--porcelain=v2", "--untracked-files=all"]
+            )
 
         environment = run.call_args.kwargs["env"]
         inherited_overrides = repository_overrides | {
@@ -1983,6 +2023,42 @@ class SecurityAndOutputTests(unittest.TestCase):
         broken["reviewer_identities"][0]["canonical_identity"] = ""
         with self.assertRaises(review.ContractError):
             review.validate_config(broken)
+
+    def test_reviewer_database_ids_must_be_globally_unique(self) -> None:
+        candidate = config()
+        candidate["reviewer_identities"][0]["database_ids"] = [42]
+        candidate["reviewer_identities"][1]["database_ids"] = [42]
+        with self.assertRaisesRegex(review.ContractError, "alias is duplicated"):
+            review.validate_config(candidate)
+        with self.assertRaisesRegex(review.ContractError, "alias is duplicated"):
+            review.index_reviewer_identities(candidate)
+
+    def test_reviewer_string_aliases_must_be_unique_across_namespaces(self) -> None:
+        string_namespaces = ("graphql_aliases", "rest_event_aliases", "node_ids")
+        for first_namespace in string_namespaces:
+            for second_namespace in string_namespaces:
+                with self.subTest(first=first_namespace, second=second_namespace):
+                    candidate = config()
+                    candidate["reviewer_identities"][0][first_namespace] = ["SHARED_ALIAS"]
+                    candidate["reviewer_identities"][1][second_namespace] = ["SHARED_ALIAS"]
+                    with self.assertRaisesRegex(review.ContractError, "alias is duplicated"):
+                        review.validate_config(candidate)
+                    with self.assertRaisesRegex(review.ContractError, "alias is duplicated"):
+                        review.index_reviewer_identities(candidate)
+
+    def test_one_reviewer_may_share_an_alias_across_namespaces(self) -> None:
+        string_namespaces = ("graphql_aliases", "rest_event_aliases", "node_ids")
+        for first_namespace in string_namespaces:
+            for second_namespace in string_namespaces:
+                with self.subTest(first=first_namespace, second=second_namespace):
+                    candidate = config()
+                    candidate["reviewer_identities"][0][first_namespace] = ["SHARED_ALIAS"]
+                    candidate["reviewer_identities"][0][second_namespace] = ["SHARED_ALIAS"]
+                    review.validate_config(candidate)
+                    self.assertEqual(
+                        review.index_reviewer_identities(candidate)["SHARED_ALIAS"],
+                        "copilot",
+                    )
 
     def test_unenforced_local_validation_commands_are_rejected(self) -> None:
         candidate = config()

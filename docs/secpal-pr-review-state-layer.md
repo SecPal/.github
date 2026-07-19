@@ -36,7 +36,9 @@ evidence cannot carry an unknown reason.
 Stored anchor counts must exactly match all supplied top-level PR collections,
 including the complete commit set. Configuration
 supports a stable canonical identity with GraphQL, REST/event, numeric, and
-node-ID aliases; no suffix-sensitive login is the sole identity contract.
+node-ID aliases. An alias may appear in multiple namespaces for the same
+canonical identity, but it cannot identify different reviewers; no
+suffix-sensitive login is the sole identity contract.
 Configuration and snapshot files must have JSON objects at their roots; every
 other valid JSON root produces the same structured invalid-input response as a
 schema violation.
@@ -271,7 +273,8 @@ GitHub's seven-day recency rule governs whether a check or expected application
 can be selected when required-check policy is configured; it does not expire a
 successful result on the current effective commit. A
 missing or inaccessible configured rules source, unsupported check type,
-malformed rule, or otherwise unknown requiredness terminates with
+malformed rule, required-workflow rule that cannot be mapped unambiguously to
+the captured check rollup, or otherwise unknown requiredness terminates with
 `BLOCKED_INCOMPLETE_REVIEW_STATE`. Pending checks are reported once and are not
 polled. Effective-check state, applicable rules, and the derived required-check
 evidence must also match their bounded revalidation observations.
