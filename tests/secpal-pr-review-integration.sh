@@ -74,8 +74,21 @@ canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=
 assert hashlib.sha256(canonical).hexdigest() == provided
 
 gate = json.load(open(gate_path, encoding="utf-8"))
-assert gate["raw_review_state"]["reviews"] == 1
+assert gate["raw_review_state"]["reviews"] == 2
+assert gate["raw_review_state"]["conversation_comments"] == 1
+assert gate["raw_review_state"]["review_threads"] == 2
+assert gate["raw_review_state"]["unresolved_threads"] == 0
 assert gate["technical_classification_required"] is True
+
+assert len(snapshot["conversation_comments"][0]["reactions"]) == 2
+assert len(snapshot["review_threads"][0]["comments"]) == 2
+assert snapshot["review_threads"][1]["is_outdated"] is True
+connections = {item["connection"]: item for item in snapshot["completeness"]["fully_paginated_connections"]}
+assert connections["reviews"]["pages"] == 2
+assert connections["review_threads"]["pages"] == 2
+assert connections["review_thread.THREAD_1.comments"]["pages"] == 2
+assert connections["conversation_comment.ISSUE_COMMENT_1.reactions"]["pages"] == 2
+assert connections["checks"]["pages"] == 2
 
 local = json.load(open(local_path, encoding="utf-8"))
 assert local["blockers"] == []

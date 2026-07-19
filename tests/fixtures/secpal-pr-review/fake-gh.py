@@ -55,14 +55,7 @@ if len(arguments) > 1 and arguments[1] == "graphql":
     print(json.dumps(response, ensure_ascii=False, separators=(",", ":")))
     raise SystemExit(0)
 
-endpoint = next(
-    (
-        value
-        for value in reversed(arguments[1:])
-        if not value.startswith("-") and "=" not in value and value != method
-    ),
-    "",
-)
+endpoint = arguments[-1] if arguments[-1] != method and not arguments[-1].startswith("-") else ""
 response = fixture.get("rest", {}).get(endpoint)
 if response is None:
     fail(f"no fake REST response for {endpoint}")

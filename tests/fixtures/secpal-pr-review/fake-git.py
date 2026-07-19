@@ -33,6 +33,7 @@ responses = {
     ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"): "origin/feat/test\n",
     ("rev-parse", "HEAD"): f"{HEAD}\n",
     ("rev-parse", "@{upstream}"): f"{HEAD}\n",
+    ("rev-list", "--reverse", f"{'b' * 40}..{HEAD}"): f"{HEAD}\n",
     ("cat-file", "-e", f"{HEAD}^{{commit}}"): "",
 }
 

@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ SPEC = importlib.util.spec_from_file_location("secpal_pr_review", HELPER)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Cannot load helper at {HELPER}")
 review = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = review
 SPEC.loader.exec_module(review)
 
 HEAD = "a" * 40
@@ -280,6 +282,9 @@ class FakeGitRunner:
             ): review.CommandResult(0, "origin/feat/test\n", ""),
             ("git", "rev-parse", "HEAD"): review.CommandResult(0, f"{HEAD}\n", ""),
             ("git", "rev-parse", "@{upstream}"): review.CommandResult(0, f"{HEAD}\n", ""),
+            ("git", "rev-list", "--reverse", f"{'b' * 40}..{HEAD}"): review.CommandResult(
+                0, f"{HEAD}\n", ""
+            ),
             ("git", "cat-file", "-e", f"{HEAD}^{{commit}}"): review.CommandResult(0, "", ""),
             ("git", "verify-commit", "--raw", HEAD): review.CommandResult(
                 0, "", 'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
@@ -340,7 +345,10 @@ class SnapshotAndPaginationTests(unittest.TestCase):
 
     def test_08_multiple_review_submissions_keep_commit_oids(self) -> None:
         value = snapshot()
-        value["reviews"] = [review_record(commit=PARENT), review_record(commit=HEAD)]
+        first = review_record(commit=PARENT)
+        second = review_record(commit=HEAD)
+        second["submitted_at"] = "2026-07-19T00:01:00Z"
+        value["reviews"] = [first, second]
         normalized = review.normalize_snapshot(value)
         self.assertEqual([item["commit_oid"] for item in normalized["reviews"]], [PARENT, HEAD])
 
@@ -500,6 +508,12 @@ class LocalGitTests(unittest.TestCase):
         runner.set(["git", "cat-file", "-e", f"{HEAD}^{{commit}}"], 1, stderr="missing")
         result = review.verify_local_against_snapshot(snapshot(), config(), runner, None)
         self.assertEqual(result["commit_signatures"][0]["state"], "object_unavailable")
+
+    def test_local_commit_set_must_match_pr(self) -> None:
+        runner = FakeGitRunner()
+        runner.set(["git", "rev-list", "--reverse", f"{'b' * 40}..{HEAD}"], 0, "")
+        result = review.verify_local_against_snapshot(snapshot(), config(), runner, None)
+        self.assert_blocker(result, "BLOCKED_UNEXPLAINED_COMMIT")
 
 
 class SignatureAndCheckTests(unittest.TestCase):
@@ -671,6 +685,12 @@ class SecurityAndOutputTests(unittest.TestCase):
             with self.subTest(command=command), self.assertRaises(review.CommandPolicyError):
                 review.validate_external_command(["git", command])
 
+    def test_git_allowlist_rejects_unexpected_read_subcommand_arguments(self) -> None:
+        with self.assertRaises(review.CommandPolicyError):
+            review.validate_external_command(["git", "show", "--output=/tmp/unexpected", "HEAD"])
+        with self.assertRaises(review.CommandPolicyError):
+            review.validate_external_command(["git", "status", "--porcelain=v2", "--ignored"])
+
     def test_59_review_request_operations_are_rejected(self) -> None:
         with self.assertRaises(review.CommandPolicyError):
             review.validate_external_command(["gh", "pr", "review", "1"])
@@ -688,6 +708,14 @@ class SecurityAndOutputTests(unittest.TestCase):
         with self.assertRaises(review.ContractError):
             review.validate_config(broken)
 
+    def test_nested_snapshot_schema_is_enforced(self) -> None:
+        value = snapshot()
+        value["reviews"] = [review_record()]
+        value["reviews"][0]["unexpected"] = True
+        value = review.attach_digest(value)
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(value)
+
     def test_digest_excludes_only_digest_field(self) -> None:
         value = snapshot()
         digest = value["snapshot_digest"]
@@ -704,6 +732,7 @@ class SecurityAndOutputTests(unittest.TestCase):
 
     def test_unvalidated_non_github_url_is_not_a_link(self) -> None:
         self.assertFalse(review.trusted_github_url("https://evil.example/SecPal/.github"))
+        self.assertFalse(review.trusted_github_url("https://github.com:invalid/path"))
         self.assertTrue(review.trusted_github_url("https://github.com/SecPal/.github/pull/1"))
 
 
