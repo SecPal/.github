@@ -28,9 +28,10 @@ is a derived, non-authoritative view.
 The helper validates both structures against these checked-in schemas and then
 applies semantic validation such as unique reviewer aliases and evidence digest
 verification. Commit evidence must use unique object IDs and contain the
-captured PR head commit. Configuration supports a stable canonical identity
-with GraphQL, REST/event, numeric, and node-ID aliases; no suffix-sensitive
-login is the sole identity contract.
+captured PR head commit. Stored anchor counts must exactly match all supplied
+top-level PR collections, including the complete commit set. Configuration
+supports a stable canonical identity with GraphQL, REST/event, numeric, and
+node-ID aliases; no suffix-sensitive login is the sole identity contract.
 
 Package 2.1 does not add a production multi-repository registry. Package 2.2
 will supply the authoritative runtime registry and must validate each selected
@@ -50,6 +51,11 @@ not part of the digest input.
 Identical source and local-checkout evidence therefore produces byte-identical
 canonical JSON and the same digest. A local commit becoming available or a
 GitHub state change is evidence and can correctly change the digest.
+
+SHA-256 provides deterministic integrity and equality evidence; it is not a
+signature or message-authentication code and does not authenticate who produced
+a snapshot. Callers must obtain gate input from the trusted capture execution
+or a separately authenticated artifact channel.
 
 ## Commands
 
@@ -113,12 +119,13 @@ python3 scripts/secpal-pr-review.py verify-gate \
   --config path/to/repository-config.json
 ```
 
-The gate verifies schema version, digest, complete pagination, an unchanged
-repository and pull-request anchor, safe repository and PR identity, the
-current signature and check policies, required-check evidence, strict
-up-to-date-base requirements, check outcomes, required or requested reviews,
-and raw unresolved thread state. It reports separately whether raw unresolved
-items exist and whether Package 2.2 technical classification remains necessary.
+The gate verifies schema version, digest, complete pagination, stored anchor
+counts, an unchanged repository and pull-request anchor, safe repository and PR
+identity, the current signature and check policies, required-check evidence,
+strict up-to-date-base requirements, check outcomes, required or requested
+reviews, and raw unresolved thread state. It reports separately whether raw
+unresolved items exist and whether Package 2.2 technical classification remains
+necessary.
 
 A clean mechanical result is named `PACKAGE_2_2_CLASSIFICATION_REQUIRED`; it is
 not merge readiness or merge authorization. Draft, closed, merged, conflicting,
@@ -148,7 +155,9 @@ initial capture, and reads it a third time after revalidation. The anchor
 includes the PR `updatedAt` value and the total counts for labels, review
 requests, reviews, conversation comments, review threads, and commits. Any
 lifecycle, identity, update-time, or count change blocks the capture, and every
-count must match its fully paginated collection. It fully paginates:
+count must match its fully paginated collection. The normalized counts are
+retained as `pull_request.captured_connection_counts` and validated again
+whenever a snapshot is loaded. It fully paginates:
 
 - labels and requested reviewers or teams;
 - review submissions, including informational, approved, dismissed, and
@@ -197,11 +206,13 @@ Each PR commit records two independent observations:
 Valid SSH and OpenPGP signatures are accepted when configuration permits them.
 The evidence distinguishes `valid`, `invalid`, `unsigned`, `unknown_key`,
 `object_unavailable`, and `verification_pending`. An unknown key is never
-reported as cryptographically verified. Required invalid, unsigned, unknown,
-pending, or unavailable verification blocks the gate. The helper does not
-import keys or persist signing configuration. Verification still uses the
-configured trust material, while command-scoped overrides prevent configuration
-from substituting the verifier executables themselves.
+reported as cryptographically verified. A `valid` state requires
+`verified: true`; every other state requires `verified: false`. Required
+invalid, unsigned, unknown, pending, unavailable, or internally inconsistent
+verification blocks the gate. The helper does not import keys or persist
+signing configuration. Verification still uses the configured trust material,
+while command-scoped overrides prevent configuration from substituting the
+verifier executables themselves.
 
 ## Required checks
 

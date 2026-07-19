@@ -21,9 +21,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   verification with GitHub.com host pinning, sanitized non-locking Git reads,
   fsmonitor and configured-verifier suppression, replacement-ref suppression,
   explicit merge-state gating, head-in-commit-set validation, three PR anchors,
-  and bounded revalidation of all paginated PR collections, commit signatures,
-  checks, and required rules, without polling, GitHub mutations, Git writes,
-  review requests, or merge authority
+  retained connection-count validation, signature state/verification
+  consistency, and bounded revalidation of all paginated PR collections,
+  commit signatures, checks, and required rules, without polling, GitHub
+  mutations, Git writes, review requests, or merge authority
 - added versioned snapshot and repository-configuration schemas, safely escaped
   derived Markdown, atomic private outputs, and offline fake-GitHub/fake-Git
   regression coverage for the Package 2.1 data contract

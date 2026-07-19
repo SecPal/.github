@@ -175,7 +175,13 @@ def check(
     }
 
 
-def finalize_snapshot(value: dict[str, Any]) -> dict[str, Any]:
+def finalize_snapshot(
+    value: dict[str, Any],
+    *,
+    preserve_captured_counts: bool = False,
+) -> dict[str, Any]:
+    if not preserve_captured_counts:
+        value["pull_request"]["captured_connection_counts"] = captured_connection_counts(value)
     counts = review.expected_connection_items(value)
     value["completeness"]["items"] = sum(counts.values())
     value["completeness"]["fully_paginated_connections"] = [
@@ -186,6 +192,21 @@ def finalize_snapshot(value: dict[str, Any]) -> dict[str, Any]:
         value["completeness"]["fully_paginated_connections"]
     )
     return review.attach_digest(value)
+
+
+def captured_connection_counts(value: dict[str, Any]) -> dict[str, int]:
+    """Return the PR-level counts supplied by the capture anchors."""
+
+    pull_request = value["pull_request"]
+    return {
+        "labels": len(pull_request["labels"]),
+        "review_requests": len(pull_request["requested_reviewers"])
+        + len(pull_request["requested_teams"]),
+        "reviews": len(value["reviews"]),
+        "conversation_comments": len(value["conversation_comments"]),
+        "review_threads": len(value["review_threads"]),
+        "commits": len(value["commits"]),
+    }
 
 
 def snapshot() -> dict[str, Any]:
@@ -287,6 +308,7 @@ def snapshot() -> dict[str, Any]:
             "blocked_reason": None,
         },
     }
+    value["pull_request"]["captured_connection_counts"] = captured_connection_counts(value)
     return finalize_snapshot(value)
 
 
@@ -566,6 +588,33 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value["commits"].append(duplicate)
         with self.assertRaisesRegex(review.ContractError, "duplicate commit OID"):
             review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_a_commit_omitted_from_the_captured_count(self) -> None:
+        value = snapshot()
+        value["pull_request"]["captured_connection_counts"] = captured_connection_counts(value)
+        value["pull_request"]["captured_connection_counts"]["commits"] = 2
+        with self.assertRaisesRegex(review.ContractError, "captured commit count"):
+            review.validate_snapshot(finalize_snapshot(value, preserve_captured_counts=True))
+
+    def test_snapshot_rejects_every_mismatched_captured_connection_count(self) -> None:
+        for connection in review.CAPTURED_CONNECTIONS:
+            with self.subTest(connection=connection):
+                value = snapshot()
+                value["pull_request"]["captured_connection_counts"][connection] += 1
+                with self.assertRaisesRegex(review.ContractError, "captured .* count"):
+                    review.validate_snapshot(
+                        finalize_snapshot(value, preserve_captured_counts=True)
+                    )
+
+    def test_snapshot_rejects_inconsistent_signature_verification_flags(self) -> None:
+        for signature_name in ("github_signature", "local_signature"):
+            for state, verified in (("valid", False), ("invalid", True)):
+                with self.subTest(signature=signature_name, state=state, verified=verified):
+                    value = snapshot()
+                    value["commits"][0][signature_name]["state"] = state
+                    value["commits"][0][signature_name]["verified"] = verified
+                    with self.assertRaisesRegex(review.ContractError, "signature evidence"):
+                        review.validate_snapshot(finalize_snapshot(value))
 
     def test_completeness_accounts_for_volatile_evidence_revalidation(self) -> None:
         value = snapshot()
@@ -1428,6 +1477,14 @@ class SecurityAndOutputTests(unittest.TestCase):
             ).stdout.decode().strip()
             review.subprocess.run(
                 ["git", "config", "gpg.ssh.program", str(verifier)],
+                cwd=root,
+                env=subprocess_environment,
+                check=True,
+            )
+            allowed_signers = root / "allowed-signers"
+            allowed_signers.write_text("", encoding="utf-8")
+            review.subprocess.run(
+                ["git", "config", "gpg.ssh.allowedSignersFile", str(allowed_signers)],
                 cwd=root,
                 env=subprocess_environment,
                 check=True,

@@ -114,6 +114,7 @@
         "head_ref",
         "head_oid_before",
         "head_oid_after",
+        "captured_connection_counts",
         "labels",
         "requested_reviewers",
         "requested_teams"
@@ -149,6 +150,26 @@
         "head_ref": { "$ref": "#/$defs/nullable_string" },
         "head_oid_before": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
         "head_oid_after": { "type": "string", "pattern": "^[0-9a-fA-F]{40,64}$" },
+        "captured_connection_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "labels",
+            "review_requests",
+            "reviews",
+            "conversation_comments",
+            "review_threads",
+            "commits"
+          ],
+          "properties": {
+            "labels": { "type": "integer", "minimum": 0 },
+            "review_requests": { "type": "integer", "minimum": 0 },
+            "reviews": { "type": "integer", "minimum": 0 },
+            "conversation_comments": { "type": "integer", "minimum": 0 },
+            "review_threads": { "type": "integer", "minimum": 0 },
+            "commits": { "type": "integer", "minimum": 1 }
+          }
+        },
         "labels": {
           "type": "array",
           "items": { "type": "string" }

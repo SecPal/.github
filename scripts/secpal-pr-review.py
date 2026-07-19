@@ -101,7 +101,15 @@ SAFE_GIT_CONFIG = (
     ("gpg.x509.program", "gpgsm"),
 )
 REVALIDATION_SUFFIX = ".revalidation"
-ANCHOR_CONNECTIONS = ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits")
+CAPTURED_CONNECTIONS = {
+    "labels": "labels",
+    "review_requests": "reviewRequests",
+    "reviews": "reviews",
+    "conversation_comments": "comments",
+    "review_threads": "reviewThreads",
+    "commits": "commits",
+}
+ANCHOR_CONNECTIONS = tuple(CAPTURED_CONNECTIONS.values())
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 GIT_CONFIG_PAIR = re.compile(r"^GIT_CONFIG_(?:KEY|VALUE)_[0-9]+$")
 GIT_TRACE_VARIABLE = re.compile(r"^GIT_TRACE(?:2)?(?:$|_)")
@@ -993,13 +1001,14 @@ def _require_keys(value: dict[str, Any], required: set[str], location: str) -> N
 
 def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
     pr = snapshot["pull_request"]
+    captured_counts = pr["captured_connection_counts"]
     expected = {
-        "labels": len(pr["labels"]),
-        "review_requests": len(pr["requested_reviewers"]) + len(pr["requested_teams"]),
-        "reviews": len(snapshot["reviews"]),
-        "conversation_comments": len(snapshot["conversation_comments"]),
-        "review_threads": len(snapshot["review_threads"]),
-        "commits": len(snapshot["commits"]),
+        "labels": captured_counts["labels"],
+        "review_requests": captured_counts["review_requests"],
+        "reviews": captured_counts["reviews"],
+        "conversation_comments": captured_counts["conversation_comments"],
+        "review_threads": captured_counts["review_threads"],
+        "commits": captured_counts["commits"],
         "checks": sum(item["status"] != "MISSING" for item in snapshot["checks"]),
     }
     sources = snapshot["required_check_evidence"]["sources"]
@@ -1162,8 +1171,30 @@ def validate_commit_evidence(pull_request: dict[str, Any], commits: list[dict[st
                 "verification_pending",
             }:
                 raise ContractError(f"Invalid {signature_name} evidence")
+            if signature.get("verified") is not (signature["state"] == "valid"):
+                raise ContractError(f"Inconsistent {signature_name} signature evidence")
     if pull_request["head_oid_after"].lower() not in commit_oids:
         raise ContractError("Snapshot commit evidence does not include the pull request head commit")
+
+
+def validate_captured_connection_counts(snapshot: dict[str, Any]) -> None:
+    """Bind stored PR-level anchor counts to the supplied collection evidence."""
+
+    pull_request = snapshot["pull_request"]
+    captured = pull_request["captured_connection_counts"]
+    actual = {
+        "labels": len(pull_request["labels"]),
+        "review_requests": len(pull_request["requested_reviewers"])
+        + len(pull_request["requested_teams"]),
+        "reviews": len(snapshot["reviews"]),
+        "conversation_comments": len(snapshot["conversation_comments"]),
+        "review_threads": len(snapshot["review_threads"]),
+        "commits": len(snapshot["commits"]),
+    }
+    for connection in CAPTURED_CONNECTIONS:
+        if captured[connection] != actual[connection]:
+            label = "commit" if connection == "commits" else connection.replace("_", " ")
+            raise ContractError(f"Snapshot {label} evidence does not match the captured {label} count")
 
 
 def validate_snapshot(snapshot: dict[str, Any]) -> None:
@@ -1220,6 +1251,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
             "head_ref",
             "head_oid_before",
             "head_oid_after",
+            "captured_connection_counts",
             "labels",
             "requested_reviewers",
             "requested_teams",
@@ -1236,6 +1268,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
     for collection in ("reviews", "conversation_comments", "review_threads", "commits", "checks"):
         if not isinstance(snapshot[collection], list):
             raise ContractError(f"{collection} must be an array")
+    validate_captured_connection_counts(snapshot)
     validate_commit_evidence(pr, snapshot["commits"])
     completeness = snapshot["completeness"]
     _require_keys(
@@ -2020,6 +2053,7 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
     for commit in snapshot["commits"]:
         if signature_policy["require_github_verified"] and (
             commit["github_signature"]["state"] != "valid"
+            or not commit["github_signature"]["verified"]
             or commit["github_signature"]["format"] not in accepted_formats
         ):
             blockers.append(
@@ -2030,6 +2064,7 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
             )
         if signature_policy["require_local_verified"] and (
             commit["local_signature"]["state"] != "valid"
+            or not commit["local_signature"]["verified"]
             or commit["local_signature"]["format"] not in accepted_formats
         ):
             blockers.append(
@@ -3389,6 +3424,10 @@ def capture_snapshot(
             "head_ref": before_pr.get("headRefName"),
             "head_oid_before": head_before,
             "head_oid_after": head_after,
+            "captured_connection_counts": {
+                name: before_pr[connection]["totalCount"]
+                for name, connection in CAPTURED_CONNECTIONS.items()
+            },
             "labels": evidence["labels"],
             "requested_reviewers": evidence["requested_reviewers"],
             "requested_teams": evidence["requested_teams"],

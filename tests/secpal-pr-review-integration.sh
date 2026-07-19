@@ -83,6 +83,15 @@ assert gate["technical_classification_required"] is True
 assert len(snapshot["conversation_comments"][0]["reactions"]) == 2
 assert len(snapshot["review_threads"][0]["comments"]) == 2
 assert snapshot["review_threads"][1]["is_outdated"] is True
+assert snapshot["pull_request"]["captured_connection_counts"] == {
+    "labels": len(snapshot["pull_request"]["labels"]),
+    "review_requests": len(snapshot["pull_request"]["requested_reviewers"])
+    + len(snapshot["pull_request"]["requested_teams"]),
+    "reviews": len(snapshot["reviews"]),
+    "conversation_comments": len(snapshot["conversation_comments"]),
+    "review_threads": len(snapshot["review_threads"]),
+    "commits": len(snapshot["commits"]),
+}
 connections = {item["connection"]: item for item in snapshot["completeness"]["fully_paginated_connections"]}
 assert connections["reviews"]["pages"] == 2
 assert connections["review_threads"]["pages"] == 2
