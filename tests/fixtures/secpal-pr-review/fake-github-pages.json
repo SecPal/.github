@@ -20,6 +20,7 @@
               "isDraft": false,
               "merged": false,
               "mergeable": "MERGEABLE",
+              "mergeStateStatus": "CLEAN",
               "reviewDecision": null,
               "author": {
                 "__typename": "User",
@@ -516,6 +517,7 @@
       {
         "type": "required_status_checks",
         "parameters": {
+          "strict_required_status_checks_policy": true,
           "required_status_checks": [{ "context": "tests", "integration_id": 1 }]
         }
       }

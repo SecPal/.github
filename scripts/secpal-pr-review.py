@@ -57,9 +57,9 @@ PROHIBITED_GIT_SUBCOMMANDS = {
     "stash",
     "switch",
 }
-PROHIBITED_GH_PR_SUBCOMMANDS = {"edit", "merge", "ready", "review"}
 SUCCESSFUL_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL"}
 PENDING_CHECK_STATUSES = {"EXPECTED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"}
+MERGE_STATE_STATUSES = {"DIRTY", "UNKNOWN", "BLOCKED", "BEHIND", "UNSTABLE", "HAS_HOOKS", "CLEAN"}
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -183,9 +183,7 @@ def validate_external_command(arguments: list[str]) -> None:
     if len(arguments) < 3:
         raise CommandPolicyError("GitHub CLI subcommand is required")
     if arguments[1] == "pr":
-        subcommand = arguments[2] if len(arguments) > 2 else ""
-        if subcommand in PROHIBITED_GH_PR_SUBCOMMANDS or subcommand:
-            raise CommandPolicyError(f"GitHub PR operation is not allowlisted: {subcommand}")
+        raise CommandPolicyError(f"GitHub PR operation is not allowlisted: {arguments[2]}")
     if arguments[1] != "api":
         raise CommandPolicyError(f"GitHub CLI operation is not allowlisted: {arguments[1]}")
     if arguments[2] == "graphql":
@@ -1070,6 +1068,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
             "is_draft",
             "is_merged",
             "mergeable",
+            "merge_state_status",
             "review_decision",
             "author",
             "base_repository",
@@ -1303,6 +1302,12 @@ def _stage_atomic_file(path: Path, content: bytes) -> Path:
 
 
 def atomic_write_many(outputs: dict[Path, bytes]) -> None:
+    normalized_targets: set[Path] = set()
+    for target in outputs:
+        normalized = Path(os.path.abspath(target))
+        if normalized in normalized_targets:
+            raise OutputSafetyError("Output paths must identify distinct files")
+        normalized_targets.add(normalized)
     staged: list[tuple[Path, Path]] = []
     try:
         for target, content in outputs.items():
@@ -1321,7 +1326,7 @@ def prepare_outputs(
     markdown_output: str | None,
 ) -> dict[Path, bytes]:
     outputs: dict[Path, bytes] = {}
-    if output and markdown_output and Path(output).absolute() == Path(markdown_output).absolute():
+    if output and markdown_output and Path(os.path.abspath(output)) == Path(os.path.abspath(markdown_output)):
         raise OutputSafetyError("Canonical JSON and derived Markdown require different output paths")
     if output:
         outputs[Path(output)] = canonical_json_bytes(snapshot)
@@ -1405,6 +1410,8 @@ def extract_anchor(payload: dict[str, Any]) -> dict[str, Any]:
         )
     if pull_request.get("state") not in {"OPEN", "CLOSED", "MERGED"}:
         raise BlockedError(BLOCKED_INCOMPLETE, "Pull request state is unsupported", "pull_request.anchor", None)
+    if pull_request.get("mergeStateStatus") not in MERGE_STATE_STATUSES:
+        raise BlockedError(BLOCKED_INCOMPLETE, "Pull request merge state is unsupported", "pull_request.anchor", None)
     if not isinstance(pull_request.get("number"), int) or isinstance(pull_request.get("number"), bool):
         raise BlockedError(BLOCKED_INCOMPLETE, "Pull request number is unavailable", "pull_request.anchor", None)
     if not isinstance(pull_request.get("isDraft"), bool) or not isinstance(pull_request.get("merged"), bool):
@@ -1449,12 +1456,15 @@ def _empty_signer() -> dict[str, Any]:
 
 def _local_signature_format(output: str) -> str:
     lowered = output.lower()
-    if 'good "git" signature' in lowered or "ssh" in lowered:
-        return "ssh"
-    if "gpgsm" in lowered or "x.509" in lowered or "x509" in lowered or "s/mime" in lowered:
+    if re.search(r"(?m)^gpgsm(?:\[[0-9]+\])?:", lowered):
         return "smime"
-    if "gpg" in lowered or "goodsig" in lowered:
+    if re.search(r"(?m)^gpg(?:\[[0-9]+\])?:", lowered):
         return "openpgp"
+    if re.search(r'(?m)^(?:good|bad) "git" signature\b', lowered) or re.search(
+        r"(?m)^ssh-keygen(?:\[[0-9]+\])?:",
+        lowered,
+    ):
+        return "ssh"
     return "unknown"
 
 
@@ -1587,8 +1597,7 @@ def evaluate_checks(
             if key[0] == name and (key[1] is None or key[1] == app_id)
         ]
         if matching:
-            key = sorted(matching, key=lambda value: (value[0], value[1] or 0))[0]
-            matched.add(key)
+            matched.update(matching)
             item["requiredness"] = "required"
             outcome = _check_outcome(item.get("status"), item.get("conclusion"), policy["expected_skipped"])
             item["evidence_state"] = f"required_{outcome}"
@@ -1651,7 +1660,8 @@ def require_rule_evidence(
             continue
         parameters = rule.get("parameters")
         checks = parameters.get("required_status_checks") if isinstance(parameters, dict) else None
-        if not isinstance(checks, list):
+        strict = parameters.get("strict_required_status_checks_policy") if isinstance(parameters, dict) else None
+        if not isinstance(checks, list) or not isinstance(strict, bool):
             raise BlockedError(
                 BLOCKED_INCOMPLETE,
                 "Required-status-check rule has malformed parameters",
@@ -1665,7 +1675,11 @@ def require_rule_evidence(
             integration_id = item.get("integration_id")
             if not isinstance(context, str) or not context or (
                 integration_id is not None
-                and (isinstance(integration_id, bool) or not isinstance(integration_id, int))
+                and (
+                    isinstance(integration_id, bool)
+                    or not isinstance(integration_id, int)
+                    or integration_id < 1
+                )
             ):
                 raise BlockedError(BLOCKED_INCOMPLETE, "Malformed required check identity", "rulesets", None)
             specifications[(context, integration_id)] = {
@@ -1673,6 +1687,13 @@ def require_rule_evidence(
                 "integration_id": integration_id,
             }
     if isinstance(branch_protection, dict):
+        if policy["require_branch_protection_evidence"] and not isinstance(branch_protection.get("strict"), bool):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Branch-protection strict-check policy is malformed",
+                "branch_protection",
+                None,
+            )
         contexts = branch_protection.get("contexts")
         checks = branch_protection.get("checks")
         if not isinstance(contexts, list) or not isinstance(checks, list):
@@ -1691,8 +1712,11 @@ def require_rule_evidence(
                 raise BlockedError(BLOCKED_INCOMPLETE, "Malformed required check", "branch_protection", None)
             context = item.get("context")
             app_id = item.get("app_id")
+            if app_id == -1:
+                app_id = None
             if not isinstance(context, str) or not context or (
-                app_id is not None and (isinstance(app_id, bool) or not isinstance(app_id, int))
+                app_id is not None
+                and (isinstance(app_id, bool) or not isinstance(app_id, int) or app_id < 1)
             ):
                 raise BlockedError(BLOCKED_INCOMPLETE, "Malformed required check identity", "branch_protection", None)
             specifications[(context, app_id)] = {"context": context, "integration_id": app_id}
@@ -1712,7 +1736,10 @@ def required_specs_from_snapshot(
             rulesets.append(
                 {
                     "type": "required_status_checks",
-                    "parameters": {"required_status_checks": rule.get("required_checks")},
+                    "parameters": {
+                        "required_status_checks": rule.get("required_checks"),
+                        "strict_required_status_checks_policy": rule.get("strict"),
+                    },
                 }
             )
     branch_protection = snapshot["applicable_rules"]["branch_protection"]
@@ -1721,6 +1748,23 @@ def required_specs_from_snapshot(
         branch_protection if policy["require_branch_protection_evidence"] else None,
         policy,
     )
+
+
+def strict_checks_require_current_base(snapshot: dict[str, Any], policy: dict[str, Any]) -> bool:
+    applicable_rules = snapshot["applicable_rules"]
+    ruleset_strict = policy["require_ruleset_evidence"] and any(
+        rule.get("type") == "required_status_checks"
+        and rule.get("strict") is True
+        and bool(rule.get("required_checks"))
+        for rule in applicable_rules["rulesets"]
+    )
+    branch_protection = applicable_rules["branch_protection"]
+    branch_protection_strict = (
+        policy["require_branch_protection_evidence"]
+        and branch_protection.get("strict") is True
+        and bool(branch_protection.get("contexts") or branch_protection.get("checks"))
+    )
+    return ruleset_strict or branch_protection_strict
 
 
 def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
@@ -1784,6 +1828,13 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
                 }
             )
     check_policy = configuration["check_policy"]
+    if pr["merge_state_status"] == "BEHIND" and strict_checks_require_current_base(snapshot, check_policy):
+        blockers.append(
+            {
+                "code": "BLOCKED_HEAD_BEHIND_BASE",
+                "reason": "Strict required checks require the pull request head to include the current base",
+            }
+        )
     required_sources = {
         source
         for source, required in (
@@ -1838,9 +1889,7 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
                 }
             )
     unresolved = [item for item in snapshot["review_threads"] if not item["is_resolved"]]
-    requested_changes = pr["review_decision"] == "CHANGES_REQUESTED" or any(
-        item["state"] == "CHANGES_REQUESTED" for item in snapshot["reviews"]
-    )
+    requested_changes = pr["review_decision"] == "CHANGES_REQUESTED"
     review_required = pr["review_decision"] == "REVIEW_REQUIRED"
     review_requested = bool(pr["requested_reviewers"] or pr["requested_teams"])
     if unresolved or requested_changes or review_required or review_requested:
@@ -2004,6 +2053,7 @@ query PullRequestAnchor($owner:String!, $name:String!, $number:Int!) {
       isDraft
       merged
       mergeable
+      mergeStateStatus
       reviewDecision
       author {
         __typename
@@ -2632,7 +2682,7 @@ def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
             "name": name,
             "application": {
                 "id": creator["node_id"],
-                "database_id": creator["database_id"],
+                "database_id": None,
                 "name": creator["login"],
                 "slug": creator["login"],
             },
@@ -2649,10 +2699,12 @@ def _normalize_applicable_rules(rulesets: list[Any], branch_protection: dict[str
         if not isinstance(rule, dict):
             raise BlockedError(BLOCKED_INCOMPLETE, "Malformed applicable rule", "rulesets", None)
         if rule.get("type") == "required_status_checks":
-            checks = rule.get("parameters", {}).get("required_status_checks", [])
+            parameters = rule.get("parameters", {})
+            checks = parameters.get("required_status_checks", [])
             normalized_rules.append(
                 {
                     "type": "required_status_checks",
+                    "strict": parameters.get("strict_required_status_checks_policy"),
                     "required_checks": sorted(
                         [
                             {
@@ -2918,6 +2970,7 @@ def capture_snapshot(
             "is_draft": bool(before_pr.get("isDraft")),
             "is_merged": bool(before_pr.get("merged")),
             "mergeable": before_pr.get("mergeable"),
+            "merge_state_status": before_pr.get("mergeStateStatus"),
             "review_decision": before_pr.get("reviewDecision"),
             "author": normalize_actor(before_pr.get("author")),
             "base_repository": {

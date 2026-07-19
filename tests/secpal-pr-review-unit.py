@@ -198,6 +198,7 @@ def snapshot() -> dict[str, Any]:
             "is_draft": False,
             "is_merged": False,
             "mergeable": "MERGEABLE",
+            "merge_state_status": "CLEAN",
             "review_decision": None,
             "author": actor("author"),
             "base_repository": {
@@ -234,8 +235,18 @@ def snapshot() -> dict[str, Any]:
         ],
         "checks": [check()],
         "applicable_rules": {
-            "rulesets": [{"type": "required_status_checks", "required_checks": [{"context": "tests", "integration_id": 1}]}],
-            "branch_protection": {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]},
+            "rulesets": [
+                {
+                    "type": "required_status_checks",
+                    "strict": True,
+                    "required_checks": [{"context": "tests", "integration_id": 1}],
+                }
+            ],
+            "branch_protection": {
+                "strict": True,
+                "contexts": ["tests"],
+                "checks": [{"context": "tests", "app_id": 1}],
+            },
             "evidence_complete": True,
         },
         "required_check_evidence": {
@@ -343,6 +354,53 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value["pull_request"]["review_decision"] = "CHANGES_REQUESTED"
         result = review.verify_snapshot_gate(finalize_snapshot(value), config())
         self.assertTrue(result["raw_review_state"]["requested_changes"])
+
+    def test_superseded_changes_request_does_not_block(self) -> None:
+        value = snapshot()
+        value["reviews"] = [review_record("CHANGES_REQUESTED"), review_record("APPROVED")]
+        value["reviews"][1]["id"] = "REVIEW_2"
+        value["reviews"][1]["submitted_at"] = "2026-07-19T00:01:00Z"
+        value["pull_request"]["review_decision"] = "APPROVED"
+        result = review.verify_snapshot_gate(finalize_snapshot(value), config())
+        self.assertFalse(result["raw_review_state"]["requested_changes"])
+        self.assertNotIn("NOT_READY_FOR_MERGE", [item["code"] for item in result["blockers"]])
+
+    def test_strict_required_checks_block_a_behind_branch(self) -> None:
+        value = snapshot()
+        value["pull_request"]["merge_state_status"] = "BEHIND"
+        value["applicable_rules"]["branch_protection"]["strict"] = True
+        value["applicable_rules"]["rulesets"][0]["strict"] = True
+        result = review.verify_snapshot_gate(review.attach_digest(value), config())
+        self.assertIn("BLOCKED_HEAD_BEHIND_BASE", [item["code"] for item in result["blockers"]])
+
+    def test_ruleset_strictness_blocks_behind_without_branch_protection(self) -> None:
+        value = snapshot()
+        value["pull_request"]["merge_state_status"] = "BEHIND"
+        value["required_check_evidence"]["sources"] = ["rulesets"]
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": None,
+            "contexts": [],
+            "checks": [],
+        }
+        configuration = config()
+        configuration["check_policy"]["require_branch_protection_evidence"] = False
+        result = review.verify_snapshot_gate(finalize_snapshot(value), configuration)
+        self.assertIn("BLOCKED_HEAD_BEHIND_BASE", [item["code"] for item in result["blockers"]])
+
+    def test_loose_required_checks_do_not_block_a_behind_branch(self) -> None:
+        value = snapshot()
+        value["pull_request"]["merge_state_status"] = "BEHIND"
+        value["applicable_rules"]["branch_protection"]["strict"] = False
+        value["applicable_rules"]["rulesets"][0]["strict"] = False
+        result = review.verify_snapshot_gate(review.attach_digest(value), config())
+        self.assertNotIn("BLOCKED_HEAD_BEHIND_BASE", [item["code"] for item in result["blockers"]])
+
+    def test_strict_policy_without_required_checks_does_not_require_current_base(self) -> None:
+        value = snapshot()
+        value["applicable_rules"]["rulesets"][0]["required_checks"] = []
+        value["applicable_rules"]["branch_protection"]["contexts"] = []
+        value["applicable_rules"]["branch_protection"]["checks"] = []
+        self.assertFalse(review.strict_checks_require_current_base(value, config()["check_policy"]))
 
     def test_06_unresolved_human_thread(self) -> None:
         value = snapshot()
@@ -669,6 +727,20 @@ class SignatureAndCheckTests(unittest.TestCase):
         value = review.interpret_local_signature(0, "gpgsm: Good signature from user")
         self.assertEqual((value["state"], value["format"]), ("valid", "smime"))
 
+    def test_openpgp_status_record_wins_over_signer_uid_text(self) -> None:
+        value = review.interpret_local_signature(
+            0,
+            "gpg: Signature made\n[GNUPG:] GOODSIG 0123456789ABCDEF ssh@example.com",
+        )
+        self.assertEqual((value["state"], value["format"]), ("valid", "openpgp"))
+
+    def test_ambiguous_gnupg_record_is_not_assumed_openpgp(self) -> None:
+        value = review.interpret_local_signature(
+            0,
+            "[GNUPG:] GOODSIG 0123456789ABCDEF signer@example.com",
+        )
+        self.assertEqual((value["state"], value["format"]), ("valid", "unknown"))
+
     def test_failed_x509_signature_is_not_mislabeled_openpgp(self) -> None:
         value = review.interpret_local_signature(1, "gpgsm: BAD signature from user")
         self.assertEqual((value["state"], value["format"]), ("invalid", "smime"))
@@ -725,6 +797,44 @@ class SignatureAndCheckTests(unittest.TestCase):
         self.assertEqual(checks[0]["evidence_state"], "required_missing")
         self.assertEqual(evidence["missing"], ["check:1:tests"])
 
+    def test_app_check_satisfies_generic_and_exact_requirements(self) -> None:
+        raw = [check() | {"requiredness": None, "evidence_state": None}]
+        _, evidence = review.evaluate_checks(
+            raw,
+            [
+                {"context": "tests", "integration_id": None},
+                {"context": "tests", "integration_id": 1},
+            ],
+            config()["check_policy"],
+        )
+        self.assertEqual(evidence["missing"], [])
+
+    def test_status_creator_id_does_not_satisfy_app_requirement(self) -> None:
+        raw = review._normalize_check(
+            {
+                "__typename": "StatusContext",
+                "id": "STATUS_1",
+                "context": "tests",
+                "state": "SUCCESS",
+                "targetUrl": None,
+                "creator": {
+                    "__typename": "User",
+                    "id": "USER_1",
+                    "databaseId": 1,
+                    "login": "reviewer",
+                    "url": "https://github.com/reviewer",
+                },
+            }
+        )
+        checks, evidence = review.evaluate_checks(
+            [raw],
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        status_context = next(item for item in checks if item["stable_id"] == "status_context:STATUS_1")
+        self.assertEqual(status_context["requiredness"], "non_required")
+        self.assertEqual(evidence["missing"], ["check:1:tests"])
+
     def test_42_requiredness_unknown(self) -> None:
         raw = [check() | {"requiredness": None, "evidence_state": None}]
         checks, evidence = review.evaluate_checks(raw, None, config()["check_policy"])
@@ -755,6 +865,34 @@ class SignatureAndCheckTests(unittest.TestCase):
             config()["check_policy"],
         )
         self.assertEqual(required, [{"context": "tests", "integration_id": None}])
+
+    def test_branch_protection_any_app_sentinel_is_generic(self) -> None:
+        required = review.require_rule_evidence(
+            [],
+            {
+                "strict": True,
+                "contexts": [],
+                "checks": [{"context": "tests", "app_id": -1}],
+            },
+            config()["check_policy"],
+        )
+        self.assertEqual(required, [{"context": "tests", "integration_id": None}])
+
+    def test_malformed_strict_check_policy_is_incomplete(self) -> None:
+        with self.assertRaises(review.BlockedError):
+            review.require_rule_evidence(
+                [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [],
+                            "strict_required_status_checks_policy": None,
+                        },
+                    }
+                ],
+                {"strict": True, "contexts": [], "checks": []},
+                config()["check_policy"],
+            )
 
 
 class SecurityAndOutputTests(unittest.TestCase):
@@ -826,6 +964,18 @@ class SecurityAndOutputTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertTrue(review.verify_digest(value))
 
+    def test_output_path_aliases_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "nested"
+            nested.mkdir()
+            output = root / "snapshot.json"
+            alias = nested / ".." / "snapshot.json"
+            with self.assertRaises(review.OutputSafetyError):
+                review.prepare_outputs(snapshot(), str(output), str(alias))
+            with self.assertRaises(review.OutputSafetyError):
+                review.atomic_write_many({output: b"json", alias: b"markdown"})
+
     def test_55_stdout_mode_has_zero_persistent_writes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             before = list(Path(directory).iterdir())
@@ -838,6 +988,8 @@ class SecurityAndOutputTests(unittest.TestCase):
         review.validate_external_command(["gh", "api", "graphql", "-f", "query=query X { viewer { login } }"])
         with self.assertRaises(review.CommandPolicyError):
             review.validate_external_command(["gh", "api", "--method", "POST", "repos/SecPal/.github/issues"])
+        with self.assertRaises(review.CommandPolicyError):
+            review.validate_external_command(["gh", "pr", "view"])
         for arguments in (
             ["gh", "api", "repos/SecPal/.github/issues/1/comments", "-f", "body=write"],
             ["gh", "api", "repos/SecPal/.github/issues/1/labels", "-F", "labels[]=security"],

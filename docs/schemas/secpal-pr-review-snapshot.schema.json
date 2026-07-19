@@ -104,6 +104,7 @@
         "is_draft",
         "is_merged",
         "mergeable",
+        "merge_state_status",
         "review_decision",
         "author",
         "base_repository",
@@ -127,6 +128,9 @@
         "is_draft": { "type": "boolean" },
         "is_merged": { "type": "boolean" },
         "mergeable": { "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null] },
+        "merge_state_status": {
+          "enum": ["DIRTY", "UNKNOWN", "BLOCKED", "BEHIND", "UNSTABLE", "HAS_HOOKS", "CLEAN"]
+        },
         "review_decision": { "enum": ["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", null] },
         "author": { "$ref": "#/$defs/author" },
         "base_repository": { "$ref": "#/$defs/repository_ref" },

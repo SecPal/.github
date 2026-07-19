@@ -108,10 +108,10 @@ python3 scripts/secpal-pr-review.py verify-gate \
 
 The gate verifies schema version, digest, complete pagination, an unchanged
 repository and pull-request anchor, safe repository and PR identity, the
-current signature and check policies, required-check evidence, check outcomes,
-required or requested reviews, and raw unresolved thread state. It reports
-separately whether raw unresolved items exist and whether Package 2.2 technical
-classification remains necessary.
+current signature and check policies, required-check evidence, strict
+up-to-date-base requirements, check outcomes, required or requested reviews,
+and raw unresolved thread state. It reports separately whether raw unresolved
+items exist and whether Package 2.2 technical classification remains necessary.
 
 A clean mechanical result is named `PACKAGE_2_2_CLASSIFICATION_REQUIRED`; it is
 not merge readiness or merge authorization. Draft, closed, merged, conflicting,
@@ -182,7 +182,9 @@ from a hard-coded workflow name or from visible green checks alone. Check runs
 and status contexts retain stable GitHub identities and are matched to required
 contexts plus application IDs when those IDs are governed. Gate verification
 rebuilds requiredness and outcomes from the supplied current policy rather than
-trusting capture-time outcome labels.
+trusting capture-time outcome labels. It also retains each configured source's
+strict up-to-date policy and blocks a `BEHIND` merge state whenever either
+enabled source requires checks against the current base.
 
 Evidence distinguishes required success, pending, failure, and absence;
 non-required success, pending, and failure; and unknown requiredness. Required
@@ -241,7 +243,7 @@ handling are explicit non-goals.
 
 Offline tests use fake `gh` and fake Git executables. They cover deterministic
 serialization, outer and nested pagination with unequal page counts, reactions,
-caps, partial failures, signatures, full-anchor races, required checks, hostile
-rendering, atomic outputs, and executable-call spies that reject GitHub and Git
-writes. Live acceptance is a separately identified read-only phase and never
-requests an AI review.
+caps, partial failures, signatures, full-anchor races, strict stale-base state,
+required checks, hostile rendering, atomic outputs, and executable-call spies
+that reject GitHub and Git writes. Live acceptance is a separately identified
+read-only phase and never requests an AI review.

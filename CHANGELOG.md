@@ -17,8 +17,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   PR evidence with complete bounded review, thread, reply, reaction, commit,
   and check pagination while blocking on partial state or anchor movement
 - added read-only local-head, exact commit-set, SSH/OpenPGP signature, applicable
-  rule, branch-protection, and required-check verification without polling,
-  GitHub mutations, Git writes, review requests, or merge authority
+  rule, branch-protection, required-check, and strict up-to-date-base
+  verification without polling, GitHub mutations, Git writes, review requests,
+  or merge authority
 - added versioned snapshot and repository-configuration schemas, safely escaped
   derived Markdown, atomic private outputs, and offline fake-GitHub/fake-Git
   regression coverage for the Package 2.1 data contract
