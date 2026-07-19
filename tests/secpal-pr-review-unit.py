@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib.util
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -29,6 +31,17 @@ SPEC.loader.exec_module(review)
 HEAD = "a" * 40
 BASE = "b" * 40
 PARENT = "c" * 40
+
+
+def uncontrolled_git_test_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in review.GIT_ENVIRONMENT_OVERRIDES:
+        environment.pop(key, None)
+    for key in tuple(environment):
+        if review.GIT_CONFIG_PAIR.fullmatch(key) or review.GIT_TRACE_VARIABLE.match(key):
+            environment.pop(key)
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    return environment
 
 
 def actor(login: str | None = "reviewer", kind: str = "user") -> dict[str, Any]:
@@ -553,6 +566,71 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value["commits"].append(duplicate)
         with self.assertRaisesRegex(review.ContractError, "duplicate commit OID"):
             review.validate_snapshot(finalize_snapshot(value))
+
+    def test_completeness_accounts_for_volatile_evidence_revalidation(self) -> None:
+        value = snapshot()
+        value["review_threads"] = [thread()]
+        expected = review.expected_connection_items(value)
+        self.assertEqual(expected["labels.revalidation"], 0)
+        self.assertEqual(expected["review_requests.revalidation"], 0)
+        self.assertEqual(expected["reviews.revalidation"], 0)
+        self.assertEqual(expected["commits.revalidation"], 1)
+        self.assertEqual(expected[f"commit.{HEAD}.parents.revalidation"], 1)
+        self.assertEqual(expected["checks.revalidation"], 1)
+        self.assertEqual(expected["rulesets.revalidation"], 1)
+        self.assertEqual(expected["branch_protection.revalidation"], 1)
+        self.assertEqual(expected["review_threads.revalidation"], 1)
+        self.assertEqual(expected["review_thread.THREAD_1.comments.revalidation"], 1)
+        self.assertEqual(expected["review_comment.RC_1.reactions.revalidation"], 0)
+
+    def test_revalidation_observations_count_against_item_kind_caps(self) -> None:
+        value = snapshot()
+        comment = review_comment()
+        comment["reactions"] = [
+            {
+                "id": "REACTION_1",
+                "content": "THUMBS_UP",
+                "created_at": "2026-07-19T00:01:00Z",
+                "user": actor(),
+            }
+        ]
+        value["review_threads"] = [thread(comments=[comment])]
+        for cap in ("maximum_threads", "maximum_comments", "maximum_reactions"):
+            with self.subTest(cap=cap):
+                candidate = copy.deepcopy(value)
+                candidate["completeness"]["configured_caps"][cap] = 1
+                with self.assertRaises(review.ContractError):
+                    review.validate_snapshot(finalize_snapshot(candidate))
+
+    def test_reaction_change_during_capture_is_terminal(self) -> None:
+        before = [review_comment()]
+        after = copy.deepcopy(before)
+        after[0]["reactions"] = [
+            {
+                "id": "REACTION_1",
+                "content": "THUMBS_UP",
+                "created_at": "2026-07-19T00:01:00Z",
+                "user": actor(),
+            }
+        ]
+        with self.assertRaises(review.BlockedError) as raised:
+            review.ensure_revalidated_evidence("review reactions", before, after)
+        self.assertEqual(raised.exception.code, review.BLOCKED_INCOMPLETE)
+
+    def test_check_change_during_capture_is_terminal(self) -> None:
+        before = [check()]
+        after = [check(status="COMPLETED", conclusion="FAILURE")]
+        with self.assertRaises(review.BlockedError):
+            review.ensure_revalidated_evidence("head checks", before, after)
+
+    def test_required_rule_change_during_capture_is_terminal(self) -> None:
+        before = snapshot()["applicable_rules"]
+        after = copy.deepcopy(before)
+        after["rulesets"][0]["required_checks"].append(
+            {"context": "new-required-check", "integration_id": 1}
+        )
+        with self.assertRaises(review.BlockedError):
+            review.ensure_revalidated_evidence("required rules", before, after)
 
     def test_07_copilot_and_codex_are_distinct_configured_identities(self) -> None:
         identities = review.index_reviewer_identities(config())
@@ -1218,6 +1296,8 @@ class SecurityAndOutputTests(unittest.TestCase):
         poisoned_environment |= {
             "GIT_CONFIG_KEY_0": "core.sshCommand",
             "GIT_CONFIG_VALUE_0": "hostile-command",
+            "GIT_CONFIG_KEY_99": "gpg.ssh.program",
+            "GIT_CONFIG_VALUE_99": "hostile-verifier",
             "GIT_NO_REPLACE_OBJECTS": "0",
             "GIT_OPTIONAL_LOCKS": "1",
             "GIT_TRACE": "/tmp/hostile-trace",
@@ -1232,15 +1312,141 @@ class SecurityAndOutputTests(unittest.TestCase):
 
         environment = run.call_args.kwargs["env"]
         inherited_overrides = repository_overrides | {
-            "GIT_CONFIG_KEY_0",
-            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_KEY_99",
+            "GIT_CONFIG_VALUE_99",
             "GIT_TRACE",
             "GIT_TRACE2_EVENT",
         }
-        self.assertEqual(sorted(inherited_overrides & environment.keys()), [])
+        self.assertEqual(sorted((inherited_overrides - {"GIT_CONFIG_COUNT"}) & environment.keys()), [])
+        configured_count = int(environment["GIT_CONFIG_COUNT"])
+        safe_config = {
+            environment[f"GIT_CONFIG_KEY_{index}"]: environment[f"GIT_CONFIG_VALUE_{index}"]
+            for index in range(configured_count)
+        }
+        self.assertEqual(safe_config, dict(review.SAFE_GIT_CONFIG))
+        self.assertEqual(
+            set(safe_config),
+            {
+                "core.fsmonitor",
+                "gpg.program",
+                "gpg.openpgp.program",
+                "gpg.ssh.program",
+                "gpg.x509.program",
+            },
+        )
+        self.assertEqual(safe_config["core.fsmonitor"], "false")
         self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
         self.assertEqual(environment["GIT_OPTIONAL_LOCKS"], "0")
         self.assertEqual(environment["GIT_NO_LAZY_FETCH"], "1")
+
+    def test_command_runner_disables_a_configured_fsmonitor_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "fsmonitor-ran"
+            hook = root / "fsmonitor-hook"
+            hook.write_text(
+                "#!/usr/bin/env python3\n"
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
+                "print('token')\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o700)
+            subprocess_environment = uncontrolled_git_test_environment()
+            review.subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=root,
+                env=subprocess_environment,
+                check=True,
+            )
+            review.subprocess.run(
+                ["git", "config", "core.fsmonitor", str(hook)],
+                cwd=root,
+                env=subprocess_environment,
+                check=True,
+            )
+            review.subprocess.run(
+                ["git", "status", "--porcelain=v2", "--untracked-files=all"],
+                cwd=root,
+                env=subprocess_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertTrue(marker.exists())
+            marker.unlink()
+
+            with contextlib.chdir(root):
+                review.CommandRunner().run(
+                    ["git", "status", "--porcelain=v2", "--untracked-files=all"]
+                )
+            self.assertFalse(marker.exists())
+
+    def test_command_runner_pins_the_ssh_signature_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "verifier-ran"
+            verifier = root / "hostile-verifier"
+            verifier.write_text(
+                "#!/bin/sh\n"
+                f": > \"{marker}\"\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            verifier.chmod(0o700)
+            subprocess_environment = uncontrolled_git_test_environment()
+            review.subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=root,
+                env=subprocess_environment,
+                check=True,
+            )
+            tree = review.subprocess.run(
+                ["git", "hash-object", "-t", "tree", "-w", "--stdin"],
+                cwd=root,
+                env=subprocess_environment,
+                input=b"",
+                capture_output=True,
+                check=True,
+            ).stdout.decode().strip()
+            commit = (
+                f"tree {tree}\n"
+                "author Reviewer <reviewer@example.com> 0 +0000\n"
+                "committer Reviewer <reviewer@example.com> 0 +0000\n"
+                "gpgsig -----BEGIN SSH SIGNATURE-----\n"
+                " invalid\n"
+                " -----END SSH SIGNATURE-----\n\n"
+                "message\n"
+            ).encode()
+            oid = review.subprocess.run(
+                ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                cwd=root,
+                env=subprocess_environment,
+                input=commit,
+                capture_output=True,
+                check=True,
+            ).stdout.decode().strip()
+            review.subprocess.run(
+                ["git", "config", "gpg.ssh.program", str(verifier)],
+                cwd=root,
+                env=subprocess_environment,
+                check=True,
+            )
+            review.subprocess.run(
+                ["git", "verify-commit", "--raw", oid],
+                cwd=root,
+                env=subprocess_environment,
+                check=False,
+            )
+            self.assertTrue(marker.exists())
+            marker.unlink()
+
+            with contextlib.chdir(root):
+                review.CommandRunner().run(
+                    ["git", "verify-commit", "--raw", oid],
+                    allow_failure=True,
+                )
+            self.assertFalse(marker.exists())
 
     def test_disabled_rule_sources_are_not_called(self) -> None:
         configuration = config()

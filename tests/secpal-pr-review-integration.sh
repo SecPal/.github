@@ -89,6 +89,17 @@ assert connections["review_threads"]["pages"] == 2
 assert connections["review_thread.THREAD_1.comments"]["pages"] == 2
 assert connections["conversation_comment.ISSUE_COMMENT_1.reactions"]["pages"] == 2
 assert connections["checks"]["pages"] == 2
+assert connections["labels.revalidation"]["pages"] == 1
+assert connections["review_requests.revalidation"]["pages"] == 1
+assert connections["reviews.revalidation"]["pages"] == 2
+assert connections["conversation_comments.revalidation"]["pages"] == 1
+assert connections["review_threads.revalidation"]["pages"] == 2
+assert connections["review_thread.THREAD_1.comments.revalidation"]["pages"] == 2
+assert connections["conversation_comment.ISSUE_COMMENT_1.reactions.revalidation"]["pages"] == 2
+assert connections["commits.revalidation"]["pages"] == 1
+assert connections["checks.revalidation"]["pages"] == 2
+assert connections["rulesets.revalidation"]["pages"] == 1
+assert connections["branch_protection.revalidation"]["pages"] == 1
 
 local = json.load(open(local_path, encoding="utf-8"))
 assert local["blockers"] == []
@@ -105,12 +116,17 @@ git_calls = [json.loads(line) for line in open(git_log, encoding="utf-8")]
 
 assert gh_calls
 assert git_calls
+anchor_calls = 0
 for call in gh_calls:
     assert call[0] == "api", call
     if "--method" in call:
         assert call[call.index("--method") + 1] == "GET", call
     query = next((arg.split("=", 1)[1] for arg in call if arg.startswith("query=")), "")
     assert "mutation" not in query.lower(), call
+    if "query PullRequestAnchor" in query:
+        anchor_calls += 1
+
+assert anchor_calls == 12, anchor_calls
 
 prohibited_git = {"push", "commit", "checkout", "switch", "reset", "clean", "stash", "fetch"}
 assert all(not call or call[0] not in prohibited_git for call in git_calls)

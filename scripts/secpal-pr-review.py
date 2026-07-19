@@ -93,6 +93,14 @@ GIT_ENVIRONMENT_OVERRIDES = {
     "GIT_SHALLOW_FILE",
     "GIT_WORK_TREE",
 }
+SAFE_GIT_CONFIG = (
+    ("core.fsmonitor", "false"),
+    ("gpg.program", "gpg"),
+    ("gpg.openpgp.program", "gpg"),
+    ("gpg.ssh.program", "ssh-keygen"),
+    ("gpg.x509.program", "gpgsm"),
+)
+REVALIDATION_SUFFIX = ".revalidation"
 ANCHOR_CONNECTIONS = ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits")
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 GIT_CONFIG_PAIR = re.compile(r"^GIT_CONFIG_(?:KEY|VALUE)_[0-9]+$")
@@ -306,6 +314,10 @@ def command_environment(executable: str) -> dict[str, str]:
         environment["GIT_NO_LAZY_FETCH"] = "1"
         environment["GIT_NO_REPLACE_OBJECTS"] = "1"
         environment["GIT_OPTIONAL_LOCKS"] = "0"
+        environment["GIT_CONFIG_COUNT"] = str(len(SAFE_GIT_CONFIG))
+        for index, (key, value) in enumerate(SAFE_GIT_CONFIG):
+            environment[f"GIT_CONFIG_KEY_{index}"] = key
+            environment[f"GIT_CONFIG_VALUE_{index}"] = value
     return environment
 
 
@@ -1005,6 +1017,31 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
             expected[f"review_comment.{comment['id']}.reactions"] = len(comment["reactions"])
     for commit in snapshot["commits"]:
         expected[f"commit.{commit['oid']}.parents"] = len(commit["parents"])
+    expected[f"labels{REVALIDATION_SUFFIX}"] = expected["labels"]
+    expected[f"review_requests{REVALIDATION_SUFFIX}"] = expected["review_requests"]
+    expected[f"reviews{REVALIDATION_SUFFIX}"] = expected["reviews"]
+    expected[f"conversation_comments{REVALIDATION_SUFFIX}"] = len(snapshot["conversation_comments"])
+    expected[f"review_threads{REVALIDATION_SUFFIX}"] = len(snapshot["review_threads"])
+    expected[f"commits{REVALIDATION_SUFFIX}"] = len(snapshot["commits"])
+    expected[f"checks{REVALIDATION_SUFFIX}"] = expected["checks"]
+    if "rulesets" in sources:
+        expected[f"rulesets{REVALIDATION_SUFFIX}"] = len(snapshot["applicable_rules"]["rulesets"])
+    if "branch_protection" in sources:
+        expected[f"branch_protection{REVALIDATION_SUFFIX}"] = 1
+    for comment in snapshot["conversation_comments"]:
+        expected[f"conversation_comment.{comment['id']}.reactions{REVALIDATION_SUFFIX}"] = len(
+            comment["reactions"]
+        )
+    for thread in snapshot["review_threads"]:
+        expected[f"review_thread.{thread['id']}.comments{REVALIDATION_SUFFIX}"] = len(
+            thread["comments"]
+        )
+        for comment in thread["comments"]:
+            expected[f"review_comment.{comment['id']}.reactions{REVALIDATION_SUFFIX}"] = len(
+                comment["reactions"]
+            )
+    for commit in snapshot["commits"]:
+        expected[f"commit.{commit['oid']}.parents{REVALIDATION_SUFFIX}"] = len(commit["parents"])
     return expected
 
 
@@ -1020,9 +1057,9 @@ def expected_api_calls(connections: list[dict[str, Any]]) -> int:
         "rulesets",
         "branch_protection",
     }
-    calls = 2
+    calls = 3
     for item in connections:
-        connection = item["connection"]
+        connection = item["connection"].removesuffix(REVALIDATION_SUFFIX)
         pages = item["pages"]
         if connection in direct_connections or (
             connection.startswith("review_thread.") and connection.endswith(".comments")
@@ -1031,6 +1068,18 @@ def expected_api_calls(connections: list[dict[str, Any]]) -> int:
         elif connection.endswith(".reactions"):
             calls += max(0, pages - 1)
     return calls
+
+
+def ensure_revalidated_evidence(label: str, before: Any, after: Any) -> None:
+    """Reject volatile evidence that changed between bounded observations."""
+
+    if before != after:
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            f"{label} changed during capture",
+            label,
+            None,
+        )
 
 
 def validate_completeness(snapshot: dict[str, Any]) -> None:
@@ -1061,12 +1110,24 @@ def validate_completeness(snapshot: dict[str, Any]) -> None:
     caps = completeness["configured_caps"]
     if completeness["api_calls"] > caps["maximum_api_calls"] or completeness["items"] > caps["maximum_items"]:
         raise ContractError("Completeness totals exceed configured aggregate caps")
-    thread_items = expected["review_threads"]
-    comment_items = expected["conversation_comments"] + sum(
-        count for connection, count in expected.items() if connection.startswith("review_thread.")
+    logical_connections = {
+        connection: connection.removesuffix(REVALIDATION_SUFFIX) for connection in expected
+    }
+    thread_items = sum(
+        expected[connection]
+        for connection, logical in logical_connections.items()
+        if logical == "review_threads"
+    )
+    comment_items = sum(
+        expected[connection]
+        for connection, logical in logical_connections.items()
+        if logical == "conversation_comments"
+        or (logical.startswith("review_thread.") and logical.endswith(".comments"))
     )
     reaction_items = sum(
-        count for connection, count in expected.items() if connection.endswith(".reactions")
+        expected[connection]
+        for connection, logical in logical_connections.items()
+        if logical.endswith(".reactions")
     )
     if (
         thread_items > caps["maximum_threads"]
@@ -2659,6 +2720,64 @@ def _embedded_connection(
     return collect_pages(connection, fetch, budget, kind=kind)
 
 
+def _capture_labels(client: GitHubClient, connection_suffix: str = "") -> list[str]:
+    connection = f"labels{connection_suffix}"
+    raw_labels = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            PULL_REQUEST_LABELS_QUERY,
+            "labels",
+            connection,
+        ),
+        client.budget,
+    )
+    if any(not isinstance(item.get("name"), str) or not item.get("name") for item in raw_labels):
+        raise BlockedError(BLOCKED_INCOMPLETE, "Label identity is unavailable", connection, None)
+    return sorted(item["name"] for item in raw_labels)
+
+
+def _capture_review_requests(
+    client: GitHubClient,
+    connection_suffix: str = "",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    connection = f"review_requests{connection_suffix}"
+    raw_requests = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            PULL_REQUEST_REVIEW_REQUESTS_QUERY,
+            "reviewRequests",
+            connection,
+        ),
+        client.budget,
+    )
+    requested_reviewers = []
+    requested_teams = []
+    for request in raw_requests:
+        target = request.get("requestedReviewer") if isinstance(request, dict) else None
+        if not isinstance(target, dict):
+            raise BlockedError(BLOCKED_INCOMPLETE, "Requested reviewer is unavailable", connection, None)
+        if target.get("__typename") == "Team":
+            requested_teams.append(
+                {
+                    "id": target.get("id"),
+                    "slug": target.get("slug"),
+                    "name": target.get("name"),
+                    "url": target.get("url"),
+                }
+            )
+        else:
+            requested_reviewers.append(normalize_actor(target))
+    return (
+        sorted(requested_reviewers, key=_author_sort_key),
+        sorted(
+            requested_teams,
+            key=lambda item: (str(item.get("slug") or ""), str(item.get("id") or "")),
+        ),
+    )
+
+
 def _normalize_review(value: dict[str, Any]) -> dict[str, Any]:
     review_id = value.get("id")
     state = value.get("state")
@@ -2679,6 +2798,28 @@ def _normalize_review(value: dict[str, Any]) -> dict[str, Any]:
         "submitted_at": value.get("submittedAt"),
         "commit_oid": commit.get("oid") if isinstance(commit, dict) else None,
     }
+
+
+def _capture_reviews(client: GitHubClient, connection_suffix: str = "") -> list[dict[str, Any]]:
+    connection = f"reviews{connection_suffix}"
+    raw_reviews = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            PULL_REQUEST_REVIEWS_QUERY,
+            "reviews",
+            connection,
+        ),
+        client.budget,
+    )
+    return sorted(
+        [_normalize_review(item) for item in raw_reviews],
+        key=lambda item: (
+            str(item.get("submitted_at") or ""),
+            int(item.get("database_id") or 0),
+            str(item.get("id") or ""),
+        ),
+    )
 
 
 def _normalize_conversation_comment(value: dict[str, Any]) -> dict[str, Any]:
@@ -2707,15 +2848,17 @@ def _capture_comment_reactions(
     comment: dict[str, Any],
     *,
     review_comment: bool,
+    connection_suffix: str = "",
 ) -> list[dict[str, Any]]:
     comment_id = comment.get("id")
     if not isinstance(comment_id, str) or not comment_id:
         raise BlockedError(BLOCKED_INCOMPLETE, "Comment node ID is unavailable", "comment.reactions", None)
-    connection = (
+    base_connection = (
         f"review_comment.{comment_id}.reactions"
         if review_comment
         else f"conversation_comment.{comment_id}.reactions"
     )
+    connection = f"{base_connection}{connection_suffix}"
     query = REVIEW_COMMENT_REACTIONS_QUERY if review_comment else ISSUE_COMMENT_REACTIONS_QUERY
 
     def next_page(cursor: str) -> Page:
@@ -2732,11 +2875,15 @@ def _capture_comment_reactions(
     )
 
 
-def _capture_thread_comments(client: GitHubClient, value: dict[str, Any]) -> list[dict[str, Any]]:
+def _capture_thread_comments(
+    client: GitHubClient,
+    value: dict[str, Any],
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
     thread_id = value.get("id")
     if not isinstance(thread_id, str) or not thread_id:
         raise BlockedError(BLOCKED_INCOMPLETE, "Review thread ID is unavailable", "review_threads", None)
-    connection = f"review_thread.{thread_id}.comments"
+    connection = f"review_thread.{thread_id}.comments{connection_suffix}"
 
     def fetch_page(cursor: str | None) -> Page:
         payload = client.graphql(
@@ -2751,36 +2898,104 @@ def _capture_thread_comments(client: GitHubClient, value: dict[str, Any]) -> lis
     raw_comments = collect_pages(connection, fetch_page, client.budget, kind="comments")
     result = []
     for raw_comment in raw_comments:
-        reactions = _capture_comment_reactions(client, raw_comment, review_comment=True)
+        reactions = _capture_comment_reactions(
+            client,
+            raw_comment,
+            review_comment=True,
+            connection_suffix=connection_suffix,
+        )
         expanded = copy.deepcopy(raw_comment)
         expanded["reactions"] = reactions
         result.append(normalize_review_comment(expanded))
     return result
 
 
-def _normalize_commit(value: dict[str, Any], runner: Any, budget: Budget) -> dict[str, Any]:
+def _capture_conversation_comments(
+    client: GitHubClient,
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
+    connection = f"conversation_comments{connection_suffix}"
+    raw_comments = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            CONVERSATION_COMMENTS_QUERY,
+            "comments",
+            connection,
+        ),
+        client.budget,
+        kind="comments",
+    )
+    comments = []
+    for raw_comment in raw_comments:
+        reactions = _capture_comment_reactions(
+            client,
+            raw_comment,
+            review_comment=False,
+            connection_suffix=connection_suffix,
+        )
+        expanded = copy.deepcopy(raw_comment)
+        expanded["reactions"] = reactions
+        comments.append(_normalize_conversation_comment(expanded))
+    return comments
+
+
+def _capture_review_threads(
+    client: GitHubClient,
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
+    connection = f"review_threads{connection_suffix}"
+    raw_threads = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            REVIEW_THREADS_QUERY,
+            "reviewThreads",
+            connection,
+        ),
+        client.budget,
+        kind="threads",
+    )
+    threads = []
+    for raw_thread in raw_threads:
+        expanded = copy.deepcopy(raw_thread)
+        expanded["comments"] = _capture_thread_comments(
+            client,
+            raw_thread,
+            connection_suffix,
+        )
+        threads.append(normalize_review_thread(expanded))
+    return threads
+
+
+def _normalize_commit(
+    value: dict[str, Any],
+    budget: Budget,
+    connection_suffix: str = "",
+) -> dict[str, Any]:
     commit = value.get("commit")
     if not isinstance(commit, dict):
         raise BlockedError(BLOCKED_INCOMPLETE, "PR commit object is unavailable", "commits", None)
     oid = commit.get("oid")
     if not isinstance(oid, str) or not OID_PATTERN.fullmatch(oid):
         raise BlockedError(BLOCKED_INCOMPLETE, "PR commit OID is unavailable", "commits", None)
+    parent_connection = f"commit.{oid}.parents{connection_suffix}"
     parents = commit.get("parents")
-    page = _connection_page(parents, f"commit.{oid}.parents")
+    page = _connection_page(parents, parent_connection)
     if page.has_next_page:
         raise BlockedError(
             BLOCKED_INCOMPLETE,
             "Commit parent connection exceeded the supported bounded page",
-            f"commit.{oid}.parents",
+            parent_connection,
             page.end_cursor,
         )
-    budget.add_items(len(page.nodes), f"commit.{oid}.parents", None)
-    budget.record_connection(f"commit.{oid}.parents", 1, len(page.nodes))
+    budget.add_items(len(page.nodes), parent_connection, None)
+    budget.record_connection(parent_connection, 1, len(page.nodes))
     parent_oids = []
     for parent in page.nodes:
         parent_oid = parent.get("oid") if isinstance(parent, dict) else None
         if not isinstance(parent_oid, str) or not OID_PATTERN.fullmatch(parent_oid):
-            raise BlockedError(BLOCKED_INCOMPLETE, "Commit parent OID is unavailable", f"commit.{oid}.parents", None)
+            raise BlockedError(BLOCKED_INCOMPLETE, "Commit parent OID is unavailable", parent_connection, None)
         parent_oids.append(parent_oid)
     return {
         "oid": oid,
@@ -2788,8 +3003,50 @@ def _normalize_commit(value: dict[str, Any], runner: Any, budget: Budget) -> dic
         "authored_at": str(commit.get("authoredDate") or ""),
         "committed_at": str(commit.get("committedDate") or ""),
         "github_signature": normalize_github_signature(commit.get("signature")),
-        "local_signature": local_signature_for_commit(runner, oid),
     }
+
+
+def _capture_commits(
+    client: GitHubClient,
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
+    connection = f"commits{connection_suffix}"
+    raw_commits = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            PULL_REQUEST_COMMITS_QUERY,
+            "commits",
+            connection,
+        ),
+        client.budget,
+    )
+    commits = [
+        _normalize_commit(
+            item,
+            client.budget,
+            connection_suffix,
+        )
+        for item in raw_commits
+    ]
+    if not commits:
+        raise BlockedError(BLOCKED_INCOMPLETE, "Pull request has no accessible commits", connection, None)
+    return commits
+
+
+def _attach_local_signatures(
+    commits: list[dict[str, Any]],
+    runner: Any,
+) -> list[dict[str, Any]]:
+    """Add checkout-local verification without mixing it into remote revalidation."""
+
+    return [
+        {
+            **copy.deepcopy(commit),
+            "local_signature": local_signature_for_commit(runner, commit["oid"]),
+        }
+        for commit in commits
+    ]
 
 
 def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
@@ -2839,6 +3096,31 @@ def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
             "details_url": value.get("targetUrl"),
         }
     raise BlockedError(BLOCKED_INCOMPLETE, f"Unsupported check type: {typename!r}", "checks", None)
+
+
+def _capture_checks(
+    client: GitHubClient,
+    head_oid: str,
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
+    connection = f"checks{connection_suffix}"
+
+    def fetch(cursor: str | None) -> Page:
+        payload = client.graphql(
+            COMMIT_CHECKS_QUERY,
+            connection,
+            cursor,
+            {"oid": head_oid},
+        )
+        commit_object = _path(payload, ("data", "repository", "object"), connection)
+        if commit_object is None:
+            raise BlockedError(BLOCKED_INCOMPLETE, "Head commit object is inaccessible", connection, cursor)
+        rollup = commit_object.get("statusCheckRollup")
+        if rollup is None:
+            return Page([], False, None)
+        return _connection_page(rollup.get("contexts"), connection)
+
+    return [_normalize_check(item) for item in collect_pages(connection, fetch, client.budget)]
 
 
 def _normalize_applicable_rules(rulesets: list[Any], branch_protection: dict[str, Any]) -> dict[str, Any]:
@@ -2893,46 +3175,49 @@ def _capture_rules(
     client: GitHubClient,
     base_ref: str,
     policy: dict[str, Any],
+    connection_suffix: str = "",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     encoded_ref = quote(base_ref, safe="")
     rulesets: list[Any] = []
     branch_protection: dict[str, Any] = {}
     sources: list[str] = []
     if policy["require_ruleset_evidence"]:
+        connection = f"rulesets{connection_suffix}"
         base_endpoint = f"repos/{client.owner}/{client.name}/rules/branches/{encoded_ref}"
         page_number = 1
         while True:
             endpoint = f"{base_endpoint}?per_page=100&page={page_number}"
-            page = client.rest(endpoint, "rulesets", str(page_number))
+            page = client.rest(endpoint, connection, str(page_number))
             if not isinstance(page, list):
                 raise BlockedError(
                     BLOCKED_INCOMPLETE,
                     "Applicable rules response is not an array",
-                    "rulesets",
+                    connection,
                     str(page_number),
                 )
-            client.budget.add_items(len(page), "rulesets", str(page_number))
+            client.budget.add_items(len(page), connection, str(page_number))
             rulesets.extend(page)
             if len(page) < 100:
-                client.budget.record_connection("rulesets", page_number, len(rulesets))
+                client.budget.record_connection(connection, page_number, len(rulesets))
                 break
             page_number += 1
-            client.budget.require_capacity_for_next_page("rulesets", str(page_number), "items")
+            client.budget.require_capacity_for_next_page(connection, str(page_number), "items")
         sources.append("rulesets")
     if policy["require_branch_protection_evidence"]:
+        connection = f"branch_protection{connection_suffix}"
         protection_endpoint = (
             f"repos/{client.owner}/{client.name}/branches/{encoded_ref}/protection/required_status_checks"
         )
-        branch_protection = client.rest(protection_endpoint, "branch_protection")
+        branch_protection = client.rest(protection_endpoint, connection)
         if not isinstance(branch_protection, dict):
             raise BlockedError(
                 BLOCKED_INCOMPLETE,
                 "Branch-protection response is not an object",
-                "branch_protection",
+                connection,
                 None,
             )
-        client.budget.add_items(1, "branch_protection", None)
-        client.budget.record_connection("branch_protection", 1, 1)
+        client.budget.add_items(1, connection, None)
+        client.budget.record_connection(connection, 1, 1)
         sources.append("branch_protection")
     required = require_rule_evidence(
         rulesets if policy["require_ruleset_evidence"] else None,
@@ -2940,6 +3225,48 @@ def _capture_rules(
         policy,
     )
     return _normalize_applicable_rules(rulesets, branch_protection), required, sorted(sources)
+
+
+def _capture_remote_evidence(
+    client: GitHubClient,
+    head_oid: str,
+    base_ref: str,
+    configuration: dict[str, Any],
+    connection_suffix: str = "",
+) -> dict[str, Any]:
+    """Capture one complete, normalized observation of mutable GitHub evidence."""
+
+    labels = _capture_labels(client, connection_suffix)
+    requested_reviewers, requested_teams = _capture_review_requests(client, connection_suffix)
+    reviews = _capture_reviews(client, connection_suffix)
+    conversation_comments = _capture_conversation_comments(client, connection_suffix)
+    review_threads = _capture_review_threads(client, connection_suffix)
+    commits = _capture_commits(client, connection_suffix)
+    raw_checks = _capture_checks(client, head_oid, connection_suffix)
+    applicable_rules, required_specs, rule_sources = _capture_rules(
+        client,
+        base_ref,
+        configuration["check_policy"],
+        connection_suffix,
+    )
+    checks, required_check_evidence = evaluate_checks(
+        raw_checks,
+        required_specs,
+        configuration["check_policy"],
+        rule_sources,
+    )
+    return {
+        "labels": labels,
+        "requested_reviewers": requested_reviewers,
+        "requested_teams": requested_teams,
+        "reviews": reviews,
+        "conversation_comments": conversation_comments,
+        "review_threads": review_threads,
+        "commits": commits,
+        "checks": checks,
+        "applicable_rules": applicable_rules,
+        "required_check_evidence": required_check_evidence,
+    }
 
 
 def capture_snapshot(
@@ -2968,126 +3295,23 @@ def capture_snapshot(
         )
     head_before = before_pr["headRefOid"]
 
-    labels_raw = collect_pages(
-        "labels",
-        _pull_request_connection_fetcher(client, PULL_REQUEST_LABELS_QUERY, "labels", "labels"),
-        budget,
-    )
-    if any(not isinstance(item.get("name"), str) or not item.get("name") for item in labels_raw):
-        raise BlockedError(BLOCKED_INCOMPLETE, "Label identity is unavailable", "labels", None)
-    labels = sorted(item["name"] for item in labels_raw)
-
-    requests_raw = collect_pages(
-        "review_requests",
-        _pull_request_connection_fetcher(
-            client,
-            PULL_REQUEST_REVIEW_REQUESTS_QUERY,
-            "reviewRequests",
-            "review_requests",
-        ),
-        budget,
-    )
-    requested_reviewers = []
-    requested_teams = []
-    for request in requests_raw:
-        target = request.get("requestedReviewer") if isinstance(request, dict) else None
-        if not isinstance(target, dict):
-            raise BlockedError(BLOCKED_INCOMPLETE, "Requested reviewer is unavailable", "review_requests", None)
-        if target.get("__typename") == "Team":
-            requested_teams.append(
-                {
-                    "id": target.get("id"),
-                    "slug": target.get("slug"),
-                    "name": target.get("name"),
-                    "url": target.get("url"),
-                }
-            )
-        else:
-            requested_reviewers.append(normalize_actor(target))
-
-    reviews_raw = collect_pages(
-        "reviews",
-        _pull_request_connection_fetcher(client, PULL_REQUEST_REVIEWS_QUERY, "reviews", "reviews"),
-        budget,
-    )
-    reviews = [_normalize_review(item) for item in reviews_raw]
-
-    conversation_raw = collect_pages(
-        "conversation_comments",
-        _pull_request_connection_fetcher(
-            client,
-            CONVERSATION_COMMENTS_QUERY,
-            "comments",
-            "conversation_comments",
-        ),
-        budget,
-        kind="comments",
-    )
-    conversation_comments = []
-    for raw_comment in conversation_raw:
-        reactions = _capture_comment_reactions(client, raw_comment, review_comment=False)
-        expanded = copy.deepcopy(raw_comment)
-        expanded["reactions"] = reactions
-        conversation_comments.append(_normalize_conversation_comment(expanded))
-
-    threads_raw = collect_pages(
-        "review_threads",
-        _pull_request_connection_fetcher(client, REVIEW_THREADS_QUERY, "reviewThreads", "review_threads"),
-        budget,
-        kind="threads",
-    )
-    review_threads = []
-    for raw_thread in threads_raw:
-        expanded = copy.deepcopy(raw_thread)
-        expanded["comments"] = _capture_thread_comments(client, raw_thread)
-        review_threads.append(normalize_review_thread(expanded))
-
-    commits_raw = collect_pages(
-        "commits",
-        _pull_request_connection_fetcher(client, PULL_REQUEST_COMMITS_QUERY, "commits", "commits"),
-        budget,
-    )
-    commits = [_normalize_commit(item, command_runner, budget) for item in commits_raw]
-    if not commits:
-        raise BlockedError(BLOCKED_INCOMPLETE, "Pull request has no accessible commits", "commits", None)
-
-    def fetch_checks(cursor: str | None) -> Page:
-        payload = client.graphql(
-            COMMIT_CHECKS_QUERY,
-            "checks",
-            cursor,
-            {"oid": head_before},
-        )
-        commit_object = _path(payload, ("data", "repository", "object"), "checks")
-        if commit_object is None:
-            raise BlockedError(BLOCKED_INCOMPLETE, "Head commit object is inaccessible", "checks", cursor)
-        rollup = commit_object.get("statusCheckRollup")
-        if rollup is None:
-            return Page([], False, None)
-        return _connection_page(rollup.get("contexts"), "checks")
-
-    raw_checks = [_normalize_check(item) for item in collect_pages("checks", fetch_checks, budget)]
-    applicable_rules, required_specs, rule_sources = _capture_rules(
+    evidence = _capture_remote_evidence(
         client,
+        head_before,
         before_pr["baseRefName"],
-        configuration["check_policy"],
-    )
-    checks, required_check_evidence = evaluate_checks(
-        raw_checks,
-        required_specs,
-        configuration["check_policy"],
-        rule_sources,
+        configuration,
     )
 
     ensure_anchor_counts_match(
         before_pr,
         {
-            "labels": len(labels_raw),
-            "reviewRequests": len(requests_raw),
-            "reviews": len(reviews_raw),
-            "comments": len(conversation_raw),
-            "reviewThreads": len(threads_raw),
-            "commits": len(commits_raw),
+            "labels": len(evidence["labels"]),
+            "reviewRequests": len(evidence["requested_reviewers"])
+            + len(evidence["requested_teams"]),
+            "reviews": len(evidence["reviews"]),
+            "comments": len(evidence["conversation_comments"]),
+            "reviewThreads": len(evidence["review_threads"]),
+            "commits": len(evidence["commits"]),
         },
     )
 
@@ -3103,6 +3327,23 @@ def capture_snapshot(
             None,
         )
     ensure_unchanged_anchor(before, after)
+
+    revalidated_evidence = _capture_remote_evidence(
+        client,
+        head_before,
+        before_pr["baseRefName"],
+        configuration,
+        REVALIDATION_SUFFIX,
+    )
+
+    terminal_payload = client.graphql(PULL_REQUEST_ANCHOR_QUERY, "pull_request.anchor.terminal")
+    terminal = extract_anchor(terminal_payload)
+    terminal_head = terminal["pull_request"]["headRefOid"]
+    ensure_unchanged_head(head_before, terminal_head)
+    ensure_unchanged_anchor(before, terminal)
+    ensure_revalidated_evidence("remote GitHub evidence", evidence, revalidated_evidence)
+    commits = _attach_local_signatures(evidence["commits"], command_runner)
+    head_after = terminal_head
 
     repository_data = before["repository"]
     base_repository = before_pr.get("baseRepository") or {}
@@ -3148,17 +3389,17 @@ def capture_snapshot(
             "head_ref": before_pr.get("headRefName"),
             "head_oid_before": head_before,
             "head_oid_after": head_after,
-            "labels": labels,
-            "requested_reviewers": requested_reviewers,
-            "requested_teams": requested_teams,
+            "labels": evidence["labels"],
+            "requested_reviewers": evidence["requested_reviewers"],
+            "requested_teams": evidence["requested_teams"],
         },
-        "reviews": reviews,
-        "conversation_comments": conversation_comments,
-        "review_threads": review_threads,
+        "reviews": evidence["reviews"],
+        "conversation_comments": evidence["conversation_comments"],
+        "review_threads": evidence["review_threads"],
         "commits": commits,
-        "checks": checks,
-        "applicable_rules": applicable_rules,
-        "required_check_evidence": required_check_evidence,
+        "checks": evidence["checks"],
+        "applicable_rules": evidence["applicable_rules"],
+        "required_check_evidence": evidence["required_check_evidence"],
         "completeness": {
             "api_calls": budget.api_calls,
             "items": budget.items,

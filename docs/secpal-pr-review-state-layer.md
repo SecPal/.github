@@ -101,7 +101,9 @@ refs and optional locks, and removes inherited Git variables that could select
 another repository, worktree, index, object database, shallow boundary,
 namespace, injected configuration, subcommand path, or trace-output target.
 Normal system, global, and repository configuration still loads from its
-standard locations. The `fetched` result is always `false`.
+standard locations, but `core.fsmonitor` is disabled and the OpenPGP, SSH, and
+X.509 verifier programs are pinned to their standard command names so config
+cannot select an arbitrary executable. The `fetched` result is always `false`.
 
 ### Verify the mechanical gate
 
@@ -141,12 +143,12 @@ Every rendering states:
 ## Complete bounded pagination
 
 The snapshot anchors the repository and PR before reading any collection,
-advances each connection independently, and reads the complete anchor once more
-after all evidence is captured. The anchor includes the PR `updatedAt` value and
-the total counts for labels, review requests, reviews, conversation comments,
-review threads, and commits. Any lifecycle, identity, update-time, or count
-change blocks the capture, and every count must match its fully paginated
-collection. It fully paginates:
+advances each connection independently, reads the complete anchor after the
+initial capture, and reads it a third time after revalidation. The anchor
+includes the PR `updatedAt` value and the total counts for labels, review
+requests, reviews, conversation comments, review threads, and commits. Any
+lifecycle, identity, update-time, or count change blocks the capture, and every
+count must match its fully paginated collection. It fully paginates:
 
 - labels and requested reviewers or teams;
 - review submissions, including informational, approved, dismissed, and
@@ -156,6 +158,17 @@ collection. It fully paginates:
 - PR commits and their bounded parent evidence;
 - head-commit check runs and status contexts;
 - applicable branch rules.
+
+After the first anchor comparison, the helper performs a second complete,
+bounded observation of every fully paginated PR collection and of volatile
+evidence that can change without moving the PR head or its top-level counts.
+This includes labels, review requests, reviews, comments and reactions, inline
+threads and replies, remote commit and GitHub-signature evidence, head checks,
+rulesets, and branch protection. The two normalized observations must be
+identical. Their connections, API calls, and items are recorded with a
+`.revalidation` suffix and count against the same configured caps. Any
+difference terminates with `BLOCKED_INCOMPLETE_REVIEW_STATE` before output is
+prepared.
 
 Independent cursors prevent unequal page counts from causing duplicate or
 omitted reads. `completeness.fully_paginated_connections` records pages and
@@ -186,7 +199,9 @@ The evidence distinguishes `valid`, `invalid`, `unsigned`, `unknown_key`,
 `object_unavailable`, and `verification_pending`. An unknown key is never
 reported as cryptographically verified. Required invalid, unsigned, unknown,
 pending, or unavailable verification blocks the gate. The helper does not
-import keys or change signing configuration.
+import keys or persist signing configuration. Verification still uses the
+configured trust material, while command-scoped overrides prevent configuration
+from substituting the verifier executables themselves.
 
 ## Required checks
 
@@ -206,7 +221,8 @@ skipped checks follow the explicit `check_policy.expected_skipped` value. A
 missing or inaccessible configured rules source, unsupported check type,
 malformed rule, or otherwise unknown requiredness terminates with
 `BLOCKED_INCOMPLETE_REVIEW_STATE`. Pending checks are reported once and are not
-polled.
+polled. Head-check state, applicable rules, and the derived required-check
+evidence must also match their bounded revalidation observations.
 
 ## Output and untrusted content
 
@@ -231,14 +247,16 @@ credential-helper output.
 
 External processes use argument arrays and exact command-shape validation.
 There is no `shell=True`, shell interpolation, dynamic query construction,
-retry loop, or configuration execution. GitHub CLI calls pin `GH_HOST` to
-`github.com` and pass `--hostname github.com` explicitly; caller-provided host
-overrides and repository-context inference cannot redirect evidence reads.
-GraphQL operations are static query documents with variables. Git commands run
-with pagers pinned, optional locking disabled, replacement refs ignored, lazy
-fetches disabled, and repository- or object-selection environment overrides
-removed before process creation. Trace-file and executable-path overrides are
-removed as part of the same boundary.
+retry loop, or execution of caller-selected helper programs. GitHub CLI calls
+pin `GH_HOST` to `github.com` and pass `--hostname github.com` explicitly;
+caller-provided host overrides and repository-context inference cannot redirect
+evidence reads. GraphQL operations are static query documents with variables.
+Git commands run with pagers pinned, optional locking disabled, replacement refs
+ignored, lazy fetches disabled, and repository- or object-selection environment
+overrides removed before process creation. Trace-file and executable-path
+overrides are removed as part of the same boundary. Command-scoped Git
+configuration disables filesystem-monitor hooks and pins every supported
+signature-verifier program.
 
 The helper exposes no operation for:
 
@@ -266,6 +284,7 @@ serialization, outer and nested pagination with unequal page counts, reactions,
 caps, partial failures, signature-envelope classification, update-time and
 connection-count anchor races, strict stale-base state, required checks, hostile
 rendering, atomic outputs, host pinning, merge-state policy coverage, commit-set
-invariants, sanitized Git environments, and executable-call spies that reject
-GitHub and Git writes. Live acceptance is a separately identified read-only
-phase and never requests an AI review.
+invariants, volatile-evidence revalidation, sanitized Git environments,
+fsmonitor and verifier-program suppression, and executable-call spies that
+reject GitHub and Git writes. Live acceptance is a separately identified
+read-only phase and never requests an AI review.
