@@ -15,9 +15,11 @@ import json
 import os
 import pathlib
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 
 repo_root = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
@@ -294,7 +296,7 @@ github_source.joinpath("package-lock.json").write_text(
 repo_specs = module.build_repo_specs(source_workspace)
 clone_root = workspace / "clone root with spaces"
 github_clone_root = clone_root / repo_state[".github"]["id"]
-valid_candidate = github_clone_root / "registered-valid"
+valid_candidate = github_clone_root / "registered-valid-1a2b3c4d"
 invalid_candidate = github_clone_root / "registered-invalid"
 unregistered_candidate = github_clone_root / "silent-seal-unregistered"
 outside_candidate = workspace / "outside-clone-root"
@@ -383,6 +385,211 @@ assert not unregistered_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exi
 assert unregistered_sentinel.read_bytes() == b"unchanged"
 assert str(unregistered_candidate) not in setup_log.read_text()
 assert unregistered_candidate.is_dir()
+
+# Provisioning must preserve the physical hash directory as the authoritative
+# server deletion path. Stable aliases are separately owned and tracked by the
+# rollout so they can be removed after the official deletion removes the
+# physical target and database registration.
+deletion_candidate = github_clone_root / "registered-delete-5e6f7a8b"
+deletion_git_source = workspace / "official deletion git source"
+deletion_git_source.mkdir()
+subprocess.run(["git", "init", "-b", "main", str(deletion_git_source)], check=True, capture_output=True)
+write_valid_instructions(deletion_git_source)
+deletion_git_source.joinpath("package.json").write_text(
+    json.dumps({"name": "registered-delete", "private": True}) + "\n"
+)
+deletion_git_source.joinpath("package-lock.json").write_text(
+    json.dumps(
+        {
+            "name": "registered-delete",
+            "lockfileVersion": 3,
+            "requires": True,
+            "packages": {},
+        }
+    )
+    + "\n"
+)
+subprocess.run(["git", "-C", str(deletion_git_source), "add", "."], check=True)
+subprocess.run(
+    [
+        "git",
+        "-C",
+        str(deletion_git_source),
+        "-c",
+        "user.name=Package 1 fixture",
+        "-c",
+        "user.email=package-1-fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "test: seed deletion fixture",
+    ],
+    check=True,
+    capture_output=True,
+)
+subprocess.run(
+    [
+        "git",
+        "-C",
+        str(deletion_git_source),
+        "worktree",
+        "add",
+        "-b",
+        "package-1-deletion-fixture",
+        str(deletion_candidate),
+    ],
+    check=True,
+    capture_output=True,
+)
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path, status) values (?, ?, ?, ?, 'active')",
+        ("delete", repo_state[".github"]["id"], "delete", str(deletion_candidate)),
+    )
+provisioned, cleaned, failures = module.provision_worktrees(
+    repo_state,
+    repo_specs,
+    clone_root,
+    db_path=db_path,
+)
+assert provisioned == [".github:registered-delete"], provisioned
+assert cleaned == []
+assert failures == []
+
+with sqlite3.connect(db_path) as connection:
+    registered_path = connection.execute(
+        "select path from worktrees where id = 'delete'"
+    ).fetchone()[0]
+assert pathlib.Path(registered_path) == deletion_candidate
+primary_alias = github_clone_root / "registered-delete"
+assert primary_alias.is_symlink()
+assert os.readlink(primary_alias) == deletion_candidate.name
+assert deletion_candidate.joinpath(module.PROVISION_MARKER_FILENAME).is_file()
+deletion_candidate.joinpath("node_modules").mkdir()
+deletion_candidate.joinpath("node_modules", "dependency-sentinel").write_text("installed")
+
+source_config_snapshots: dict[pathlib.Path, tuple[bytes, int]] = {}
+for source_root_entry in source_workspace.iterdir():
+    source_config = source_root_entry / module.POLYSCOPE_LOCAL_CONFIG_NAME
+    source_config.write_text('{"sentinel":true}\n')
+    source_config_snapshots[source_config] = (
+        source_config.read_bytes(),
+        source_config.stat().st_mtime_ns,
+    )
+db_snapshot = (db_path.read_bytes(), db_path.stat().st_mtime_ns)
+provisioned, cleaned, failures = module.provision_worktrees(
+    repo_state,
+    repo_specs,
+    clone_root,
+    db_path=db_path,
+)
+assert provisioned == []
+assert cleaned == []
+assert failures == []
+assert (db_path.read_bytes(), db_path.stat().st_mtime_ns) == db_snapshot
+for source_config, snapshot in source_config_snapshots.items():
+    assert (source_config.read_bytes(), source_config.stat().st_mtime_ns) == snapshot
+
+secondary_alias = github_clone_root / "registered-delete-secondary"
+secondary_alias.symlink_to(deletion_candidate.name)
+module.record_workspace_alias(secondary_alias, deletion_candidate)
+unrelated_alias = github_clone_root / "user-owned-alias"
+unrelated_alias.symlink_to(deletion_candidate.name)
+assert unrelated_alias.is_symlink()
+
+# Model the official server contract: delete precisely the registered path and
+# row, then let the registration-triggered provision reconciliation clean only
+# Package-1-owned aliases. This is deliberately not a clone-reaper fixture.
+deletion_result = subprocess.run(
+    # Polyscope owns the generated local config and provision marker, so its
+    # official delete is allowed to remove those untracked lifecycle files.
+    ["git", "-C", str(deletion_git_source), "worktree", "remove", "--force", str(registered_path)],
+    capture_output=True,
+    text=True,
+)
+assert deletion_result.returncode == 0, (
+    deletion_result.stdout,
+    deletion_result.stderr,
+    subprocess.run(
+        ["git", "-C", str(deletion_candidate), "status", "--short", "--ignored"],
+        capture_output=True,
+        text=True,
+    ).stdout,
+)
+with sqlite3.connect(db_path) as connection:
+    connection.execute("delete from worktrees where id = 'delete'")
+    assert connection.execute("select count(*) from worktrees where id = 'delete'").fetchone()[0] == 0
+removed_aliases = module.cleanup_removed_workspace_aliases(
+    repo_state,
+    clone_root,
+    {repo_name: [] for repo_name in repo_state},
+)
+assert removed_aliases == sorted([str(primary_alias), str(secondary_alias)])
+assert not deletion_candidate.exists()
+assert not deletion_candidate.joinpath("node_modules", "dependency-sentinel").exists()
+assert not deletion_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exists()
+assert str(deletion_candidate) not in subprocess.run(
+    ["git", "-C", str(deletion_git_source), "worktree", "list", "--porcelain"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout
+assert not primary_alias.exists() and not primary_alias.is_symlink()
+assert not secondary_alias.exists() and not secondary_alias.is_symlink()
+assert unrelated_alias.is_symlink(), (
+    os.path.lexists(unrelated_alias),
+    module.load_workspace_alias_registry(github_clone_root),
+    removed_aliases,
+)
+assert module.load_workspace_alias_registry(github_clone_root) == {
+    "registered-valid": valid_candidate.name,
+}
+
+# Registration aliases may be migrated back to their verified physical target,
+# but symlink chains and paths outside the expected repository clone root are
+# never accepted as authoritative deletion identities.
+chain_target = github_clone_root / "chain-target-2b3c4d5e"
+chain_target.mkdir()
+chain_middle = github_clone_root / "chain-middle"
+chain_middle.symlink_to(chain_target.name)
+chain_alias = github_clone_root / "chain-alias"
+chain_alias.symlink_to(chain_middle.name)
+with sqlite3.connect(db_path) as connection:
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path, status) values (?, ?, ?, ?, 'active')",
+        ("chain", repo_state[".github"]["id"], "chain", str(chain_alias)),
+    )
+try:
+    module.preserve_registered_workspace_physical_path(chain_target, db_path=db_path)
+except RuntimeError as error:
+    assert "direct alias" in str(error).lower() or "symlink" in str(error).lower(), error
+else:
+    raise AssertionError("symlink-chain registration must fail closed")
+with sqlite3.connect(db_path) as connection:
+    assert connection.execute("select path from worktrees where id = 'chain'").fetchone()[0] == str(chain_alias)
+    connection.execute("delete from worktrees where id = 'chain'")
+
+# Registry records cannot escape the repository clone root or turn another
+# user-owned path into an alias-cleanup target.
+unsafe_registry_root = clone_root / repo_state["GuardGuide"]["id"]
+unsafe_registry_root.mkdir(parents=True)
+outside_sentinel = workspace / "outside-alias-sentinel"
+outside_sentinel.write_text("unchanged")
+module.workspace_alias_registry_path(unsafe_registry_root).write_text(
+    json.dumps({"version": 1, "aliases": {"managed": "../outside-alias-sentinel"}}) + "\n"
+)
+try:
+    module.cleanup_removed_workspace_aliases(
+        repo_state,
+        clone_root,
+        {repo_name: [] for repo_name in repo_state},
+    )
+except RuntimeError as error:
+    assert "one path component" in str(error), error
+else:
+    raise AssertionError("workspace alias registry traversal must fail closed")
+assert outside_sentinel.read_text() == "unchanged"
 
 # SQLite URI mode must quote legal filename characters instead of treating
 # them as URI query, fragment, or percent-escape syntax and selecting or

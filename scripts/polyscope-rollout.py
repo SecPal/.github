@@ -17,8 +17,10 @@ import secrets
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
+import tempfile
 import textwrap
 import urllib.parse
 import urllib.request
@@ -209,7 +211,10 @@ def find_current_worktree_record(
     current_path = resolve_path_for_matching(worktree_path)
     columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(worktrees)")}
     order_by = "created_at desc, id desc" if "created_at" in columns else "id desc"
-    rows = connection.execute(f"select id, path from worktrees order by {order_by}").fetchall()
+    where_clause = " where status = 'active'" if "status" in columns else ""
+    rows = connection.execute(
+        f"select id, path from worktrees{where_clause} order by {order_by}"
+    ).fetchall()
 
     for worktree_id, registered_path in rows:
         if not isinstance(registered_path, str) or not registered_path.strip():
@@ -3498,50 +3503,194 @@ def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) ->
     ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
 
 
-def normalize_registered_workspace_path(
+def workspace_alias_registry_path(repo_clone_root: pathlib.Path) -> pathlib.Path:
+    return repo_clone_root / WORKSPACE_ALIAS_REGISTRY_FILENAME
+
+
+def validate_workspace_alias_component(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        raise RuntimeError(f"workspace alias registry has an invalid {field}")
+    if pathlib.PurePath(value).name != value or "/" in value or "\\" in value or "\0" in value:
+        raise RuntimeError(f"workspace alias registry {field} must be one path component")
+    return value
+
+
+def load_workspace_alias_registry(repo_clone_root: pathlib.Path) -> dict[str, str]:
+    registry_path = workspace_alias_registry_path(repo_clone_root)
+    if not registry_path.exists() and not registry_path.is_symlink():
+        return {}
+    if registry_path.is_symlink() or not registry_path.is_file():
+        raise RuntimeError(f"workspace alias registry is not a regular file: {registry_path}")
+
+    try:
+        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"unable to read workspace alias registry {registry_path}: {error}") from error
+    if not isinstance(payload, dict) or set(payload) != {"version", "aliases"}:
+        raise RuntimeError(f"workspace alias registry has an invalid schema: {registry_path}")
+    if payload["version"] != 1 or not isinstance(payload["aliases"], dict):
+        raise RuntimeError(f"workspace alias registry has an unsupported schema: {registry_path}")
+
+    aliases: dict[str, str] = {}
+    for raw_alias, raw_target in payload["aliases"].items():
+        alias = validate_workspace_alias_component(raw_alias, "alias")
+        target = validate_workspace_alias_component(raw_target, "target")
+        if alias == target:
+            raise RuntimeError(f"workspace alias registry maps {alias} to itself: {registry_path}")
+        aliases[alias] = target
+    return aliases
+
+
+def write_workspace_alias_registry(repo_clone_root: pathlib.Path, aliases: dict[str, str]) -> None:
+    registry_path = workspace_alias_registry_path(repo_clone_root)
+    if registry_path.is_symlink() or (registry_path.exists() and not registry_path.is_file()):
+        raise RuntimeError(f"workspace alias registry is not a regular file: {registry_path}")
+    if not aliases:
+        registry_path.unlink(missing_ok=True)
+        return
+
+    payload = json.dumps({"version": 1, "aliases": dict(sorted(aliases.items()))}, indent=2) + "\n"
+    repo_clone_root.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{WORKSPACE_ALIAS_REGISTRY_FILENAME}.",
+        dir=repo_clone_root,
+    )
+    temporary_path = pathlib.Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, registry_path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
+
+
+def record_workspace_alias(alias_path: pathlib.Path, worktree_path: pathlib.Path) -> None:
+    repo_clone_root = worktree_path.parent
+    if alias_path.parent != repo_clone_root or alias_path == worktree_path:
+        raise RuntimeError(f"workspace alias must be a distinct direct child of {repo_clone_root}: {alias_path}")
+    if worktree_path.is_symlink() or not worktree_path.is_dir():
+        raise RuntimeError(f"workspace alias target must be a physical directory: {worktree_path}")
+    if not alias_path.is_symlink() or os.readlink(alias_path) != worktree_path.name:
+        raise RuntimeError(f"workspace alias must point directly to {worktree_path.name}: {alias_path}")
+
+    alias_name = validate_workspace_alias_component(alias_path.name, "alias")
+    target_name = validate_workspace_alias_component(worktree_path.name, "target")
+    aliases = load_workspace_alias_registry(repo_clone_root)
+    if aliases.get(alias_name) == target_name:
+        return
+    if alias_name in aliases:
+        raise RuntimeError(f"workspace alias registry already owns {alias_path} for another target")
+    aliases[alias_name] = target_name
+    write_workspace_alias_registry(repo_clone_root, aliases)
+
+
+def preserve_registered_workspace_physical_path(
     worktree_path: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
 ) -> None:
+    """Keep the server-owned deletion identity on the physical directory."""
+    if worktree_path.is_symlink() or not worktree_path.is_dir():
+        raise RuntimeError(f"registered workspace is not a physical directory: {worktree_path}")
+    physical_path = worktree_path.resolve(strict=True)
     resolved_db_path = db_path or default_polyscope_db_path()
-    if not resolved_db_path.exists():
-        return
-
-    normalized_path = worktree_path.parent / resolve_current_workspace_name(worktree_path, db_path=resolved_db_path)
-    if normalized_path == worktree_path:
-        return
-
-    if normalized_path.exists() and not normalized_path.is_symlink():
-        return
-
-    if normalized_path.is_symlink():
-        try:
-            if normalized_path.resolve() != worktree_path.resolve():
-                return
-        except OSError:
-            return
+    if not resolved_db_path.is_file():
+        raise RuntimeError(f"Polyscope DB not found while preserving workspace path: {resolved_db_path}")
 
     try:
         with sqlite3.connect(resolved_db_path) as connection:
-            current_worktree = find_current_worktree_record(connection, worktree_path)
+            current_worktree = find_current_worktree_record(connection, physical_path)
             if current_worktree is None:
+                raise RuntimeError(f"no current Polyscope registration matches {physical_path}")
+            worktree_id, registered_value = current_worktree
+            if not isinstance(worktree_id, str) or not isinstance(registered_value, str):
+                raise RuntimeError(f"Polyscope registration for {physical_path} is incomplete")
+
+            registered_path = pathlib.Path(registered_value)
+            if registered_path == physical_path:
                 return
+            if not registered_path.is_absolute() or registered_path.parent.resolve() != physical_path.parent:
+                raise RuntimeError(
+                    f"registered workspace alias is outside the physical clone root: {registered_path}"
+                )
+            if not registered_path.is_symlink():
+                raise RuntimeError(
+                    f"registered workspace path differs from its physical directory without a direct alias: {registered_path}"
+                )
+            link_target = pathlib.Path(os.readlink(registered_path))
+            if link_target.is_absolute() or len(link_target.parts) != 1 or link_target.name != physical_path.name:
+                raise RuntimeError(
+                    f"registered workspace path is not a direct alias to {physical_path.name}: {registered_path}"
+                )
+            if registered_path.resolve(strict=True) != physical_path:
+                raise RuntimeError(f"registered workspace alias target mismatch: {registered_path}")
 
-            worktree_id = current_worktree[0]
-            connection.execute(
-                """
-                update worktrees
-                set path = ?
-                where id = ?
-                """,
-                (str(normalized_path), worktree_id),
+            record_workspace_alias(registered_path, physical_path)
+            cursor = connection.execute(
+                "update worktrees set path = ? where id = ? and path = ?",
+                (str(physical_path), worktree_id, registered_value),
             )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"Polyscope registration changed while preserving {physical_path}")
             connection.commit()
-    except sqlite3.Error:
-        return
+    except sqlite3.Error as error:
+        raise RuntimeError(
+            f"unable to preserve physical Polyscope workspace path {physical_path}: {error}"
+        ) from error
 
-    if not normalized_path.exists():
-        normalized_path.symlink_to(worktree_path.name)
+
+def cleanup_removed_workspace_aliases(
+    repo_state: dict[str, dict[str, Any]],
+    clone_root: pathlib.Path,
+    registered_worktrees: dict[str, list[pathlib.Path]],
+) -> list[str]:
+    """Remove only recorded aliases whose physical registered target is gone."""
+    resolved_clone_root = clone_root.resolve()
+    removed: list[str] = []
+
+    for repo_name, repo_entry in repo_state.items():
+        repo_clone_root = resolved_clone_root / str(repo_entry["id"])
+        if repo_clone_root.is_symlink():
+            raise RuntimeError(f"repository clone root must not be a symlink: {repo_clone_root}")
+        aliases = load_workspace_alias_registry(repo_clone_root)
+        if not aliases:
+            continue
+
+        registered_targets = {
+            path.resolve()
+            for path in registered_worktrees.get(repo_name, [])
+        }
+        retained: dict[str, str] = {}
+        for alias_name, target_name in aliases.items():
+            alias_path = repo_clone_root / alias_name
+            target_path = repo_clone_root / target_name
+            if alias_path.is_symlink():
+                if os.readlink(alias_path) != target_name:
+                    raise RuntimeError(f"recorded workspace alias changed target: {alias_path}")
+            elif alias_path.exists():
+                raise RuntimeError(f"recorded workspace alias became a non-symlink: {alias_path}")
+
+            if target_path.is_symlink() or (target_path.exists() and not target_path.is_dir()):
+                raise RuntimeError(f"recorded workspace alias target is not a physical directory: {target_path}")
+            if target_path.exists() or target_path.resolve() in registered_targets:
+                retained[alias_name] = target_name
+                continue
+
+            if alias_path.is_symlink():
+                alias_path.unlink()
+                removed.append(str(alias_path))
+                continue
+
+        if retained != aliases:
+            write_workspace_alias_registry(repo_clone_root, retained)
+
+    return sorted(removed)
 
 
 def ensure_workspace_alias(worktree_path: pathlib.Path, *, db_path: pathlib.Path | None = None) -> None:
@@ -3556,6 +3705,7 @@ def ensure_workspace_alias(worktree_path: pathlib.Path, *, db_path: pathlib.Path
     if alias_path.is_symlink():
         try:
             if alias_path.resolve() == worktree_path.resolve():
+                record_workspace_alias(alias_path, worktree_path)
                 return
         except OSError:
             # Broken or inaccessible symlinks are recreated below.
@@ -3568,6 +3718,7 @@ def ensure_workspace_alias(worktree_path: pathlib.Path, *, db_path: pathlib.Path
         )
 
     alias_path.symlink_to(worktree_path.name)
+    record_workspace_alias(alias_path, worktree_path)
 
 
 def sync_worktree_auxiliary_files(repo_name: str, worktree_path: pathlib.Path) -> None:
@@ -3740,6 +3891,14 @@ def provision_worktrees(
     if canonical_validation_failed:
         return [], [], failed_provision_worktrees
 
+    removed_workspace_aliases = cleanup_removed_workspace_aliases(
+        repo_state,
+        clone_root,
+        registered_worktrees,
+    )
+    for removed_alias in removed_workspace_aliases:
+        print(f"Removed stale managed workspace alias {removed_alias}")
+
     cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
         repo_state,
         repo_specs,
@@ -3752,7 +3911,7 @@ def provision_worktrees(
 
     for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
         try:
-            normalize_registered_workspace_path(worktree_path, db_path=db_path)
+            preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
             sync_worktree_local_config(worktree_path, config_text)
             ensure_workspace_alias(worktree_path, db_path=db_path)

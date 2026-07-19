@@ -1903,8 +1903,8 @@ assert "PLAYWRIGHT_BASE_URL=https://frontend-azure-cheetah.preview.secpal.dev" i
 assert "PLAYWRIGHT_API_BASE_URL=https://api-azure-cheetah.preview.secpal.dev" in playwright_probe_result.stdout, playwright_probe_result.stdout
 PY
 
-# normalize_registered_workspace_path must update the matched worktree row even when
-# Polyscope stored a different path string that resolves to the same directory.
+# The physical workspace must replace a safely verified legacy alias as the
+# authoritative deletion path, while stable aliases remain separately tracked.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
@@ -1970,7 +1970,8 @@ with sqlite3.connect(db_path) as connection:
         ("api-worktree", "frontend-worktree"),
     )
 
-module.normalize_registered_workspace_path(worktree_path, db_path=db_path)
+module.preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
+module.ensure_workspace_alias(worktree_path, db_path=db_path)
 
 with sqlite3.connect(db_path) as connection:
     stored_path = connection.execute(
@@ -1978,10 +1979,14 @@ with sqlite3.connect(db_path) as connection:
         ("api-worktree",),
     ).fetchone()[0]
 
-assert stored_path == str(worktree_path.parent / "azure-cheetah"), stored_path
+assert stored_path == str(worktree_path), stored_path
 normalized_path = worktree_path.parent / "azure-cheetah"
 assert normalized_path.is_symlink(), normalized_path
 assert normalized_path.resolve() == worktree_path.resolve(), normalized_path.resolve()
+assert module.load_workspace_alias_registry(worktree_path.parent) == {
+    "azure-cheetah": worktree_path.name,
+    "registered-worktree": worktree_path.name,
+}
 PY
 
 # Git branch metadata must not be used as the preview workspace name; hostnames
