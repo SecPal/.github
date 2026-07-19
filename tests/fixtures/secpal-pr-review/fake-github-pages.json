@@ -313,7 +313,40 @@
       }
     },
     "ReviewThreadComments": {
-      "thread-comments-1": {
+      "THREAD_1:null": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "comments": {
+              "nodes": [
+                {
+                  "id": "REVIEW_COMMENT_1",
+                  "databaseId": 51,
+                  "author": {
+                    "__typename": "Bot",
+                    "id": "BOT_COPILOT",
+                    "databaseId": 12,
+                    "login": "copilot-pull-request-reviewer",
+                    "url": "https://github.com/apps/copilot-pull-request-reviewer"
+                  },
+                  "body": "Original inline context.",
+                  "url": "https://github.com/SecPal/.github/pull/1#discussion_r51",
+                  "createdAt": "2026-07-19T00:05:00Z",
+                  "updatedAt": "2026-07-19T00:05:00Z",
+                  "replyTo": null,
+                  "pullRequestReview": { "id": "REVIEW_1" },
+                  "reactions": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": true, "endCursor": "thread-comments-1" }
+            }
+          }
+        }
+      },
+      "THREAD_1:thread-comments-1": {
         "data": {
           "repository": { "pullRequest": { "id": "PR_1" } },
           "node": {
@@ -342,6 +375,33 @@
                 }
               ],
               "pageInfo": { "hasNextPage": false, "endCursor": "thread-comments-2" }
+            }
+          }
+        }
+      },
+      "THREAD_2:null": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "comments": {
+              "nodes": [
+                {
+                  "id": "REVIEW_COMMENT_3",
+                  "databaseId": 53,
+                  "author": null,
+                  "body": "Outdated context from an unavailable author.",
+                  "url": "https://github.com/SecPal/.github/pull/1#discussion_r53",
+                  "createdAt": "2026-07-19T00:07:00Z",
+                  "updatedAt": "2026-07-19T00:07:00Z",
+                  "replyTo": null,
+                  "pullRequestReview": { "id": "REVIEW_2" },
+                  "reactions": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": null }
             }
           }
         }

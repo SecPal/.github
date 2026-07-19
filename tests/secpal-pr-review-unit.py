@@ -368,6 +368,10 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         budget = review.Budget(config())
         self.assertEqual(review.collect_pages("review_threads.T1.comments", pages.__getitem__, budget), ["first", "reply"])
 
+    def test_thread_metadata_query_does_not_multiply_nested_connections(self) -> None:
+        self.assertNotIn("comments(first:", review.REVIEW_THREADS_QUERY)
+        self.assertIn("comments(first:100", review.REVIEW_THREAD_COMMENTS_QUERY)
+
     def test_11_unequal_connection_page_counts_do_not_refetch(self) -> None:
         calls: dict[str, list[str | None]] = {"reviews": [], "comments": []}
 

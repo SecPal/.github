@@ -1948,43 +1948,6 @@ query ReviewThreads($owner:String!, $name:String!, $number:Int!, $after:String) 
           diffSide
           startLine
           startDiffSide
-          comments(first:100) {
-            nodes {
-              id
-              databaseId
-              author {
-                __typename
-                login
-                url
-                ... on User { id databaseId }
-                ... on Bot { id databaseId }
-                ... on Organization { id databaseId }
-                ... on Mannequin { id databaseId }
-              }
-              body
-              url
-              createdAt
-              updatedAt
-              replyTo { id }
-              pullRequestReview { id }
-              reactions(first:100) {
-                nodes {
-                  id
-                  content
-                  createdAt
-                  user {
-                    __typename
-                    id
-                    databaseId
-                    login
-                    url
-                  }
-                }
-                pageInfo { hasNextPage endCursor }
-              }
-            }
-            pageInfo { hasNextPage endCursor }
-          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -2350,7 +2313,7 @@ def _capture_thread_comments(client: GitHubClient, value: dict[str, Any]) -> lis
         raise BlockedError(BLOCKED_INCOMPLETE, "Review thread ID is unavailable", "review_threads", None)
     connection = f"review_thread.{thread_id}.comments"
 
-    def next_page(cursor: str) -> Page:
+    def fetch_page(cursor: str | None) -> Page:
         payload = client.graphql(
             REVIEW_THREAD_COMMENTS_QUERY,
             connection,
@@ -2360,13 +2323,7 @@ def _capture_thread_comments(client: GitHubClient, value: dict[str, Any]) -> lis
         nested = _path(payload, ("data", "node", "comments"), connection)
         return _connection_page(nested, connection)
 
-    raw_comments = _embedded_connection(
-        value.get("comments"),
-        next_page,
-        connection,
-        client.budget,
-        "comments",
-    )
+    raw_comments = collect_pages(connection, fetch_page, client.budget, kind="comments")
     result = []
     for raw_comment in raw_comments:
         reactions = _capture_comment_reactions(client, raw_comment, review_comment=True)

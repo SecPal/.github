@@ -46,10 +46,16 @@ if len(arguments) > 1 and arguments[1] == "graphql":
         fail("fake gh could not identify GraphQL operation")
     operation = match.group(1)
     cursor = "null"
+    node_id = None
     for value in arguments:
         if value.startswith("after="):
             cursor = value.split("=", 1)[1]
-    response = fixture.get("graphql", {}).get(operation, {}).get(cursor)
+        if value.startswith("nodeId="):
+            node_id = value.split("=", 1)[1]
+    operation_responses = fixture.get("graphql", {}).get(operation, {})
+    response = operation_responses.get(f"{node_id}:{cursor}") if node_id else None
+    if response is None:
+        response = operation_responses.get(cursor)
     if response is None:
         fail(f"no fake GraphQL response for {operation} cursor={cursor}")
     print(json.dumps(response, ensure_ascii=False, separators=(",", ":")))
