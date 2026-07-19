@@ -1269,7 +1269,7 @@ def extract_anchor(payload: dict[str, Any]) -> dict[str, Any]:
             "pull_request.anchor",
             None,
         )
-    if pull_request.get("state") not in {"OPEN", "CLOSED"}:
+    if pull_request.get("state") not in {"OPEN", "CLOSED", "MERGED"}:
         raise BlockedError(BLOCKED_INCOMPLETE, "Pull request state is unsupported", "pull_request.anchor", None)
     if not isinstance(pull_request.get("number"), int) or isinstance(pull_request.get("number"), bool):
         raise BlockedError(BLOCKED_INCOMPLETE, "Pull request number is unavailable", "pull_request.anchor", None)

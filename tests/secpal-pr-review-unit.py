@@ -19,6 +19,7 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "secpal-pr-review.py"
+FIXTURES = REPO_ROOT / "tests/fixtures/secpal-pr-review"
 SPEC = importlib.util.spec_from_file_location("secpal_pr_review", HELPER)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Cannot load helper at {HELPER}")
@@ -438,6 +439,15 @@ class SnapshotAndPaginationTests(unittest.TestCase):
             review.extract_anchor({"data": {"repository": None}})
         with self.assertRaises(review.BlockedError):
             review.extract_anchor({"data": {"repository": {"pullRequest": None}}})
+
+    def test_merged_pull_request_anchor_is_supported(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        fixture["data"]["repository"]["pullRequest"]["state"] = "MERGED"
+        fixture["data"]["repository"]["pullRequest"]["merged"] = True
+        anchor = review.extract_anchor(fixture)
+        self.assertEqual(anchor["pull_request"]["state"], "MERGED")
 
     def test_19_deleted_author_is_explicit(self) -> None:
         self.assertEqual(review.normalize_actor(None), actor(None))
