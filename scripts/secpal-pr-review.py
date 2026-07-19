@@ -30,6 +30,7 @@ DEFAULT_MAXIMUM_ITEMS = 10_000
 DEFAULT_MAXIMUM_THREADS = 500
 DEFAULT_MAXIMUM_COMMENTS = 10_000
 DEFAULT_MAXIMUM_REACTIONS = 10_000
+DEFAULT_EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 BLOCKED_INCOMPLETE = "BLOCKED_INCOMPLETE_REVIEW_STATE"
 ZERO_AUTHOR = {
     "kind": "deleted_or_unavailable",
@@ -101,10 +102,19 @@ SAFE_GIT_CONFIG = (
     ("gpg.x509.program", "gpgsm"),
 )
 REVALIDATION_SUFFIX = ".revalidation"
+TRUSTED_COMMAND_DIRECTORIES = (
+    Path("/usr/bin"),
+    Path("/bin"),
+    Path("/usr/local/bin"),
+    Path("/opt/homebrew/bin"),
+    Path("/opt/local/bin"),
+)
+TRUSTED_COMMAND_PATH = os.pathsep.join(str(path) for path in TRUSTED_COMMAND_DIRECTORIES)
 CAPTURED_CONNECTIONS = {
     "labels": "labels",
     "review_requests": "reviewRequests",
     "reviews": "reviews",
+    "pull_request_reactions": "reactions",
     "conversation_comments": "comments",
     "review_threads": "reviewThreads",
     "commits": "commits",
@@ -286,28 +296,82 @@ def validate_external_command(arguments: list[str]) -> None:
 class CommandRunner:
     """Execute only validated, read-only external commands through argument arrays."""
 
+    def __init__(
+        self,
+        executable_paths: dict[str, str] | None = None,
+        timeout_seconds: int = DEFAULT_EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+    ) -> None:
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds < 1:
+            raise CommandPolicyError("External command timeout must be a positive integer")
+        supplied = executable_paths or {}
+        if not set(supplied) <= {"git", "gh"}:
+            raise CommandPolicyError("Only git and gh executable overrides are supported")
+        self.executable_paths = {
+            name: _validate_injected_executable(name, value) for name, value in supplied.items()
+        }
+        self.timeout_seconds = timeout_seconds
+
     def run(self, arguments: list[str], *, allow_failure: bool = False) -> CommandResult:
         validate_external_command(arguments)
-        environment = command_environment(Path(arguments[0]).name)
-        completed = subprocess.run(
-            arguments,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=environment,
-        )
-        result = CommandResult(completed.returncode, completed.stdout, completed.stderr)
+        executable = Path(arguments[0]).name
+        resolved = self.executable_paths.get(executable) or resolve_trusted_executable(executable)
+        command = [resolved, *arguments[1:]]
+        environment = command_environment(executable)
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=environment,
+                timeout=self.timeout_seconds,
+            )
+            result = CommandResult(completed.returncode, completed.stdout, completed.stderr)
+        except subprocess.TimeoutExpired:
+            result = CommandResult(
+                124,
+                "",
+                f"{executable} timed out after {self.timeout_seconds} seconds",
+            )
         if result.returncode != 0 and not allow_failure:
             raise CommandFailure(arguments, result)
         return result
+
+
+def _validate_injected_executable(name: str, value: str) -> str:
+    """Validate an explicit executable supplied by trusted in-process test orchestration."""
+
+    path = Path(value)
+    if not path.is_absolute() or path.name != name or not path.is_file() or not os.access(path, os.X_OK):
+        raise CommandPolicyError(f"Invalid explicit executable path for {name}")
+    return str(path.resolve())
+
+
+@cache
+def resolve_trusted_executable(executable: str) -> str:
+    """Resolve an allowlisted tool without consulting repository-controlled PATH entries."""
+
+    if executable not in {"git", "gh"}:
+        raise CommandPolicyError(f"Executable is not allowlisted: {executable}")
+    for directory in TRUSTED_COMMAND_DIRECTORIES:
+        candidate = directory / executable
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    raise CommandPolicyError(f"Trusted executable is unavailable: {executable}")
 
 
 def command_environment(executable: str) -> dict[str, str]:
     """Build a deterministic environment for an allowlisted external command."""
 
     environment = os.environ.copy()
+    environment["PATH"] = TRUSTED_COMMAND_PATH
     environment["PAGER"] = "cat"
     if executable == "gh":
         environment["GH_PAGER"] = "cat"
@@ -911,6 +975,7 @@ def normalize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     pr["requested_teams"] = sorted(
         pr.get("requested_teams", []), key=lambda item: (str(item.get("slug") or ""), str(item.get("id") or ""))
     )
+    pr["reactions"] = normalize_reactions(pr.get("reactions", []))
     result["reviews"] = sorted(
         result.get("reviews", []),
         key=lambda item: (
@@ -921,6 +986,7 @@ def normalize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     )
     for item in result["reviews"]:
         item["author"] = _normalize_existing_author(item["author"])
+        item["reactions"] = normalize_reactions(item.get("reactions", []))
     result["conversation_comments"] = sorted(
         result.get("conversation_comments", []),
         key=lambda item: (
@@ -993,6 +1059,7 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
         "labels": captured_counts["labels"],
         "review_requests": captured_counts["review_requests"],
         "reviews": captured_counts["reviews"],
+        "pull_request.reactions": captured_counts["pull_request_reactions"],
         "conversation_comments": captured_counts["conversation_comments"],
         "review_threads": captured_counts["review_threads"],
         "commits": captured_counts["commits"],
@@ -1016,6 +1083,8 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
         expected["branch_protection"] = 1
     for comment in snapshot["conversation_comments"]:
         expected[f"conversation_comment.{comment['id']}.reactions"] = len(comment["reactions"])
+    for submitted_review in snapshot["reviews"]:
+        expected[f"review.{submitted_review['id']}.reactions"] = len(submitted_review["reactions"])
     for thread in snapshot["review_threads"]:
         expected[f"review_thread.{thread['id']}.comments"] = len(thread["comments"])
         for comment in thread["comments"]:
@@ -1025,6 +1094,7 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
     expected[f"labels{REVALIDATION_SUFFIX}"] = expected["labels"]
     expected[f"review_requests{REVALIDATION_SUFFIX}"] = expected["review_requests"]
     expected[f"reviews{REVALIDATION_SUFFIX}"] = expected["reviews"]
+    expected[f"pull_request.reactions{REVALIDATION_SUFFIX}"] = expected["pull_request.reactions"]
     expected[f"conversation_comments{REVALIDATION_SUFFIX}"] = len(snapshot["conversation_comments"])
     expected[f"review_threads{REVALIDATION_SUFFIX}"] = len(snapshot["review_threads"])
     expected[f"commits{REVALIDATION_SUFFIX}"] = len(snapshot["commits"])
@@ -1038,6 +1108,10 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
     for comment in snapshot["conversation_comments"]:
         expected[f"conversation_comment.{comment['id']}.reactions{REVALIDATION_SUFFIX}"] = len(
             comment["reactions"]
+        )
+    for submitted_review in snapshot["reviews"]:
+        expected[f"review.{submitted_review['id']}.reactions{REVALIDATION_SUFFIX}"] = len(
+            submitted_review["reactions"]
         )
     for thread in snapshot["review_threads"]:
         expected[f"review_thread.{thread['id']}.comments{REVALIDATION_SUFFIX}"] = len(
@@ -1057,6 +1131,7 @@ def expected_api_calls(connections: list[dict[str, Any]]) -> int:
         "labels",
         "review_requests",
         "reviews",
+        "pull_request.reactions",
         "conversation_comments",
         "review_threads",
         "commits",
@@ -1186,6 +1261,7 @@ def validate_captured_connection_counts(snapshot: dict[str, Any]) -> None:
         "review_requests": len(pull_request["requested_reviewers"])
         + len(pull_request["requested_teams"]),
         "reviews": len(snapshot["reviews"]),
+        "pull_request_reactions": len(pull_request["reactions"]),
         "conversation_comments": len(snapshot["conversation_comments"]),
         "review_threads": len(snapshot["review_threads"]),
         "commits": len(snapshot["commits"]),
@@ -1194,6 +1270,38 @@ def validate_captured_connection_counts(snapshot: dict[str, Any]) -> None:
         if captured[connection] != actual[connection]:
             label = "commit" if connection == "commits" else connection.replace("_", " ")
             raise ContractError(f"Snapshot {label} evidence does not match the captured {label} count")
+
+
+def _require_unique_identities(label: str, values: Iterable[Any]) -> None:
+    identities = list(values)
+    if any(not isinstance(identity, str) or not identity for identity in identities):
+        raise ContractError(f"Snapshot contains an invalid {label} identity")
+    if len(identities) != len(set(identities)):
+        raise ContractError(f"Snapshot contains a duplicate {label} identity")
+
+
+def validate_stable_evidence_identities(snapshot: dict[str, Any]) -> None:
+    """Reject duplicated stable GitHub node identities across canonical collections."""
+
+    _require_unique_identities("review", (item.get("id") for item in snapshot["reviews"]))
+    _require_unique_identities(
+        "conversation comment",
+        (item.get("id") for item in snapshot["conversation_comments"]),
+    )
+    _require_unique_identities("review thread", (item.get("id") for item in snapshot["review_threads"]))
+    review_comments = [
+        comment
+        for thread in snapshot["review_threads"]
+        for comment in thread["comments"]
+    ]
+    _require_unique_identities("review comment", (item.get("id") for item in review_comments))
+    reactions = [
+        *snapshot["pull_request"]["reactions"],
+        *(reaction for item in snapshot["reviews"] for reaction in item["reactions"]),
+        *(reaction for item in snapshot["conversation_comments"] for reaction in item["reactions"]),
+        *(reaction for item in review_comments for reaction in item["reactions"]),
+    ]
+    _require_unique_identities("reaction", (item.get("id") for item in reactions))
 
 
 def validate_snapshot(snapshot: dict[str, Any]) -> None:
@@ -1236,6 +1344,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
             "number",
             "url",
             "title",
+            "body",
             "state",
             "is_draft",
             "is_merged",
@@ -1257,6 +1366,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
             "labels",
             "requested_reviewers",
             "requested_teams",
+            "reactions",
         },
         "pull_request",
     )
@@ -1323,6 +1433,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
     for collection in ("reviews", "conversation_comments", "review_threads", "commits", "checks"):
         if not isinstance(snapshot[collection], list):
             raise ContractError(f"{collection} must be an array")
+    validate_stable_evidence_identities(snapshot)
     validate_captured_connection_counts(snapshot)
     validate_commit_evidence(pr, snapshot["commits"])
     completeness = snapshot["completeness"]
@@ -1342,7 +1453,10 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
         raise ContractError("An authoritative snapshot cannot contain a blocker")
     if not snapshot["applicable_rules"].get("evidence_complete"):
         raise ContractError("Applicable-rule evidence is incomplete")
-    if snapshot["required_check_evidence"].get("determination") != "complete":
+    required_check_evidence = snapshot["required_check_evidence"]
+    if required_check_evidence.get("unknown_reasons"):
+        raise ContractError("Complete required-check evidence cannot contain unknown reasons")
+    if required_check_evidence.get("determination") != "complete":
         raise ContractError("Required-check evidence is incomplete")
     validate_required_check_metadata(snapshot)
     validate_completeness(snapshot)
@@ -1651,6 +1765,7 @@ def extract_anchor(payload: dict[str, Any]) -> dict[str, Any]:
         "id": pull_request.get("id"),
         "url": pull_request.get("url"),
         "title": pull_request.get("title"),
+        "body": pull_request.get("body"),
         "state": pull_request.get("state"),
         "baseRefName": pull_request.get("baseRefName"),
     }
@@ -2112,9 +2227,9 @@ def validate_required_check_metadata(snapshot: dict[str, Any]) -> None:
         sources,
     )
     stored_evidence = snapshot["required_check_evidence"]
-    if (
-        stored_evidence["required"] != expected_evidence["required"]
-        or stored_evidence["missing"] != expected_evidence["missing"]
+    if any(
+        stored_evidence[key] != expected_evidence[key]
+        for key in ("determination", "required", "missing", "sources", "unknown_reasons")
     ):
         raise ContractError("Required-check metadata disagrees with applicable rules and checks")
     stored_by_id = {item["stable_id"]: item for item in stored_checks}
@@ -2453,6 +2568,7 @@ query PullRequestAnchor($owner:String!, $name:String!, $number:Int!) {
       number
       url
       title
+      body
       state
       isDraft
       merged
@@ -2466,6 +2582,7 @@ query PullRequestAnchor($owner:String!, $name:String!, $number:Int!) {
       comments { totalCount }
       reviewThreads { totalCount }
       commits { totalCount }
+      reactions { totalCount }
       author {
         __typename
         login
@@ -2542,6 +2659,72 @@ query PullRequestReviews($owner:String!, $name:String!, $number:Int!, $after:Str
           url
           submittedAt
           commit { oid }
+          reactions(first:100) {
+            nodes {
+              id
+              content
+              createdAt
+              user {
+                __typename
+                id
+                databaseId
+                login
+                url
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+REVIEW_REACTIONS_QUERY = r"""
+query ReviewReactions($owner:String!, $name:String!, $number:Int!, $nodeId:ID!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) { id }
+  }
+  node(id:$nodeId) {
+    ... on PullRequestReview {
+      reactions(first:100, after:$after) {
+        nodes {
+          id
+          content
+          createdAt
+          user {
+            __typename
+            id
+            databaseId
+            login
+            url
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+PULL_REQUEST_REACTIONS_QUERY = r"""
+query PullRequestReactions($owner:String!, $name:String!, $number:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      reactions(first:100, after:$after) {
+        nodes {
+          id
+          content
+          createdAt
+          user {
+            __typename
+            id
+            databaseId
+            login
+            url
+          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -2990,6 +3173,9 @@ def _normalize_review(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value.get("body"), str) or not isinstance(value.get("url"), str):
         raise BlockedError(BLOCKED_INCOMPLETE, "Review content fields are unavailable", "reviews", None)
     commit = value.get("commit")
+    raw_reactions = value.get("reactions", [])
+    if isinstance(raw_reactions, dict):
+        raw_reactions = raw_reactions.get("nodes", [])
     return {
         "id": review_id,
         "database_id": value.get("databaseId"),
@@ -2999,7 +3185,32 @@ def _normalize_review(value: dict[str, Any]) -> dict[str, Any]:
         "url": value["url"],
         "submitted_at": value.get("submittedAt"),
         "commit_oid": commit.get("oid") if isinstance(commit, dict) else None,
+        "reactions": normalize_reactions(raw_reactions),
     }
+
+
+def _capture_review_reactions(
+    client: GitHubClient,
+    submitted_review: dict[str, Any],
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
+    review_id = submitted_review.get("id")
+    if not isinstance(review_id, str) or not review_id:
+        raise BlockedError(BLOCKED_INCOMPLETE, "Review node ID is unavailable", "review.reactions", None)
+    connection = f"review.{review_id}.reactions{connection_suffix}"
+
+    def next_page(cursor: str) -> Page:
+        payload = client.graphql(REVIEW_REACTIONS_QUERY, connection, cursor, {"nodeId": review_id})
+        value = _path(payload, ("data", "node", "reactions"), connection)
+        return _connection_page(value, connection)
+
+    return _embedded_connection(
+        submitted_review.get("reactions"),
+        next_page,
+        connection,
+        client.budget,
+        "reactions",
+    )
 
 
 def _capture_reviews(client: GitHubClient, connection_suffix: str = "") -> list[dict[str, Any]]:
@@ -3014,14 +3225,38 @@ def _capture_reviews(client: GitHubClient, connection_suffix: str = "") -> list[
         ),
         client.budget,
     )
+    reviews = []
+    for raw_review in raw_reviews:
+        expanded = copy.deepcopy(raw_review)
+        expanded["reactions"] = _capture_review_reactions(client, raw_review, connection_suffix)
+        reviews.append(_normalize_review(expanded))
     return sorted(
-        [_normalize_review(item) for item in raw_reviews],
+        reviews,
         key=lambda item: (
             str(item.get("submitted_at") or ""),
             int(item.get("database_id") or 0),
             str(item.get("id") or ""),
         ),
     )
+
+
+def _capture_pull_request_reactions(
+    client: GitHubClient,
+    connection_suffix: str = "",
+) -> list[dict[str, Any]]:
+    connection = f"pull_request.reactions{connection_suffix}"
+    raw_reactions = collect_pages(
+        connection,
+        _pull_request_connection_fetcher(
+            client,
+            PULL_REQUEST_REACTIONS_QUERY,
+            "reactions",
+            connection,
+        ),
+        client.budget,
+        kind="reactions",
+    )
+    return normalize_reactions(raw_reactions)
 
 
 def _normalize_conversation_comment(value: dict[str, Any]) -> dict[str, Any]:
@@ -3480,6 +3715,7 @@ def _capture_remote_evidence(
     labels = _capture_labels(client, connection_suffix)
     requested_reviewers, requested_teams = _capture_review_requests(client, connection_suffix)
     reviews = _capture_reviews(client, connection_suffix)
+    pull_request_reactions = _capture_pull_request_reactions(client, connection_suffix)
     conversation_comments = _capture_conversation_comments(client, connection_suffix)
     review_threads = _capture_review_threads(client, connection_suffix)
     commits = _capture_commits(client, connection_suffix)
@@ -3506,6 +3742,7 @@ def _capture_remote_evidence(
         "requested_reviewers": requested_reviewers,
         "requested_teams": requested_teams,
         "reviews": reviews,
+        "pull_request_reactions": pull_request_reactions,
         "conversation_comments": conversation_comments,
         "review_threads": review_threads,
         "commits": commits,
@@ -3562,6 +3799,7 @@ def capture_snapshot(
             "reviewRequests": len(evidence["requested_reviewers"])
             + len(evidence["requested_teams"]),
             "reviews": len(evidence["reviews"]),
+            "reactions": len(evidence["pull_request_reactions"]),
             "comments": len(evidence["conversation_comments"]),
             "reviewThreads": len(evidence["review_threads"]),
             "commits": len(evidence["commits"]),
@@ -3621,6 +3859,7 @@ def capture_snapshot(
             "number": int(before_pr.get("number")),
             "url": str(before_pr.get("url") or ""),
             "title": str(before_pr.get("title") or ""),
+            "body": str(before_pr.get("body") or ""),
             "state": state,
             "is_draft": bool(before_pr.get("isDraft")),
             "is_merged": bool(before_pr.get("merged")),
@@ -3653,6 +3892,7 @@ def capture_snapshot(
             "labels": evidence["labels"],
             "requested_reviewers": evidence["requested_reviewers"],
             "requested_teams": evidence["requested_teams"],
+            "reactions": evidence["pull_request_reactions"],
         },
         "reviews": evidence["reviews"],
         "conversation_comments": evidence["conversation_comments"],

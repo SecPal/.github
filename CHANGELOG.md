@@ -33,6 +33,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   check and repository-identity metadata, and removed unenforced arbitrary
   local-validation commands from the read-only Package 2.1 configuration
   contract
+- resolved `git` and `gh` only from fixed host-tool prefixes, replaced inherited
+  command search paths, closed standard input, bounded each invocation, captured
+  direct PR and review-summary reactions, and rejected unknown required-check
+  reasons or duplicate stable review-state identities
 
 ## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
 

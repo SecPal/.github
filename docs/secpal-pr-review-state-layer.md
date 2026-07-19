@@ -30,6 +30,9 @@ applies semantic validation such as unique reviewer aliases and evidence digest
 verification. Repository owner, name, URL, PR URL, base repository, head
 repository, and merged-state components must be internally consistent. Commit
 evidence must use unique object IDs and contain the captured PR head commit.
+Reviews, conversation comments, review threads, inline comments, and reactions
+must also have unique stable GitHub identities. Complete required-check
+evidence cannot carry an unknown reason.
 Stored anchor counts must exactly match all supplied top-level PR collections,
 including the complete commit set. Configuration
 supports a stable canonical identity with GraphQL, REST/event, numeric, and
@@ -113,10 +116,13 @@ a partial clone cannot silently fetch a missing object. It disables replacement
 refs and optional locks, and removes inherited Git variables that could select
 another repository, worktree, index, object database, shallow boundary,
 namespace, injected configuration, subcommand path, or trace-output target.
-Normal system, global, and repository configuration still loads from its
-standard locations, but `core.fsmonitor` is disabled and the OpenPGP, SSH, and
-X.509 verifier programs are pinned to their standard command names so config
-cannot select an arbitrary executable. The `fetched` result is always `false`.
+Every `git` and `gh` invocation uses a resolved absolute executable from fixed
+host-tool prefixes; the inherited `PATH` is replaced for the command and any
+configured verifier child process. Standard Git configuration still loads, but
+`core.fsmonitor` is disabled and the OpenPGP, SSH, and X.509 verifier programs
+are pinned to their standard names within that trusted command path. Standard
+input is closed and each external command has a 30-second timeout. The
+`fetched` result is always `false`.
 
 ### Verify the mechanical gate
 
@@ -160,7 +166,8 @@ The snapshot anchors the repository and PR before reading any collection,
 advances each connection independently, reads the complete anchor after the
 initial capture, and reads it a third time after revalidation. The anchor
 includes the PR `updatedAt` value and the total counts for labels, review
-requests, reviews, conversation comments, review threads, and commits. Any
+requests, reviews, direct PR reactions, conversation comments, review threads,
+and commits. Any
 lifecycle, identity, update-time, or count change blocks the capture, and every
 count must match its fully paginated collection. The normalized counts are
 retained as `pull_request.captured_connection_counts` and validated again
@@ -168,7 +175,8 @@ whenever a snapshot is loaded. It fully paginates:
 
 - labels and requested reviewers or teams;
 - review submissions, including informational, approved, dismissed, and
-  requested-changes reviews;
+  requested-changes reviews, plus each review-summary reaction connection;
+- the pull-request body and its direct reaction connection;
 - top-level conversation comments and each reaction connection;
 - review threads, every nested reply, and each nested reaction connection;
 - PR commits and their bounded parent evidence;
@@ -178,11 +186,12 @@ whenever a snapshot is loaded. It fully paginates:
 After the first anchor comparison, the helper performs a second complete,
 bounded observation of every fully paginated PR collection and of volatile
 evidence that can change without moving the PR head or its top-level counts.
-This includes labels, review requests, reviews, comments and reactions, inline
-threads and replies, remote commit and GitHub-signature evidence, effective
-commit checks, rulesets, and branch protection. The two normalized observations
-must be identical. Their connections, API calls, and items are recorded with a
-`.revalidation` suffix and count against the same configured caps. Any
+This includes labels, review requests, reviews and their reactions, the pull
+request and its reactions, comments and reactions, inline threads and replies,
+remote commit and GitHub-signature evidence, effective commit checks, rulesets,
+and branch protection. The two normalized observations must be identical. Their
+connections, API calls, and items are recorded with a `.revalidation` suffix
+and count against the same configured caps. Any
 difference terminates with `BLOCKED_INCOMPLETE_REVIEW_STATE` before output is
 prepared.
 
@@ -198,8 +207,8 @@ true is never completeness. The helper terminates with
 cursor. A nested-page failure prevents any authoritative snapshot or requested
 output from being emitted.
 
-There are no retries, sleeps, polls, or wait-until-complete loops. One failed
-API call is one terminal blocker.
+There are no retries, sleeps, polls, or wait-until-complete loops. One failed or
+timed-out API call is one terminal blocker.
 
 ## Signatures
 

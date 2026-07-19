@@ -16,6 +16,7 @@
               "number": 1,
               "url": "https://github.com/SecPal/.github/pull/1",
               "title": "Fixture pull request",
+              "body": "Fixture pull request body.",
               "state": "OPEN",
               "isDraft": false,
               "merged": false,
@@ -58,6 +59,7 @@
                 "pageInfo": { "hasNextPage": false, "endCursor": null }
               },
               "reviews": { "totalCount": 2 },
+              "reactions": { "totalCount": 1 },
               "comments": { "totalCount": 1 },
               "reviewThreads": { "totalCount": 2 },
               "commits": { "totalCount": 1 }
@@ -115,7 +117,24 @@
                     "body": "Informational review only.",
                     "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-11",
                     "submittedAt": "2026-07-19T00:00:00Z",
-                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+                    "reactions": {
+                      "nodes": [
+                        {
+                          "id": "REVIEW_REACTION_1",
+                          "content": "THUMBS_UP",
+                          "createdAt": "2026-07-19T00:00:30Z",
+                          "user": {
+                            "__typename": "User",
+                            "id": "USER_REVIEW_REACTOR_1",
+                            "databaseId": 51,
+                            "login": "review-reactor-one",
+                            "url": "https://github.com/review-reactor-one"
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": true, "endCursor": "review-reaction-1" }
+                    }
                   }
                 ],
                 "pageInfo": { "hasNextPage": true, "endCursor": "review-1" }
@@ -144,10 +163,67 @@
                     "body": "Second informational review.",
                     "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-12",
                     "submittedAt": "2026-07-19T00:01:00Z",
-                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+                    "reactions": {
+                      "nodes": [],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
                   }
                 ],
                 "pageInfo": { "hasNextPage": false, "endCursor": "review-2" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ReviewReactions": {
+      "REVIEW_1:review-reaction-1": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "reactions": {
+              "nodes": [
+                {
+                  "id": "REVIEW_REACTION_2",
+                  "content": "EYES",
+                  "createdAt": "2026-07-19T00:00:45Z",
+                  "user": {
+                    "__typename": "User",
+                    "id": "USER_REVIEW_REACTOR_2",
+                    "databaseId": 52,
+                    "login": "review-reactor-two",
+                    "url": "https://github.com/review-reactor-two"
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": "review-reaction-2" }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestReactions": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reactions": {
+                "nodes": [
+                  {
+                    "id": "PR_REACTION_1",
+                    "content": "ROCKET",
+                    "createdAt": "2026-07-19T00:00:15Z",
+                    "user": {
+                      "__typename": "User",
+                      "id": "USER_PR_REACTOR_1",
+                      "databaseId": 50,
+                      "login": "pr-reactor",
+                      "url": "https://github.com/pr-reactor"
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
               }
             }
           }

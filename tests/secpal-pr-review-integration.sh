@@ -20,38 +20,39 @@ export PATH="$workspace/bin:$PATH"
 export FAKE_GH_FIXTURE="$FIXTURES/fake-github-pages.json"
 export FAKE_GH_LOG="$workspace/gh.log"
 export FAKE_GIT_LOG="$workspace/git.log"
+helper=(python3 "$FIXTURES/fake-cli.py" "$HELPER" "$workspace/bin")
 
 first="$workspace/first.json"
 second="$workspace/second.json"
 markdown="$workspace/output/snapshot.md"
 json_output="$workspace/output/snapshot.json"
 
-python3 "$HELPER" snapshot \
+"${helper[@]}" snapshot \
   --repo SecPal/.github \
   --pr 1 \
   --config "$FIXTURES/config.json" >"$first"
 
-python3 "$HELPER" snapshot \
+"${helper[@]}" snapshot \
   --repo SecPal/.github \
   --pr 1 \
   --config "$FIXTURES/config.json" >"$second"
 
 cmp "$first" "$second"
 
-python3 "$HELPER" verify-gate \
+"${helper[@]}" verify-gate \
   --snapshot "$first" \
   --config "$FIXTURES/config.json" >"$workspace/gate.json"
 
-python3 "$HELPER" verify-local \
+"${helper[@]}" verify-local \
   --repo SecPal/.github \
   --pr 1 \
   --config "$FIXTURES/config.json" \
   --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"$workspace/local.json"
 
-python3 "$HELPER" render --snapshot "$first" --format markdown >"$workspace/rendered.md"
+"${helper[@]}" render --snapshot "$first" --format markdown >"$workspace/rendered.md"
 grep -Fq 'Canonical authority: JSON snapshot and SHA-256 digest' "$workspace/rendered.md"
 
-python3 "$HELPER" snapshot \
+"${helper[@]}" snapshot \
   --repo SecPal/.github \
   --pr 1 \
   --config "$FIXTURES/config.json" \
@@ -81,6 +82,9 @@ assert gate["raw_review_state"]["unresolved_threads"] == 0
 assert gate["technical_classification_required"] is True
 
 assert len(snapshot["conversation_comments"][0]["reactions"]) == 2
+assert len(snapshot["pull_request"]["reactions"]) == 1
+assert len(snapshot["reviews"][0]["reactions"]) == 2
+assert snapshot["reviews"][1]["reactions"] == []
 assert len(snapshot["review_threads"][0]["comments"]) == 2
 assert snapshot["review_threads"][1]["is_outdated"] is True
 assert snapshot["pull_request"]["captured_connection_counts"] == {
@@ -88,6 +92,7 @@ assert snapshot["pull_request"]["captured_connection_counts"] == {
     "review_requests": len(snapshot["pull_request"]["requested_reviewers"])
     + len(snapshot["pull_request"]["requested_teams"]),
     "reviews": len(snapshot["reviews"]),
+    "pull_request_reactions": len(snapshot["pull_request"]["reactions"]),
     "conversation_comments": len(snapshot["conversation_comments"]),
     "review_threads": len(snapshot["review_threads"]),
     "commits": len(snapshot["commits"]),
@@ -97,6 +102,9 @@ assert snapshot["pull_request"]["check_commit_oid"] == "d" * 40
 assert snapshot["pull_request"]["check_commit_source"] == "test_merge"
 connections = {item["connection"]: item for item in snapshot["completeness"]["fully_paginated_connections"]}
 assert connections["reviews"]["pages"] == 2
+assert connections["pull_request.reactions"]["pages"] == 1
+assert connections["review.REVIEW_1.reactions"]["pages"] == 2
+assert connections["review.REVIEW_2.reactions"]["pages"] == 1
 assert connections["review_threads"]["pages"] == 2
 assert connections["review_thread.THREAD_1.comments"]["pages"] == 2
 assert connections["conversation_comment.ISSUE_COMMENT_1.reactions"]["pages"] == 2
@@ -104,6 +112,9 @@ assert connections["test_merge_checks"]["pages"] == 2
 assert connections["labels.revalidation"]["pages"] == 1
 assert connections["review_requests.revalidation"]["pages"] == 1
 assert connections["reviews.revalidation"]["pages"] == 2
+assert connections["pull_request.reactions.revalidation"]["pages"] == 1
+assert connections["review.REVIEW_1.reactions.revalidation"]["pages"] == 2
+assert connections["review.REVIEW_2.reactions.revalidation"]["pages"] == 1
 assert connections["conversation_comments.revalidation"]["pages"] == 1
 assert connections["review_threads.revalidation"]["pages"] == 2
 assert connections["review_thread.THREAD_1.comments.revalidation"]["pages"] == 2

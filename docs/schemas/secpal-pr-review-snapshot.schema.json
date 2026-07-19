@@ -100,6 +100,7 @@
         "number",
         "url",
         "title",
+        "body",
         "state",
         "is_draft",
         "is_merged",
@@ -120,7 +121,8 @@
         "captured_connection_counts",
         "labels",
         "requested_reviewers",
-        "requested_teams"
+        "requested_teams",
+        "reactions"
       ],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
@@ -128,6 +130,7 @@
         "number": { "type": "integer", "minimum": 1 },
         "url": { "type": "string", "minLength": 1 },
         "title": { "type": "string" },
+        "body": { "type": "string" },
         "state": { "enum": ["OPEN", "CLOSED", "MERGED"] },
         "is_draft": { "type": "boolean" },
         "is_merged": { "type": "boolean" },
@@ -166,6 +169,7 @@
             "labels",
             "review_requests",
             "reviews",
+            "pull_request_reactions",
             "conversation_comments",
             "review_threads",
             "commits"
@@ -174,6 +178,7 @@
             "labels": { "type": "integer", "minimum": 0 },
             "review_requests": { "type": "integer", "minimum": 0 },
             "reviews": { "type": "integer", "minimum": 0 },
+            "pull_request_reactions": { "type": "integer", "minimum": 0 },
             "conversation_comments": { "type": "integer", "minimum": 0 },
             "review_threads": { "type": "integer", "minimum": 0 },
             "commits": { "type": "integer", "minimum": 1 }
@@ -200,6 +205,10 @@
               "url": { "$ref": "#/$defs/nullable_string" }
             }
           }
+        },
+        "reactions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reaction" }
         }
       }
     },
@@ -208,7 +217,7 @@
       "additionalProperties": false,
       "required": ["id", "content", "created_at", "user"],
       "properties": {
-        "id": { "$ref": "#/$defs/nullable_string" },
+        "id": { "type": "string", "minLength": 1 },
         "content": { "type": "string", "minLength": 1 },
         "created_at": { "$ref": "#/$defs/nullable_string" },
         "user": { "$ref": "#/$defs/author" }
@@ -225,7 +234,8 @@
         "body",
         "url",
         "submitted_at",
-        "commit_oid"
+        "commit_oid",
+        "reactions"
       ],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
@@ -235,7 +245,11 @@
         "body": { "type": "string" },
         "url": { "type": "string" },
         "submitted_at": { "$ref": "#/$defs/nullable_string" },
-        "commit_oid": { "$ref": "#/$defs/nullable_string" }
+        "commit_oid": { "$ref": "#/$defs/nullable_string" },
+        "reactions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reaction" }
+        }
       }
     },
     "conversation_comment": {
@@ -432,7 +446,7 @@
       "additionalProperties": false,
       "required": ["determination", "required", "missing", "sources", "unknown_reasons"],
       "properties": {
-        "determination": { "enum": ["complete", "incomplete"] },
+        "determination": { "const": "complete" },
         "required": { "type": "array", "items": { "type": "string" } },
         "missing": { "type": "array", "items": { "type": "string" } },
         "sources": {
@@ -440,7 +454,7 @@
           "uniqueItems": true,
           "items": { "enum": ["rulesets", "branch_protection"] }
         },
-        "unknown_reasons": { "type": "array", "items": { "type": "string" } }
+        "unknown_reasons": { "type": "array", "maxItems": 0, "items": { "type": "string" } }
       }
     },
     "connection_evidence": {

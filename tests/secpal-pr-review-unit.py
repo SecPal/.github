@@ -119,6 +119,7 @@ def review_record(state: str = "COMMENTED", login: str = "reviewer", commit: str
         "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-11",
         "submitted_at": "2026-07-19T00:00:00Z",
         "commit_oid": commit,
+        "reactions": [],
     }
 
 
@@ -205,6 +206,7 @@ def captured_connection_counts(value: dict[str, Any]) -> dict[str, int]:
         "review_requests": len(pull_request["requested_reviewers"])
         + len(pull_request["requested_teams"]),
         "reviews": len(value["reviews"]),
+        "pull_request_reactions": len(pull_request["reactions"]),
         "conversation_comments": len(value["conversation_comments"]),
         "review_threads": len(value["review_threads"]),
         "commits": len(value["commits"]),
@@ -230,6 +232,7 @@ def snapshot() -> dict[str, Any]:
             "number": 1,
             "url": "https://github.com/SecPal/.github/pull/1",
             "title": "Fixture pull request",
+            "body": "Fixture pull request body.",
             "state": "OPEN",
             "is_draft": False,
             "is_merged": False,
@@ -258,6 +261,7 @@ def snapshot() -> dict[str, Any]:
             "labels": [],
             "requested_reviewers": [],
             "requested_teams": [],
+            "reactions": [],
         },
         "reviews": [],
         "conversation_comments": [],
@@ -380,7 +384,10 @@ class SnapshotAndPaginationTests(unittest.TestCase):
 
     def test_03_resolved_and_unresolved_threads(self) -> None:
         value = snapshot()
-        value["review_threads"] = [thread("T1", resolved=True), thread("T2", resolved=False)]
+        value["review_threads"] = [
+            thread("T1", resolved=True),
+            thread("T2", resolved=False, comments=[review_comment("RC_2")]),
+        ]
         value = finalize_snapshot(value)
         result = review.verify_snapshot_gate(value, config())
         self.assertEqual(result["raw_review_state"]["resolved_threads"], 1)
@@ -623,6 +630,12 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         with self.assertRaisesRegex(review.ContractError, "Required-check metadata"):
             review.validate_snapshot(review.attach_digest(value))
 
+    def test_snapshot_rejects_unknown_reasons_for_complete_required_check_evidence(self) -> None:
+        value = snapshot()
+        value["required_check_evidence"]["unknown_reasons"] = ["required checks may be incomplete"]
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(review.attach_digest(value))
+
     def test_snapshot_rejects_a_duplicate_check_identity(self) -> None:
         value = snapshot()
         duplicate = copy.deepcopy(value["checks"][0])
@@ -631,6 +644,27 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         duplicate["evidence_state"] = "non_required_successful"
         value["checks"].append(duplicate)
         with self.assertRaisesRegex(review.ContractError, "duplicate check identity"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_duplicate_review_identities(self) -> None:
+        value = snapshot()
+        value["reviews"] = [review_record(), review_record()]
+        with self.assertRaisesRegex(review.ContractError, "duplicate review identity"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_duplicate_reaction_identities_across_subjects(self) -> None:
+        duplicate = {
+            "id": "REACTION_1",
+            "content": "EYES",
+            "created_at": "2026-07-19T00:01:00Z",
+            "user": actor("reactor"),
+        }
+        value = snapshot()
+        value["pull_request"]["reactions"] = [copy.deepcopy(duplicate)]
+        submitted_review = review_record()
+        submitted_review["reactions"] = [copy.deepcopy(duplicate)]
+        value["reviews"] = [submitted_review]
+        with self.assertRaisesRegex(review.ContractError, "duplicate reaction identity"):
             review.validate_snapshot(finalize_snapshot(value))
 
     def test_snapshot_rejects_check_requiredness_that_disagrees_with_rules(self) -> None:
@@ -792,6 +826,49 @@ class SnapshotAndPaginationTests(unittest.TestCase):
     def test_thread_metadata_query_does_not_multiply_nested_connections(self) -> None:
         self.assertNotIn("comments(first:", review.REVIEW_THREADS_QUERY)
         self.assertIn("comments(first:100", review.REVIEW_THREAD_COMMENTS_QUERY)
+
+    def test_review_and_pull_request_reactions_have_independent_paginated_queries(self) -> None:
+        self.assertIn("reactions(first:100)", review.PULL_REQUEST_REVIEWS_QUERY)
+        self.assertIn("... on PullRequestReview", review.REVIEW_REACTIONS_QUERY)
+        self.assertIn("reactions(first:100", review.REVIEW_REACTIONS_QUERY)
+        self.assertIn("reactions(first:100", review.PULL_REQUEST_REACTIONS_QUERY)
+        self.assertIn("reactions { totalCount }", review.PULL_REQUEST_ANCHOR_QUERY)
+
+    def test_review_normalization_retains_summary_reactions(self) -> None:
+        value = {
+            "id": "REVIEW_1",
+            "databaseId": 11,
+            "author": {
+                "__typename": "User",
+                "id": "USER_1",
+                "databaseId": 1,
+                "login": "reviewer",
+                "url": "https://github.com/reviewer",
+            },
+            "state": "COMMENTED",
+            "body": "Summary",
+            "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-11",
+            "submittedAt": "2026-07-19T00:00:00Z",
+            "commit": {"oid": HEAD},
+            "reactions": {
+                "nodes": [
+                    {
+                        "id": "REACTION_1",
+                        "content": "EYES",
+                        "createdAt": "2026-07-19T00:01:00Z",
+                        "user": {
+                            "__typename": "User",
+                            "id": "USER_2",
+                            "databaseId": 2,
+                            "login": "reactor",
+                            "url": "https://github.com/reactor",
+                        },
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            },
+        }
+        self.assertEqual(review._normalize_review(value)["reactions"][0]["content"], "EYES")
 
     def test_11_unequal_connection_page_counts_do_not_refetch(self) -> None:
         calls: dict[str, list[str | None]] = {"reviews": [], "comments": []}
@@ -961,7 +1038,15 @@ class LocalGitTests(unittest.TestCase):
 
     def test_anchor_query_captures_review_update_sentinels(self) -> None:
         self.assertIn("updatedAt", review.PULL_REQUEST_ANCHOR_QUERY)
-        for connection in ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits"):
+        for connection in (
+            "labels",
+            "reviewRequests",
+            "reviews",
+            "comments",
+            "reviewThreads",
+            "commits",
+            "reactions",
+        ):
             with self.subTest(connection=connection):
                 self.assertIn(f"{connection} {{ totalCount }}", review.PULL_REQUEST_ANCHOR_QUERY)
 
@@ -1008,7 +1093,15 @@ class LocalGitTests(unittest.TestCase):
         )["graphql"]["PullRequestAnchor"]["null"]
         pull_request = fixture["data"]["repository"]["pullRequest"]
         pull_request["updatedAt"] = "2026-07-19T00:00:00Z"
-        for connection in ("labels", "reviewRequests", "reviews", "comments", "reviewThreads", "commits"):
+        for connection in (
+            "labels",
+            "reviewRequests",
+            "reviews",
+            "comments",
+            "reviewThreads",
+            "commits",
+            "reactions",
+        ):
             pull_request[connection] = {"totalCount": 0}
         before = review.extract_anchor(copy.deepcopy(fixture))
         changed = copy.deepcopy(fixture)
@@ -1490,7 +1583,37 @@ class SecurityAndOutputTests(unittest.TestCase):
             review.CommandRunner().run(arguments)
         environment = run.call_args.kwargs["env"]
         self.assertEqual(environment["GH_HOST"], "github.com")
+        self.assertEqual(environment["PATH"], review.TRUSTED_COMMAND_PATH)
+        self.assertTrue(Path(run.call_args.args[0][0]).is_absolute())
         self.assertEqual(run.call_args.args[0][2:4], ["--hostname", "github.com"])
+
+    def test_command_runner_does_not_resolve_allowlisted_tools_from_inherited_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "shim-ran"
+            shim = root / "git"
+            shim.write_text(
+                "#!/bin/sh\n"
+                f": > {str(marker)!r}\n"
+                f"printf '%s\\n' {HEAD!r}\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o700)
+            inherited_path = f"{root}{os.pathsep}{os.environ.get('PATH', '')}"
+            with mock.patch.dict(review.os.environ, {"PATH": inherited_path}):
+                review.CommandRunner().run(["git", "rev-parse", "HEAD"], allow_failure=True)
+            self.assertFalse(marker.exists())
+
+    def test_command_runner_bounds_execution_and_closes_stdin(self) -> None:
+        expired = review.subprocess.TimeoutExpired(["git", "rev-parse", "HEAD"], 1)
+        with mock.patch.object(review.subprocess, "run", side_effect=expired) as run:
+            with self.assertRaises(review.CommandFailure):
+                review.CommandRunner().run(["git", "rev-parse", "HEAD"])
+        self.assertEqual(run.call_args.kwargs["stdin"], review.subprocess.DEVNULL)
+        self.assertEqual(
+            run.call_args.kwargs["timeout"],
+            review.DEFAULT_EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
 
     def test_command_runner_sanitizes_git_repository_and_object_overrides(self) -> None:
         repository_overrides = {
