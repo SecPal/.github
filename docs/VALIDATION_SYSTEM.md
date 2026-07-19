@@ -119,11 +119,14 @@ licensing, frontmatter, or size rules. All managed source roots are validated
 before any instruction-dependent local configuration or repository metadata is
 written. A missing validator or missing Markdown tooling blocks rollout.
 
-Generated Polyscope workspace setup sequences invoke the validation-only
-`--validate-instruction-worktree` mode as their first effective boundary.
-Polyscope may already have created and registered the candidate at that point,
-but canonical validation must succeed before npm, Composer, `.env`, database,
-migration, seed, or any other native setup command runs.
+Generated Polyscope workspace setup sequences contain exactly one strict shell
+entry. That entry invokes the validation-only
+`--validate-instruction-worktree` mode, then runs the complete original native
+setup as fail-fast command groups. Polyscope may already have created and
+registered the candidate at that point, but canonical validation must succeed
+before npm, Composer, `.env`, database, migration, seed, or any other native
+setup command runs. A multiline command cannot escape the guard, and failure of
+any native command stops every later setup operation.
 
 The external worktree provisioner derives its allowlist only from active
 `worktrees` registrations in the current Polyscope SQLite database. Registered
@@ -139,6 +142,16 @@ provisionable candidates before the first such candidate mutation, so one
 invalid candidate cannot leave another candidate partially provisioned.
 Validator failures remain errors and include the affected root and canonical
 validator output.
+
+The provisioner keeps the resolved physical hash directory as the authoritative
+`worktrees.path` deletion identity. It never replaces that database value with
+a stable alias. Direct sibling aliases are tracked separately in a strict
+per-repository registry. When official workspace deletion removes the physical
+path and active registration, the database event reconciliation removes only
+recorded aliases whose exact direct target is gone; symlink chains, traversal,
+changed targets, non-directory targets, and unrelated aliases fail closed or
+remain untouched. The seven-day clone reaper is reserved for genuinely
+unregistered historical clones, not successful workspace deletion.
 
 The direct `--prepare-api-worktree`, `--bootstrap-api-worktree`,
 `--refresh-api-worktree`, and `--run-api-worktree` commands share one
@@ -190,7 +203,16 @@ The rollout sync path watches the rollout, canonical validator, manifest
 library and helper sources, instruction roots and Codex template, committed
 `package-lock.json`, and installed `node_modules/.package-lock.json`. The
 provision path watches database and local-configuration state, while its timer
-provides a bounded fallback. No user unit invokes broad privileged commands.
+provides a bounded fallback. Both target one process-locked provision service.
+Each activation waits three seconds to coalesce SQLite event bursts; the
+five-start, ten-second limit therefore cannot be exhausted by expected
+activations. systemd collapses duplicate starts while the oneshot is active;
+the three-minute timer provides a bounded recovery run if a path event does not
+yield a follow-up activation. No-op provisioning avoids rewriting the database
+or watched local configuration. The installer clears only historical failed
+state for the provision path and service during deliberate convergence;
+subsequent service failures remain visible. No user unit invokes broad
+privileged commands.
 
 Rollout requires both independent files, always reads runtime policy from
 `AGENTS.md`, and never treats the Copilot review profile as runtime

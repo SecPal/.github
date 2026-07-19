@@ -22,6 +22,7 @@ POLYSCOPE_REAL_GIT_BIN="${POLYSCOPE_REAL_GIT_BIN:-$(command -v git || true)}"
 POLYSCOPE_API_BASE="${POLYSCOPE_API_BASE:-http://127.0.0.1:4321/api}"
 POLYSCOPE_CLONE_ROOT="${POLYSCOPE_CLONE_ROOT:-$HOME/.polyscope/clones}"
 POLYSCOPE_HOME="${POLYSCOPE_HOME:-$HOME/.polyscope}"
+POLYSCOPE_PROVISION_LOCK="${POLYSCOPE_PROVISION_LOCK:-$HOME/.local/state/polyscope/worktree-provision.lock}"
 POLYSCOPE_EXPOSE_BIN="${POLYSCOPE_EXPOSE_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64}"
 POLYSCOPE_EXPOSE_REAL_BIN="${POLYSCOPE_EXPOSE_REAL_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64.real}"
 POLYSCOPE_GIT_BIN_DIR="${POLYSCOPE_GIT_BIN_DIR:-$HOME/.local/lib/polyscope/bin}"
@@ -175,7 +176,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -237,7 +238,7 @@ if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
 fi
 
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
-for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE INSTALL_TARGET; do
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
     _val="${!_var_name}"
     if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
         echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
@@ -476,12 +477,10 @@ cat >"$PROVISION_SERVICE_UNIT" <<EOF
 [Unit]
 Description=Provision SecPal Polyscope worktrees automatically
 After=polyscope-rollout-sync.service
-# Bound the self-trigger feedback loop: DB sync writes to polyscope.db which is
-# watched by the paired path unit; without a burst cap this can re-trigger the
-# service until systemd rate-limits the unit. Five starts per five minutes
-# leaves room for the three-minute fallback timer plus real workspace events
-# without letting the provisioning loop run away indefinitely.
-StartLimitIntervalSec=300
+# Each activation spends three seconds coalescing SQLite event bursts before
+# the serialized provisioner runs. With five starts per ten seconds, even
+# immediate failures remain visible without making the path unit hit its limit.
+StartLimitIntervalSec=10
 StartLimitBurst=5
 
 [Service]
@@ -490,7 +489,8 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --skip-local-configs --skip-db-sync --provision-worktrees
+ExecStartPre=/usr/bin/sleep 3
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF
@@ -500,6 +500,7 @@ cat >"$PROVISION_PATH_UNIT" <<EOF
 Description=Watch SecPal Polyscope worktree metadata and generated local config for automatic provisioning
 
 [Path]
+Unit=polyscope-worktree-provision.service
 PathChanged=$HOME/.polyscope/polyscope.db
 PathModified=$HOME/.polyscope/polyscope.db-wal
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
@@ -522,6 +523,7 @@ cat >"$PROVISION_TIMER_UNIT" <<EOF
 Description=Poll SecPal Polyscope worktrees for provisioning fallback
 
 [Timer]
+Unit=polyscope-worktree-provision.service
 OnStartupSec=30s
 OnUnitActiveSec=3min
 Persistent=true
@@ -569,6 +571,10 @@ fi
 
 "$SYSTEMCTL_BIN" --user enable --now polyscope-rollout-sync.path
 "$SYSTEMCTL_BIN" --user start polyscope-rollout-sync.service
+# A prior unit-start-limit-hit survives unit replacement. Clear only the two
+# provision units during this deliberate convergence before enabling the new
+# coalesced path contract; later service failures remain observable.
+"$SYSTEMCTL_BIN" --user reset-failed polyscope-worktree-provision.path polyscope-worktree-provision.service
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 "$SYSTEMCTL_BIN" --user enable --now polyscope-clone-reaper.timer

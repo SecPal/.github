@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
+
+**Fixed:**
+
+- wrapped canonical validation and every generated native setup command in one strict fail-closed shell entry, preventing multiline or `||`-bearing setup entries from running after an invalid workspace and stopping all later setup after any command failure
+- preserved physical registered workspace paths as the authoritative Polyscope deletion identity, tracked stable direct aliases separately, and removed only verified Package-1-owned broken aliases after official deletion
+- serialized worktree provisioning with an invocation lock, coalesced database event bursts before execution, bounded the service activation window so expected bursts cannot fail the path unit, and made installer convergence clear only historical provision-unit failure state
+
 ## 2026-07-18 - Close Polyscope Workspace Lifecycle Gaps
 
 **Fixed:**

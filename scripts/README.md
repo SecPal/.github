@@ -391,16 +391,29 @@ managed repositories automatically when the canonical repo list changes. Both
 the provision path and the three-minute fallback timer are enabled. The
 provisioner reads only active `worktrees` registrations from `polyscope.db`,
 resolves them beneath the matching repository clone root, and never scans an
-unregistered clone as a setup candidate. The paired daily
+unregistered clone as a setup candidate. The physical hash directory remains
+the database's authoritative deletion path. Stable aliases are direct sibling
+symlinks recorded in a strict per-repository registry; after official deletion
+removes the physical path and registration, the next database-triggered
+reconciliation removes only those recorded broken aliases. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
 checking the live database allowlist, locks, and processes.
 
 Every generated repository setup sequence starts with the validation-only
-`--validate-instruction-worktree` command. It validates the actual candidate
-root synchronously before npm, Composer, `.env`, database, migration, seed, or
-repository setup commands can run. The external provisioner applies the same
-canonical contract before its local configuration, hook, alias, setup, and
-marker writes.
+`--validate-instruction-worktree` command inside one strict shell entry. That
+entry groups the complete native setup with fail-fast semantics, so validation
+or any later command failure prevents every remaining npm, Composer, `.env`,
+database, migration, seed, build, or repository setup command. The external
+provisioner applies the same canonical contract before its local configuration,
+hook, alias, setup, and marker writes.
+
+The worktree provision service waits three seconds before each activation to
+coalesce SQLite event bursts and takes a process-shared lock before provisioning.
+The path and fallback timer both target that serialized service. Five starts per
+ten seconds cannot be exhausted by the three-second activations, while genuine
+service failures remain visible. A deliberate user-installer convergence clears
+only historical failed state for the provision path and service before enabling
+the new unit contract; it does not hide later failures.
 
 ### `install-polyscope-system-components.sh`
 
