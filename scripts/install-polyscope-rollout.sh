@@ -33,7 +33,7 @@ SERVICE_PATH="${POLYSCOPE_SERVICE_PATH:-}"
 SUDO_BIN="${SUDO_BIN:-sudo}"
 FIXED_POLYSCOPE_NGINX_HELPER="/usr/local/libexec/secpal-polyscope-nginx-apply"
 POLYSCOPE_NGINX_HELPER_CHECK="${POLYSCOPE_NGINX_HELPER:-$FIXED_POLYSCOPE_NGINX_HELPER}"
-FIXED_POLYSCOPE_NGINX_MANIFEST="$HOME/.local/state/polyscope/nginx-manifest.json"
+FIXED_POLYSCOPE_NGINX_MANIFEST="/home/secpal/.local/state/polyscope/nginx-manifest.json"
 if [[ "${POLYSCOPE_NGINX_MANIFEST:-$FIXED_POLYSCOPE_NGINX_MANIFEST}" != "$FIXED_POLYSCOPE_NGINX_MANIFEST" ]]; then
     echo "Error: the nginx manifest path is fixed at $FIXED_POLYSCOPE_NGINX_MANIFEST." >&2
     exit 1
@@ -78,6 +78,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if ! secpal_uid="$(id -u secpal 2>/dev/null)"; then
+    echo "Error: required service user 'secpal' does not exist." >&2
+    exit 1
+fi
+if [[ "$(id -u)" != "$secpal_uid" ]]; then
+    echo "Error: this installer must be run as the secpal user." >&2
+    exit 1
+fi
 
 if [[ -z "$SERVICE_PATH" ]]; then
     SERVICE_PATH="$POLYSCOPE_GIT_BIN_DIR:$BIN_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
@@ -285,10 +294,46 @@ if [[ "$server_scope" == "system" ]]; then
         echo "Error: required system Polyscope service user 'secpal' does not exist." >&2
         exit 1
     fi
+    mapfile -t _installed_path_lines < <(sed -n 's/^Environment=PATH=//p' "$installed_server_target")
+    if [[ "${#_installed_path_lines[@]}" -ne 1 ]]; then
+        echo "Error: reviewed system server drop-in is incomplete; expected exactly one service PATH: $installed_server_target" >&2
+        exit 1
+    fi
+    _installed_service_path="${_installed_path_lines[0]}"
+    if [[ -z "$_installed_service_path" \
+        || "$_installed_service_path" == *: \
+        || "$_installed_service_path" =~ [[:space:]] ]]; then
+        echo "Error: reviewed system server drop-in contains an invalid service PATH: $installed_server_target" >&2
+        exit 1
+    fi
+    IFS=: read -r -a _installed_path_entries <<<"$_installed_service_path"
+    for _installed_path_entry in "${_installed_path_entries[@]}"; do
+        if [[ -z "$_installed_path_entry" || "$_installed_path_entry" != /* ]]; then
+            echo "Error: reviewed system server drop-in PATH entries must be absolute and non-empty: $installed_server_target" >&2
+            exit 1
+        fi
+    done
+    for _required_path_entry in \
+        /home/secpal/.local/lib/polyscope/bin \
+        /home/secpal/.local/bin \
+        /usr/local/sbin \
+        /usr/local/bin \
+        /usr/sbin \
+        /usr/bin; do
+        if [[ ":$_installed_service_path:" != *":$_required_path_entry:"* ]]; then
+            echo "Error: reviewed system server drop-in PATH is incomplete: $installed_server_target" >&2
+            echo "Missing PATH entry: $_required_path_entry" >&2
+            exit 1
+        fi
+    done
+    _installed_node_bin="$(PATH="$_installed_service_path" command -v node || true)"
+    if [[ -z "$_installed_node_bin" || "$_installed_node_bin" != /* || ! -x "$_installed_node_bin" ]]; then
+        echo "Error: reviewed system server drop-in PATH cannot resolve Node.js: $installed_server_target" >&2
+        exit 1
+    fi
     for _required_dropin_line in \
         "User=secpal" \
         "ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
-        "Environment=PATH=/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
         "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" \
         "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git"; do
         if ! grep -qxF "$_required_dropin_line" "$installed_server_target"; then

@@ -366,10 +366,13 @@ POLYSCOPE_SERVER_SCOPE=system bash .github/scripts/install-polyscope-rollout.sh
 ```
 
 Run `install-polyscope-system-components.sh` first. This installer remains
-unprivileged and verifies the exact command
-`sudo -k -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`. The
-credential reset ensures the check proves the exact `NOPASSWD` rule rather than
-a cached interactive sudo timestamp. It never tests generic sudo access,
+unprivileged, requires the invoking account to be `secpal`, and verifies the
+exact fixed-helper capability:
+
+`sudo -k -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`
+
+The credential reset ensures the check proves the exact `NOPASSWD` rule rather
+than a cached interactive sudo timestamp. It never tests generic sudo access,
 rejects helper-path overrides, and exits before writing user units when the
 fixed helper, fixed manifest path, system server drop-in, or exact
 authorization is unavailable.
@@ -410,6 +413,16 @@ sudo -k
 sudo .github/scripts/install-polyscope-system-components.sh
 ```
 
+The installer resolves `node` before writing the system drop-in, verifies that
+the `secpal` service account can execute it, and adds its directory to the
+service `PATH`. If root's environment cannot discover a user-managed Node.js
+installation, pass its absolute path explicitly:
+
+```bash
+sudo .github/scripts/install-polyscope-system-components.sh \
+  --node-bin /home/secpal/.local/share/node/bin/node
+```
+
 The administrator enters the password only at the terminal prompt. The script
 validates sudoers syntax before activation, writes fixed root-owned targets
 atomically, and restores the previous components if activation fails. It does
@@ -419,7 +432,9 @@ paths through passwordless sudo.
 `DESTDIR=/path scripts/install-polyscope-system-components.sh --stage-only`
 renders a deterministic packaging fixture without root or a local `secpal`
 account. Its UID 1000 systemd value is for validation only; a real installation
-always resolves the target host's `secpal` UID before activation.
+always resolves the target host's `secpal` UID and an executable Node.js path
+before activation. Packaging tests may pass `--node-bin` to render the intended
+service `PATH` without inspecting the target account.
 
 Before activation, the installer verifies the executable canonical rollout
 and validator source bundle, committed lockfile, and installed pinned Markdown

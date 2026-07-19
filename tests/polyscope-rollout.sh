@@ -3978,6 +3978,7 @@ import importlib.util
 import os
 import pathlib
 import sys
+import types
 
 script_path = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
@@ -4006,7 +4007,70 @@ spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
+assert module.DEFAULT_NGINX_MANIFEST_PATH == pathlib.Path(
+    "/home/secpal/.local/state/polyscope/nginx-manifest.json"
+)
 module.DEFAULT_NGINX_MANIFEST_PATH = manifest
+
+# Direct-root troubleshooting writes with only the service user's filesystem
+# authority, then restores the original effective identity before applying.
+identity = {"euid": 0, "egid": 0, "groups": [0, 27]}
+identity_log = []
+original_identity_functions = {
+    name: getattr(module.os, name)
+    for name in ("geteuid", "getegid", "getgroups", "seteuid", "setegid", "setgroups")
+}
+module.os.geteuid = lambda: identity["euid"]
+module.os.getegid = lambda: identity["egid"]
+module.os.getgroups = lambda: list(identity["groups"])
+
+def set_identity(key, value):
+    identity_log.append((key, value))
+    identity[key] = value
+
+module.os.seteuid = lambda value: set_identity("euid", value)
+module.os.setegid = lambda value: set_identity("egid", value)
+module.os.setgroups = lambda value: set_identity("groups", list(value))
+written_identity = []
+module.write_nginx_manifest(
+    manifest,
+    {"fixture": True},
+    writer=lambda path, payload: written_identity.append(
+        (path, payload, identity["euid"], identity["egid"], list(identity["groups"]))
+    ),
+    service_user=types.SimpleNamespace(pw_uid=1000, pw_gid=1000),
+)
+assert written_identity == [(manifest, {"fixture": True}, 1000, 1000, [1000])], written_identity
+assert identity == {"euid": 0, "egid": 0, "groups": [0, 27]}, identity
+assert identity_log == [
+    ("groups", [1000]),
+    ("egid", 1000),
+    ("euid", 1000),
+    ("euid", 0),
+    ("egid", 0),
+    ("groups", [0, 27]),
+], identity_log
+
+class ExpectedWriteFailure(Exception):
+    pass
+
+def fail_manifest_write(_path, _payload):
+    raise ExpectedWriteFailure
+
+try:
+    module.write_nginx_manifest(
+        manifest,
+        {"fixture": False},
+        writer=fail_manifest_write,
+        service_user=types.SimpleNamespace(pw_uid=1000, pw_gid=1000),
+    )
+except ExpectedWriteFailure:
+    pass
+else:
+    raise AssertionError("manifest write failure was suppressed")
+assert identity == {"euid": 0, "egid": 0, "groups": [0, 27]}, identity
+for name, function in original_identity_functions.items():
+    setattr(module.os, name, function)
 
 module.install_nginx_config(
     manifest,
@@ -4042,6 +4106,24 @@ finally:
     module.os.geteuid = original_geteuid
 
 assert command_log.read_text().splitlines() == ["", ""], command_log.read_text()
+
+# The production dispatch ignores environment-selected helpers. Tests may
+# still inject an explicit helper argument at the function boundary.
+bad_helper = fixture / "bad-environment-helper"
+bad_helper_marker = fixture / "bad-helper-ran"
+bad_helper.write_text(
+    "#!/usr/bin/env bash\n"
+    f"printf 'ran\\n' > {bad_helper_marker!s}\n"
+)
+bad_helper.chmod(0o755)
+module.DEFAULT_NGINX_HELPER_PATH = fake_helper
+os.environ["POLYSCOPE_NGINX_HELPER"] = str(bad_helper)
+try:
+    module.install_nginx_config(manifest, sudo_bin=str(fake_sudo))
+finally:
+    os.environ.pop("POLYSCOPE_NGINX_HELPER")
+assert not bad_helper_marker.exists(), bad_helper_marker
+assert command_log.read_text().splitlines() == ["", "", ""], command_log.read_text()
 PY
 
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
@@ -5516,7 +5598,9 @@ fake_polyscope_bin_dir="$home_dir/.polyscope/bin"
 fake_polyscope_git_dir="$home_dir/.local/lib/polyscope/bin"
 fake_codex_home="$home_dir/.codex"
 real_readlink_bin="$(command -v readlink)"
+real_id_bin="$(command -v id)"
 export REAL_READLINK_BIN="$real_readlink_bin"
+export REAL_ID_BIN="$real_id_bin"
 mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_sudo_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
 mkdir -p "$(dirname "$fake_server_bin")"
 
@@ -5567,6 +5651,24 @@ exec "$REAL_READLINK_BIN" "$@"
 STUB
 chmod +x "$fake_systemctl_dir/readlink"
 
+cat >"$fake_systemctl_dir/id" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
+    printf '1000\n'
+    exit 0
+fi
+if [[ "${1:-}" == "-u" && $# -eq 1 ]]; then
+    printf '1000\n'
+    exit 0
+fi
+if [[ "${1:-}" == "-un" && $# -eq 1 ]]; then
+    printf 'secpal\n'
+    exit 0
+fi
+exec "$REAL_ID_BIN" "$@"
+STUB
+chmod +x "$fake_systemctl_dir/id"
+
 cat >"$fake_sudo_dir/sudo" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SUDO_LOG"
@@ -5598,6 +5700,43 @@ STUB
 chmod +x "$fake_nginx_helper"
 export POLYSCOPE_NGINX_HELPER="$fake_nginx_helper"
 export POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE=1
+
+# The unprivileged installer owns secpal-specific paths and units. A different
+# caller must fail before any installation writes, independently of HOME.
+wrong_user_id_dir="$workspace/wrong-user-id"
+wrong_user_home_dir="$workspace/wrong-user-home"
+wrong_user_bin_dir="$workspace/wrong-user-bin"
+wrong_user_unit_dir="$workspace/wrong-user-units"
+wrong_user_error="$workspace/wrong-user.error"
+wrong_user_exit=0
+mkdir -p "$wrong_user_id_dir" "$wrong_user_home_dir/.polyscope/bin"
+cat >"$wrong_user_id_dir/id" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
+    printf '1000\n'
+    exit 0
+fi
+if [[ "${1:-}" == "-u" && $# -eq 1 ]]; then
+    printf '2000\n'
+    exit 0
+fi
+exec "$REAL_ID_BIN" "$@"
+STUB
+chmod +x "$wrong_user_id_dir/id"
+env HOME="$wrong_user_home_dir" \
+    PATH="$wrong_user_id_dir:$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$wrong_user_bin_dir" \
+        --unit-dir "$wrong_user_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$wrong_user_error" \
+    || wrong_user_exit=$?
+if [[ "$wrong_user_exit" -eq 0 ]]; then
+    echo "unprivileged installer must require the secpal account" >&2
+    exit 1
+fi
+grep -qF 'must be run as the secpal user' "$wrong_user_error"
+test ! -e "$wrong_user_unit_dir/polyscope-rollout-sync.service"
 
 # Production installation must persist the one fixed root-owned helper path,
 # even if an older broad sudo rule would make an arbitrary override executable.
@@ -6000,12 +6139,16 @@ system_systemctl_log="$workspace/system-systemctl.log"
 system_sudo_log="$workspace/system-sudo.log"
 system_fragment_dir="$workspace/system-fragments"
 system_fragment_path="$system_fragment_dir/polyscope-server.service"
-system_server_user="$(id -un)"
-mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir"
+system_server_user="secpal"
+system_node_dir="$workspace/system-node/bin"
+system_node_bin="$system_node_dir/node"
+mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir" "$system_node_dir"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$system_node_bin"
+chmod +x "$system_node_bin"
 printf '[Unit]\nDescription=Polyscope Server\n' > "$system_fragment_path"
 system_component_stage="$workspace/system-component-stage"
 DESTDIR="$system_component_stage" \
-    "$REPO_ROOT/scripts/install-polyscope-system-components.sh" --stage-only >/dev/null
+    "$REPO_ROOT/scripts/install-polyscope-system-components.sh" --stage-only --node-bin "$system_node_bin" >/dev/null
 mkdir -p "$system_dropin_dir"
 cp "$system_component_stage/etc/systemd/system/polyscope-server.service.d/zz-secpal-runtime.conf" \
     "$system_dropin_dir/zz-secpal-runtime.conf"
@@ -6069,7 +6212,7 @@ test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 test "$(file_sha256 "$system_dropin_dir/zz-secpal-runtime.conf")" = "$system_dropin_hash_before"
 grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q 'Environment=PATH=/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"

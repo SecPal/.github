@@ -13,14 +13,32 @@ RUNTIME_ROLLOUT_SOURCE="/home/secpal/code/SecPal/.github/scripts/polyscope-rollo
 RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
 DESTDIR="${DESTDIR:-}"
+NODE_BIN=""
 STAGE_ONLY=0
 
-if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--stage-only" ) ]]; then
-    echo "Usage: $0 [--stage-only]" >&2
+usage() {
+    echo "Usage: $0 [--stage-only] [--node-bin PATH]" >&2
     exit 2
-fi
-if [[ ${1:-} == "--stage-only" ]]; then
-    STAGE_ONLY=1
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --stage-only)
+            STAGE_ONLY=1
+            shift
+            ;;
+        --node-bin)
+            [[ $# -ge 2 ]] || usage
+            NODE_BIN="$2"
+            shift 2
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+
+if [[ "$STAGE_ONLY" -eq 1 ]]; then
     if [[ -z "$DESTDIR" ]]; then
         echo "Error: --stage-only requires a non-empty DESTDIR." >&2
         exit 2
@@ -36,6 +54,52 @@ for source_file in "$HELPER_SOURCE" "$LIBRARY_SOURCE" "$ROLLOUT_SOURCE"; do
         exit 1
     fi
 done
+
+if [[ "$STAGE_ONLY" -eq 1 ]]; then
+    SECPAL_UID=1000
+elif ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
+    echo "Error: required service user 'secpal' does not exist." >&2
+    exit 1
+fi
+
+if [[ -z "$NODE_BIN" ]]; then
+    if [[ "$STAGE_ONLY" -eq 1 ]]; then
+        NODE_BIN="/usr/bin/node"
+    else
+        NODE_BIN="$(command -v node || true)"
+    fi
+fi
+if [[ -z "$NODE_BIN" || "$NODE_BIN" != /* || "$NODE_BIN" =~ [[:space:]:] ]]; then
+    echo "Error: Node.js must resolve to an absolute executable path without whitespace or colons." >&2
+    exit 1
+fi
+if [[ "$STAGE_ONLY" -eq 0 ]]; then
+    if [[ ! -f "$NODE_BIN" || ! -x "$NODE_BIN" ]]; then
+        echo "Error: Node.js executable is missing or not executable: $NODE_BIN" >&2
+        exit 1
+    fi
+    unresolved_node_bin="$NODE_BIN"
+    if ! resolved_node_bin="$(readlink -f -- "$NODE_BIN")" || [[ -z "$resolved_node_bin" ]]; then
+        echo "Error: failed to resolve the Node.js executable: $unresolved_node_bin" >&2
+        exit 1
+    fi
+    NODE_BIN="$resolved_node_bin"
+    if [[ "$NODE_BIN" != /* || "$NODE_BIN" =~ [[:space:]:] ]]; then
+        echo "Error: resolved Node.js path is unsafe for the service PATH: $NODE_BIN" >&2
+        exit 1
+    fi
+    if [[ ! -x /usr/bin/sudo ]] \
+        || ! /usr/bin/sudo -u secpal -- /usr/bin/test -x "$NODE_BIN"; then
+        echo "Error: Node.js is not executable by the secpal service user: $NODE_BIN" >&2
+        exit 1
+    fi
+fi
+NODE_BIN_DIR="$(dirname -- "$NODE_BIN")"
+BASE_SERVICE_PATH="/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+case ":$BASE_SERVICE_PATH:" in
+    *":$NODE_BIN_DIR:"*) SYSTEM_SERVICE_PATH="$BASE_SERVICE_PATH" ;;
+    *) SYSTEM_SERVICE_PATH="$NODE_BIN_DIR:$BASE_SERVICE_PATH" ;;
+esac
 
 if [[ "$STAGE_ONLY" -eq 0 ]]; then
     for runtime_file in \
@@ -56,13 +120,6 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         echo "Error: canonical Polyscope runtime scripts and pinned validator must be executable below $RUNTIME_TOOLCHAIN_ROOT." >&2
         exit 1
     fi
-fi
-
-if [[ "$STAGE_ONLY" -eq 1 ]]; then
-    SECPAL_UID=1000
-elif ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
-    echo "Error: required service user 'secpal' does not exist." >&2
-    exit 1
 fi
 
 prefix_path() {
@@ -95,7 +152,7 @@ ExecStart=
 ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321
 ExecStartPost=
 ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
-Environment=PATH=/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PATH=$SYSTEM_SERVICE_PATH
 Environment=SSH_AUTH_SOCK=/run/user/$SECPAL_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git
 EOF

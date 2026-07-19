@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import pwd
 import re
 import secrets
 import shlex
@@ -30,8 +31,9 @@ ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
-DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path.home() / ".local" / "state" / "polyscope" / "nginx-manifest.json"
+DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
+NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
@@ -203,13 +205,9 @@ def find_current_worktree_record(
     worktree_path: pathlib.Path,
 ) -> tuple[str | None, str | None] | None:
     current_path = resolve_path_for_matching(worktree_path)
-    rows = connection.execute(
-        """
-        select id, path
-        from worktrees
-        order by created_at desc
-        """
-    ).fetchall()
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(worktrees)")}
+    order_by = "created_at desc, id desc" if "created_at" in columns else "id desc"
+    rows = connection.execute(f"select id, path from worktrees order by {order_by}").fetchall()
 
     for worktree_id, registered_path in rows:
         if not isinstance(registered_path, str) or not registered_path.strip():
@@ -341,13 +339,9 @@ def build_linked_workspace_resolver_source() -> str:
 
         def find_current_worktree(connection):
             current_path = resolve_path_for_matching(Path.cwd())
-            rows = connection.execute(
-                '''
-                select id, path
-                from worktrees
-                order by created_at desc
-                '''
-            ).fetchall()
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(worktrees)")}
+            order_by = "created_at desc, id desc" if "created_at" in columns else "id desc"
+            rows = connection.execute(f"select id, path from worktrees order by {order_by}").fetchall()
 
             for worktree_id, registered_path in rows:
                 if not isinstance(registered_path, str) or not registered_path.strip():
@@ -3294,7 +3288,7 @@ def load_registered_worktree_paths(
                 str(row[1])
                 for row in connection.execute("PRAGMA table_info(worktrees)")
             }
-            required_columns = {"id", "repo_id", "path", "status", "created_at"}
+            required_columns = {"id", "repo_id", "path"}
             missing_columns = sorted(required_columns - columns)
             if missing_columns:
                 raise RuntimeError(
@@ -3302,13 +3296,10 @@ def load_registered_worktree_paths(
                     + ", ".join(missing_columns)
                 )
 
+            where_clause = " where status = 'active'" if "status" in columns else ""
+            order_by = "created_at asc, id asc" if "created_at" in columns else "id asc"
             rows = connection.execute(
-                """
-                select id, repo_id, path
-                from worktrees
-                where status = 'active'
-                order by created_at asc, id asc
-                """
+                f"select id, repo_id, path from worktrees{where_clause} order by {order_by}"
             ).fetchall()
     except sqlite3.Error as error:
         raise RuntimeError(
@@ -4340,9 +4331,7 @@ def install_nginx_config(
     helper_path: pathlib.Path | None = None,
 ) -> None:
     sudo_bin = sudo_bin or os.environ.get("POLYSCOPE_SUDO_BIN", "sudo")
-    helper_path = helper_path or pathlib.Path(
-        os.environ.get("POLYSCOPE_NGINX_HELPER", str(DEFAULT_NGINX_HELPER_PATH))
-    )
+    helper_path = helper_path or DEFAULT_NGINX_HELPER_PATH
     if manifest_path.resolve() != DEFAULT_NGINX_MANIFEST_PATH.resolve():
         raise RuntimeError(
             f"privileged nginx application requires the fixed manifest path {DEFAULT_NGINX_MANIFEST_PATH}: "
@@ -4353,6 +4342,55 @@ def install_nginx_config(
 
     command = [str(helper_path)] if os.geteuid() == 0 else [sudo_bin, "-n", str(helper_path)]
     subprocess.run(command, check=True)
+
+
+def write_nginx_manifest(
+    manifest_path: pathlib.Path,
+    payload: dict[str, Any],
+    *,
+    writer: Any,
+    service_user: Any | None = None,
+) -> None:
+    """Write the fixed manifest with only the service account's filesystem authority."""
+    if manifest_path.resolve() != DEFAULT_NGINX_MANIFEST_PATH.resolve():
+        raise RuntimeError(
+            f"privileged nginx application requires the fixed manifest path {DEFAULT_NGINX_MANIFEST_PATH}: "
+            f"{manifest_path}"
+        )
+
+    try:
+        expected_user = service_user or pwd.getpwnam(NGINX_MANIFEST_USER)
+    except KeyError as error:
+        raise RuntimeError(f"required nginx manifest user does not exist: {NGINX_MANIFEST_USER}") from error
+    current_uid = os.geteuid()
+    if current_uid == expected_user.pw_uid:
+        writer(manifest_path, payload)
+        return
+    if current_uid != 0:
+        raise RuntimeError(
+            f"nginx manifest may only be written by root or {NGINX_MANIFEST_USER}"
+        )
+
+    original_egid = os.getegid()
+    original_groups = os.getgroups()
+    groups_changed = False
+    egid_changed = False
+    euid_changed = False
+    try:
+        os.setgroups([expected_user.pw_gid])
+        groups_changed = True
+        os.setegid(expected_user.pw_gid)
+        egid_changed = True
+        os.seteuid(expected_user.pw_uid)
+        euid_changed = True
+        writer(manifest_path, payload)
+    finally:
+        if euid_changed:
+            os.seteuid(0)
+        if egid_changed:
+            os.setegid(original_egid)
+        if groups_changed:
+            os.setgroups(original_groups)
 
 
 def validate_direct_api_worktree_roots(
@@ -4538,7 +4576,11 @@ def main() -> int:
             repo_state,
             nginx_http2_syntax=nginx_http2_syntax,
         )
-        polyscope_nginx.write_manifest_atomic(args.nginx_manifest_output, nginx_manifest)
+        write_nginx_manifest(
+            args.nginx_manifest_output,
+            nginx_manifest,
+            writer=polyscope_nginx.write_manifest_atomic,
+        )
         install_nginx_config(args.nginx_manifest_output)
 
     provisioned_worktrees: list[str] = []

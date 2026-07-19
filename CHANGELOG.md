@@ -14,8 +14,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - placed canonical AI-instruction validation first in every generated native workspace setup, preventing dependency, environment, database, and repository setup side effects for invalid candidates
-- restricted automatic provisioning and preview-state retention to active Polyscope database registrations, including URI-safe read-only database selection and retention before filesystem materialization, leaving unregistered clones exclusively to the conservative reaper
-- replaced generic unattended sudo assumptions with a fixed root-owned nginx manifest helper, rejected production path overrides, reset cached credentials before exact authorization checks, preserved direct-root operation, added account-independent staging, and kept pre-import validation, atomic activation, and rollback
+- restricted automatic provisioning and preview-state retention to active Polyscope database registrations, including legacy-schema fallback, URI-safe read-only database selection in both rollout and reaper, and retention before filesystem materialization, leaving unregistered clones exclusively to the conservative reaper
+- replaced generic unattended sudo assumptions with a fixed root-owned nginx manifest helper, fixed its manifest to the `secpal` path and write identity even during direct-root operation, rejected production helper and manifest overrides, reset cached credentials before exact authorization checks, added account-independent staging, and kept pre-import validation, atomic activation, and rollback
+- made the system service's Node.js path explicit and service-account executable, while making the unprivileged installer and its system-scope fixtures independent of the invoking administrator or CI account
 - converged rollout, provision path and timer, clone reaper, source watchers, and system-server intent with focused security and lifecycle regression coverage
 
 ## 2026-07-18 - Harden Instruction Validation Rollout

@@ -178,8 +178,8 @@ sudo prompt to install the root-owned helper bundle, exact sudoers drop-in, and
 system server drop-in. Before activation it verifies the canonical rollout
 source bundle under `/home/secpal/code/SecPal/.github/scripts/`; the drop-in
 executes that source directly after its pinned Markdown validator dependencies
-have been checked and does not depend on a user-local link that has not been
-installed yet. The `secpal` user then runs
+and a `secpal`-executable Node.js path have been checked and does not depend on
+a user-local link that has not been installed yet. The `secpal` user then runs
 `scripts/install-polyscope-rollout.sh` without sudo to install and enable the
 rollout path, worktree provision path and timer, and clone reaper timer. The
 user installer resets cached sudo credentials before checking the exact fixed

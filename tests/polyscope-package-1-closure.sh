@@ -274,6 +274,44 @@ for index, unsafe_name in enumerate(
     assert uri_registered[".github"] == [valid_candidate.resolve()], uri_registered[".github"]
     assert sorted(uri_fixture.iterdir()) == [uri_db_path]
 
+# Legacy Polyscope databases predate both lifecycle columns. All of their rows
+# remain active, and record lookup must fall back to deterministic ID ordering.
+legacy_db_path = workspace / "legacy-polyscope.db"
+with sqlite3.connect(legacy_db_path) as connection:
+    connection.execute(
+        """
+        create table worktrees (
+            id text primary key,
+            repo_id text not null,
+            branch text not null,
+            path text not null
+        )
+        """
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
+        ("legacy-valid", repo_state[".github"]["id"], "legacy", str(valid_candidate)),
+    )
+
+legacy_registered = module.load_registered_worktree_paths(legacy_db_path, repo_state, clone_root)
+assert legacy_registered[".github"] == [valid_candidate.resolve()], legacy_registered[".github"]
+with sqlite3.connect(legacy_db_path) as connection:
+    assert module.find_current_worktree_record(connection, valid_candidate) == (
+        "legacy-valid",
+        str(valid_candidate),
+    )
+    resolver_namespace: dict[str, object] = {}
+    exec(module.build_linked_workspace_resolver_source(), resolver_namespace)
+    previous_cwd = pathlib.Path.cwd()
+    os.chdir(valid_candidate)
+    try:
+        assert resolver_namespace["find_current_worktree"](connection) == (
+            "legacy-valid",
+            str(valid_candidate),
+        )
+    finally:
+        os.chdir(previous_cwd)
+
 with sqlite3.connect(db_path) as connection:
     connection.execute("delete from worktrees")
     connection.execute(

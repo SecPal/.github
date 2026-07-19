@@ -73,10 +73,11 @@ def protected_clone_root_names(conn: sqlite3.Connection, clone_root: Path) -> se
 
 
 def load_protected_paths(db_path: Path, clone_root: Path) -> tuple[set[str], set[Path]]:
-    if not db_path.is_file():
-        raise ValueError(f"Polyscope DB not found at {db_path}")
+    resolved_db_path = db_path.resolve()
+    if not resolved_db_path.is_file():
+        raise ValueError(f"Polyscope DB not found at {resolved_db_path}")
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(f"{resolved_db_path.as_uri()}?mode=ro", uri=True) as conn:
             return protected_clone_root_names(conn, clone_root), active_worktree_paths(conn, clone_root)
     except sqlite3.Error as exc:
         raise ValueError(f"unable to read Polyscope DB: {exc}") from exc

@@ -262,16 +262,21 @@ POLYSCOPE_SERVER_SCOPE=system bash ./scripts/install-polyscope-rollout.sh
 The system drop-in executes the rollout from the canonical
 `/home/secpal/code/SecPal/.github/scripts/` source bundle, which the
 administrator installer verifies with its pinned validator toolchain before
-activation. The first step therefore
-does not depend on the user-local links created by the second step.
+activation. It also resolves Node.js before writing the drop-in and includes
+that executable's directory in the service `PATH`; pass `--node-bin` when Node
+is installed through a user-managed toolchain that root cannot discover. The
+first step therefore does not depend on the user-local links created by the
+second step.
 
 The user installer clears cached sudo credentials and verifies only the exact
 noninteractive fixed-helper capability; it rejects helper-path overrides and
 does not require or grant generic passwordless sudo. The rollout writes a
-strict manifest at the fixed `~/.local/state/polyscope/nginx-manifest.json`
-path, and the root-owned helper
-validates and renders the one fixed preview nginx target before testing and
-reloading nginx. Failed validation or reload restores the previous target.
+strict manifest at the fixed
+`/home/secpal/.local/state/polyscope/nginx-manifest.json` path with `secpal`
+filesystem authority, including during direct-root troubleshooting, and the
+root-owned helper validates and renders the one fixed preview nginx target
+before testing and reloading nginx. Failed validation or reload restores the
+previous target.
 
 Every generated workspace setup starts with canonical instruction validation.
 The external provisioner considers only active worktrees registered in the
