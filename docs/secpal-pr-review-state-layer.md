@@ -106,9 +106,10 @@ python3 scripts/secpal-pr-review.py verify-gate \
   --config path/to/repository-config.json
 ```
 
-The gate verifies schema version, digest, complete pagination, unchanged head,
-safe repository and PR identity, signature policy, required-check evidence,
-check outcomes, requested changes, and raw unresolved thread state. It reports
+The gate verifies schema version, digest, complete pagination, an unchanged
+repository and pull-request anchor, safe repository and PR identity, the
+current signature and check policies, required-check evidence, check outcomes,
+required or requested reviews, and raw unresolved thread state. It reports
 separately whether raw unresolved items exist and whether Package 2.2 technical
 classification remains necessary.
 
@@ -130,9 +131,10 @@ Every rendering states:
 
 ## Complete bounded pagination
 
-The snapshot anchors the PR head before reading any collection, advances each
-connection independently, and reads the head once more after all evidence is
-captured. It fully paginates:
+The snapshot anchors the repository and PR before reading any collection,
+advances each connection independently, and reads the complete anchor once more
+after all evidence is captured. Any anchor change blocks the capture. It fully
+paginates:
 
 - labels and requested reviewers or teams;
 - review submissions, including informational, approved, dismissed, and
@@ -174,17 +176,19 @@ import keys or change signing configuration.
 
 ## Required checks
 
-Requiredness is derived from current applicable repository rules for the base
-branch and branch-protection required-status-check evidence. It is not derived
+Requiredness is derived from the repository-rule and branch-protection sources
+enabled by configuration. Disabled sources are not called. It is not derived
 from a hard-coded workflow name or from visible green checks alone. Check runs
 and status contexts retain stable GitHub identities and are matched to required
-contexts plus application IDs when those IDs are governed.
+contexts plus application IDs when those IDs are governed. Gate verification
+rebuilds requiredness and outcomes from the supplied current policy rather than
+trusting capture-time outcome labels.
 
 Evidence distinguishes required success, pending, failure, and absence;
 non-required success, pending, and failure; and unknown requiredness. Required
 skipped checks follow the explicit `check_policy.expected_skipped` value. A
-missing or inaccessible rules source, unsupported check type, malformed rule,
-or otherwise unknown requiredness terminates with
+missing or inaccessible configured rules source, unsupported check type,
+malformed rule, or otherwise unknown requiredness terminates with
 `BLOCKED_INCOMPLETE_REVIEW_STATE`. Pending checks are reported once and are not
 polled.
 
@@ -237,7 +241,7 @@ handling are explicit non-goals.
 
 Offline tests use fake `gh` and fake Git executables. They cover deterministic
 serialization, outer and nested pagination with unequal page counts, reactions,
-caps, partial failures, signatures, local-head races, required checks, hostile
+caps, partial failures, signatures, full-anchor races, required checks, hostile
 rendering, atomic outputs, and executable-call spies that reject GitHub and Git
 writes. Live acceptance is a separately identified read-only phase and never
 requests an AI review.

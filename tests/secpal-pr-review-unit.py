@@ -162,6 +162,19 @@ def check(
     }
 
 
+def finalize_snapshot(value: dict[str, Any]) -> dict[str, Any]:
+    counts = review.expected_connection_items(value)
+    value["completeness"]["items"] = sum(counts.values())
+    value["completeness"]["fully_paginated_connections"] = [
+        {"connection": connection, "pages": 1, "items": count}
+        for connection, count in sorted(counts.items())
+    ]
+    value["completeness"]["api_calls"] = review.expected_api_calls(
+        value["completeness"]["fully_paginated_connections"]
+    )
+    return review.attach_digest(value)
+
+
 def snapshot() -> dict[str, Any]:
     value = {
         "schema_version": "1.0",
@@ -250,7 +263,7 @@ def snapshot() -> dict[str, Any]:
             "blocked_reason": None,
         },
     }
-    return review.attach_digest(value)
+    return finalize_snapshot(value)
 
 
 class FakeGitRunner:
@@ -305,7 +318,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
     def test_02_informational_review_only(self) -> None:
         value = snapshot()
         value["reviews"] = [review_record()]
-        value = review.attach_digest(value)
+        value = finalize_snapshot(value)
         result = review.verify_snapshot_gate(value, config())
         self.assertEqual(result["raw_review_state"]["reviews"], 1)
         self.assertTrue(result["technical_classification_required"])
@@ -313,7 +326,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
     def test_03_resolved_and_unresolved_threads(self) -> None:
         value = snapshot()
         value["review_threads"] = [thread("T1", resolved=True), thread("T2", resolved=False)]
-        value = review.attach_digest(value)
+        value = finalize_snapshot(value)
         result = review.verify_snapshot_gate(value, config())
         self.assertEqual(result["raw_review_state"]["resolved_threads"], 1)
         self.assertEqual(result["raw_review_state"]["unresolved_threads"], 1)
@@ -321,21 +334,111 @@ class SnapshotAndPaginationTests(unittest.TestCase):
     def test_04_outdated_thread_is_retained(self) -> None:
         value = snapshot()
         value["review_threads"] = [thread(outdated=True)]
-        review.validate_snapshot(review.attach_digest(value))
+        review.validate_snapshot(finalize_snapshot(value))
         self.assertTrue(value["review_threads"][0]["is_outdated"])
 
     def test_05_requested_changes_review(self) -> None:
         value = snapshot()
         value["reviews"] = [review_record("CHANGES_REQUESTED")]
         value["pull_request"]["review_decision"] = "CHANGES_REQUESTED"
-        result = review.verify_snapshot_gate(review.attach_digest(value), config())
+        result = review.verify_snapshot_gate(finalize_snapshot(value), config())
         self.assertTrue(result["raw_review_state"]["requested_changes"])
 
     def test_06_unresolved_human_thread(self) -> None:
         value = snapshot()
         value["review_threads"] = [thread(comments=[review_comment(login="human")])]
-        result = review.verify_snapshot_gate(review.attach_digest(value), config())
+        result = review.verify_snapshot_gate(finalize_snapshot(value), config())
         self.assertEqual(result["raw_review_state"]["unresolved_threads"], 1)
+
+    def test_review_required_is_a_mechanical_blocker(self) -> None:
+        value = snapshot()
+        value["pull_request"]["review_decision"] = "REVIEW_REQUIRED"
+        result = review.verify_snapshot_gate(review.attach_digest(value), config())
+        self.assertIn("NOT_READY_FOR_MERGE", [item["code"] for item in result["blockers"]])
+
+    def test_requested_review_is_a_mechanical_blocker(self) -> None:
+        value = snapshot()
+        value["pull_request"]["requested_reviewers"] = [actor("pending-reviewer")]
+        result = review.verify_snapshot_gate(finalize_snapshot(value), config())
+        self.assertIn("NOT_READY_FOR_MERGE", [item["code"] for item in result["blockers"]])
+        self.assertTrue(result["raw_review_state"]["review_requested"])
+
+    def test_gate_reapplies_current_skipped_check_policy(self) -> None:
+        capture_configuration = config()
+        capture_configuration["check_policy"]["expected_skipped"] = "allow"
+        raw = [check(status="COMPLETED", conclusion="SKIPPED") | {"requiredness": None, "evidence_state": None}]
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            capture_configuration["check_policy"],
+        )
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        value = review.attach_digest(value)
+
+        gate_configuration = config()
+        gate_configuration["check_policy"]["expected_skipped"] = "block"
+        result = review.verify_snapshot_gate(value, gate_configuration)
+
+        self.assertIn("BLOCKED_FAILED_OR_PENDING_CI", [item["code"] for item in result["blockers"]])
+
+    def test_gate_rejects_missing_pagination_evidence(self) -> None:
+        value = snapshot()
+        value["completeness"]["fully_paginated_connections"] = []
+        value = review.attach_digest(value)
+        with self.assertRaises(review.ContractError):
+            review.verify_snapshot_gate(value, config())
+
+    def test_gate_rejects_capture_warnings(self) -> None:
+        value = snapshot()
+        value["completeness"]["warnings"] = ["partial capture"]
+        value = review.attach_digest(value)
+        with self.assertRaises(review.ContractError):
+            review.verify_snapshot_gate(value, config())
+
+    def test_gate_rejects_required_rule_source_missing_from_snapshot(self) -> None:
+        value = snapshot()
+        value["required_check_evidence"]["sources"].remove("rulesets")
+        value["applicable_rules"]["rulesets"] = []
+        value = finalize_snapshot(value)
+        result = review.verify_snapshot_gate(value, config())
+        self.assertIn(review.BLOCKED_INCOMPLETE, [item["code"] for item in result["blockers"]])
+
+    def test_gate_accepts_intentionally_disabled_rule_sources(self) -> None:
+        value = snapshot()
+        value["required_check_evidence"] = {
+            "determination": "complete",
+            "required": [],
+            "missing": [],
+            "sources": [],
+            "unknown_reasons": [],
+        }
+        value["applicable_rules"] = {
+            "rulesets": [],
+            "branch_protection": {"strict": None, "contexts": [], "checks": []},
+            "evidence_complete": True,
+        }
+        value = finalize_snapshot(value)
+        configuration = config()
+        configuration["check_policy"]["require_ruleset_evidence"] = False
+        configuration["check_policy"]["require_branch_protection_evidence"] = False
+        result = review.verify_snapshot_gate(value, configuration)
+        self.assertEqual(result["blockers"], [])
+
+    def test_snapshot_rejects_mismatched_connection_item_count(self) -> None:
+        value = snapshot()
+        value["completeness"]["fully_paginated_connections"][0]["items"] += 1
+        value = review.attach_digest(value)
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(value)
+
+    def test_snapshot_rejects_mismatched_api_call_count(self) -> None:
+        value = snapshot()
+        value["completeness"]["api_calls"] -= 1
+        value = review.attach_digest(value)
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(value)
 
     def test_07_copilot_and_codex_are_distinct_configured_identities(self) -> None:
         identities = review.index_reviewer_identities(config())
@@ -510,6 +613,17 @@ class LocalGitTests(unittest.TestCase):
         with self.assertRaises(review.BlockedError):
             review.ensure_unchanged_head(HEAD, "d" * 40)
 
+    def test_non_head_anchor_movement_during_capture(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        before = review.extract_anchor(copy.deepcopy(fixture))
+        changed = copy.deepcopy(fixture)
+        changed["data"]["repository"]["pullRequest"]["isDraft"] = True
+        after = review.extract_anchor(changed)
+        with self.assertRaises(review.BlockedError):
+            review.ensure_unchanged_anchor(before, after)
+
     def test_30_unexpected_base_branch(self) -> None:
         value = snapshot()
         value["pull_request"]["base_ref"] = "develop"
@@ -550,6 +664,38 @@ class SignatureAndCheckTests(unittest.TestCase):
     def test_37_verification_pending_or_unavailable(self) -> None:
         value = review.normalize_github_signature({"isValid": False, "state": "PENDING", "__typename": "SshSignature"})
         self.assertEqual(value["state"], "verification_pending")
+
+    def test_successful_x509_signature_is_not_mislabeled_openpgp(self) -> None:
+        value = review.interpret_local_signature(0, "gpgsm: Good signature from user")
+        self.assertEqual((value["state"], value["format"]), ("valid", "smime"))
+
+    def test_failed_x509_signature_is_not_mislabeled_openpgp(self) -> None:
+        value = review.interpret_local_signature(1, "gpgsm: BAD signature from user")
+        self.assertEqual((value["state"], value["format"]), ("invalid", "smime"))
+
+    def test_local_verification_enforces_accepted_signature_formats(self) -> None:
+        configuration = config()
+        configuration["signature_policy"]["accepted_formats"] = ["ssh"]
+        runner = FakeGitRunner()
+        runner.set(
+            ["git", "verify-commit", "--raw", HEAD],
+            0,
+            stderr="gpg: Good signature from reviewer",
+        )
+        result = review.verify_local_against_snapshot(snapshot(), configuration, runner, None)
+        self.assertIn("BLOCKED_INVALID_SIGNATURE", [item["code"] for item in result["blockers"]])
+
+    def test_local_verification_honors_disabled_signature_requirement(self) -> None:
+        configuration = config()
+        configuration["signature_policy"]["require_local_verified"] = False
+        runner = FakeGitRunner()
+        runner.set(
+            ["git", "verify-commit", "--raw", HEAD],
+            1,
+            stderr="does not have a signature",
+        )
+        result = review.verify_local_against_snapshot(snapshot(), configuration, runner, None)
+        self.assertNotIn("BLOCKED_INVALID_SIGNATURE", [item["code"] for item in result["blockers"]])
 
     def evaluated(self, status: str, conclusion: str | None, expected_skipped: str = "block") -> list[dict[str, Any]]:
         raw = [
@@ -632,7 +778,7 @@ class SecurityAndOutputTests(unittest.TestCase):
                 "reactions": [],
             }
         ]
-        rendered = review.render_markdown(review.attach_digest(value))
+        rendered = review.render_markdown(finalize_snapshot(value))
         self.assertNotIn("```\nhostile", rendered)
 
     def test_49_deceptive_links_and_images_are_not_trusted(self) -> None:
@@ -692,6 +838,47 @@ class SecurityAndOutputTests(unittest.TestCase):
         review.validate_external_command(["gh", "api", "graphql", "-f", "query=query X { viewer { login } }"])
         with self.assertRaises(review.CommandPolicyError):
             review.validate_external_command(["gh", "api", "--method", "POST", "repos/SecPal/.github/issues"])
+        for arguments in (
+            ["gh", "api", "repos/SecPal/.github/issues/1/comments", "-f", "body=write"],
+            ["gh", "api", "repos/SecPal/.github/issues/1/labels", "-F", "labels[]=security"],
+            ["gh", "api", "repos/SecPal/.github/issues/1", "--input", "payload.json"],
+            ["gh", "api", "-X", "PATCH", "repos/SecPal/.github/issues/1"],
+            ["gh", "api", "--method=DELETE", "repos/SecPal/.github/issues/1"],
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(review.CommandPolicyError):
+                review.validate_external_command(arguments)
+
+    def test_graphql_string_variables_cannot_trigger_field_file_reads(self) -> None:
+        arguments = review.graphql_arguments(
+            "SecPal",
+            ".github",
+            1,
+            "@/etc/passwd",
+            "query X($after:String) { viewer { login } }",
+        )
+        index = arguments.index("after=@/etc/passwd")
+        self.assertEqual(arguments[index - 1], "-f")
+        review.validate_external_command(arguments)
+
+    def test_disabled_rule_sources_are_not_called(self) -> None:
+        configuration = config()
+        policy = configuration["check_policy"] | {
+            "require_ruleset_evidence": False,
+            "require_branch_protection_evidence": False,
+        }
+
+        class Client:
+            owner = "SecPal"
+            name = ".github"
+            budget = review.Budget(configuration)
+
+            def rest(self, *_: Any, **__: Any) -> Any:
+                raise AssertionError("disabled evidence source was called")
+
+        applicable, required, sources = review._capture_rules(Client(), "main", policy)
+        self.assertEqual(required, [])
+        self.assertEqual(sources, [])
+        self.assertEqual(applicable["rulesets"], [])
 
     def test_57_no_polling_or_retries(self) -> None:
         calls = 0

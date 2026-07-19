@@ -180,7 +180,7 @@ def validate_external_command(arguments: list[str]) -> None:
         return
     if executable != "gh":
         raise CommandPolicyError(f"Executable is not allowlisted: {executable}")
-    if len(arguments) < 2:
+    if len(arguments) < 3:
         raise CommandPolicyError("GitHub CLI subcommand is required")
     if arguments[1] == "pr":
         subcommand = arguments[2] if len(arguments) > 2 else ""
@@ -188,18 +188,51 @@ def validate_external_command(arguments: list[str]) -> None:
             raise CommandPolicyError(f"GitHub PR operation is not allowlisted: {subcommand}")
     if arguments[1] != "api":
         raise CommandPolicyError(f"GitHub CLI operation is not allowlisted: {arguments[1]}")
-    method = "GET"
-    if "--method" in arguments:
-        index = arguments.index("--method")
-        if index + 1 >= len(arguments):
-            raise CommandPolicyError("Missing GitHub API method")
-        method = arguments[index + 1].upper()
-    if method != "GET":
-        raise CommandPolicyError(f"GitHub API method is not read-only: {method}")
-    if len(arguments) > 2 and arguments[2] == "graphql":
-        query = next((value.split("=", 1)[1] for value in arguments if value.startswith("query=")), "")
+    if arguments[2] == "graphql":
+        fields = arguments[3:]
+        if len(fields) % 2:
+            raise CommandPolicyError("GraphQL arguments must be exact flag/value pairs")
+        query = ""
+        seen_variables: set[str] = set()
+        string_variables = {"owner", "name", "after", "nodeId", "oid"}
+        for index in range(0, len(fields), 2):
+            flag, field = fields[index : index + 2]
+            if flag not in {"-f", "-F"} or "=" not in field:
+                raise CommandPolicyError("GraphQL arguments are not exactly allowlisted")
+            key, value = field.split("=", 1)
+            if key == "query":
+                if flag != "-f" or query:
+                    raise CommandPolicyError("GraphQL query must be supplied once as a raw field")
+                query = value
+                continue
+            if key in seen_variables:
+                raise CommandPolicyError(f"GraphQL variable is duplicated: {key}")
+            seen_variables.add(key)
+            if key == "number":
+                if flag != "-F" or not re.fullmatch(r"[1-9][0-9]*", value):
+                    raise CommandPolicyError("GraphQL number must be a positive typed integer")
+            elif key in string_variables:
+                if flag != "-f" or not value or re.search(r"[\x00-\x1f\x7f]", value):
+                    raise CommandPolicyError(f"GraphQL string variable is invalid: {key}")
+            else:
+                raise CommandPolicyError(f"GraphQL variable is not allowlisted: {key}")
         if not re.match(r"^\s*query\b", query) or re.search(r"\bmutation\b", query, re.IGNORECASE):
             raise CommandPolicyError("Only static GraphQL query operations are allowed")
+        return
+    if len(arguments) != 5 or arguments[2:4] != ["--method", "GET"]:
+        raise CommandPolicyError("REST requests must use the exact explicit GET command shape")
+    repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    encoded_ref = r"[A-Za-z0-9._~%-]+"
+    endpoint = arguments[4]
+    allowed_endpoint = re.fullmatch(
+        rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page=100&page=[1-9][0-9]*",
+        endpoint,
+    ) or re.fullmatch(
+        rf"repos/{repository}/branches/{encoded_ref}/protection/required_status_checks",
+        endpoint,
+    )
+    if not allowed_endpoint:
+        raise CommandPolicyError("REST endpoint is not exactly read-only allowlisted")
 
 
 class CommandRunner:
@@ -459,6 +492,9 @@ def _validate_schema_value(
         minimum_items = schema.get("minItems")
         if isinstance(minimum_items, int) and len(value) < minimum_items:
             raise ContractError(f"Schema array is too short at {location}")
+        maximum_items = schema.get("maxItems")
+        if isinstance(maximum_items, int) and len(value) > maximum_items:
+            raise ContractError(f"Schema array is too long at {location}")
         if schema.get("uniqueItems") is True:
             serialized = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in value]
             if len(serialized) != len(set(serialized)):
@@ -893,6 +929,103 @@ def _require_keys(value: dict[str, Any], required: set[str], location: str) -> N
         raise ContractError(f"Missing {location} fields: {missing}")
 
 
+def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
+    pr = snapshot["pull_request"]
+    expected = {
+        "labels": len(pr["labels"]),
+        "review_requests": len(pr["requested_reviewers"]) + len(pr["requested_teams"]),
+        "reviews": len(snapshot["reviews"]),
+        "conversation_comments": len(snapshot["conversation_comments"]),
+        "review_threads": len(snapshot["review_threads"]),
+        "commits": len(snapshot["commits"]),
+        "checks": sum(item["status"] != "MISSING" for item in snapshot["checks"]),
+    }
+    sources = snapshot["required_check_evidence"]["sources"]
+    if len(sources) != len(set(sources)) or not set(sources) <= {"rulesets", "branch_protection"}:
+        raise ContractError("Required-check sources must be unique and supported")
+    if "rulesets" in sources:
+        expected["rulesets"] = len(snapshot["applicable_rules"]["rulesets"])
+    if "branch_protection" in sources:
+        expected["branch_protection"] = 1
+    for comment in snapshot["conversation_comments"]:
+        expected[f"conversation_comment.{comment['id']}.reactions"] = len(comment["reactions"])
+    for thread in snapshot["review_threads"]:
+        expected[f"review_thread.{thread['id']}.comments"] = len(thread["comments"])
+        for comment in thread["comments"]:
+            expected[f"review_comment.{comment['id']}.reactions"] = len(comment["reactions"])
+    for commit in snapshot["commits"]:
+        expected[f"commit.{commit['oid']}.parents"] = len(commit["parents"])
+    return expected
+
+
+def expected_api_calls(connections: list[dict[str, Any]]) -> int:
+    direct_connections = {
+        "labels",
+        "review_requests",
+        "reviews",
+        "conversation_comments",
+        "review_threads",
+        "commits",
+        "checks",
+        "rulesets",
+        "branch_protection",
+    }
+    calls = 2
+    for item in connections:
+        connection = item["connection"]
+        pages = item["pages"]
+        if connection in direct_connections or (
+            connection.startswith("review_thread.") and connection.endswith(".comments")
+        ):
+            calls += pages
+        elif connection.endswith(".reactions"):
+            calls += max(0, pages - 1)
+    return calls
+
+
+def validate_completeness(snapshot: dict[str, Any]) -> None:
+    completeness = snapshot["completeness"]
+    if completeness["warnings"]:
+        raise ContractError("An authoritative snapshot cannot contain capture warnings")
+    expected = expected_connection_items(snapshot)
+    evidence: dict[str, int] = {}
+    for item in completeness["fully_paginated_connections"]:
+        connection = item["connection"]
+        if connection in evidence:
+            raise ContractError(f"Duplicate pagination evidence for {connection}")
+        evidence[connection] = item["items"]
+    missing = sorted(expected.keys() - evidence.keys())
+    extra = sorted(evidence.keys() - expected.keys())
+    mismatched = sorted(
+        connection for connection in expected.keys() & evidence.keys() if expected[connection] != evidence[connection]
+    )
+    if missing or extra or mismatched:
+        raise ContractError(
+            "Invalid pagination evidence: "
+            f"missing={missing}, extra={extra}, mismatched={mismatched}"
+        )
+    if completeness["items"] != sum(expected.values()):
+        raise ContractError("Completeness item total does not match connection evidence")
+    if completeness["api_calls"] != expected_api_calls(completeness["fully_paginated_connections"]):
+        raise ContractError("Completeness API-call total does not match pagination evidence")
+    caps = completeness["configured_caps"]
+    if completeness["api_calls"] > caps["maximum_api_calls"] or completeness["items"] > caps["maximum_items"]:
+        raise ContractError("Completeness totals exceed configured aggregate caps")
+    thread_items = expected["review_threads"]
+    comment_items = expected["conversation_comments"] + sum(
+        count for connection, count in expected.items() if connection.startswith("review_thread.")
+    )
+    reaction_items = sum(
+        count for connection, count in expected.items() if connection.endswith(".reactions")
+    )
+    if (
+        thread_items > caps["maximum_threads"]
+        or comment_items > caps["maximum_comments"]
+        or reaction_items > caps["maximum_reactions"]
+    ):
+        raise ContractError("Completeness totals exceed configured item-kind caps")
+
+
 def validate_snapshot(snapshot: dict[str, Any]) -> None:
     if not isinstance(snapshot, dict):
         raise ContractError("Snapshot must be a JSON object")
@@ -997,6 +1130,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
         raise ContractError("Applicable-rule evidence is incomplete")
     if snapshot["required_check_evidence"].get("determination") != "complete":
         raise ContractError("Required-check evidence is incomplete")
+    validate_completeness(snapshot)
 
 
 def trusted_github_url(value: str | None) -> bool:
@@ -1210,17 +1344,17 @@ def graphql_arguments(
         "graphql",
         "-f",
         f"query={query_document}",
-        "-F",
+        "-f",
         f"owner={owner}",
-        "-F",
+        "-f",
         f"name={name}",
         "-F",
         f"number={number}",
     ]
     if cursor is not None:
-        arguments.extend(["-F", f"after={cursor}"])
+        arguments.extend(["-f", f"after={cursor}"])
     for key, value in sorted((extra_variables or {}).items()):
-        arguments.extend(["-F", f"{key}={value}"])
+        arguments.extend(["-f", f"{key}={value}"])
     return arguments
 
 
@@ -1299,14 +1433,35 @@ def ensure_unchanged_head(before: str, after: str) -> None:
         )
 
 
+def ensure_unchanged_anchor(before: dict[str, Any], after: dict[str, Any]) -> None:
+    if before != after:
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Pull request or repository anchor changed during capture",
+            "pull_request.anchor",
+            None,
+        )
+
+
 def _empty_signer() -> dict[str, Any]:
     return copy.deepcopy(ZERO_AUTHOR)
 
 
+def _local_signature_format(output: str) -> str:
+    lowered = output.lower()
+    if 'good "git" signature' in lowered or "ssh" in lowered:
+        return "ssh"
+    if "gpgsm" in lowered or "x.509" in lowered or "x509" in lowered or "s/mime" in lowered:
+        return "smime"
+    if "gpg" in lowered or "goodsig" in lowered:
+        return "openpgp"
+    return "unknown"
+
+
 def interpret_local_signature(returncode: int, output: str) -> dict[str, Any]:
     lowered = output.lower()
+    signature_format = _local_signature_format(lowered)
     if returncode == 0:
-        signature_format = "ssh" if "good \"git\" signature" in lowered or " ssh " in lowered else "openpgp"
         return {
             "state": "valid",
             "verified": True,
@@ -1325,7 +1480,7 @@ def interpret_local_signature(returncode: int, output: str) -> dict[str, Any]:
     return {
         "state": state,
         "verified": False,
-        "format": "ssh" if "ssh" in lowered else ("openpgp" if "gpg" in lowered else "unknown"),
+        "format": signature_format,
         "reason": state,
         "signer": _empty_signer(),
     }
@@ -1405,6 +1560,7 @@ def evaluate_checks(
     raw_checks: list[dict[str, Any]],
     required_specs: list[dict[str, Any]] | None,
     policy: dict[str, Any],
+    sources: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     checks = [copy.deepcopy(item) for item in raw_checks]
     if required_specs is None:
@@ -1468,7 +1624,7 @@ def evaluate_checks(
         "determination": "complete",
         "required": required_ids,
         "missing": missing,
-        "sources": ["branch_protection", "rulesets"],
+        "sources": sorted(sources if sources is not None else ["branch_protection", "rulesets"]),
         "unknown_reasons": [],
     }
 
@@ -1545,6 +1701,28 @@ def require_rule_evidence(
     return [specifications[key] for key in sorted(specifications, key=lambda value: (value[0], value[1] or 0))]
 
 
+def required_specs_from_snapshot(
+    snapshot: dict[str, Any],
+    policy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    normalized_rules = snapshot["applicable_rules"]["rulesets"]
+    rulesets = []
+    for rule in normalized_rules:
+        if rule.get("type") == "required_status_checks":
+            rulesets.append(
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": rule.get("required_checks")},
+                }
+            )
+    branch_protection = snapshot["applicable_rules"]["branch_protection"]
+    return require_rule_evidence(
+        rulesets if policy["require_ruleset_evidence"] else None,
+        branch_protection if policy["require_branch_protection_evidence"] else None,
+        policy,
+    )
+
+
 def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
     validate_config(configuration)
     validate_snapshot(snapshot)
@@ -1605,7 +1783,46 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
                     "reason": f"Local signature invalid for {commit['oid']}",
                 }
             )
-    for item in snapshot["checks"]:
+    check_policy = configuration["check_policy"]
+    required_sources = {
+        source
+        for source, required in (
+            ("rulesets", check_policy["require_ruleset_evidence"]),
+            ("branch_protection", check_policy["require_branch_protection_evidence"]),
+        )
+        if required
+    }
+    captured_sources = set(snapshot["required_check_evidence"]["sources"])
+    for source in sorted(required_sources - captured_sources):
+        blockers.append(
+            {
+                "code": BLOCKED_INCOMPLETE,
+                "reason": f"Required check-policy source is absent: {source}",
+            }
+        )
+    raw_checks = [
+        {
+            key: copy.deepcopy(item[key])
+            for key in (
+                "stable_id",
+                "name",
+                "application",
+                "status",
+                "conclusion",
+                "details_url",
+            )
+        }
+        for item in snapshot["checks"]
+        if item["status"] != "MISSING"
+    ]
+    required_specs = required_specs_from_snapshot(snapshot, check_policy)
+    evaluated_checks, _ = evaluate_checks(
+        raw_checks,
+        required_specs,
+        check_policy,
+        sorted(required_sources),
+    )
+    for item in evaluated_checks:
         if item["evidence_state"] in {
             "required_pending",
             "required_failed",
@@ -1624,11 +1841,13 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
     requested_changes = pr["review_decision"] == "CHANGES_REQUESTED" or any(
         item["state"] == "CHANGES_REQUESTED" for item in snapshot["reviews"]
     )
-    if unresolved or requested_changes:
+    review_required = pr["review_decision"] == "REVIEW_REQUIRED"
+    review_requested = bool(pr["requested_reviewers"] or pr["requested_teams"])
+    if unresolved or requested_changes or review_required or review_requested:
         blockers.append(
             {
                 "code": "NOT_READY_FOR_MERGE",
-                "reason": "Raw unresolved review state requires Package 2.2 classification",
+                "reason": "Required or unresolved review state prevents the mechanical gate",
             }
         )
     return {
@@ -1643,6 +1862,8 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
             "resolved_threads": len(snapshot["review_threads"]) - len(unresolved),
             "unresolved_threads": len(unresolved),
             "requested_changes": requested_changes,
+            "review_required": review_required,
+            "review_requested": review_requested,
         },
         "technical_classification_required": bool(
             snapshot["reviews"] or snapshot["conversation_comments"] or snapshot["review_threads"]
@@ -1734,10 +1955,14 @@ def verify_local_against_snapshot(
         block("BLOCKED_UNSAFE_GITHUB_STATE", "PR is closed or merged")
 
     signatures = []
+    signature_policy = configuration["signature_policy"]
+    accepted_formats = set(signature_policy["accepted_formats"])
     for commit in snapshot["commits"]:
         value = local_signature_for_commit(runner, commit["oid"])
         signatures.append({"oid": commit["oid"], **value})
-        if value["state"] != "valid":
+        if signature_policy["require_local_verified"] and (
+            value["state"] != "valid" or value["format"] not in accepted_formats
+        ):
             block("BLOCKED_INVALID_SIGNATURE", f"Local signature is not valid for {commit['oid']}")
 
     return {
@@ -2468,38 +2693,53 @@ def _capture_rules(
     client: GitHubClient,
     base_ref: str,
     policy: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     encoded_ref = quote(base_ref, safe="")
-    base_endpoint = f"repos/{client.owner}/{client.name}/rules/branches/{encoded_ref}"
     rulesets: list[Any] = []
-    page_number = 1
-    while True:
-        endpoint = f"{base_endpoint}?per_page=100&page={page_number}"
-        page = client.rest(endpoint, "rulesets", str(page_number))
-        if not isinstance(page, list):
+    branch_protection: dict[str, Any] = {}
+    sources: list[str] = []
+    if policy["require_ruleset_evidence"]:
+        base_endpoint = f"repos/{client.owner}/{client.name}/rules/branches/{encoded_ref}"
+        page_number = 1
+        while True:
+            endpoint = f"{base_endpoint}?per_page=100&page={page_number}"
+            page = client.rest(endpoint, "rulesets", str(page_number))
+            if not isinstance(page, list):
+                raise BlockedError(
+                    BLOCKED_INCOMPLETE,
+                    "Applicable rules response is not an array",
+                    "rulesets",
+                    str(page_number),
+                )
+            client.budget.add_items(len(page), "rulesets", str(page_number))
+            rulesets.extend(page)
+            if len(page) < 100:
+                client.budget.record_connection("rulesets", page_number, len(rulesets))
+                break
+            page_number += 1
+            client.budget.require_capacity_for_next_page("rulesets", str(page_number), "items")
+        sources.append("rulesets")
+    if policy["require_branch_protection_evidence"]:
+        protection_endpoint = (
+            f"repos/{client.owner}/{client.name}/branches/{encoded_ref}/protection/required_status_checks"
+        )
+        branch_protection = client.rest(protection_endpoint, "branch_protection")
+        if not isinstance(branch_protection, dict):
             raise BlockedError(
                 BLOCKED_INCOMPLETE,
-                "Applicable rules response is not an array",
-                "rulesets",
-                str(page_number),
+                "Branch-protection response is not an object",
+                "branch_protection",
+                None,
             )
-        client.budget.add_items(len(page), "rulesets", str(page_number))
-        rulesets.extend(page)
-        if len(page) < 100:
-            client.budget.record_connection("rulesets", page_number, len(rulesets))
-            break
-        page_number += 1
-        client.budget.require_capacity_for_next_page("rulesets", str(page_number), "items")
-    protection_endpoint = (
-        f"repos/{client.owner}/{client.name}/branches/{encoded_ref}/protection/required_status_checks"
+        client.budget.add_items(1, "branch_protection", None)
+        client.budget.record_connection("branch_protection", 1, 1)
+        sources.append("branch_protection")
+    required = require_rule_evidence(
+        rulesets if policy["require_ruleset_evidence"] else None,
+        branch_protection if policy["require_branch_protection_evidence"] else None,
+        policy,
     )
-    branch_protection = client.rest(protection_endpoint, "branch_protection")
-    if not isinstance(branch_protection, dict):
-        raise BlockedError(BLOCKED_INCOMPLETE, "Branch-protection response is not an object", "branch_protection", None)
-    client.budget.add_items(1, "branch_protection", None)
-    client.budget.record_connection("branch_protection", 1, 1)
-    required = require_rule_evidence(rulesets, branch_protection, policy)
-    return _normalize_applicable_rules(rulesets, branch_protection), required
+    return _normalize_applicable_rules(rulesets, branch_protection), required, sorted(sources)
 
 
 def capture_snapshot(
@@ -2627,8 +2867,17 @@ def capture_snapshot(
         return _connection_page(rollup.get("contexts"), "checks")
 
     raw_checks = [_normalize_check(item) for item in collect_pages("checks", fetch_checks, budget)]
-    applicable_rules, required_specs = _capture_rules(client, before_pr["baseRefName"], configuration["check_policy"])
-    checks, required_check_evidence = evaluate_checks(raw_checks, required_specs, configuration["check_policy"])
+    applicable_rules, required_specs, rule_sources = _capture_rules(
+        client,
+        before_pr["baseRefName"],
+        configuration["check_policy"],
+    )
+    checks, required_check_evidence = evaluate_checks(
+        raw_checks,
+        required_specs,
+        configuration["check_policy"],
+        rule_sources,
+    )
 
     after_payload = client.graphql(PULL_REQUEST_ANCHOR_QUERY, "pull_request.anchor.after")
     after = extract_anchor(after_payload)
@@ -2641,6 +2890,7 @@ def capture_snapshot(
             "pull_request.anchor",
             None,
         )
+    ensure_unchanged_anchor(before, after)
 
     repository_data = before["repository"]
     base_repository = before_pr.get("baseRepository") or {}

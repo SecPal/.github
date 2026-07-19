@@ -15,7 +15,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - added a standard-library Python helper that captures canonical, digest-bound
   PR evidence with complete bounded review, thread, reply, reaction, commit,
-  and check pagination while blocking on partial state or head movement
+  and check pagination while blocking on partial state or anchor movement
 - added read-only local-head, exact commit-set, SSH/OpenPGP signature, applicable
   rule, branch-protection, and required-check verification without polling,
   GitHub mutations, Git writes, review requests, or merge authority

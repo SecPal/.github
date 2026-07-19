@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HELPER="$REPO_ROOT/scripts/secpal-pr-review.py"
 FIXTURES="$SCRIPT_DIR/fixtures/secpal-pr-review"
-workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review.XXXXXX")"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-integration.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p "$workspace/bin" "$workspace/output"

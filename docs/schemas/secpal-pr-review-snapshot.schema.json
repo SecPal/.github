@@ -392,7 +392,11 @@
         "determination": { "enum": ["complete", "incomplete"] },
         "required": { "type": "array", "items": { "type": "string" } },
         "missing": { "type": "array", "items": { "type": "string" } },
-        "sources": { "type": "array", "items": { "type": "string" } },
+        "sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["rulesets", "branch_protection"] }
+        },
         "unknown_reasons": { "type": "array", "items": { "type": "string" } }
       }
     },
@@ -440,9 +444,10 @@
         },
         "fully_paginated_connections": {
           "type": "array",
+          "minItems": 8,
           "items": { "$ref": "#/$defs/connection_evidence" }
         },
-        "warnings": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "maxItems": 0, "items": { "type": "string" } },
         "blocked_reason": { "type": "null" }
       }
     }
