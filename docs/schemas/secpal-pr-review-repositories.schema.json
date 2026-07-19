@@ -11,7 +11,6 @@
     "default_branch",
     "allowed_base_repositories",
     "reviewer_identities",
-    "required_local_validation",
     "signature_policy",
     "check_policy",
     "maximum_api_calls",
@@ -66,22 +65,6 @@
             "type": "array",
             "uniqueItems": true,
             "items": { "type": "integer", "minimum": 1 }
-          }
-        }
-      }
-    },
-    "required_local_validation": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "command"],
-        "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "command": {
-            "type": "array",
-            "minItems": 1,
-            "items": { "type": "string", "minLength": 1 }
           }
         }
       }

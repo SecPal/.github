@@ -22,12 +22,6 @@
       "database_ids": []
     }
   ],
-  "required_local_validation": [
-    {
-      "name": "unit",
-      "command": ["python3", "-m", "unittest", "tests/secpal-pr-review-unit.py"]
-    }
-  ],
   "signature_policy": {
     "require_github_verified": true,
     "require_local_verified": true,

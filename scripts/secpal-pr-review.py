@@ -603,7 +603,6 @@ def validate_config(configuration: dict[str, Any]) -> None:
         "default_branch",
         "allowed_base_repositories",
         "reviewer_identities",
-        "required_local_validation",
         "signature_policy",
         "check_policy",
         "maximum_api_calls",
@@ -665,17 +664,6 @@ def validate_config(configuration: dict[str, Any]) -> None:
             isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in database_ids
         ):
             raise ContractError("database_ids must contain positive integers")
-    validations = configuration["required_local_validation"]
-    if not isinstance(validations, list):
-        raise ContractError("required_local_validation must be a list")
-    for validation in validations:
-        if not isinstance(validation, dict) or set(validation) != {"name", "command"}:
-            raise ContractError("Each local validation requires name and command")
-        command = validation["command"]
-        if not validation["name"] or not isinstance(command, list) or not command:
-            raise ContractError("Local validation name and command cannot be empty")
-        if any(not isinstance(argument, str) or not argument for argument in command):
-            raise ContractError("Local validation command must be an argument array")
     signature_policy = configuration["signature_policy"]
     if not isinstance(signature_policy, dict) or set(signature_policy) != {
         "require_github_verified",
@@ -720,7 +708,6 @@ def default_config(repository: str) -> dict[str, Any]:
         "default_branch": "main",
         "allowed_base_repositories": [repository],
         "reviewer_identities": [],
-        "required_local_validation": [],
         "signature_policy": {
             "require_github_verified": True,
             "require_local_verified": True,
@@ -1009,8 +996,17 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
         "conversation_comments": captured_counts["conversation_comments"],
         "review_threads": captured_counts["review_threads"],
         "commits": captured_counts["commits"],
-        "checks": sum(item["status"] != "MISSING" for item in snapshot["checks"]),
     }
+    check_items = sum(item["status"] != "MISSING" for item in snapshot["checks"])
+    check_source = pr["check_commit_source"]
+    if check_source == "test_merge":
+        expected["test_merge_checks"] = check_items
+    elif check_source == "head":
+        if pr["potential_merge_commit_oid"] is not None:
+            expected["test_merge_checks"] = 0
+        expected["head_checks"] = check_items
+    else:
+        raise ContractError("Unsupported check commit source")
     sources = snapshot["required_check_evidence"]["sources"]
     if len(sources) != len(set(sources)) or not set(sources) <= {"rulesets", "branch_protection"}:
         raise ContractError("Required-check sources must be unique and supported")
@@ -1032,7 +1028,9 @@ def expected_connection_items(snapshot: dict[str, Any]) -> dict[str, int]:
     expected[f"conversation_comments{REVALIDATION_SUFFIX}"] = len(snapshot["conversation_comments"])
     expected[f"review_threads{REVALIDATION_SUFFIX}"] = len(snapshot["review_threads"])
     expected[f"commits{REVALIDATION_SUFFIX}"] = len(snapshot["commits"])
-    expected[f"checks{REVALIDATION_SUFFIX}"] = expected["checks"]
+    for connection in ("test_merge_checks", "head_checks"):
+        if connection in expected:
+            expected[f"{connection}{REVALIDATION_SUFFIX}"] = expected[connection]
     if "rulesets" in sources:
         expected[f"rulesets{REVALIDATION_SUFFIX}"] = len(snapshot["applicable_rules"]["rulesets"])
     if "branch_protection" in sources:
@@ -1062,7 +1060,8 @@ def expected_api_calls(connections: list[dict[str, Any]]) -> int:
         "conversation_comments",
         "review_threads",
         "commits",
-        "checks",
+        "test_merge_checks",
+        "head_checks",
         "rulesets",
         "branch_protection",
     }
@@ -1251,6 +1250,9 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
             "head_ref",
             "head_oid_before",
             "head_oid_after",
+            "potential_merge_commit_oid",
+            "check_commit_oid",
+            "check_commit_source",
             "captured_connection_counts",
             "labels",
             "requested_reviewers",
@@ -1258,13 +1260,66 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
         },
         "pull_request",
     )
+    repository_name = f"{repository['owner']}/{repository['name']}"
+    repository_url = f"https://github.com/{repository_name}"
+    if (
+        repository["name_with_owner"] != repository_name
+        or repository["url"] != repository_url
+    ):
+        raise ContractError("Snapshot repository identity components disagree")
+    if pr["base_repository"] != {
+        "id": repository["id"],
+        "name_with_owner": repository_name,
+        "url": repository_url,
+    }:
+        raise ContractError("Pull request base repository does not match the queried repository")
+    if pr["url"] != f"{repository_url}/pull/{pr['number']}":
+        raise ContractError("Pull request URL does not match its repository and number")
+    if pr["is_merged"] is not (pr["state"] == "MERGED"):
+        raise ContractError("Pull request merged state is internally inconsistent")
+    head_repository = pr["head_repository"]
+    head_values = (
+        head_repository["id"],
+        head_repository["name_with_owner"],
+        head_repository["url"],
+    )
+    if any(value is None for value in head_values) and not all(value is None for value in head_values):
+        raise ContractError("Pull request head repository identity is incomplete")
+    if all(value is not None for value in head_values):
+        validate_repository_name(head_repository["name_with_owner"])
+        if head_repository["url"] != f"https://github.com/{head_repository['name_with_owner']}":
+            raise ContractError("Pull request head repository URL is inconsistent")
+        if head_repository["id"] == repository["id"] and head_repository != pr["base_repository"]:
+            raise ContractError("Pull request head repository identity disagrees with its repository ID")
     if not isinstance(pr["number"], int) or pr["number"] < 1:
         raise ContractError("Pull request number must be positive")
-    for key in ("base_oid", "head_oid_before", "head_oid_after"):
+    for key in ("base_oid", "head_oid_before", "head_oid_after", "check_commit_oid"):
         if not isinstance(pr[key], str) or not OID_PATTERN.fullmatch(pr[key]):
             raise ContractError(f"Invalid pull request {key}")
+    potential_merge_commit_oid = pr["potential_merge_commit_oid"]
+    if potential_merge_commit_oid is not None and (
+        not isinstance(potential_merge_commit_oid, str)
+        or not OID_PATTERN.fullmatch(potential_merge_commit_oid)
+    ):
+        raise ContractError("Invalid pull request potential_merge_commit_oid")
+    if (
+        pr["state"] == "OPEN"
+        and pr["mergeable"] in {"MERGEABLE", "UNKNOWN"}
+        and potential_merge_commit_oid is None
+    ):
+        raise ContractError("Potential merge commit is unavailable for an open mergeable pull request")
     if pr["head_oid_before"] != pr["head_oid_after"]:
         raise ContractError("Snapshot head changed during capture")
+    if pr["check_commit_source"] == "head":
+        if pr["check_commit_oid"] != pr["head_oid_after"]:
+            raise ContractError("Head check evidence is bound to the wrong commit")
+    elif pr["check_commit_source"] == "test_merge":
+        if potential_merge_commit_oid is None or pr["check_commit_oid"] != potential_merge_commit_oid:
+            raise ContractError("Test-merge check evidence is bound to the wrong commit")
+        if not any(item.get("status") != "MISSING" for item in snapshot["checks"]):
+            raise ContractError("Test-merge check evidence cannot be empty")
+    else:
+        raise ContractError("Unsupported check commit source")
     for collection in ("reviews", "conversation_comments", "review_threads", "commits", "checks"):
         if not isinstance(snapshot[collection], list):
             raise ContractError(f"{collection} must be an array")
@@ -1289,6 +1344,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
         raise ContractError("Applicable-rule evidence is incomplete")
     if snapshot["required_check_evidence"].get("determination") != "complete":
         raise ContractError("Required-check evidence is incomplete")
+    validate_required_check_metadata(snapshot)
     validate_completeness(snapshot)
 
 
@@ -1535,10 +1591,52 @@ def extract_anchor(payload: dict[str, Any]) -> dict[str, Any]:
     pull_request = repository.get("pullRequest")
     if pull_request is None:
         raise BlockedError(BLOCKED_INCOMPLETE, "Pull request is unavailable", "pull_request.anchor", None)
-    if not pull_request.get("headRefOid") or not pull_request.get("baseRefOid"):
+    if any(
+        not isinstance(pull_request.get(key), str)
+        or not OID_PATTERN.fullmatch(pull_request[key])
+        for key in ("headRefOid", "baseRefOid")
+    ):
         raise BlockedError(
             BLOCKED_INCOMPLETE,
             "Pull request head or base OID is unavailable",
+            "pull_request.anchor",
+            None,
+        )
+    if "potentialMergeCommit" not in pull_request:
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Potential merge commit evidence is unavailable",
+            "pull_request.anchor",
+            None,
+        )
+    potential_merge_commit = pull_request["potentialMergeCommit"]
+    if potential_merge_commit is not None and (
+        not isinstance(potential_merge_commit, dict)
+        or not isinstance(potential_merge_commit.get("oid"), str)
+        or not OID_PATTERN.fullmatch(potential_merge_commit["oid"])
+    ):
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Potential merge commit identity is unavailable",
+            "pull_request.anchor",
+            None,
+        )
+    mergeable = pull_request.get("mergeable")
+    if mergeable not in {"MERGEABLE", "CONFLICTING", "UNKNOWN"}:
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Pull request mergeability is unavailable",
+            "pull_request.anchor",
+            None,
+        )
+    if (
+        pull_request.get("state") == "OPEN"
+        and mergeable in {"MERGEABLE", "UNKNOWN"}
+        and potential_merge_commit is None
+    ):
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Potential merge commit is still being generated",
             "pull_request.anchor",
             None,
         )
@@ -1829,7 +1927,10 @@ def evaluate_checks(
             outcome = _check_outcome(item.get("status"), item.get("conclusion"), policy["expected_skipped"])
             item["evidence_state"] = f"non_required_{outcome}"
     missing: list[str] = []
-    for key in sorted(set(required_by_key) - matched, key=lambda value: (value[0], value[1] or 0)):
+    for key in sorted(
+        set(required_by_key) - matched,
+        key=lambda value: (value[0], value[1] or 0),
+    ):
         stable_id = _required_stable_id(key[0], key[1])
         missing.append(stable_id)
         checks.append(
@@ -1971,6 +2072,71 @@ def required_specs_from_snapshot(
         branch_protection if policy["require_branch_protection_evidence"] else None,
         policy,
     )
+
+
+def validate_required_check_metadata(snapshot: dict[str, Any]) -> None:
+    """Reject internally contradictory required-check snapshot evidence."""
+
+    stored_checks = snapshot["checks"]
+    stable_ids = [item["stable_id"] for item in stored_checks]
+    if len(stable_ids) != len(set(stable_ids)):
+        raise ContractError("Snapshot contains a duplicate check identity")
+    sources = snapshot["required_check_evidence"]["sources"]
+    source_set = set(sources)
+    policy = {
+        "require_ruleset_evidence": "rulesets" in source_set,
+        "require_branch_protection_evidence": "branch_protection" in source_set,
+        "expected_skipped": "block",
+    }
+    try:
+        required_specs = required_specs_from_snapshot(snapshot, policy)
+    except BlockedError as exc:
+        raise ContractError(f"Invalid required-check rule evidence: {exc.message}") from exc
+    raw_fields = (
+        "stable_id",
+        "name",
+        "application",
+        "status",
+        "conclusion",
+        "details_url",
+    )
+    raw_checks = [
+        {key: copy.deepcopy(item[key]) for key in raw_fields}
+        for item in stored_checks
+        if item["status"] != "MISSING"
+    ]
+    evaluated, expected_evidence = evaluate_checks(
+        raw_checks,
+        required_specs,
+        policy,
+        sources,
+    )
+    stored_evidence = snapshot["required_check_evidence"]
+    if (
+        stored_evidence["required"] != expected_evidence["required"]
+        or stored_evidence["missing"] != expected_evidence["missing"]
+    ):
+        raise ContractError("Required-check metadata disagrees with applicable rules and checks")
+    stored_by_id = {item["stable_id"]: item for item in stored_checks}
+    expected_by_id = {item["stable_id"]: item for item in evaluated}
+    if stored_by_id.keys() != expected_by_id.keys():
+        raise ContractError("Required-check metadata omits or invents check evidence")
+    for stable_id, expected in expected_by_id.items():
+        stored = stored_by_id[stable_id]
+        for key in (*raw_fields[1:], "requiredness"):
+            if stored[key] != expected[key]:
+                raise ContractError(f"Check requiredness or identity is inconsistent for {stable_id}")
+        if stored["status"] == "MISSING":
+            allowed_states = {"required_missing"}
+        else:
+            prefix = stored["requiredness"]
+            outcomes = {
+                _check_outcome(stored["status"], stored["conclusion"], skipped_policy)
+                for skipped_policy in ("allow", "block")
+            }
+            allowed_states = {f"{prefix}_{outcome}" for outcome in outcomes}
+        if stored["evidence_state"] not in allowed_states:
+            raise ContractError(f"Check outcome evidence is inconsistent for {stable_id}")
 
 
 def strict_checks_require_current_base(snapshot: dict[str, Any], policy: dict[str, Any]) -> bool:
@@ -2120,9 +2286,9 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
         }:
             blockers.append(
                 {
-                    "code": "BLOCKED_FAILED_OR_PENDING_CI"
-                    if item["evidence_state"] != "requiredness_unknown"
-                    else BLOCKED_INCOMPLETE,
+                    "code": BLOCKED_INCOMPLETE
+                    if item["evidence_state"] == "requiredness_unknown"
+                    else "BLOCKED_FAILED_OR_PENDING_CI",
                     "reason": f"{item['name']}: {item['evidence_state']}",
                 }
             )
@@ -2315,6 +2481,7 @@ query PullRequestAnchor($owner:String!, $name:String!, $number:Int!) {
       headRepository { id nameWithOwner url }
       headRefName
       headRefOid
+      potentialMergeCommit { oid }
     }
   }
 }
@@ -3135,27 +3302,65 @@ def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
 
 def _capture_checks(
     client: GitHubClient,
-    head_oid: str,
-    connection_suffix: str = "",
+    commit_oid: str,
+    connection: str,
 ) -> list[dict[str, Any]]:
-    connection = f"checks{connection_suffix}"
 
     def fetch(cursor: str | None) -> Page:
         payload = client.graphql(
             COMMIT_CHECKS_QUERY,
             connection,
             cursor,
-            {"oid": head_oid},
+            {"oid": commit_oid},
         )
         commit_object = _path(payload, ("data", "repository", "object"), connection)
         if commit_object is None:
-            raise BlockedError(BLOCKED_INCOMPLETE, "Head commit object is inaccessible", connection, cursor)
+            raise BlockedError(BLOCKED_INCOMPLETE, "Check commit object is inaccessible", connection, cursor)
         rollup = commit_object.get("statusCheckRollup")
         if rollup is None:
             return Page([], False, None)
         return _connection_page(rollup.get("contexts"), connection)
 
     return [_normalize_check(item) for item in collect_pages(connection, fetch, client.budget)]
+
+
+def select_effective_check_target(
+    head_oid: str,
+    potential_merge_commit_oid: str | None,
+    test_merge_checks: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Apply GitHub's test-merge-first required-check selection rule."""
+
+    if potential_merge_commit_oid is not None and test_merge_checks:
+        return potential_merge_commit_oid, "test_merge"
+    return head_oid, "head"
+
+
+def _capture_effective_checks(
+    client: GitHubClient,
+    head_oid: str,
+    potential_merge_commit_oid: str | None,
+    connection_suffix: str = "",
+) -> tuple[list[dict[str, Any]], str, str]:
+    test_merge_checks: list[dict[str, Any]] = []
+    if potential_merge_commit_oid is not None:
+        test_merge_checks = _capture_checks(
+            client,
+            potential_merge_commit_oid,
+            f"test_merge_checks{connection_suffix}",
+        )
+    check_commit_oid, check_commit_source = select_effective_check_target(
+        head_oid,
+        potential_merge_commit_oid,
+        test_merge_checks,
+    )
+    if check_commit_source == "test_merge":
+        return test_merge_checks, check_commit_oid, check_commit_source
+    return (
+        _capture_checks(client, head_oid, f"head_checks{connection_suffix}"),
+        check_commit_oid,
+        check_commit_source,
+    )
 
 
 def _normalize_applicable_rules(rulesets: list[Any], branch_protection: dict[str, Any]) -> dict[str, Any]:
@@ -3265,6 +3470,7 @@ def _capture_rules(
 def _capture_remote_evidence(
     client: GitHubClient,
     head_oid: str,
+    potential_merge_commit_oid: str | None,
     base_ref: str,
     configuration: dict[str, Any],
     connection_suffix: str = "",
@@ -3277,7 +3483,12 @@ def _capture_remote_evidence(
     conversation_comments = _capture_conversation_comments(client, connection_suffix)
     review_threads = _capture_review_threads(client, connection_suffix)
     commits = _capture_commits(client, connection_suffix)
-    raw_checks = _capture_checks(client, head_oid, connection_suffix)
+    raw_checks, check_commit_oid, check_commit_source = _capture_effective_checks(
+        client,
+        head_oid,
+        potential_merge_commit_oid,
+        connection_suffix,
+    )
     applicable_rules, required_specs, rule_sources = _capture_rules(
         client,
         base_ref,
@@ -3299,6 +3510,8 @@ def _capture_remote_evidence(
         "review_threads": review_threads,
         "commits": commits,
         "checks": checks,
+        "check_commit_oid": check_commit_oid,
+        "check_commit_source": check_commit_source,
         "applicable_rules": applicable_rules,
         "required_check_evidence": required_check_evidence,
     }
@@ -3329,10 +3542,15 @@ def capture_snapshot(
             None,
         )
     head_before = before_pr["headRefOid"]
+    potential_merge_commit = before_pr.get("potentialMergeCommit")
+    potential_merge_commit_oid = (
+        potential_merge_commit.get("oid") if isinstance(potential_merge_commit, dict) else None
+    )
 
     evidence = _capture_remote_evidence(
         client,
         head_before,
+        potential_merge_commit_oid,
         before_pr["baseRefName"],
         configuration,
     )
@@ -3366,6 +3584,7 @@ def capture_snapshot(
     revalidated_evidence = _capture_remote_evidence(
         client,
         head_before,
+        potential_merge_commit_oid,
         before_pr["baseRefName"],
         configuration,
         REVALIDATION_SUFFIX,
@@ -3424,6 +3643,9 @@ def capture_snapshot(
             "head_ref": before_pr.get("headRefName"),
             "head_oid_before": head_before,
             "head_oid_after": head_after,
+            "potential_merge_commit_oid": potential_merge_commit_oid,
+            "check_commit_oid": evidence["check_commit_oid"],
+            "check_commit_source": evidence["check_commit_source"],
             "captured_connection_counts": {
                 name: before_pr[connection]["totalCount"]
                 for name, connection in CAPTURED_CONNECTIONS.items()

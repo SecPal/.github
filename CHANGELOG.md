@@ -28,6 +28,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added versioned snapshot and repository-configuration schemas, safely escaped
   derived Markdown, atomic private outputs, and offline fake-GitHub/fake-Git
   regression coverage for the Package 2.1 data contract
+- bound required-check evidence to GitHub's effective test-merge or head commit,
+  proved same-named check/status evaluation, rejected contradictory snapshot
+  check and repository-identity metadata, and removed unenforced arbitrary
+  local-validation commands from the read-only Package 2.1 configuration
+  contract
 
 ## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
 

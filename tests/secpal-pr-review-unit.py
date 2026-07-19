@@ -31,6 +31,7 @@ SPEC.loader.exec_module(review)
 HEAD = "a" * 40
 BASE = "b" * 40
 PARENT = "c" * 40
+MERGE = "d" * 40
 
 
 def uncontrolled_git_test_environment() -> dict[str, str]:
@@ -90,7 +91,6 @@ def config() -> dict[str, Any]:
                 "database_ids": [],
             },
         ],
-        "required_local_validation": [{"name": "unit", "command": ["python3", "-m", "unittest"]}],
         "signature_policy": {
             "require_github_verified": True,
             "require_local_verified": True,
@@ -161,7 +161,9 @@ def thread(
 
 
 def check(
-    name: str = "tests", status: str = "COMPLETED", conclusion: str | None = "SUCCESS"
+    name: str = "tests",
+    status: str = "COMPLETED",
+    conclusion: str | None = "SUCCESS",
 ) -> dict[str, Any]:
     return {
         "stable_id": f"check:1:{name}",
@@ -250,6 +252,9 @@ def snapshot() -> dict[str, Any]:
             "head_ref": "feat/test",
             "head_oid_before": HEAD,
             "head_oid_after": HEAD,
+            "potential_merge_commit_oid": MERGE,
+            "check_commit_oid": HEAD,
+            "check_commit_source": "head",
             "labels": [],
             "requested_reviewers": [],
             "requested_teams": [],
@@ -549,6 +554,8 @@ class SnapshotAndPaginationTests(unittest.TestCase):
             "sources": [],
             "unknown_reasons": [],
         }
+        value["checks"][0]["requiredness"] = "non_required"
+        value["checks"][0]["evidence_state"] = "non_required_successful"
         value["applicable_rules"] = {
             "rulesets": [],
             "branch_protection": {"strict": None, "contexts": [], "checks": []},
@@ -580,6 +587,76 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value["commits"][0]["oid"] = PARENT
         with self.assertRaisesRegex(review.ContractError, "head commit"):
             review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_checks_bound_to_the_wrong_commit(self) -> None:
+        value = snapshot()
+        value["pull_request"]["check_commit_oid"] = MERGE
+        with self.assertRaisesRegex(review.ContractError, "wrong commit"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_an_indeterminate_open_mergeable_check_target(self) -> None:
+        value = snapshot()
+        value["pull_request"]["potential_merge_commit_oid"] = None
+        with self.assertRaisesRegex(review.ContractError, "Potential merge commit"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_accepts_nonempty_checks_bound_to_the_test_merge_commit(self) -> None:
+        value = snapshot()
+        value["pull_request"]["potential_merge_commit_oid"] = MERGE
+        value["pull_request"]["check_commit_oid"] = MERGE
+        value["pull_request"]["check_commit_source"] = "test_merge"
+        review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_an_empty_test_merge_check_selection(self) -> None:
+        value = snapshot()
+        value["pull_request"]["potential_merge_commit_oid"] = MERGE
+        value["pull_request"]["check_commit_oid"] = MERGE
+        value["pull_request"]["check_commit_source"] = "test_merge"
+        value["checks"] = []
+        value["required_check_evidence"]["missing"] = ["check:1:tests"]
+        with self.assertRaisesRegex(review.ContractError, "cannot be empty"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_required_check_metadata_that_disagrees_with_rules(self) -> None:
+        value = snapshot()
+        value["required_check_evidence"]["required"] = []
+        with self.assertRaisesRegex(review.ContractError, "Required-check metadata"):
+            review.validate_snapshot(review.attach_digest(value))
+
+    def test_snapshot_rejects_a_duplicate_check_identity(self) -> None:
+        value = snapshot()
+        duplicate = copy.deepcopy(value["checks"][0])
+        duplicate["name"] = "another-name"
+        duplicate["requiredness"] = "non_required"
+        duplicate["evidence_state"] = "non_required_successful"
+        value["checks"].append(duplicate)
+        with self.assertRaisesRegex(review.ContractError, "duplicate check identity"):
+            review.validate_snapshot(finalize_snapshot(value))
+
+    def test_snapshot_rejects_check_requiredness_that_disagrees_with_rules(self) -> None:
+        value = snapshot()
+        value["checks"][0]["requiredness"] = "non_required"
+        value["checks"][0]["evidence_state"] = "non_required_successful"
+        with self.assertRaisesRegex(review.ContractError, "requiredness"):
+            review.validate_snapshot(review.attach_digest(value))
+
+    def test_snapshot_rejects_repository_identity_components_that_disagree(self) -> None:
+        value = snapshot()
+        value["repository"]["owner"] = "Other"
+        with self.assertRaisesRegex(review.ContractError, "repository identity"):
+            review.validate_snapshot(review.attach_digest(value))
+
+    def test_snapshot_rejects_a_base_repository_unrelated_to_the_queried_repository(self) -> None:
+        value = snapshot()
+        value["pull_request"]["base_repository"]["name_with_owner"] = "SecPal/other"
+        with self.assertRaisesRegex(review.ContractError, "base repository"):
+            review.validate_snapshot(review.attach_digest(value))
+
+    def test_snapshot_rejects_inconsistent_merged_state(self) -> None:
+        value = snapshot()
+        value["pull_request"]["state"] = "MERGED"
+        with self.assertRaisesRegex(review.ContractError, "merged state"):
+            review.validate_snapshot(review.attach_digest(value))
 
     def test_snapshot_rejects_duplicate_commit_oids(self) -> None:
         value = snapshot()
@@ -625,7 +702,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         self.assertEqual(expected["reviews.revalidation"], 0)
         self.assertEqual(expected["commits.revalidation"], 1)
         self.assertEqual(expected[f"commit.{HEAD}.parents.revalidation"], 1)
-        self.assertEqual(expected["checks.revalidation"], 1)
+        self.assertEqual(expected["head_checks.revalidation"], 1)
         self.assertEqual(expected["rulesets.revalidation"], 1)
         self.assertEqual(expected["branch_protection.revalidation"], 1)
         self.assertEqual(expected["review_threads.revalidation"], 1)
@@ -856,6 +933,7 @@ class LocalGitTests(unittest.TestCase):
         value = snapshot()
         value["pull_request"]["head_oid_before"] = "d" * 40
         value["pull_request"]["head_oid_after"] = "d" * 40
+        value["pull_request"]["check_commit_oid"] = "d" * 40
         value["commits"][0]["oid"] = "d" * 40
         value = finalize_snapshot(value)
         self.assert_blocker(review.verify_local_against_snapshot(value, config(), FakeGitRunner(), None), "BLOCKED_HEAD_MOVED")
@@ -887,6 +965,43 @@ class LocalGitTests(unittest.TestCase):
             with self.subTest(connection=connection):
                 self.assertIn(f"{connection} {{ totalCount }}", review.PULL_REQUEST_ANCHOR_QUERY)
 
+    def test_anchor_captures_the_potential_test_merge_commit(self) -> None:
+        self.assertIn("potentialMergeCommit { oid }", review.PULL_REQUEST_ANCHOR_QUERY)
+
+    def test_test_merge_checks_take_precedence_when_present(self) -> None:
+        self.assertEqual(
+            review.select_effective_check_target(HEAD, MERGE, [check()]),
+            (MERGE, "test_merge"),
+        )
+        self.assertEqual(
+            review.select_effective_check_target(HEAD, MERGE, []),
+            (HEAD, "head"),
+        )
+
+    def test_effective_check_capture_falls_back_to_head_only_for_an_empty_test_merge(self) -> None:
+        client = object()
+        with mock.patch.object(
+            review,
+            "_capture_checks",
+            side_effect=[[], [check()]],
+        ) as capture:
+            checks, oid, source = review._capture_effective_checks(client, HEAD, MERGE)
+        self.assertEqual((checks, oid, source), ([check()], HEAD, "head"))
+        self.assertEqual(
+            capture.call_args_list,
+            [
+                mock.call(client, MERGE, "test_merge_checks"),
+                mock.call(client, HEAD, "head_checks"),
+            ],
+        )
+
+    def test_effective_check_capture_does_not_mix_head_and_test_merge_contexts(self) -> None:
+        client = object()
+        with mock.patch.object(review, "_capture_checks", return_value=[check()]) as capture:
+            checks, oid, source = review._capture_effective_checks(client, HEAD, MERGE)
+        self.assertEqual((checks, oid, source), ([check()], MERGE, "test_merge"))
+        capture.assert_called_once_with(client, MERGE, "test_merge_checks")
+
     def test_anchor_requires_review_update_sentinels(self) -> None:
         fixture = json.loads(
             (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
@@ -905,6 +1020,34 @@ class LocalGitTests(unittest.TestCase):
         del fixture["data"]["repository"]["pullRequest"]["updatedAt"]
         with self.assertRaises(review.BlockedError):
             review.extract_anchor(fixture)
+
+    def test_anchor_requires_well_formed_potential_merge_commit_evidence(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        del fixture["data"]["repository"]["pullRequest"]["potentialMergeCommit"]
+        with self.assertRaisesRegex(review.BlockedError, "Potential merge commit"):
+            review.extract_anchor(fixture)
+
+    def test_anchor_blocks_when_test_merge_generation_is_still_indeterminate(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        pull_request = fixture["data"]["repository"]["pullRequest"]
+        pull_request["mergeable"] = "UNKNOWN"
+        pull_request["potentialMergeCommit"] = None
+        with self.assertRaisesRegex(review.BlockedError, "still being generated"):
+            review.extract_anchor(fixture)
+
+    def test_conflicting_anchor_can_have_no_potential_merge_commit(self) -> None:
+        fixture = json.loads(
+            (FIXTURES / "fake-github-pages.json").read_text(encoding="utf-8")
+        )["graphql"]["PullRequestAnchor"]["null"]
+        pull_request = fixture["data"]["repository"]["pullRequest"]
+        pull_request["mergeable"] = "CONFLICTING"
+        pull_request["mergeStateStatus"] = "DIRTY"
+        pull_request["potentialMergeCommit"] = None
+        self.assertIsNone(review.extract_anchor(fixture)["pull_request"]["potentialMergeCommit"])
 
     def test_anchor_counts_must_match_captured_collections(self) -> None:
         fixture = json.loads(
@@ -1065,7 +1208,7 @@ class SignatureAndCheckTests(unittest.TestCase):
         self.assertEqual(checks[0]["evidence_state"], "required_missing")
         self.assertEqual(evidence["missing"], ["check:1:tests"])
 
-    def test_app_check_satisfies_generic_and_exact_requirements(self) -> None:
+    def test_generic_requirement_is_satisfied_by_the_only_present_context_kind(self) -> None:
         raw = [check() | {"requiredness": None, "evidence_state": None}]
         _, evidence = review.evaluate_checks(
             raw,
@@ -1076,6 +1219,38 @@ class SignatureAndCheckTests(unittest.TestCase):
             config()["check_policy"],
         )
         self.assertEqual(evidence["missing"], [])
+
+    def test_same_named_check_and_status_are_both_evaluated_as_required(self) -> None:
+        raw = [
+            check() | {"requiredness": None, "evidence_state": None},
+            {
+                "stable_id": "status_context:STATUS_1",
+                "name": "tests",
+                "application": {
+                    "id": None,
+                    "database_id": None,
+                    "name": "legacy-status",
+                    "slug": "legacy-status",
+                },
+                "status": "FAILURE",
+                "conclusion": "FAILURE",
+                "details_url": None,
+            },
+        ]
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": None}],
+            config()["check_policy"],
+        )
+        self.assertEqual(evidence["missing"], [])
+        states = {item["stable_id"]: item["evidence_state"] for item in checks}
+        self.assertEqual(
+            states,
+            {
+                "check:1:tests": "required_successful",
+                "status_context:STATUS_1": "required_failed",
+            },
+        )
 
     def test_status_creator_id_does_not_satisfy_app_requirement(self) -> None:
         raw = review._normalize_check(
@@ -1567,6 +1742,14 @@ class SecurityAndOutputTests(unittest.TestCase):
         broken["reviewer_identities"][0]["canonical_identity"] = ""
         with self.assertRaises(review.ContractError):
             review.validate_config(broken)
+
+    def test_unenforced_local_validation_commands_are_rejected(self) -> None:
+        candidate = config()
+        candidate.setdefault("required_local_validation", []).append(
+            {"name": "must-run", "command": ["false"]}
+        )
+        with self.assertRaisesRegex(review.ContractError, "required_local_validation"):
+            review.validate_config(candidate)
 
     def test_nested_snapshot_schema_is_enforced(self) -> None:
         value = snapshot()

@@ -92,12 +92,15 @@ assert snapshot["pull_request"]["captured_connection_counts"] == {
     "review_threads": len(snapshot["review_threads"]),
     "commits": len(snapshot["commits"]),
 }
+assert snapshot["pull_request"]["potential_merge_commit_oid"] == "d" * 40
+assert snapshot["pull_request"]["check_commit_oid"] == "d" * 40
+assert snapshot["pull_request"]["check_commit_source"] == "test_merge"
 connections = {item["connection"]: item for item in snapshot["completeness"]["fully_paginated_connections"]}
 assert connections["reviews"]["pages"] == 2
 assert connections["review_threads"]["pages"] == 2
 assert connections["review_thread.THREAD_1.comments"]["pages"] == 2
 assert connections["conversation_comment.ISSUE_COMMENT_1.reactions"]["pages"] == 2
-assert connections["checks"]["pages"] == 2
+assert connections["test_merge_checks"]["pages"] == 2
 assert connections["labels.revalidation"]["pages"] == 1
 assert connections["review_requests.revalidation"]["pages"] == 1
 assert connections["reviews.revalidation"]["pages"] == 2
@@ -106,7 +109,7 @@ assert connections["review_threads.revalidation"]["pages"] == 2
 assert connections["review_thread.THREAD_1.comments.revalidation"]["pages"] == 2
 assert connections["conversation_comment.ISSUE_COMMENT_1.reactions.revalidation"]["pages"] == 2
 assert connections["commits.revalidation"]["pages"] == 1
-assert connections["checks.revalidation"]["pages"] == 2
+assert connections["test_merge_checks.revalidation"]["pages"] == 2
 assert connections["rulesets.revalidation"]["pages"] == 1
 assert connections["branch_protection.revalidation"]["pages"] == 1
 

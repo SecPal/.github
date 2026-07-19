@@ -44,6 +44,9 @@
               },
               "headRefName": "feat/test",
               "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "potentialMergeCommit": {
+                "oid": "dddddddddddddddddddddddddddddddddddddddd"
+              },
               "labels": {
                 "totalCount": 0,
                 "nodes": [],

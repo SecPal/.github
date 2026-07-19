@@ -27,9 +27,11 @@ is a derived, non-authoritative view.
 
 The helper validates both structures against these checked-in schemas and then
 applies semantic validation such as unique reviewer aliases and evidence digest
-verification. Commit evidence must use unique object IDs and contain the
-captured PR head commit. Stored anchor counts must exactly match all supplied
-top-level PR collections, including the complete commit set. Configuration
+verification. Repository owner, name, URL, PR URL, base repository, head
+repository, and merged-state components must be internally consistent. Commit
+evidence must use unique object IDs and contain the captured PR head commit.
+Stored anchor counts must exactly match all supplied top-level PR collections,
+including the complete commit set. Configuration
 supports a stable canonical identity with GraphQL, REST/event, numeric, and
 node-ID aliases; no suffix-sensitive login is the sole identity contract.
 
@@ -101,6 +103,11 @@ upstream, local head, remote-tracking head, PR head, expected head, base
 repository and branch, exact base-to-head commit set, commit-object
 availability, and every local commit signature.
 
+Repository configuration deliberately contains no arbitrary local-validation
+command list. Executing repository-selected programs would cross this layer's
+strict read-only process boundary; Package 2.2 owns orchestration of the
+repository's documented test and validation commands.
+
 It never fetches automatically. The helper also sets `GIT_NO_LAZY_FETCH=1` so
 a partial clone cannot silently fetch a missing object. It disables replacement
 refs and optional locks, and removes inherited Git variables that could select
@@ -165,16 +172,16 @@ whenever a snapshot is loaded. It fully paginates:
 - top-level conversation comments and each reaction connection;
 - review threads, every nested reply, and each nested reaction connection;
 - PR commits and their bounded parent evidence;
-- head-commit check runs and status contexts;
+- check runs and status contexts from GitHub's effective check commit;
 - applicable branch rules.
 
 After the first anchor comparison, the helper performs a second complete,
 bounded observation of every fully paginated PR collection and of volatile
 evidence that can change without moving the PR head or its top-level counts.
 This includes labels, review requests, reviews, comments and reactions, inline
-threads and replies, remote commit and GitHub-signature evidence, head checks,
-rulesets, and branch protection. The two normalized observations must be
-identical. Their connections, API calls, and items are recorded with a
+threads and replies, remote commit and GitHub-signature evidence, effective
+commit checks, rulesets, and branch protection. The two normalized observations
+must be identical. Their connections, API calls, and items are recorded with a
 `.revalidation` suffix and count against the same configured caps. Any
 difference terminates with `BLOCKED_INCOMPLETE_REVIEW_STATE` before output is
 prepared.
@@ -226,13 +233,28 @@ trusting capture-time outcome labels. It also retains each configured source's
 strict up-to-date policy and blocks a `BEHIND` merge state whenever either
 enabled source requires checks against the current base.
 
+The anchor records GitHub's potential test-merge commit. When that commit has
+any check or status context, its fully paginated rollup is authoritative;
+otherwise the helper captures the head-commit rollup. The selected source and
+OID are stored, semantically validated, and independently selected again during
+revalidation. An open PR whose test merge is still being generated blocks as
+incomplete instead of assuming the head rollup is authoritative. A generic
+required name matches every check-run and legacy
+status-context entry when both kinds are present, so one successful kind cannot
+hide a failed same-named counterpart. It does not invent an absent context
+kind; application-specific requirements remain bound to a check run from that
+application.
+
 Evidence distinguishes required success, pending, failure, and absence;
 non-required success, pending, and failure; and unknown requiredness. Required
-skipped checks follow the explicit `check_policy.expected_skipped` value. A
+skipped checks follow the explicit `check_policy.expected_skipped` value.
+GitHub's seven-day recency rule governs whether a check or expected application
+can be selected when required-check policy is configured; it does not expire a
+successful result on the current effective commit. A
 missing or inaccessible configured rules source, unsupported check type,
 malformed rule, or otherwise unknown requiredness terminates with
 `BLOCKED_INCOMPLETE_REVIEW_STATE`. Pending checks are reported once and are not
-polled. Head-check state, applicable rules, and the derived required-check
+polled. Effective-check state, applicable rules, and the derived required-check
 evidence must also match their bounded revalidation observations.
 
 ## Output and untrusted content
@@ -295,7 +317,8 @@ serialization, outer and nested pagination with unequal page counts, reactions,
 caps, partial failures, signature-envelope classification, update-time and
 connection-count anchor races, strict stale-base state, required checks, hostile
 rendering, atomic outputs, host pinning, merge-state policy coverage, commit-set
-invariants, volatile-evidence revalidation, sanitized Git environments,
-fsmonitor and verifier-program suppression, and executable-call spies that
-reject GitHub and Git writes. Live acceptance is a separately identified
-read-only phase and never requests an AI review.
+invariants, test-merge selection, duplicate-name check/status evaluation,
+volatile-evidence revalidation, sanitized Git
+environments, fsmonitor and verifier-program suppression, and executable-call
+spies that reject GitHub and Git writes. Live acceptance is a separately
+identified read-only phase and never requests an AI review.
