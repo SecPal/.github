@@ -6230,6 +6230,7 @@ grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log
 grep -q '^--user daemon-reload$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
 grep -q '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log"
+grep -q '^--user reset-failed polyscope-worktree-provision.path polyscope-worktree-provision.service$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.path$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log"
 if [[ "$(grep -n '^--user start polyscope-rollout-sync.service$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" -ge "$(grep -n '^--user enable --now polyscope-worktree-provision.timer$' "$system_systemctl_log" | tail -n1 | cut -d: -f1)" ]]; then
@@ -6272,9 +6273,17 @@ if grep -qF '/../' "$fake_unit_dir/polyscope-rollout-sync.path"; then
     exit 1
 fi
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'StartLimitIntervalSec=300' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'StartLimitBurst=5' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^Type=oneshot$' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^StartLimitIntervalSec=10$' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^StartLimitBurst=5$' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^ExecStartPre=/usr/bin/sleep 3$' "$fake_unit_dir/polyscope-worktree-provision.service"
+if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polyscope-worktree-provision.service"; then
+  echo "provision service must expose failures without suppressing them" >&2
+  exit 1
+fi
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
+grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^Persistent=true$' "$fake_unit_dir/polyscope-worktree-provision.timer"
@@ -6301,6 +6310,20 @@ if grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-wor
 fi
 grep -qE '^PathChanged=.*/api/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathChanged=.*/frontend/polyscope\.local\.json$' "$fake_unit_dir/polyscope-worktree-provision.path"
+if grep -qE 'worktree-provision\.lock|\.polyscope/clones' "$fake_unit_dir/polyscope-worktree-provision.path"; then
+  echo "provision path must not watch state written by the provisioner" >&2
+  exit 1
+fi
+if command -v systemd-analyze >/dev/null 2>&1; then
+  systemd_verify_log="$workspace/systemd-analyze-verify.log"
+  if ! SYSTEMD_UNIT_PATH="$fake_unit_dir:" systemd-analyze verify \
+    "$fake_unit_dir"/*.service \
+    "$fake_unit_dir"/*.path \
+    "$fake_unit_dir"/*.timer >"$systemd_verify_log" 2>&1; then
+    cat "$systemd_verify_log" >&2
+    exit 1
+  fi
+fi
 grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '.polyscope-preview-stage' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'build.lock' "$workspace_root/frontend/polyscope.local.json"
@@ -6309,6 +6332,7 @@ grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-rollout-sync.path' "$fake_systemctl_log"
 grep -q 'start polyscope-rollout-sync.service' "$fake_systemctl_log"
+grep -q 'reset-failed polyscope-worktree-provision.path polyscope-worktree-provision.service' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.path' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-worktree-provision.timer' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-clone-reaper.timer' "$fake_systemctl_log"

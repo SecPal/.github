@@ -697,5 +697,67 @@ except (RuntimeError, SystemExit, ValueError) as error:
 else:
     raise AssertionError("registered path outside clone root must fail closed")
 
+# A process-shared provision lock serializes path, timer, and manual callers.
+# The second real process must remain blocked until the first releases the
+# production lock helper, then complete exactly once.
+lock_path = workspace / "state with spaces" / "worktree-provision.lock"
+holder_ready = workspace / "holder-ready"
+lock_probe = """
+import importlib.util
+import pathlib
+import sys
+import time
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", pathlib.Path(sys.argv[1]))
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+with module.provision_worktree_lock(pathlib.Path(sys.argv[2])):
+    pathlib.Path(sys.argv[3]).write_text("acquired")
+    time.sleep(float(sys.argv[4]))
+"""
+holder = subprocess.Popen(
+    [sys.executable, "-B", "-c", lock_probe, str(script_path), str(lock_path), str(holder_ready), "0.5"]
+)
+for _ in range(100):
+    if holder_ready.exists():
+        break
+    time.sleep(0.01)
+else:
+    holder.terminate()
+    holder.wait()
+    raise AssertionError("first provision-lock process did not acquire the lock")
+
+contender_ready = workspace / "contender-ready"
+contender = subprocess.Popen(
+    [sys.executable, "-B", "-c", lock_probe, str(script_path), str(lock_path), str(contender_ready), "0"]
+)
+time.sleep(0.1)
+assert contender.poll() is None, "provision lock did not serialize concurrent caller"
+assert not contender_ready.exists()
+assert holder.wait(timeout=3) == 0
+assert contender.wait(timeout=3) == 0
+assert contender_ready.read_text() == "acquired"
+
+lock_sentinel = workspace / "lock-sentinel"
+lock_sentinel.write_text("unchanged")
+symlink_lock = workspace / "symlink-provision.lock"
+symlink_lock.symlink_to(lock_sentinel.name)
+try:
+    with module.provision_worktree_lock(symlink_lock):
+        raise AssertionError("symlink provision lock must not be acquired")
+except RuntimeError as error:
+    assert "symlink" in str(error).lower(), error
+assert lock_sentinel.read_text() == "unchanged"
+
+hardlink_lock = workspace / "hardlink-provision.lock"
+os.link(lock_sentinel, hardlink_lock)
+try:
+    with module.provision_worktree_lock(hardlink_lock):
+        raise AssertionError("multiply linked provision lock must not be acquired")
+except RuntimeError as error:
+    assert "one link" in str(error).lower(), error
+assert lock_sentinel.read_text() == "unchanged"
+
 print("Package-1 setup-order and registered-worktree tests passed.")
 PY

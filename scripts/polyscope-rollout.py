@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -100,6 +102,34 @@ class CanonicalInstructionValidationError(RuntimeError):
 
 def default_polyscope_db_path() -> pathlib.Path:
     return pathlib.Path(os.environ.get("POLYSCOPE_DB_PATH", pathlib.Path.home() / ".polyscope" / "polyscope.db"))
+
+
+def default_provision_lock_path() -> pathlib.Path:
+    return pathlib.Path.home() / ".local" / "state" / "polyscope" / "worktree-provision.lock"
+
+
+@contextlib.contextmanager
+def provision_worktree_lock(lock_path: pathlib.Path):
+    """Serialize provisioners without making the lock itself a watched input."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if lock_path.is_symlink():
+        raise RuntimeError(f"provision lock must not be a symlink: {lock_path}")
+
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        lock_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            raise RuntimeError(f"provision lock must be a regular file: {lock_path}")
+        if lock_stat.st_uid != os.geteuid() or lock_stat.st_nlink != 1:
+            raise RuntimeError(f"provision lock must be owned by the caller and have one link: {lock_path}")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def resolve_path_for_matching(path: pathlib.Path) -> str:
@@ -4681,6 +4711,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
     parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
+    parser.add_argument("--provision-lock-path", type=pathlib.Path, default=default_provision_lock_path())
     parser.add_argument("--polyscope-api-base", default="http://127.0.0.1:4321/api")
     parser.add_argument("--repo-state-file", type=pathlib.Path)
     parser.add_argument(
@@ -4770,13 +4801,14 @@ def main() -> int:
     cleaned_preview_storage_targets: list[str] = []
     failed_provision_worktrees: list[dict[str, str]] = []
     if args.provision_worktrees:
-        provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
-            repo_state,
-            repo_specs,
-            args.clone_root,
-            db_path=args.db_path,
-            validated_instruction_roots=validated_instruction_roots,
-        )
+        with provision_worktree_lock(args.provision_lock_path):
+            provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
+                repo_state,
+                repo_specs,
+                args.clone_root,
+                db_path=args.db_path,
+                validated_instruction_roots=validated_instruction_roots,
+            )
 
     summary = build_summary(
         repo_state,

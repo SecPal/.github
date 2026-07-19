@@ -278,10 +278,15 @@ root-owned helper validates and renders the one fixed preview nginx target
 before testing and reloading nginx. Failed validation or reload restores the
 previous target.
 
-Every generated workspace setup starts with canonical instruction validation.
-The external provisioner considers only active worktrees registered in the
-Polyscope database, while unregistered clone directories remain solely under
-the conservative seven-day clone-reaper policy. See
+Every generated workspace setup is one fail-closed shell unit: canonical
+instruction validation must succeed before the complete native setup sequence,
+and any later setup failure stops all remaining commands. The external
+provisioner considers only active worktrees registered in the Polyscope
+database. It preserves their physical paths as the authoritative deletion
+identity and tracks stable aliases separately for bounded cleanup. Unregistered
+clone directories remain solely under the conservative seven-day clone-reaper
+policy. Provision events are serialized and briefly coalesced so SQLite bursts
+cannot permanently fail the path unit. See
 [`scripts/README.md`](scripts/README.md) for installation and verification
 details.
 
