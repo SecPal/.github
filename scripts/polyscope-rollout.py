@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import pwd
 import re
 import secrets
 import shlex
@@ -24,11 +25,15 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
+ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
+
 
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
-ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
+DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
+DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
+NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
@@ -82,6 +87,7 @@ INSTRUCTION_DEPENDENT_DIRECT_API_MODES = (
     "refresh_api_worktree",
     "run_api_worktree",
 )
+VALIDATION_ONLY_DIRECT_MODE = "validate_instruction_worktree"
 
 
 class CanonicalInstructionValidationError(RuntimeError):
@@ -199,13 +205,9 @@ def find_current_worktree_record(
     worktree_path: pathlib.Path,
 ) -> tuple[str | None, str | None] | None:
     current_path = resolve_path_for_matching(worktree_path)
-    rows = connection.execute(
-        """
-        select id, path
-        from worktrees
-        order by created_at desc
-        """
-    ).fetchall()
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(worktrees)")}
+    order_by = "created_at desc, id desc" if "created_at" in columns else "id desc"
+    rows = connection.execute(f"select id, path from worktrees order by {order_by}").fetchall()
 
     for worktree_id, registered_path in rows:
         if not isinstance(registered_path, str) or not registered_path.strip():
@@ -337,13 +339,9 @@ def build_linked_workspace_resolver_source() -> str:
 
         def find_current_worktree(connection):
             current_path = resolve_path_for_matching(Path.cwd())
-            rows = connection.execute(
-                '''
-                select id, path
-                from worktrees
-                order by created_at desc
-                '''
-            ).fetchall()
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(worktrees)")}
+            order_by = "created_at desc, id desc" if "created_at" in columns else "id desc"
+            rows = connection.execute(f"select id, path from worktrees order by {order_by}").fetchall()
 
             for worktree_id, registered_path in rows:
                 if not isinstance(registered_path, str) or not registered_path.strip():
@@ -515,6 +513,12 @@ def build_preview_url_template(preview_prefix: str | None) -> str:
     if preview_prefix:
         return f"https://{preview_prefix}-{{{{worktree}}}}.preview.secpal.dev"
     return "https://{{worktree}}.preview.secpal.dev"
+
+
+def build_workspace_instruction_validation_command() -> str:
+    """Return the synchronous guard used by Polyscope's native setup runner."""
+    rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
+    return f"python3 {rollout_script} --validate-instruction-worktree \"$PWD\""
 
 
 def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
@@ -1286,6 +1290,7 @@ def cleanup_removed_api_preview_databases(
     *,
     db_path: pathlib.Path | None = None,
     validated_instruction_roots: set[pathlib.Path],
+    registered_api_worktrees: list[pathlib.Path],
 ) -> list[str]:
     api_clone_root = clone_root / repo_state["api"]["id"]
     if not api_clone_root.exists():
@@ -1306,7 +1311,13 @@ def cleanup_removed_api_preview_databases(
     api_spec = repo_specs["api"]
     api_validation_commands = render_local_config(api_spec).get("scripts", {}).get("setup", [])
     active_targets: set[str] = set()
-    for worktree_path in api_clone_root.iterdir():
+    for worktree_path in registered_api_worktrees:
+        active_targets.add(
+            build_preview_database_name(
+                base_database,
+                resolve_current_workspace_name(worktree_path, db_path=db_path),
+            )
+        )
         if not worktree_path.is_dir() or worktree_path.is_symlink():
             continue
 
@@ -1322,12 +1333,6 @@ def cleanup_removed_api_preview_databases(
             protects_storage_target = True
 
         if protects_storage_target:
-            active_targets.add(
-                build_preview_database_name(
-                    base_database,
-                    resolve_current_workspace_name(worktree_path, db_path=db_path),
-                )
-            )
             env_path = worktree_path / ".env"
             if env_path.exists():
                 active_targets.update(discover_existing_api_preview_targets(load_env_assignments(env_path), base_database))
@@ -2827,6 +2832,10 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
                     continue
                 if run_action.get("command") in API_RUNTIME_PREVIEW_COMMANDS:
                     run_action["command"] = build_api_preview_runtime_shell_command(run_action["command"], repo_path)
+        spec["local_config"]["scripts"]["setup"].insert(
+            0,
+            build_workspace_instruction_validation_command(),
+        )
         repo_specs[repo_name] = spec
     return repo_specs
 
@@ -3256,6 +3265,77 @@ def is_provisionable_worktree(
     return True
 
 
+def load_registered_worktree_paths(
+    db_path: pathlib.Path,
+    repo_state: dict[str, dict[str, Any]],
+    clone_root: pathlib.Path,
+) -> dict[str, list[pathlib.Path]]:
+    """Load active managed worktrees from Polyscope's authoritative database."""
+    resolved_db_path = db_path.resolve()
+    resolved_clone_root = clone_root.resolve()
+    if not resolved_db_path.is_file():
+        raise RuntimeError(f"Polyscope DB not found for registered-worktree provisioning: {resolved_db_path}")
+
+    repo_names_by_id = {
+        str(entry["id"]): repo_name
+        for repo_name, entry in repo_state.items()
+    }
+    registered: dict[str, set[pathlib.Path]] = {repo_name: set() for repo_name in repo_state}
+
+    try:
+        with sqlite3.connect(f"{resolved_db_path.as_uri()}?mode=ro", uri=True) as connection:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(worktrees)")
+            }
+            required_columns = {"id", "repo_id", "path"}
+            missing_columns = sorted(required_columns - columns)
+            if missing_columns:
+                raise RuntimeError(
+                    "Polyscope worktrees table is missing required columns: "
+                    + ", ".join(missing_columns)
+                )
+
+            where_clause = " where status = 'active'" if "status" in columns else ""
+            order_by = "created_at asc, id asc" if "created_at" in columns else "id asc"
+            rows = connection.execute(
+                f"select id, repo_id, path from worktrees{where_clause} order by {order_by}"
+            ).fetchall()
+    except sqlite3.Error as error:
+        raise RuntimeError(
+            f"unable to read active Polyscope worktree registrations from {resolved_db_path}: {error}"
+        ) from error
+
+    for worktree_id, repo_id, registered_path in rows:
+        repo_name = repo_names_by_id.get(str(repo_id))
+        if repo_name is None:
+            continue
+        if not isinstance(registered_path, str) or not registered_path.strip():
+            raise RuntimeError(
+                f"active Polyscope worktree {worktree_id} for {repo_name} has no usable path"
+            )
+
+        candidate = pathlib.Path(registered_path)
+        if not candidate.is_absolute():
+            raise RuntimeError(
+                f"active Polyscope worktree {worktree_id} for {repo_name} has a non-absolute path: {candidate}"
+            )
+
+        resolved_candidate = candidate.resolve()
+        expected_repo_root = (resolved_clone_root / str(repo_state[repo_name]["id"])).resolve()
+        if resolved_candidate.parent != expected_repo_root:
+            raise RuntimeError(
+                f"active Polyscope worktree {worktree_id} for {repo_name} resolves outside its clone root "
+                f"{expected_repo_root}: {resolved_candidate}"
+            )
+        registered[repo_name].add(resolved_candidate)
+
+    return {
+        repo_name: sorted(paths, key=str)
+        for repo_name, paths in registered.items()
+    }
+
+
 def resolve_git_dir(repo_path: pathlib.Path) -> pathlib.Path:
     git_path = repo_path / ".git"
     if git_path.is_dir():
@@ -3558,6 +3638,12 @@ def provision_worktrees(
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
     validate_repo_instruction_files(repo_specs, validation_cache)
+    resolved_db_path = db_path or default_polyscope_db_path()
+    registered_worktrees = load_registered_worktree_paths(
+        resolved_db_path,
+        repo_state,
+        clone_root,
+    )
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
@@ -3566,17 +3652,21 @@ def provision_worktrees(
     canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
-        repo_clone_root = clone_root / repo_state[repo_name]["id"]
-        if not repo_clone_root.exists():
-            continue
-
         local_config = render_local_config(spec)
         validation_commands = local_config.get("scripts", {}).get("setup", [])
         setup_commands = validation_commands
         if repo_name == "api":
-            setup_commands = setup_commands[1:]
+            # The external provisioner already validated the candidate and the
+            # API bootstrap command performs its own readiness preparation.
+            # Skip the native-runner validation and prepare entries here.
+            setup_commands = setup_commands[2:]
 
-        for worktree_path in sorted(path for path in repo_clone_root.iterdir() if path.is_dir() and not path.is_symlink()):
+        for worktree_path in registered_worktrees[repo_name]:
+            if not worktree_path.is_dir() or worktree_path.is_symlink():
+                print(
+                    f"Skipping registered {repo_name} worktree at {worktree_path}: path is missing or not a real directory"
+                )
+                continue
             try:
                 if not is_provisionable_worktree(
                     repo_name,
@@ -3632,6 +3722,7 @@ def provision_worktrees(
         clone_root,
         db_path=db_path,
         validated_instruction_roots=validation_cache,
+        registered_api_worktrees=registered_worktrees["api"],
     )
     provisioned_worktrees: list[str] = []
 
@@ -4234,58 +4325,72 @@ def build_summary(
 
 
 def install_nginx_config(
-    nginx_output: pathlib.Path,
+    manifest_path: pathlib.Path,
     *,
-    target: pathlib.Path = pathlib.Path("/etc/nginx/sites-available/preview.secpal.dev"),
     sudo_bin: str | None = None,
-    nginx_bin: str = "nginx",
-    systemctl_bin: str = "systemctl",
+    helper_path: pathlib.Path | None = None,
 ) -> None:
     sudo_bin = sudo_bin or os.environ.get("POLYSCOPE_SUDO_BIN", "sudo")
+    helper_path = helper_path or DEFAULT_NGINX_HELPER_PATH
+    if manifest_path.resolve() != DEFAULT_NGINX_MANIFEST_PATH.resolve():
+        raise RuntimeError(
+            f"privileged nginx application requires the fixed manifest path {DEFAULT_NGINX_MANIFEST_PATH}: "
+            f"{manifest_path}"
+        )
+    if not helper_path.is_file() or not os.access(helper_path, os.X_OK):
+        raise RuntimeError(f"constrained Polyscope nginx helper is missing or not executable: {helper_path}")
 
-    def sudo_command(*command: str) -> list[str]:
-        if os.geteuid() == 0:
-            return list(command)
-        return [sudo_bin, "-n", *command]
+    command = [str(helper_path)] if os.geteuid() == 0 else [sudo_bin, "-n", str(helper_path)]
+    subprocess.run(command, check=True)
 
-    target_exists = subprocess.run(
-        sudo_command("test", "-f", str(target)),
-        check=False,
-    ).returncode == 0
-    if target_exists:
-        unchanged = subprocess.run(
-            sudo_command("cmp", "-s", str(nginx_output), str(target)),
-            check=False,
-        ).returncode == 0
-        if unchanged:
-            return
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup_target = target.with_name(f"{target.name}.bak-{timestamp}")
-    if target_exists:
-        subprocess.run(sudo_command("cp", str(target), str(backup_target)), check=True)
-
-    def restore_previous_config() -> None:
-        if target_exists:
-            subprocess.run(sudo_command("cp", str(backup_target), str(target)), check=True)
-        else:
-            subprocess.run(sudo_command("rm", "-f", str(target)), check=True)
-
-    subprocess.run(sudo_command("install", "-m", "644", str(nginx_output), str(target)), check=True)
-    try:
-        subprocess.run(sudo_command(nginx_bin, "-t"), check=True)
-    except subprocess.CalledProcessError:
-        restore_previous_config()
-        subprocess.run(sudo_command(nginx_bin, "-t"), check=True)
-        raise
+def write_nginx_manifest(
+    manifest_path: pathlib.Path,
+    payload: dict[str, Any],
+    *,
+    writer: Any,
+    service_user: Any | None = None,
+) -> None:
+    """Write the fixed manifest with only the service account's filesystem authority."""
+    if manifest_path.resolve() != DEFAULT_NGINX_MANIFEST_PATH.resolve():
+        raise RuntimeError(
+            f"privileged nginx application requires the fixed manifest path {DEFAULT_NGINX_MANIFEST_PATH}: "
+            f"{manifest_path}"
+        )
 
     try:
-        subprocess.run(sudo_command(systemctl_bin, "reload", "nginx"), check=True)
-    except subprocess.CalledProcessError:
-        restore_previous_config()
-        subprocess.run(sudo_command(nginx_bin, "-t"), check=True)
-        subprocess.run(sudo_command(systemctl_bin, "reload", "nginx"), check=True)
-        raise
+        expected_user = service_user or pwd.getpwnam(NGINX_MANIFEST_USER)
+    except KeyError as error:
+        raise RuntimeError(f"required nginx manifest user does not exist: {NGINX_MANIFEST_USER}") from error
+    current_uid = os.geteuid()
+    if current_uid == expected_user.pw_uid:
+        writer(manifest_path, payload)
+        return
+    if current_uid != 0:
+        raise RuntimeError(
+            f"nginx manifest may only be written by root or {NGINX_MANIFEST_USER}"
+        )
+
+    original_egid = os.getegid()
+    original_groups = os.getgroups()
+    groups_changed = False
+    egid_changed = False
+    euid_changed = False
+    try:
+        os.setgroups([expected_user.pw_gid])
+        groups_changed = True
+        os.setegid(expected_user.pw_gid)
+        egid_changed = True
+        os.seteuid(expected_user.pw_uid)
+        euid_changed = True
+        writer(manifest_path, payload)
+    finally:
+        if euid_changed:
+            os.seteuid(0)
+        if egid_changed:
+            os.setegid(original_egid)
+        if groups_changed:
+            os.setgroups(original_groups)
 
 
 def validate_direct_api_worktree_roots(
@@ -4359,6 +4464,17 @@ def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> 
     raise RuntimeError(f"unsupported direct API-worktree mode: {mode}")
 
 
+def dispatch_validation_only_direct_mode(args: argparse.Namespace) -> int | None:
+    """Validate one candidate root without performing any rollout mutation."""
+    requested_root = getattr(args, VALIDATION_ONLY_DIRECT_MODE)
+    if requested_root is None:
+        return None
+
+    resolved_root = validate_instruction_root(requested_root, set())
+    print(f"Canonical AI-instruction validation passed for {resolved_root}")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync SecPal Polyscope prompts, links, and preview config.")
     # These are the only direct early-return modes. All consume repository
@@ -4366,6 +4482,11 @@ def parse_args() -> argparse.Namespace:
     # normal rollout is the sole fallthrough path; no instruction-independent
     # direct mode currently exists.
     direct_mode_group = parser.add_mutually_exclusive_group()
+    direct_mode_group.add_argument(
+        "--validate-instruction-worktree",
+        dest=VALIDATION_ONLY_DIRECT_MODE,
+        type=pathlib.Path,
+    )
     for mode in INSTRUCTION_DEPENDENT_DIRECT_API_MODES:
         direct_mode_group.add_argument(
             f"--{mode.replace('_', '-')}",
@@ -4385,6 +4506,11 @@ def parse_args() -> argparse.Namespace:
         default=pathlib.Path.home() / "polyscope-preview-secpal-dev.nginx.conf",
     )
     parser.add_argument(
+        "--nginx-manifest-output",
+        type=pathlib.Path,
+        default=DEFAULT_NGINX_MANIFEST_PATH,
+    )
+    parser.add_argument(
         "--nginx-http2-syntax",
         choices=NGINX_HTTP2_SYNTAX_CHOICES,
         default="modern",
@@ -4402,6 +4528,9 @@ def main() -> int:
     args = parse_args()
 
     try:
+        validation_only_result = dispatch_validation_only_direct_mode(args)
+        if validation_only_result is not None:
+            return validation_only_result
         direct_mode_result = dispatch_instruction_dependent_direct_api_mode(args)
     except CanonicalInstructionValidationError as error:
         print(error, file=sys.stderr)
@@ -4437,7 +4566,22 @@ def main() -> int:
     args.nginx_output.write_text(render_nginx_config(repo_state, nginx_http2_syntax=nginx_http2_syntax))
 
     if args.install_nginx:
-        install_nginx_config(args.nginx_output)
+        try:
+            import polyscope_nginx
+        except ModuleNotFoundError as error:
+            raise SystemExit(
+                f"constrained nginx manifest library is missing next to the rollout: {ROLLOUT_SCRIPT_PATH.with_name('polyscope_nginx.py')}"
+            ) from error
+        nginx_manifest = polyscope_nginx.build_manifest(
+            repo_state,
+            nginx_http2_syntax=nginx_http2_syntax,
+        )
+        write_nginx_manifest(
+            args.nginx_manifest_output,
+            nginx_manifest,
+            writer=polyscope_nginx.write_manifest_atomic,
+        )
+        install_nginx_config(args.nginx_manifest_output)
 
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []

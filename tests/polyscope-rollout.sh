@@ -852,6 +852,7 @@ conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 cur.execute('create table repositories (id text primary key, name text not null, path text not null, created_at text, base_branch text, default_model text, merge_prompt text, pr_prompt text, draft_pr_prompt text, merge_and_push_prompt text, worktree_base_from_origin integer, github_assign_self_enabled integer default 0 not null, review_model text, review_prompt text)')
 cur.execute('create table repository_links (repo_id text not null, linked_repo_id text not null, created_at text default (datetime(\'now\')) not null, primary key (repo_id, linked_repo_id))')
+cur.execute('create table worktrees (id text primary key, repo_id text not null, branch text not null, path text not null, status text default \'active\' not null, created_at text default (datetime(\'now\')) not null)')
 
 repo_state = {
     'api': {'id': 'api12345', 'name': 'SecPal/api', 'path': str(workspace_root / 'api')},
@@ -872,6 +873,27 @@ conn.commit()
 conn.close()
 repos_json.write_text(json.dumps(repo_state, indent=2))
 PY
+
+replace_registered_worktrees() {
+    python3 - "$db_path" "$@" <<'PY'
+import sqlite3
+import sys
+
+db_path, *registrations = sys.argv[1:]
+if len(registrations) % 2:
+    raise SystemExit("registered-worktree fixtures require repo-id/path pairs")
+
+with sqlite3.connect(db_path) as connection:
+    connection.execute("delete from worktrees")
+    for index in range(0, len(registrations), 2):
+        repo_id, path = registrations[index : index + 2]
+        worktree_id = f"fixture-{index // 2:04d}"
+        connection.execute(
+            "insert into worktrees (id, repo_id, branch, path, status) values (?, ?, ?, ?, 'active')",
+            (worktree_id, repo_id, f"branch-{index // 2:04d}", path),
+        )
+PY
+}
 
 assert_rollout_rejects_instruction_contract \
     "GuardGuide" "AGENTS.md" "missing" 'Missing: AGENTS.md'
@@ -3955,135 +3977,153 @@ python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
 import pathlib
-import subprocess
 import sys
+import types
 
 script_path = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
-fixture = workspace / "nginx-install-rollback-fixture"
+fixture = workspace / "nginx-helper-dispatch-fixture"
 fixture.mkdir()
-target = fixture / "preview.secpal.dev"
-candidate = fixture / "candidate.conf"
-systemctl_log = fixture / "systemctl.log"
-systemctl_failure_marker = fixture / "systemctl-failed-once"
+manifest = fixture / "nginx-manifest.json"
+manifest.write_text("{}\n")
 fake_sudo = fixture / "sudo"
-fake_nginx = fixture / "nginx"
-fake_systemctl = fixture / "systemctl"
+fake_helper = fixture / "secpal-polyscope-nginx-apply"
+command_log = fixture / "commands.log"
 
-target.write_text("valid-current\n")
-candidate.write_text("invalid-candidate\n")
 fake_sudo.write_text(
     "#!/usr/bin/env bash\n"
     "[[ \"${1:-}\" == '-n' ]] || exit 97\n"
     "shift\n"
     "exec \"$@\"\n"
 )
-fake_nginx.write_text(
+fake_helper.write_text(
     "#!/usr/bin/env bash\n"
-    f"grep -q '^invalid' {target!s} && exit 1\n"
-    "exit 0\n"
+    f"printf '%s\\n' \"$*\" >> {command_log!s}\n"
 )
-fake_systemctl.write_text(
-    "#!/usr/bin/env bash\n"
-    f"printf '%s\\n' \"$*\" >> {systemctl_log!s}\n"
-    f"if [[ \"${{FAIL_FIRST_SYSTEMCTL_RELOAD:-0}}\" == '1' && ! -e {systemctl_failure_marker!s} ]]; then\n"
-    f"  touch {systemctl_failure_marker!s}\n"
-    "  exit 1\n"
-    "fi\n"
-)
-for executable in (fake_sudo, fake_nginx, fake_systemctl):
+for executable in (fake_sudo, fake_helper):
     executable.chmod(0o755)
 
 spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
+assert module.DEFAULT_NGINX_MANIFEST_PATH == pathlib.Path(
+    "/home/secpal/.local/state/polyscope/nginx-manifest.json"
+)
+module.DEFAULT_NGINX_MANIFEST_PATH = manifest
+
+# Direct-root troubleshooting writes with only the service user's filesystem
+# authority, then restores the original effective identity before applying.
+identity = {"euid": 0, "egid": 0, "groups": [0, 27]}
+identity_log = []
+original_identity_functions = {
+    name: getattr(module.os, name)
+    for name in ("geteuid", "getegid", "getgroups", "seteuid", "setegid", "setgroups")
+}
+module.os.geteuid = lambda: identity["euid"]
+module.os.getegid = lambda: identity["egid"]
+module.os.getgroups = lambda: list(identity["groups"])
+
+def set_identity(key, value):
+    identity_log.append((key, value))
+    identity[key] = value
+
+module.os.seteuid = lambda value: set_identity("euid", value)
+module.os.setegid = lambda value: set_identity("egid", value)
+module.os.setgroups = lambda value: set_identity("groups", list(value))
+written_identity = []
+module.write_nginx_manifest(
+    manifest,
+    {"fixture": True},
+    writer=lambda path, payload: written_identity.append(
+        (path, payload, identity["euid"], identity["egid"], list(identity["groups"]))
+    ),
+    service_user=types.SimpleNamespace(pw_uid=1000, pw_gid=1000),
+)
+assert written_identity == [(manifest, {"fixture": True}, 1000, 1000, [1000])], written_identity
+assert identity == {"euid": 0, "egid": 0, "groups": [0, 27]}, identity
+assert identity_log == [
+    ("groups", [1000]),
+    ("egid", 1000),
+    ("euid", 1000),
+    ("euid", 0),
+    ("egid", 0),
+    ("groups", [0, 27]),
+], identity_log
+
+class ExpectedWriteFailure(Exception):
+    pass
+
+def fail_manifest_write(_path, _payload):
+    raise ExpectedWriteFailure
 
 try:
-    module.install_nginx_config(
-        candidate,
-        target=target,
-        sudo_bin=str(fake_sudo),
-        nginx_bin=str(fake_nginx),
-        systemctl_bin=str(fake_systemctl),
+    module.write_nginx_manifest(
+        manifest,
+        {"fixture": False},
+        writer=fail_manifest_write,
+        service_user=types.SimpleNamespace(pw_uid=1000, pw_gid=1000),
     )
-except subprocess.CalledProcessError:
+except ExpectedWriteFailure:
     pass
 else:
-    raise AssertionError("invalid nginx candidate must fail installation")
+    raise AssertionError("manifest write failure was suppressed")
+assert identity == {"euid": 0, "egid": 0, "groups": [0, 27]}, identity
+for name, function in original_identity_functions.items():
+    setattr(module.os, name, function)
 
-assert target.read_text() == "valid-current\n", target.read_text()
-assert not systemctl_log.exists(), systemctl_log.read_text() if systemctl_log.exists() else ""
-
-candidate.write_text("valid-next\n")
 module.install_nginx_config(
-    candidate,
-    target=target,
+    manifest,
     sudo_bin=str(fake_sudo),
-    nginx_bin=str(fake_nginx),
-    systemctl_bin=str(fake_systemctl),
+    helper_path=fake_helper,
 )
-assert target.read_text() == "valid-next\n", target.read_text()
-assert systemctl_log.read_text().splitlines() == ["reload nginx"], systemctl_log.read_text()
+assert command_log.read_text().splitlines() == [""], command_log.read_text()
 
-target.write_text("valid-current-before-reload-failure\n")
-candidate.write_text("valid-next-reload-failure\n")
-os.environ["FAIL_FIRST_SYSTEMCTL_RELOAD"] = "1"
+alternate_manifest = fixture / "alternate.json"
+alternate_manifest.write_text("{}\n")
 try:
     module.install_nginx_config(
-        candidate,
-        target=target,
+        alternate_manifest,
         sudo_bin=str(fake_sudo),
-        nginx_bin=str(fake_nginx),
-        systemctl_bin=str(fake_systemctl),
+        helper_path=fake_helper,
     )
-except subprocess.CalledProcessError:
+except RuntimeError as error:
+    assert "fixed manifest path" in str(error), error
     pass
 else:
-    raise AssertionError("nginx reload failure must fail installation after restoring the previous config")
-finally:
-    os.environ.pop("FAIL_FIRST_SYSTEMCTL_RELOAD", None)
-
-assert target.read_text() == "valid-current-before-reload-failure\n", target.read_text()
-assert systemctl_log.read_text().splitlines() == [
-    "reload nginx",
-    "reload nginx",
-    "reload nginx",
-], systemctl_log.read_text()
-
-candidate.write_text("valid-current-before-reload-failure\n")
-module.install_nginx_config(
-    candidate,
-    target=target,
-    sudo_bin=str(fake_sudo),
-    nginx_bin=str(fake_nginx),
-    systemctl_bin=str(fake_systemctl),
-)
-assert systemctl_log.read_text().splitlines() == [
-    "reload nginx",
-    "reload nginx",
-    "reload nginx",
-], systemctl_log.read_text()
+    raise AssertionError("alternate manifest path reached the privileged helper")
 
 # Root execution must not depend on a sudo binary being installed.
-root_target = fixture / "root-preview.secpal.dev"
-root_candidate = fixture / "root-candidate.conf"
-root_target.write_text("valid-root-current\\n")
-root_candidate.write_text("valid-root-next\\n")
 original_geteuid = module.os.geteuid
 module.os.geteuid = lambda: 0
 try:
     module.install_nginx_config(
-        root_candidate,
-        target=root_target,
+        manifest,
         sudo_bin=str(fixture / "missing-sudo"),
-        nginx_bin=str(fake_nginx),
-        systemctl_bin=str(fake_systemctl),
+        helper_path=fake_helper,
     )
 finally:
     module.os.geteuid = original_geteuid
 
-assert root_target.read_text() == "valid-root-next\\n", root_target.read_text()
+assert command_log.read_text().splitlines() == ["", ""], command_log.read_text()
+
+# The production dispatch ignores environment-selected helpers. Tests may
+# still inject an explicit helper argument at the function boundary.
+bad_helper = fixture / "bad-environment-helper"
+bad_helper_marker = fixture / "bad-helper-ran"
+bad_helper.write_text(
+    "#!/usr/bin/env bash\n"
+    f"printf 'ran\\n' > {bad_helper_marker!s}\n"
+)
+bad_helper.chmod(0o755)
+module.DEFAULT_NGINX_HELPER_PATH = fake_helper
+os.environ["POLYSCOPE_NGINX_HELPER"] = str(bad_helper)
+try:
+    module.install_nginx_config(manifest, sudo_bin=str(fake_sudo))
+finally:
+    os.environ.pop("POLYSCOPE_NGINX_HELPER")
+assert not bad_helper_marker.exists(), bad_helper_marker
+assert command_log.read_text().splitlines() == ["", "", ""], command_log.read_text()
 PY
 
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
@@ -4613,6 +4653,7 @@ assert_invalid_candidate_blocks_provisioning() {
             ;;
     esac
 
+    replace_registered_worktrees "fe123456" "$invalid_instruction_clone"
     api_env_hash_before_invalid_candidate="$(file_sha256 "$api_clone/.env")"
     db_hash_before_invalid_candidate="$(file_sha256 "$db_path")"
     pg_state_hash_before_invalid_candidate="$(file_sha256 "$fake_pg_state")"
@@ -4664,6 +4705,7 @@ assert len(failures) == 1, failures
 assert failures[0]["path"] == invalid_path, failures
 assert "canonical AI-instruction validation failed" in failures[0]["error"], failures
 PY
+    replace_registered_worktrees
     rm -rf "$invalid_instruction_clone"
 }
 
@@ -4674,6 +4716,15 @@ assert_invalid_candidate_blocks_provisioning \
     "invalid-copilot" ".github/copilot-instructions.md" "missing-spdx" \
     "Missing inline SPDX header or .license sidecar"
 
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "api12345" "$broken_api_clone" \
+    "api12345" "$garbled_git_api_clone" \
+    "fe123456" "$frontend_clone" \
+    "fe123456" "$broken_frontend_clone" \
+    "an123456" "$broken_android_clone" \
+    "an123456" "$android_clone"
+
 provision_summary_json="$workspace/provision-summary.json"
 env HOME="$home_dir" \
     PATH="$service_path" \
@@ -4683,6 +4734,7 @@ env HOME="$home_dir" \
     FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$provision_summary_json" \
@@ -4804,6 +4856,10 @@ open(sys.argv[1], 'w').write(json.dumps(state))
 PY
 
 invalid_dir_cleanup_summary_json="$workspace/invalid-dir-cleanup-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -4811,6 +4867,7 @@ env HOME="$home_dir" \
     FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$invalid_dir_cleanup_summary_json" \
@@ -4832,6 +4889,82 @@ assert 'secpal__preview__fix' not in state['databases'], state['databases']
 PY
 
 grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__fix" WITH (FORCE)' "$fake_psql_log"
+
+# An active API registration may briefly precede its filesystem materialization.
+# Its deterministic preview target remains live until the registration itself
+# becomes inactive, regardless of provisioning eligibility.
+missing_active_api_clone="$home_dir/.polyscope/clones/api12345/pending-otter"
+python3 - <<'PY' "$fake_pg_state"
+import json
+import sys
+
+state = json.loads(open(sys.argv[1]).read())
+state['databases'].append('secpal__preview__pending_otter')
+open(sys.argv[1], 'w').write(json.dumps(state))
+PY
+
+missing_active_summary_json="$workspace/missing-active-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "api12345" "$missing_active_api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$missing_active_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$missing_active_summary_json" "$fake_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+assert summary.get('cleaned_preview_storage_targets', []) == [], summary
+assert 'secpal__preview__pending_otter' in state['databases'], state['databases']
+PY
+
+missing_removed_summary_json="$workspace/missing-removed-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone"
+env HOME="$home_dir" \
+    PATH="$service_path" \
+    PROVISION_LOG="$provision_log" \
+    FAKE_PSQL_LOG="$fake_psql_log" \
+    FAKE_PSQL_STATE="$fake_pg_state" \
+    python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$nginx_output" \
+    --summary-output "$missing_removed_summary_json" \
+    --skip-local-configs \
+    --skip-db-sync \
+    --provision-worktrees \
+    > /dev/null
+
+python3 - "$missing_removed_summary_json" "$fake_pg_state" <<'PY'
+import json
+import sys
+
+summary = json.loads(open(sys.argv[1]).read())
+state = json.loads(open(sys.argv[2]).read())
+assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__pending_otter'], summary
+assert 'secpal__preview__pending_otter' not in state['databases'], state['databases']
+PY
 
 legacy_hashed_api_clone="$home_dir/.polyscope/clones/api12345/legacy-hawk-165552b7"
 mkdir -p "$legacy_hashed_api_clone/.git/info" "$legacy_hashed_api_clone/.git/hooks" "$legacy_hashed_api_clone/scripts"
@@ -4883,6 +5016,12 @@ EOF
 chmod +x "$stale_api_clone/scripts/preflight.sh"
 
 stale_provision_summary_json="$workspace/stale-provision-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone" \
+    "api12345" "$legacy_hashed_api_clone" \
+    "api12345" "$stale_api_clone"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -4890,6 +5029,7 @@ env HOME="$home_dir" \
     FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$stale_provision_summary_json" \
@@ -4943,6 +5083,10 @@ open(sys.argv[1], "w").write(json.dumps(state))
 PY
 
 cleanup_summary_json="$workspace/cleanup-summary.json"
+replace_registered_worktrees \
+    "api12345" "$api_clone" \
+    "fe123456" "$frontend_clone" \
+    "an123456" "$android_clone"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -4950,6 +5094,7 @@ env HOME="$home_dir" \
     FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$cleanup_summary_json" \
@@ -4988,6 +5133,7 @@ env HOME="$home_dir" \
     FAKE_PSQL_STATE="$fake_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$idempotent_summary_json" \
@@ -5053,6 +5199,14 @@ state.setdefault('schemas', []).append('secpal__preview__broken_mole')
 open(sys.argv[1], 'w').write(json.dumps(state))
 PY
 
+replace_registered_worktrees \
+    "api12345" "$failing_api_clone" \
+    "api12345" "$failing_api_cleanup_clone" \
+    "api12345" "$failing_api_alias_clone" \
+    "fe123456" "$failing_frontend_manifest_clone" \
+    "fe123456" "$failing_frontend_io_clone" \
+    "gg123456" "$guardguide_clone"
+
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -5061,6 +5215,7 @@ env HOME="$home_dir" \
     FAIL_ON_WORKTREE="$failing_api_clone" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$failure_isolation_summary_json" \
@@ -5161,6 +5316,7 @@ env HOME="$home_dir" \
     FAIL_ON_WORKTREE="$failing_api_clone" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$guardguide_lockfile_summary_json" \
@@ -5228,6 +5384,10 @@ exit 0
 EOF
 chmod +x "$schema_frontend_clone/scripts/preflight.sh"
 
+replace_registered_worktrees \
+    "api12345" "$schema_api_clone" \
+    "fe123456" "$schema_frontend_clone"
+
 env HOME="$schema_home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -5235,6 +5395,7 @@ env HOME="$schema_home_dir" \
     FAKE_PSQL_STATE="$schema_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$schema_summary_json" \
@@ -5311,6 +5472,7 @@ env HOME="$schema_home_dir" \
     FAKE_PSQL_STATE="$schema_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$schema_recovery_summary_json" \
@@ -5357,6 +5519,7 @@ env HOME="$schema_home_dir" \
     FAKE_PSQL_STATE="$schema_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$schema_lockfile_summary_json" \
@@ -5377,6 +5540,7 @@ PY
 test "$schema_frontend_npm_ci_count_before" -lt "$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log")"
 
 rm -rf "$schema_api_clone" "$schema_frontend_clone"
+replace_registered_worktrees
 
 env HOME="$schema_home_dir" \
     PATH="$service_path" \
@@ -5385,6 +5549,7 @@ env HOME="$schema_home_dir" \
     FAKE_PSQL_STATE="$schema_pg_state" \
     python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
     --summary-output "$schema_cleanup_summary_json" \
@@ -5425,6 +5590,7 @@ fake_unit_dir="$workspace/fake-units"
 fake_systemctl_dir="$workspace/fake-systemctl"
 fake_systemctl_log="$workspace/systemctl.log"
 fake_sudo_dir="$workspace/fake-sudo"
+fake_nginx_helper="$fake_sudo_dir/secpal-polyscope-nginx-apply"
 fake_server_bin="$workspace/fake-tools/polyscope-server"
 fake_expose_real_log="$workspace/expose-real.log"
 fake_git_real_log="$workspace/git-real.log"
@@ -5432,7 +5598,9 @@ fake_polyscope_bin_dir="$home_dir/.polyscope/bin"
 fake_polyscope_git_dir="$home_dir/.local/lib/polyscope/bin"
 fake_codex_home="$home_dir/.codex"
 real_readlink_bin="$(command -v readlink)"
+real_id_bin="$(command -v id)"
 export REAL_READLINK_BIN="$real_readlink_bin"
+export REAL_ID_BIN="$real_id_bin"
 mkdir -p "$fake_bin_dir" "$fake_unit_dir" "$fake_systemctl_dir" "$fake_sudo_dir" "$fake_polyscope_bin_dir" "$fake_polyscope_git_dir"
 mkdir -p "$(dirname "$fake_server_bin")"
 
@@ -5483,6 +5651,24 @@ exec "$REAL_READLINK_BIN" "$@"
 STUB
 chmod +x "$fake_systemctl_dir/readlink"
 
+cat >"$fake_systemctl_dir/id" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
+    printf '1000\n'
+    exit 0
+fi
+if [[ "${1:-}" == "-u" && $# -eq 1 ]]; then
+    printf '1000\n'
+    exit 0
+fi
+if [[ "${1:-}" == "-un" && $# -eq 1 ]]; then
+    printf 'secpal\n'
+    exit 0
+fi
+exec "$REAL_ID_BIN" "$@"
+STUB
+chmod +x "$fake_systemctl_dir/id"
+
 cat >"$fake_sudo_dir/sudo" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SUDO_LOG"
@@ -5494,13 +5680,87 @@ if [[ "${1:-}" == "-n" && "${2:-}" == "true" ]]; then
     exit 98
 fi
 
-if [[ "${1:-}" == "-n" ]]; then
+if [[ "${1:-}" == "-k" && "${2:-}" == "-n" ]]; then
+    shift 2
+elif [[ "${1:-}" == "-n" ]]; then
     shift
 fi
 
 exec "$@"
 STUB
 chmod +x "$fake_sudo_dir/sudo"
+
+cat >"$fake_nginx_helper" <<'STUB'
+#!/usr/bin/env bash
+if [[ $# -eq 0 || ( $# -eq 1 && "$1" == "--check" ) ]]; then
+    exit 0
+fi
+exit 64
+STUB
+chmod +x "$fake_nginx_helper"
+export POLYSCOPE_NGINX_HELPER="$fake_nginx_helper"
+export POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE=1
+
+# The unprivileged installer owns secpal-specific paths and units. A different
+# caller must fail before any installation writes, independently of HOME.
+wrong_user_id_dir="$workspace/wrong-user-id"
+wrong_user_home_dir="$workspace/wrong-user-home"
+wrong_user_bin_dir="$workspace/wrong-user-bin"
+wrong_user_unit_dir="$workspace/wrong-user-units"
+wrong_user_error="$workspace/wrong-user.error"
+wrong_user_exit=0
+mkdir -p "$wrong_user_id_dir" "$wrong_user_home_dir/.polyscope/bin"
+cat >"$wrong_user_id_dir/id" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
+    printf '1000\n'
+    exit 0
+fi
+if [[ "${1:-}" == "-u" && $# -eq 1 ]]; then
+    printf '2000\n'
+    exit 0
+fi
+exec "$REAL_ID_BIN" "$@"
+STUB
+chmod +x "$wrong_user_id_dir/id"
+env HOME="$wrong_user_home_dir" \
+    PATH="$wrong_user_id_dir:$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$wrong_user_bin_dir" \
+        --unit-dir "$wrong_user_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$wrong_user_error" \
+    || wrong_user_exit=$?
+if [[ "$wrong_user_exit" -eq 0 ]]; then
+    echo "unprivileged installer must require the secpal account" >&2
+    exit 1
+fi
+grep -qF 'must be run as the secpal user' "$wrong_user_error"
+test ! -e "$wrong_user_unit_dir/polyscope-rollout-sync.service"
+
+# Production installation must persist the one fixed root-owned helper path,
+# even if an older broad sudo rule would make an arbitrary override executable.
+custom_helper_home_dir="$workspace/custom-helper-home"
+custom_helper_bin_dir="$workspace/custom-helper-bin"
+custom_helper_unit_dir="$workspace/custom-helper-units"
+custom_helper_error="$workspace/custom-helper-install.error"
+custom_helper_exit=0
+mkdir -p "$custom_helper_home_dir/.polyscope/bin"
+env HOME="$custom_helper_home_dir" \
+    POLYSCOPE_NGINX_HELPER="$fake_nginx_helper" \
+    POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE=0 \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$custom_helper_bin_dir" \
+        --unit-dir "$custom_helper_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$custom_helper_error" \
+    || custom_helper_exit=$?
+if [[ "$custom_helper_exit" -eq 0 ]]; then
+    echo "installer must reject a non-fixed nginx helper path" >&2
+    exit 1
+fi
+grep -qF 'nginx helper path is fixed' "$custom_helper_error"
+test ! -e "$custom_helper_unit_dir/polyscope-rollout-sync.service"
 
 # A custom rollout source is only executable as an instruction-dependent
 # command when its canonical validator is present beside it. Reject an
@@ -5559,8 +5819,13 @@ mkdir -p "$missing_toolchain_source_dir" \
 cp "$PYTHON_SCRIPT" "$missing_toolchain_source_script"
 cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
     "$missing_toolchain_source_dir/validate-ai-instructions.sh"
+cp "$REPO_ROOT/scripts/polyscope_nginx.py" \
+    "$missing_toolchain_source_dir/polyscope_nginx.py"
+cp "$REPO_ROOT/scripts/secpal-polyscope-nginx-apply.py" \
+    "$missing_toolchain_source_dir/secpal-polyscope-nginx-apply.py"
 chmod +x "$missing_toolchain_source_script" \
-    "$missing_toolchain_source_dir/validate-ai-instructions.sh"
+    "$missing_toolchain_source_dir/validate-ai-instructions.sh" \
+    "$missing_toolchain_source_dir/secpal-polyscope-nginx-apply.py"
 cat >"$missing_toolchain_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
 #!/usr/bin/env bash
 exit 0
@@ -5638,6 +5903,43 @@ grep -qF 'resolved rollout source script path must not contain whitespace' \
     "$spaced_error"
 test ! -e "$spaced_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$spaced_unit_dir/polyscope-rollout-sync.path"
+
+# The privileged helper accepts one fixed manifest path. Reject an override
+# before installing a user unit that could never complete successfully.
+custom_manifest_home_dir="$workspace/custom-manifest-home"
+custom_manifest_bin_dir="$workspace/custom-manifest-bin"
+custom_manifest_unit_dir="$workspace/custom-manifest-units"
+custom_manifest_error="$workspace/custom-manifest-install.error"
+custom_manifest_exit=0
+mkdir -p "$custom_manifest_home_dir/.polyscope/bin"
+cat >"$custom_manifest_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$custom_manifest_home_dir/.polyscope/bin/expose-linux-x64"
+env HOME="$custom_manifest_home_dir" \
+    CODEX_HOME="$custom_manifest_home_dir/.codex" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/custom-manifest-sudo.log" \
+    POLYSCOPE_NGINX_HELPER="$fake_nginx_helper" \
+    POLYSCOPE_NGINX_MANIFEST="$custom_manifest_home_dir/custom-manifest.json" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --bin-dir "$custom_manifest_bin_dir" \
+        --unit-dir "$custom_manifest_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$custom_manifest_error" \
+    || custom_manifest_exit=$?
+if [[ "$custom_manifest_exit" -eq 0 ]]; then
+    echo "installer must reject a non-fixed nginx manifest path" >&2
+    exit 1
+fi
+grep -qF 'nginx manifest path is fixed' "$custom_manifest_error"
+test ! -e "$custom_manifest_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$custom_manifest_unit_dir/polyscope-rollout-sync.service"
 
 env HOME="$home_dir" \
     CODEX_HOME="$fake_codex_home" \
@@ -5837,10 +6139,52 @@ system_systemctl_log="$workspace/system-systemctl.log"
 system_sudo_log="$workspace/system-sudo.log"
 system_fragment_dir="$workspace/system-fragments"
 system_fragment_path="$system_fragment_dir/polyscope-server.service"
-system_server_user="$(id -un)"
-system_server_uid="$(id -u)"
-mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir"
+system_server_user="secpal"
+system_node_dir="$workspace/system-node/bin"
+system_node_bin="$system_node_dir/node"
+mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir" "$system_node_dir"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$system_node_bin"
+chmod +x "$system_node_bin"
 printf '[Unit]\nDescription=Polyscope Server\n' > "$system_fragment_path"
+system_component_stage="$workspace/system-component-stage"
+DESTDIR="$system_component_stage" \
+    "$REPO_ROOT/scripts/install-polyscope-system-components.sh" --stage-only --node-bin "$system_node_bin" >/dev/null
+mkdir -p "$system_dropin_dir"
+cp "$system_component_stage/etc/systemd/system/polyscope-server.service.d/zz-secpal-runtime.conf" \
+    "$system_dropin_dir/zz-secpal-runtime.conf"
+system_dropin_hash_before="$(file_sha256 "$system_dropin_dir/zz-secpal-runtime.conf")"
+
+# A stale privileged drop-in must fail the unprivileged installer before it
+# creates any links or user units. The system-component installer is the only
+# writer for this root-owned contract.
+stale_system_dropin_dir="$workspace/stale-system-service-units/polyscope-server.service.d"
+stale_system_bin_dir="$workspace/stale-system-bin"
+stale_system_unit_dir="$workspace/stale-system-user-units"
+stale_system_error="$workspace/stale-system-install.error"
+mkdir -p "$stale_system_dropin_dir"
+printf '[Service]\nUser=secpal\n' >"$stale_system_dropin_dir/zz-secpal-runtime.conf"
+stale_system_exit=0
+env HOME="$system_home_dir" \
+    CODEX_HOME="$system_home_dir/.codex-stale" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$system_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$system_sudo_log" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="$system_server_user" \
+    POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$stale_system_dropin_dir" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$stale_system_bin_dir" --unit-dir "$stale_system_unit_dir" --polyscope-server-bin "$fake_server_bin" \
+    2>"$stale_system_error" \
+    || stale_system_exit=$?
+if [[ "$stale_system_exit" -eq 0 ]]; then
+    echo "unprivileged installer must reject stale system components" >&2
+    exit 1
+fi
+grep -qF 'reviewed system server drop-in is incomplete' "$stale_system_error"
+test ! -e "$stale_system_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$stale_system_unit_dir/polyscope-rollout-sync.service"
 
 cat >"$system_polyscope_bin_dir/expose-linux-x64" <<'STUB'
 #!/usr/bin/env bash
@@ -5865,16 +6209,18 @@ env HOME="$system_home_dir" \
 
 test ! -e "$system_user_unit_dir/polyscope-server.service"
 test -f "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
+test "$(file_sha256 "$system_dropin_dir/zz-secpal-runtime.conf")" = "$system_dropin_hash_before"
+grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q "Environment=PATH=$system_polyscope_git_dir:$system_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
-grep -q '^daemon-reload$' "$system_systemctl_log"
-grep -q '^enable --now polyscope-server.service$' "$system_systemctl_log"
-grep -q '^restart polyscope-server.service$' "$system_systemctl_log"
+if grep -Eq '^(daemon-reload|enable --now polyscope-server\.service|restart polyscope-server\.service)$' "$system_systemctl_log"; then
+  echo "unprivileged installer must not mutate the system service" >&2
+  exit 1
+fi
 grep -q '^--user disable --now polyscope-server.service$' "$system_systemctl_log"
 grep -q '^--user daemon-reload$' "$system_systemctl_log"
 grep -q '^--user enable --now polyscope-rollout-sync.path$' "$system_systemctl_log"
@@ -5889,25 +6235,6 @@ if grep -q '^--user start polyscope-worktree-provision.service$' "$system_system
   echo "system-scope install must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
   exit 1
 fi
-
-system_fallback_dropin_dir="$workspace/system-fallback-service-units/polyscope-server.service.d"
-mkdir -p "$system_fallback_dropin_dir"
-
-env HOME="$system_home_dir" \
-    CODEX_HOME="$system_home_dir/.codex" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$system_systemctl_log" \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$system_sudo_log" \
-    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
-    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="" \
-    POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$system_fallback_dropin_dir" \
-    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" --bin-dir "$system_bin_dir" --unit-dir "$system_user_unit_dir" --polyscope-server-bin "$fake_server_bin"
-
-grep -q 'Environment=SSH_AUTH_SOCK=/run/user/0/openssh_agent' "$system_fallback_dropin_dir/zz-secpal-runtime.conf"
 
 grep -q 'ExecStart=.*/polyscope-server serve --host 127.0.0.1 --port 4321' "$fake_unit_dir/polyscope-server.service"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.service"
@@ -5924,6 +6251,8 @@ grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
@@ -5931,6 +6260,8 @@ grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polysc
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/node_modules/\.package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/polyscope_nginx\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal-polyscope-nginx-apply\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 if grep -qF '/../' "$fake_unit_dir/polyscope-rollout-sync.path"; then
     echo "rollout sync watcher paths must be normalized" >&2
     exit 1
@@ -5984,6 +6315,11 @@ if grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"; t
   echo "installer must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
   exit 1
 fi
+if grep -qF -- '-n -k true' "$workspace/user-sudo.log"; then
+  echo "installer must not test generic passwordless sudo" >&2
+  exit 1
+fi
+grep -qF -- "-k -n $fake_nginx_helper --check" "$workspace/user-sudo.log"
 
 # installer must refuse when system scope is detected but sudo is unavailable
 no_sudo_home_dir="$workspace/no-sudo-home"
@@ -6292,3 +6628,9 @@ env HOME="$home_dir" \
     "$fake_polyscope_bin_dir/expose-linux-x64" share https://example.com:443 >/dev/null
 
 grep -q 'share https://example.com:443' "$fake_expose_real_log"
+
+# Keep the package-1 security boundaries attached to the established rollout
+# regression entry point used by repository validation.
+bash "$SCRIPT_DIR/polyscope-package-1-closure.sh"
+bash "$SCRIPT_DIR/polyscope-nginx-helper.sh"
+bash "$SCRIPT_DIR/polyscope-system-installer.sh"

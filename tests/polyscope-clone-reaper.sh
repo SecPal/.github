@@ -374,6 +374,45 @@ assert report['skipped']['active'] == [str(root / 'legacy-worktree')]
 assert report['would_remove'] == [str(root / 'legacy-orphan')]
 PY
 
+# Read-only SQLite URIs must quote legal filename metacharacters instead of
+# selecting a different database or creating a side file.
+uri_home="$workspace/uri?authoritative#state/.polyscope"
+uri_root="$uri_home/clones"
+mkdir -p "$uri_root/uri-worktree"
+python3 - <<'PY' "$uri_home" "$uri_root"
+import sqlite3
+import sys
+from pathlib import Path
+
+home = Path(sys.argv[1])
+root = Path(sys.argv[2])
+db_path = home / "polyscope.db"
+with sqlite3.connect(db_path) as connection:
+    connection.executescript(
+        """
+        CREATE TABLE repositories (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL);
+        CREATE TABLE worktrees (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL);
+        """
+    )
+    connection.execute("INSERT INTO repositories VALUES (?, ?, ?)", ("uri-repo", "uri", "/tmp/uri"))
+    connection.execute(
+        "INSERT INTO worktrees VALUES (?, ?, ?, ?)",
+        ("uri-worktree", "uri-repo", "main", str(root / "uri-worktree")),
+    )
+PY
+uri_output="$(python3 "$REAPER" --polyscope-home "$uri_home" --dry-run --json)"
+python3 - <<'PY' "$uri_output" "$uri_root" "$uri_home"
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(sys.argv[1])
+root = Path(sys.argv[2])
+home = Path(sys.argv[3])
+assert str(root / "uri-worktree") in report["skipped"]["active"], report
+assert sorted(home.iterdir()) == [root, home / "polyscope.db"], sorted(home.iterdir())
+PY
+
 # A configured clone root must be absolute and must not permit cleanup elsewhere.
 set +e
 outside_output="$(python3 "$REAPER" --polyscope-home "$polyscope_home" --clone-root relative --dry-run 2>&1)"

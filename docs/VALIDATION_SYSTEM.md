@@ -119,13 +119,26 @@ licensing, frontmatter, or size rules. All managed source roots are validated
 before any instruction-dependent local configuration or repository metadata is
 written. A missing validator or missing Markdown tooling blocks rollout.
 
-Candidate worktrees are validated with that same contract before worktree
-registration, instruction-dependent metadata synchronization, local
-configuration installation, setup, or provision markers. Canonical validation
-finishes for all provisionable candidates before the first such candidate
-mutation, so one invalid candidate cannot leave another candidate partially
-provisioned. Validator failures remain errors and include the affected root and
-the canonical validator output.
+Generated Polyscope workspace setup sequences invoke the validation-only
+`--validate-instruction-worktree` mode as their first effective boundary.
+Polyscope may already have created and registered the candidate at that point,
+but canonical validation must succeed before npm, Composer, `.env`, database,
+migration, seed, or any other native setup command runs.
+
+The external worktree provisioner derives its allowlist only from active
+`worktrees` registrations in the current Polyscope SQLite database. Registered
+paths are resolved and constrained to the matching repository clone root;
+the read-only SQLite URI percent-encodes the resolved database path before
+adding URI parameters, so legal filename characters cannot select or create a
+different database;
+unregistered directories are ignored and remain available only to the
+conservative clone reaper. Candidate worktrees are validated before
+instruction-dependent metadata synchronization, local configuration, hooks,
+aliases, setup, or provision markers. Canonical validation finishes for all
+provisionable candidates before the first such candidate mutation, so one
+invalid candidate cannot leave another candidate partially provisioned.
+Validator failures remain errors and include the affected root and canonical
+validator output.
 
 The direct `--prepare-api-worktree`, `--bootstrap-api-worktree`,
 `--refresh-api-worktree`, and `--run-api-worktree` commands share one
@@ -137,6 +150,47 @@ migrations, imports, seeds, refreshes, or runtime process execution. Missing
 Markdownlint therefore blocks these direct operations as well as normal
 rollout. No instruction-independent direct command currently bypasses this
 boundary.
+
+## Polyscope Privilege Boundary
+
+The rollout never installs arbitrary nginx text. It atomically writes a strict,
+size-bounded JSON manifest to one fixed user-owned path. The root-owned
+`secpal-polyscope-nginx-apply` helper accepts only apply with no arguments or a
+non-mutating `--check`. It validates manifest type, ownership, mode, keys,
+repository identifiers, fixed preview domain and clone root, and loopback-only
+PHP upstream before rendering the fixed nginx target from its root-owned
+template bundle. The helper validates the manifest library's exact path,
+ownership, and mode before importing it, so an unsafe dependency cannot run
+privileged top-level code before rejection.
+
+Only the exact helper command forms are eligible for passwordless sudo. The
+user service cannot invoke a shell, Python interpreter, `systemctl`, or general
+file utility through that rule. The helper writes the fixed target atomically,
+runs `/usr/sbin/nginx -t`, and reloads nginx only on success. A validation or
+reload failure restores the prior configuration and reactivates it when
+necessary. Direct root execution remains available for the root-driven rollout
+and administrator troubleshooting; when sudo identity is present, it must
+match the exact `secpal` account and UID.
+
+Installation is deliberately split. An administrator runs
+`scripts/install-polyscope-system-components.sh` through a real interactive
+sudo prompt to install the root-owned helper bundle, exact sudoers drop-in, and
+system server drop-in. Before activation it verifies the canonical rollout
+source bundle under `/home/secpal/code/SecPal/.github/scripts/`; the drop-in
+executes that source directly after its pinned Markdown validator dependencies
+and a `secpal`-executable Node.js path have been checked and does not depend on
+a user-local link that has not been installed yet. The `secpal` user then runs
+`scripts/install-polyscope-rollout.sh` without sudo to install and enable the
+rollout path, worktree provision path and timer, and clone reaper timer. The
+user installer resets cached sudo credentials before checking the exact fixed
+helper `--check`; a helper override, non-fixed manifest path, missing helper,
+authorization, validator dependency, or Markdownlint blocks installation.
+
+The rollout sync path watches the rollout, canonical validator, manifest
+library and helper sources, instruction roots and Codex template, committed
+`package-lock.json`, and installed `node_modules/.package-lock.json`. The
+provision path watches database and local-configuration state, while its timer
+provides a bounded fallback. No user unit invokes broad privileged commands.
 
 Rollout requires both independent files, always reads runtime policy from
 `AGENTS.md`, and never treats the Copilot review profile as runtime
