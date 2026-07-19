@@ -589,6 +589,18 @@ class SignatureAndCheckTests(unittest.TestCase):
         with self.assertRaises(review.BlockedError):
             review.require_rule_evidence(None, {}, config()["check_policy"])
 
+    def test_branch_protection_preserves_required_check_with_null_app_id(self) -> None:
+        required = review.require_rule_evidence(
+            [],
+            {
+                "strict": True,
+                "contexts": ["tests"],
+                "checks": [{"context": "tests", "app_id": None}],
+            },
+            config()["check_policy"],
+        )
+        self.assertEqual(required, [{"context": "tests", "integration_id": None}])
+
 
 class SecurityAndOutputTests(unittest.TestCase):
     def test_46_hostile_markdown_is_escaped(self) -> None:

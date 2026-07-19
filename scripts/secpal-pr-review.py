@@ -1540,7 +1540,8 @@ def require_rule_evidence(
             ):
                 raise BlockedError(BLOCKED_INCOMPLETE, "Malformed required check identity", "branch_protection", None)
             specifications[(context, app_id)] = {"context": context, "integration_id": app_id}
-            specifications.pop((context, None), None)
+            if app_id is not None:
+                specifications.pop((context, None), None)
     return [specifications[key] for key in sorted(specifications, key=lambda value: (value[0], value[1] or 0))]
 
 
