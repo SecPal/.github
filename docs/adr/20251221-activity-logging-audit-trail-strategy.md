@@ -7,7 +7,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Accepted**
+**Partially Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)**
+
+**Previous status:** Accepted
 
 ## Date
 
@@ -18,6 +20,8 @@ SPDX-License-Identifier: CC0-1.0
 **Implemented:** Phases 1-3 (Sub-Issues #386-#391, #398, #408) - Core infrastructure complete
 **In Progress:** Phase 4 (Retention & Archiving)
 **Pending:** Phases 5-6 (Controller/Policy/Frontend/Documentation)
+
+**Supersession notice:** Retention-driven audit logging, tamper-evident integrity, retention controls, and comprehensive audit coverage remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces User-based Tenant resolution, Organizational Unit log scoping, inheritance blocking, and ADR-007/ADR-008/ADR-009-based access dependencies with active TenantMembership context and effective permission, scope, and validity authorization. The historical content below is retained for context.
 
 ## Context
 

@@ -25,6 +25,7 @@ SPDX-License-Identifier: CC0-1.0
 
 - [ADR-004](20251108-rbac-spatie-temporal-extension.md)
 - [ADR-005](20251111-rbac-design-decisions.md)
+- [ADR-010](20251221-activity-logging-audit-trail-strategy.md)
 - [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md)
 
 This ADR was accepted after functional and architectural review by the SecPal Product and Domain Owner.

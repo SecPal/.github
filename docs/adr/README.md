@@ -94,7 +94,6 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15
 - [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06
-- [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24
 
 ### Proposed
 
@@ -111,6 +110,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 ### Partially Superseded
 
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+- [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
