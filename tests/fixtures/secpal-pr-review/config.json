@@ -1,0 +1,40 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "schema_version": "1.0",
+  "repository": "SecPal/.github",
+  "default_branch": "main",
+  "allowed_base_repositories": ["SecPal/.github"],
+  "reviewer_identities": [
+    {
+      "canonical_identity": "copilot",
+      "kind": "bot",
+      "graphql_aliases": ["copilot-pull-request-reviewer"],
+      "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
+      "node_ids": [],
+      "database_ids": []
+    },
+    {
+      "canonical_identity": "codex",
+      "kind": "bot",
+      "graphql_aliases": ["chatgpt-codex-connector"],
+      "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
+      "node_ids": [],
+      "database_ids": []
+    }
+  ],
+  "signature_policy": {
+    "require_github_verified": true,
+    "require_local_verified": true,
+    "accepted_formats": ["ssh", "openpgp"]
+  },
+  "check_policy": {
+    "require_ruleset_evidence": true,
+    "require_branch_protection_evidence": true,
+    "expected_skipped": "block"
+  },
+  "maximum_api_calls": 200,
+  "maximum_items": 10000,
+  "maximum_threads": 500,
+  "maximum_comments": 10000,
+  "maximum_reactions": 10000
+}

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/.github/blob/main/docs/schemas/secpal-pr-review-repositories.schema.json",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "title": "SecPal deterministic pull request evidence repository configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "default_branch",
+    "allowed_base_repositories",
+    "reviewer_identities",
+    "signature_policy",
+    "check_policy",
+    "maximum_api_calls",
+    "maximum_items",
+    "maximum_threads",
+    "maximum_comments",
+    "maximum_reactions"
+  ],
+  "properties": {
+    "$comment": { "type": "string" },
+    "schema_version": { "const": "1.0" },
+    "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "default_branch": { "type": "string", "minLength": 1 },
+    "allowed_base_repositories": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[^/]+/[^/]+$" }
+    },
+    "reviewer_identities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "canonical_identity",
+          "kind",
+          "graphql_aliases",
+          "rest_event_aliases",
+          "node_ids",
+          "database_ids"
+        ],
+        "properties": {
+          "canonical_identity": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["human", "bot", "app"] },
+          "graphql_aliases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "rest_event_aliases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "node_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "database_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "signature_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["require_github_verified", "require_local_verified", "accepted_formats"],
+      "properties": {
+        "require_github_verified": { "type": "boolean" },
+        "require_local_verified": { "type": "boolean" },
+        "accepted_formats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["ssh", "openpgp"] }
+        }
+      }
+    },
+    "check_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "require_ruleset_evidence",
+        "require_branch_protection_evidence",
+        "expected_skipped"
+      ],
+      "properties": {
+        "require_ruleset_evidence": { "type": "boolean" },
+        "require_branch_protection_evidence": { "type": "boolean" },
+        "expected_skipped": { "enum": ["block", "allow"] }
+      }
+    },
+    "maximum_api_calls": { "type": "integer", "minimum": 1 },
+    "maximum_items": { "type": "integer", "minimum": 1 },
+    "maximum_threads": { "type": "integer", "minimum": 1 },
+    "maximum_comments": { "type": "integer", "minimum": 1 },
+    "maximum_reactions": { "type": "integer", "minimum": 1 }
+  }
+}

@@ -1,0 +1,617 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "graphql": {
+    "PullRequestAnchor": {
+      "null": {
+        "data": {
+          "repository": {
+            "id": "REPO_1",
+            "name": ".github",
+            "nameWithOwner": "SecPal/.github",
+            "url": "https://github.com/SecPal/.github",
+            "defaultBranchRef": { "name": "main" },
+            "pullRequest": {
+              "id": "PR_1",
+              "databaseId": 1,
+              "number": 1,
+              "url": "https://github.com/SecPal/.github/pull/1",
+              "title": "Fixture pull request",
+              "body": "Fixture pull request body.",
+              "state": "OPEN",
+              "isDraft": false,
+              "merged": false,
+              "mergeable": "MERGEABLE",
+              "mergeStateStatus": "CLEAN",
+              "reviewDecision": null,
+              "updatedAt": "2026-07-19T00:08:00Z",
+              "author": {
+                "__typename": "User",
+                "id": "USER_AUTHOR",
+                "databaseId": 8,
+                "login": "author",
+                "url": "https://github.com/author"
+              },
+              "baseRepository": {
+                "id": "REPO_1",
+                "nameWithOwner": "SecPal/.github",
+                "url": "https://github.com/SecPal/.github"
+              },
+              "baseRefName": "main",
+              "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "headRepository": {
+                "id": "REPO_1",
+                "nameWithOwner": "SecPal/.github",
+                "url": "https://github.com/SecPal/.github"
+              },
+              "headRefName": "feat/test",
+              "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "potentialMergeCommit": {
+                "oid": "dddddddddddddddddddddddddddddddddddddddd"
+              },
+              "labels": {
+                "totalCount": 0,
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              },
+              "reviewRequests": {
+                "totalCount": 0,
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              },
+              "reviews": { "totalCount": 2 },
+              "reactions": { "totalCount": 1 },
+              "comments": { "totalCount": 1 },
+              "reviewThreads": { "totalCount": 2 },
+              "commits": { "totalCount": 1 }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestLabels": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "labels": {
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestReviewRequests": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviewRequests": {
+                "nodes": [],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestReviews": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviews": {
+                "nodes": [
+                  {
+                    "id": "REVIEW_1",
+                    "databaseId": 11,
+                    "author": {
+                      "__typename": "Bot",
+                      "id": "BOT_COPILOT",
+                      "databaseId": 12,
+                      "login": "copilot-pull-request-reviewer",
+                      "url": "https://github.com/apps/copilot-pull-request-reviewer"
+                    },
+                    "state": "COMMENTED",
+                    "body": "Informational review only.",
+                    "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-11",
+                    "submittedAt": "2026-07-19T00:00:00Z",
+                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+                    "reactions": {
+                      "nodes": [
+                        {
+                          "id": "REVIEW_REACTION_1",
+                          "content": "THUMBS_UP",
+                          "createdAt": "2026-07-19T00:00:30Z",
+                          "user": {
+                            "__typename": "User",
+                            "id": "USER_REVIEW_REACTOR_1",
+                            "databaseId": 51,
+                            "login": "review-reactor-one",
+                            "url": "https://github.com/review-reactor-one"
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": true, "endCursor": "review-reaction-1" }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": true, "endCursor": "review-1" }
+              }
+            }
+          }
+        }
+      },
+      "review-1": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviews": {
+                "nodes": [
+                  {
+                    "id": "REVIEW_2",
+                    "databaseId": 12,
+                    "author": {
+                      "__typename": "Bot",
+                      "id": "BOT_CODEX",
+                      "databaseId": 13,
+                      "login": "chatgpt-codex-connector",
+                      "url": "https://github.com/apps/chatgpt-codex-connector"
+                    },
+                    "state": "COMMENTED",
+                    "body": "Second informational review.",
+                    "url": "https://github.com/SecPal/.github/pull/1#pullrequestreview-12",
+                    "submittedAt": "2026-07-19T00:01:00Z",
+                    "commit": { "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+                    "reactions": {
+                      "nodes": [],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": "review-2" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ReviewReactions": {
+      "REVIEW_1:review-reaction-1": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "reactions": {
+              "nodes": [
+                {
+                  "id": "REVIEW_REACTION_2",
+                  "content": "EYES",
+                  "createdAt": "2026-07-19T00:00:45Z",
+                  "user": {
+                    "__typename": "User",
+                    "id": "USER_REVIEW_REACTOR_2",
+                    "databaseId": 52,
+                    "login": "review-reactor-two",
+                    "url": "https://github.com/review-reactor-two"
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": "review-reaction-2" }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestReactions": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reactions": {
+                "nodes": [
+                  {
+                    "id": "PR_REACTION_1",
+                    "content": "ROCKET",
+                    "createdAt": "2026-07-19T00:00:15Z",
+                    "user": {
+                      "__typename": "User",
+                      "id": "USER_PR_REACTOR_1",
+                      "databaseId": 50,
+                      "login": "pr-reactor",
+                      "url": "https://github.com/pr-reactor"
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ConversationComments": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "ISSUE_COMMENT_1",
+                    "databaseId": 31,
+                    "author": {
+                      "__typename": "User",
+                      "id": "USER_AUTHOR",
+                      "databaseId": 8,
+                      "login": "author",
+                      "url": "https://github.com/author"
+                    },
+                    "body": "Top-level context with ](javascript:alert(1)).",
+                    "url": "https://github.com/SecPal/.github/pull/1#issuecomment-31",
+                    "createdAt": "2026-07-19T00:02:00Z",
+                    "updatedAt": "2026-07-19T00:02:00Z",
+                    "reactions": {
+                      "nodes": [
+                        {
+                          "id": "REACTION_1",
+                          "content": "THUMBS_UP",
+                          "createdAt": "2026-07-19T00:03:00Z",
+                          "user": {
+                            "__typename": "User",
+                            "id": "USER_REACTOR_1",
+                            "databaseId": 41,
+                            "login": "reactor-one",
+                            "url": "https://github.com/reactor-one"
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": true, "endCursor": "reaction-1" }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "IssueCommentReactions": {
+      "reaction-1": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "reactions": {
+              "nodes": [
+                {
+                  "id": "REACTION_2",
+                  "content": "EYES",
+                  "createdAt": "2026-07-19T00:04:00Z",
+                  "user": {
+                    "__typename": "User",
+                    "id": "USER_REACTOR_2",
+                    "databaseId": 42,
+                    "login": "reactor-two",
+                    "url": "https://github.com/reactor-two"
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": "reaction-2" }
+            }
+          }
+        }
+      }
+    },
+    "ReviewThreads": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviewThreads": {
+                "nodes": [
+                  {
+                    "id": "THREAD_1",
+                    "isResolved": true,
+                    "isOutdated": false,
+                    "path": "scripts/example.py",
+                    "line": 7,
+                    "originalLine": 7,
+                    "diffSide": "RIGHT",
+                    "startLine": null,
+                    "startDiffSide": null,
+                    "comments": {
+                      "nodes": [
+                        {
+                          "id": "REVIEW_COMMENT_1",
+                          "databaseId": 51,
+                          "author": {
+                            "__typename": "Bot",
+                            "id": "BOT_COPILOT",
+                            "databaseId": 12,
+                            "login": "copilot-pull-request-reviewer",
+                            "url": "https://github.com/apps/copilot-pull-request-reviewer"
+                          },
+                          "body": "Original inline context.",
+                          "url": "https://github.com/SecPal/.github/pull/1#discussion_r51",
+                          "createdAt": "2026-07-19T00:05:00Z",
+                          "updatedAt": "2026-07-19T00:05:00Z",
+                          "replyTo": null,
+                          "pullRequestReview": { "id": "REVIEW_1" },
+                          "reactions": {
+                            "nodes": [],
+                            "pageInfo": { "hasNextPage": false, "endCursor": null }
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": true, "endCursor": "thread-comments-1" }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": true, "endCursor": "thread-1" }
+              }
+            }
+          }
+        }
+      },
+      "thread-1": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "reviewThreads": {
+                "nodes": [
+                  {
+                    "id": "THREAD_2",
+                    "isResolved": true,
+                    "isOutdated": true,
+                    "path": null,
+                    "line": null,
+                    "originalLine": 3,
+                    "diffSide": "RIGHT",
+                    "startLine": null,
+                    "startDiffSide": null,
+                    "comments": {
+                      "nodes": [
+                        {
+                          "id": "REVIEW_COMMENT_3",
+                          "databaseId": 53,
+                          "author": null,
+                          "body": "Outdated context from an unavailable author.",
+                          "url": "https://github.com/SecPal/.github/pull/1#discussion_r53",
+                          "createdAt": "2026-07-19T00:07:00Z",
+                          "updatedAt": "2026-07-19T00:07:00Z",
+                          "replyTo": null,
+                          "pullRequestReview": { "id": "REVIEW_2" },
+                          "reactions": {
+                            "nodes": [],
+                            "pageInfo": { "hasNextPage": false, "endCursor": null }
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": "thread-2" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ReviewThreadComments": {
+      "THREAD_1:null": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "comments": {
+              "nodes": [
+                {
+                  "id": "REVIEW_COMMENT_1",
+                  "databaseId": 51,
+                  "author": {
+                    "__typename": "Bot",
+                    "id": "BOT_COPILOT",
+                    "databaseId": 12,
+                    "login": "copilot-pull-request-reviewer",
+                    "url": "https://github.com/apps/copilot-pull-request-reviewer"
+                  },
+                  "body": "Original inline context.",
+                  "url": "https://github.com/SecPal/.github/pull/1#discussion_r51",
+                  "createdAt": "2026-07-19T00:05:00Z",
+                  "updatedAt": "2026-07-19T00:05:00Z",
+                  "replyTo": null,
+                  "pullRequestReview": { "id": "REVIEW_1" },
+                  "reactions": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": true, "endCursor": "thread-comments-1" }
+            }
+          }
+        }
+      },
+      "THREAD_1:thread-comments-1": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "comments": {
+              "nodes": [
+                {
+                  "id": "REVIEW_COMMENT_2",
+                  "databaseId": 52,
+                  "author": {
+                    "__typename": "User",
+                    "id": "USER_AUTHOR",
+                    "databaseId": 8,
+                    "login": "author",
+                    "url": "https://github.com/author"
+                  },
+                  "body": "Human reply retained.",
+                  "url": "https://github.com/SecPal/.github/pull/1#discussion_r52",
+                  "createdAt": "2026-07-19T00:06:00Z",
+                  "updatedAt": "2026-07-19T00:06:00Z",
+                  "replyTo": { "id": "REVIEW_COMMENT_1" },
+                  "pullRequestReview": { "id": "REVIEW_1" },
+                  "reactions": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": "thread-comments-2" }
+            }
+          }
+        }
+      },
+      "THREAD_2:null": {
+        "data": {
+          "repository": { "pullRequest": { "id": "PR_1" } },
+          "node": {
+            "comments": {
+              "nodes": [
+                {
+                  "id": "REVIEW_COMMENT_3",
+                  "databaseId": 53,
+                  "author": null,
+                  "body": "Outdated context from an unavailable author.",
+                  "url": "https://github.com/SecPal/.github/pull/1#discussion_r53",
+                  "createdAt": "2026-07-19T00:07:00Z",
+                  "updatedAt": "2026-07-19T00:07:00Z",
+                  "replyTo": null,
+                  "pullRequestReview": { "id": "REVIEW_2" },
+                  "reactions": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                  }
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": null }
+            }
+          }
+        }
+      }
+    },
+    "PullRequestCommits": {
+      "null": {
+        "data": {
+          "repository": {
+            "pullRequest": {
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "authoredDate": "2026-07-19T00:00:00Z",
+                      "committedDate": "2026-07-19T00:00:00Z",
+                      "parents": {
+                        "nodes": [{ "oid": "cccccccccccccccccccccccccccccccccccccccc" }],
+                        "pageInfo": { "hasNextPage": false, "endCursor": "parent-1" }
+                      },
+                      "signature": {
+                        "__typename": "SshSignature",
+                        "isValid": true,
+                        "state": "VALID",
+                        "wasSignedByGitHub": false,
+                        "signer": {
+                          "__typename": "User",
+                          "id": "USER_AUTHOR",
+                          "databaseId": 8,
+                          "login": "author",
+                          "url": "https://github.com/author"
+                        }
+                      }
+                    }
+                  }
+                ],
+                "pageInfo": { "hasNextPage": false, "endCursor": "commit-1" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "CommitChecks": {
+      "null": {
+        "data": {
+          "repository": {
+            "object": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "id": "CHECK_1",
+                      "name": "tests",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS",
+                      "detailsUrl": "https://github.com/SecPal/.github/actions/runs/1",
+                      "checkSuite": {
+                        "app": {
+                          "id": "APP_1",
+                          "databaseId": 1,
+                          "name": "GitHub Actions",
+                          "slug": "github-actions"
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": { "hasNextPage": true, "endCursor": "check-1" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "check-1": {
+        "data": {
+          "repository": {
+            "object": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "id": "CHECK_2",
+                      "name": "optional-lint",
+                      "status": "COMPLETED",
+                      "conclusion": "FAILURE",
+                      "detailsUrl": "https://github.com/SecPal/.github/actions/runs/2",
+                      "checkSuite": {
+                        "app": {
+                          "id": "APP_1",
+                          "databaseId": 1,
+                          "name": "GitHub Actions",
+                          "slug": "github-actions"
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": { "hasNextPage": false, "endCursor": "check-2" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "rest": {
+    "repos/SecPal/.github/rules/branches/main?per_page=100&page=1": [
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": true,
+          "required_status_checks": [{ "context": "tests", "integration_id": 1 }]
+        }
+      }
+    ],
+    "repos/SecPal/.github/branches/main/protection/required_status_checks": {
+      "strict": true,
+      "contexts": ["tests"],
+      "checks": [{ "context": "tests", "app_id": 1 }]
+    }
+  }
+}

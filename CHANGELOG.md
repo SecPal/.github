@@ -9,6 +9,44 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-19 - Add Deterministic PR Evidence State Layer
+
+**Added:**
+
+- added a standard-library Python helper that captures canonical, digest-bound
+  PR evidence with complete bounded review, thread, reply, reaction, commit,
+  and check pagination while blocking on partial state or anchor movement
+- added read-only local-head, exact commit-set, SSH/OpenPGP signature, applicable
+  rule, branch-protection, required-check, and strict up-to-date-base
+  verification with GitHub.com host pinning, sanitized non-locking Git reads,
+  fsmonitor and configured-verifier suppression, replacement-ref suppression,
+  explicit merge-state gating, head-in-commit-set validation, three PR anchors,
+  retained connection-count validation, signature state/verification
+  consistency, and bounded revalidation of all paginated PR collections,
+  commit signatures, checks, and required rules, without polling, GitHub
+  mutations, Git writes, review requests, or merge authority
+- added versioned snapshot and repository-configuration schemas, safely escaped
+  derived Markdown, atomic private outputs, and offline fake-GitHub/fake-Git
+  regression coverage for the Package 2.1 data contract
+- bound required-check evidence to GitHub's effective test-merge or head commit,
+  proved same-named check/status evaluation, rejected contradictory snapshot
+  check and repository-identity metadata, and removed unenforced arbitrary
+  local-validation commands from the read-only Package 2.1 configuration
+  contract
+- resolved `git` and `gh` only from fixed host-tool prefixes, replaced inherited
+  command search paths, closed standard input, bounded each invocation, captured
+  direct PR and review-summary reactions, and rejected unknown required-check
+  reasons or duplicate stable review-state identities
+- preserved structured gate reports when a newly required rule source is absent,
+  enforced every current capture cap against stored usage, and rejected non-object
+  JSON configuration roots without an unhandled exception
+- rejected ambiguous reviewer aliases across every supported identity namespace
+  and failed closed when required-workflow rules cannot be mapped completely to
+  captured check evidence
+- rejected pagination evidence whose items cannot fit in its recorded pages,
+  preserved generic ruleset checks when app-bound branch protection also
+  applies, and included direct and nested reactions in raw review classification
+
 ## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
 
 **Fixed:**

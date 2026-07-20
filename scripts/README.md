@@ -7,6 +7,19 @@ SPDX-License-Identifier: CC0-1.0
 
 This directory contains utility scripts for SecPal development.
 
+## Pull Request Evidence
+
+### `secpal-pr-review.py`
+
+Captures deterministic, thread-aware GitHub pull-request evidence and verifies
+local Git state through a strict read-only command boundary. Canonical JSON is
+the authority; Markdown is an escaped derived view. The helper performs no
+review request, reaction, reply, thread resolution, push, or merge operation.
+
+See [Deterministic PR State and Evidence Layer](../docs/secpal-pr-review-state-layer.md)
+for schemas, bounded pagination, signature and required-check semantics, safe
+outputs, commands, and Package 2.1 non-goals.
+
 ## Validation Scripts
 
 ### `check-domains.sh`
