@@ -9,6 +9,27 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-20 - Add Finite PR Feedback Remediation Workflow
+
+**Added:**
+
+- added an explicitly invoked central Codex skill with a finite two-cycle,
+  three-capture state contract, independent finding classification, one holistic
+  audit, and an explicit user merge-authorization checkpoint
+- added a deterministic mutation-plan schema and separate guarded helper whose
+  exact allowlist permits only one anchor-bound reaction, inline evidence reply,
+  or eligible thread resolution per invocation, with idempotency reads and no
+  retries, review requests, Ready transitions, generic API access, Git writes,
+  or merge authority
+- added a production registry for all nine governance-managed repositories with
+  argument-array validation and explicit manual gates, plus an idempotent direct
+  skill-link installer whose real user-level rollout remains post-merge
+- added offline unit, policy, fake-GitHub, fake-Git, and temporary-HOME coverage
+  while leaving the accepted Package-2.1 helper, review-memory automation,
+  repository instruction routing, and sibling repositories unchanged
+
+---
+
 ## 2026-07-20 - Separate Post-Merge Evidence From Merge Readiness
 
 **Fixed:**
