@@ -82,6 +82,7 @@ def complete_resolution_evidence() -> dict[str, bool]:
         "final_evidence_verified": True,
         "no_late_feedback": True,
         "all_threads_classified": True,
+        "manual_gates_verified": True,
         "registered_validation_verified": True,
     }
 
@@ -167,6 +168,25 @@ def plan(*operations: dict[str, Any], current_state: str = "APPLY_JUSTIFIED_REAC
     snapshot = evidence_snapshot()
     session = base_session()
     session["state"] = current_state
+    if current_state == "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES":
+        session.update(
+            {
+                "state_captures": 1,
+                "remediation_cycles": 0,
+                "holistic_audits": 0,
+                "signed_commits": 0,
+                "fast_forward_pushes": 0,
+            }
+        )
+    registered = actions.select_repository(actions.load_registry(), "SecPal/.github")
+    manual_gate_evidence = [
+        {
+            "gate": gate,
+            "status": "SATISFIED",
+            "evidence": ["verified by the unit-test fixture"],
+        }
+        for gate in registered["manual_gates"]
+    ]
     return {
         "schema_version": "1.0",
         "repository": "SecPal/.github",
@@ -175,9 +195,14 @@ def plan(*operations: dict[str, Any], current_state: str = "APPLY_JUSTIFIED_REAC
         "initial_snapshot_digest": snapshot["snapshot_digest"],
         "expected_head_sha": p21.HEAD,
         "created_for_state": current_state,
-        "cycle_number": 1,
+        "cycle_number": session["remediation_cycles"],
         "session": session,
         "findings": [finding()],
+        "manual_gate_evidence": (
+            manual_gate_evidence
+            if current_state == "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE"
+            else []
+        ),
         "operations": list(operations),
     }
 
@@ -201,8 +226,8 @@ def registry_entry(repository: str) -> dict[str, Any]:
         "maximum_api_calls": 200,
         "maximum_items": 10000,
         "maximum_threads": 500,
-        "maximum_comments": 10000,
-        "maximum_reactions": 10000,
+        "maximum_comments": 100,
+        "maximum_reactions": 25,
     }
 
 
@@ -324,6 +349,11 @@ class ContractTests(TestCase):
         with self.assertRaisesRegex(actions.PlanError, "finite workflow state"):
             actions.validate_session_state(session)
 
+        rolled_back = base_session()
+        rolled_back["state"] = "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"
+        with self.assertRaisesRegex(actions.PlanError, "counter state"):
+            actions.validate_session_state(rolled_back)
+
         for kind, required_state in (
             ("REACTION", "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"),
             ("EVIDENCE_REPLY", "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"),
@@ -355,6 +385,22 @@ class ContractTests(TestCase):
             )
             changed = copy.deepcopy(value)
             changed["session"]["state"] = wrong_state
+            if wrong_state == "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES":
+                changed["session"].update(
+                    state_captures=1,
+                    remediation_cycles=0,
+                    holistic_audits=0,
+                    signed_commits=0,
+                    fast_forward_pushes=0,
+                )
+            else:
+                changed["session"].update(
+                    state_captures=3,
+                    remediation_cycles=1,
+                    holistic_audits=1,
+                    signed_commits=1,
+                    fast_forward_pushes=1,
+                )
             with self.subTest(kind=kind, mismatch="session"), self.assertRaisesRegex(
                 actions.PlanError, "creation state"
             ):
@@ -362,6 +408,22 @@ class ContractTests(TestCase):
             changed = copy.deepcopy(value)
             changed["created_for_state"] = wrong_state
             changed["session"]["state"] = changed["created_for_state"]
+            if wrong_state == "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES":
+                changed["session"].update(
+                    state_captures=1,
+                    remediation_cycles=0,
+                    holistic_audits=0,
+                    signed_commits=0,
+                    fast_forward_pushes=0,
+                )
+            else:
+                changed["session"].update(
+                    state_captures=3,
+                    remediation_cycles=1,
+                    holistic_audits=1,
+                    signed_commits=1,
+                    fast_forward_pushes=1,
+                )
             with self.subTest(kind=kind, mismatch="operation"), self.assertRaisesRegex(
                 actions.PlanError, "operation phase"
             ):
@@ -496,16 +558,18 @@ class ContractTests(TestCase):
         with self.assertRaisesRegex(actions.PlanError, "snapshot state"):
             actions.validate_plan(changed_thread_state, evidence_snapshot(), p21.config())
 
-    def test_compound_source_items_require_stable_distinct_logical_findings(self) -> None:
+    def test_each_source_item_has_exactly_one_independent_classification(self) -> None:
         value = plan(operation())
         value["findings"].append(
             finding("finding-002", "INFORMATIONAL", disposition="NON_ACTIONABLE")
         )
-        normalized = actions.validate_plan(value, evidence_snapshot(), p21.config())
-        self.assertEqual(len(normalized["findings"]), 2)
-        value["findings"][1]["logical_finding_id"] = "finding-001"
-        with self.assertRaisesRegex(actions.PlanError, "logical finding"):
+        with self.assertRaisesRegex(actions.PlanError, "source item"):
             actions.validate_plan(value, evidence_snapshot(), p21.config())
+
+        folded = plan(operation())
+        folded["findings"][0]["source_node_ids"].append("REACTION_1")
+        with self.assertRaisesRegex(actions.PlanError, "source item"):
+            actions.validate_plan(folded, evidence_snapshot(), p21.config())
 
     def test_duplicate_findings_require_a_canonical_root(self) -> None:
         value = plan(operation())
@@ -520,6 +584,8 @@ class ContractTests(TestCase):
         ):
             first = finding("finding-001", classification, disposition=disposition)
             second = finding("finding-002", classification, disposition=disposition)
+            second["source_node_ids"] = ["RC_2"]
+            second["source_database_ids"] = [22]
             first["canonical_finding_id"] = "finding-002"
             second["canonical_finding_id"] = "finding-001"
             value = plan()
@@ -527,7 +593,7 @@ class ContractTests(TestCase):
             with self.subTest(classification=classification), self.assertRaisesRegex(
                 actions.PlanError, "canonical.*cycle"
             ):
-                actions.validate_plan(value, evidence_snapshot(), p21.config())
+                actions._validate_finding_semantics(value["findings"])
 
     def test_actionable_fixed_dispositions_require_commit_and_test_proof(self) -> None:
         for classification, disposition in (
@@ -680,11 +746,20 @@ class ContractTests(TestCase):
             )
             op["logical_finding_id"] = finding_id
             replies.append(op)
-            findings.append(finding(finding_id, "INVALID_FALSE_OR_MISLEADING", disposition="DISPROVEN_WITH_EVIDENCE"))
+            item = finding(
+                finding_id,
+                "INVALID_FALSE_OR_MISLEADING",
+                disposition="DISPROVEN_WITH_EVIDENCE",
+            )
+            item["source_node_ids"] = [f"RC_{index}"]
+            item["source_database_ids"] = [index + 1]
+            findings.append(item)
         value = plan(*replies)
         value["findings"] = findings
         with self.assertRaisesRegex(actions.PlanError, "evidence repl"):
-            actions.validate_plan(value, evidence_snapshot(), p21.config())
+            actions._validate_operation_semantics(
+                value, actions._validate_finding_semantics(value["findings"])
+            )
 
     def test_consumed_counters_reserve_capacity_for_pending_operations(self) -> None:
         reaction = plan(operation())
@@ -1219,6 +1294,16 @@ class MutationTests(TestCase):
             {"owner": "SecPal", "name": ".github", "number": 1},
         )
         actions._validate_action_command(feedback_query)
+        feedback_page = actions._graphql_arguments(
+            actions.CURRENT_REVIEW_FEEDBACK_QUERY,
+            {
+                "owner": "SecPal",
+                "name": ".github",
+                "number": 1,
+                "threadsCursor": "THREAD_CURSOR_1",
+            },
+        )
+        actions._validate_action_command(feedback_page)
         add_reaction = actions._graphql_arguments(
             actions.ADD_REACTION_MUTATION,
             {"subjectId": "REVIEW_1", "content": "THUMBS_UP"},
@@ -1242,6 +1327,7 @@ class MutationTests(TestCase):
             ["gh", "api", "--hostname", "github.com", "repos/SecPal/.github/issues"],
             [*reaction, "--input", "payload.json"],
             [*query, "-f", "extra=value"],
+            [*feedback_page, "-f", "extra=value"],
             [*reply[:7], "-F", *reply[8:]],
         ):
             with self.subTest(arguments=unsafe), self.assertRaises(actions.MutationBlocked):
@@ -1262,7 +1348,7 @@ class MutationTests(TestCase):
         query = actions.CURRENT_REVIEW_FEEDBACK_QUERY
         self.assertRegex(
             query,
-            r"(?s)reviewThreads\(first:100\).*comments\(first:100\).*reactions\(first:25\)",
+            r"(?s)reviewThreads\(first:100, after:\$threadsCursor\).*comments\(first:100\).*reactions\(first:25\)",
         )
         self.assertNotRegex(
             query,
@@ -1453,8 +1539,55 @@ class MutationTests(TestCase):
         payload["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"][
             "hasNextPage"
         ] = True
-        with self.assertRaisesRegex(actions.MutationBlocked, "review threads exceeds"):
-            github.read_current_feedback(plan())
+        payload["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"][
+            "endCursor"
+        ] = "THREAD_CURSOR_1"
+        second_page = copy.deepcopy(payload)
+        second_thread = second_page["data"]["repository"]["pullRequest"][
+            "reviewThreads"
+        ]
+        second_thread["nodes"][0]["id"] = "THREAD_2"
+        second_thread["nodes"][0]["comments"]["nodes"][0]["id"] = "RC_2"
+        second_thread["pageInfo"] = {
+            "hasNextPage": False,
+            "endCursor": "THREAD_CURSOR_2",
+        }
+        pages = iter((payload, second_page))
+        calls: list[list[str]] = []
+
+        def next_page(arguments: list[str]) -> dict[str, Any]:
+            calls.append(arguments)
+            return copy.deepcopy(next(pages))
+
+        github = actions.LiveGitHub(
+            SimpleNamespace(run=next_page)
+        )
+        current = github.read_current_feedback(plan())
+        self.assertEqual(
+            [item["node_id"] for item in current["feedback"]["threads"]],
+            ["THREAD_1", "THREAD_2"],
+        )
+        self.assertNotIn("threadsCursor=THREAD_CURSOR_1", calls[0])
+        self.assertIn("threadsCursor=THREAD_CURSOR_1", calls[1])
+
+    def test_live_feedback_projection_obeys_every_registered_item_cap(self) -> None:
+        feedback = {
+            "pull_request_reactions": [],
+            "reviews": [
+                {"node_id": "REVIEW_1", "reactions": []},
+                {"node_id": "REVIEW_2", "reactions": []},
+            ],
+            "conversation_comments": [],
+            "threads": [],
+        }
+        limits = {
+            "maximum_items": 1,
+            "maximum_threads": 1,
+            "maximum_comments": 1,
+            "maximum_reactions": 1,
+        }
+        with self.assertRaisesRegex(actions.MutationBlocked, "items"):
+            actions._validate_feedback_limits(feedback, limits)
 
     def test_missing_trusted_gh_is_reported_as_a_guarded_blocker(self) -> None:
         with mock.patch.object(
@@ -2511,6 +2644,26 @@ class MutationTests(TestCase):
         self.assertEqual(observed, [("SecPal/.github", Path("/repo"))])
         self.assertFalse(result["registered_validation_verified"])
 
+    def test_resolution_evidence_requires_explicit_manual_gate_evidence(self) -> None:
+        initial = evidence_snapshot()
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["manual_gate_evidence"] = []
+        with self.assertRaisesRegex(actions.PlanError, "manual gate"):
+            actions.validate_plan(value, initial, p21.config())
+        result = actions.build_resolution_evidence(
+            value,
+            initial,
+            initial,
+            p21.config(),
+            p21.FakeGitRunner(),
+            lambda _repository, _repository_root: True,
+        )
+        self.assertFalse(result["manual_gates_verified"])
+        self.assertFalse(result["registered_validation_verified"])
+
     def test_resolution_reverifies_local_state_after_registered_validations(self) -> None:
         initial = evidence_snapshot()
         value = plan(
@@ -2546,6 +2699,13 @@ class RegistryTests(TestCase):
         "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts", "SecPal/android",
         "SecPal/changelog", "SecPal/GuardGuide", "SecPal/guardguide.de", "SecPal/secpal.app",
     ]
+
+    def test_registry_caps_match_unpaginated_nested_live_connections(self) -> None:
+        registry = actions.load_registry()
+        for entry in registry["repositories"]:
+            with self.subTest(repository=entry["repository"]):
+                self.assertLessEqual(entry["maximum_comments"], 100)
+                self.assertLessEqual(entry["maximum_reactions"], 25)
 
     def test_registry_cases_61_to_69(self) -> None:
         registry = {"schema_version": "1.0", "repositories": [registry_entry(repo) for repo in self.repositories]}

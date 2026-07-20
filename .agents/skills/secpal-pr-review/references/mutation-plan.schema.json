@@ -37,6 +37,10 @@
       "type": "array",
       "items": { "$ref": "#/$defs/finding" }
     },
+    "manual_gate_evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/manual_gate_evidence" }
+    },
     "operations": {
       "type": "array",
       "items": { "$ref": "#/$defs/operation" }
@@ -61,6 +65,20 @@
         "CONFLICTING_REVIEWERS",
         "SECURITY_WEAKENING_SUGGESTION"
       ]
+    },
+    "manual_gate_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate", "status", "evidence"],
+      "properties": {
+        "gate": { "type": "string", "minLength": 1 },
+        "status": { "const": "SATISFIED" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
     },
     "session": {
       "type": "object",

@@ -159,6 +159,7 @@ REQUIRED_RESOLUTION_EVIDENCE = frozenset(
         "final_evidence_verified",
         "no_late_feedback",
         "all_threads_classified",
+        "manual_gates_verified",
         "registered_validation_verified",
     }
 )
@@ -298,6 +299,29 @@ def validate_session_state(session: dict[str, Any]) -> None:
         raise PlanError("signed remediation commits cannot exceed completed remediation cycles")
     if session.get("remediation_cycles", 0) and session.get("holistic_audits", 0) != 1:
         raise PlanError("a remediation session requires exactly one holistic audit before readiness")
+    mutation_counter_states = {
+        "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES": {
+            "state_captures": 1,
+            "remediation_cycles": 0,
+            "holistic_audits": 0,
+            "signed_commits": 0,
+            "fast_forward_pushes": 0,
+            "thread_resolutions": 0,
+        },
+        "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE": {
+            "state_captures": 3,
+            "holistic_audits": 1,
+        },
+    }
+    required = mutation_counter_states.get(session["state"])
+    if required is not None and any(session[key] != value for key, value in required.items()):
+        raise PlanError("session counters do not match the exact mutation counter state")
+    if session["state"] == "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE" and not (
+        session["remediation_cycles"]
+        == session["signed_commits"]
+        == session["fast_forward_pushes"]
+    ):
+        raise PlanError("resolution counter state requires one pushed signed commit per cycle")
 
 
 def determine_terminal_outcome(session: dict[str, Any]) -> str:
@@ -344,11 +368,16 @@ def determine_terminal_outcome(session: dict[str, Any]) -> str:
 
 def _validate_finding_semantics(findings: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
+    classified_source_ids: set[str] = set()
     for item in findings:
         identifier = item["logical_finding_id"]
         if identifier in by_id:
             raise PlanError(f"duplicate logical finding ID: {identifier}")
         by_id[identifier] = item
+        source_ids = item["source_node_ids"]
+        if len(source_ids) != 1 or source_ids[0] in classified_source_ids:
+            raise PlanError("each source item requires exactly one independent classification")
+        classified_source_ids.add(source_ids[0])
         if item["classification"] not in CLASSIFICATIONS:
             raise PlanError(f"unsupported classification: {item['classification']}")
         if item["disposition"] not in DISPOSITION_POLICY[item["classification"]]:
@@ -521,6 +550,34 @@ def _validate_plan_phase(plan: dict[str, Any]) -> None:
         for operation in pending_operations
     ):
         raise PlanError("pending operation kind is not allowed in the exact operation phase")
+
+
+def _manual_gates_verified(
+    plan: dict[str, Any], registered: dict[str, Any]
+) -> bool:
+    evidence_items = plan.get("manual_gate_evidence")
+    if not isinstance(evidence_items, list):
+        return False
+    expected_gates = registered["manual_gates"]
+    if len(evidence_items) != len(expected_gates):
+        return False
+    evidence_by_gate: dict[str, dict[str, Any]] = {}
+    for item in evidence_items:
+        if not isinstance(item, dict) or not isinstance(item.get("gate"), str):
+            return False
+        if item["gate"] in evidence_by_gate:
+            return False
+        if item.get("status") != "SATISFIED":
+            return False
+        evidence = item.get("evidence")
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or any(not isinstance(value, str) or not value.strip() for value in evidence)
+        ):
+            return False
+        evidence_by_gate[item["gate"]] = item
+    return set(evidence_by_gate) == set(expected_gates)
 
 
 def _snapshot_evidence_ids(
@@ -727,6 +784,11 @@ def validate_plan(
         raise PlanError("mutation plan must not contain credentials or secrets")
     validate_session_state(plan["session"])
     _validate_plan_phase(plan)
+    if (
+        plan["created_for_state"] == "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE"
+        and not _manual_gates_verified(plan, registered)
+    ):
+        raise PlanError("resolution plan requires evidence for every registered manual gate")
     if plan["cycle_number"] != plan["session"]["remediation_cycles"]:
         raise PlanError("plan cycle number must match the finite session counter")
     findings = _validate_finding_semantics(plan["findings"])
@@ -984,7 +1046,10 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
 }
 """
 CURRENT_REVIEW_FEEDBACK_QUERY = r"""
-query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
+query CurrentReviewFeedback(
+  $owner:String!, $name:String!, $number:Int!,
+  $reviewsCursor:String, $commentsCursor:String, $threadsCursor:String
+) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
       id headRefOid state
@@ -992,7 +1057,7 @@ query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
       }
-      reviews(first:100) {
+      reviews(first:100, after:$reviewsCursor) {
         nodes {
           id databaseId body state commit { oid }
           author {
@@ -1007,9 +1072,9 @@ query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
             pageInfo { hasNextPage }
           }
         }
-        pageInfo { hasNextPage }
+        pageInfo { hasNextPage endCursor }
       }
-      comments(first:100) {
+      comments(first:100, after:$commentsCursor) {
         nodes {
           id databaseId body updatedAt
           author {
@@ -1024,9 +1089,9 @@ query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
             pageInfo { hasNextPage }
           }
         }
-        pageInfo { hasNextPage }
+        pageInfo { hasNextPage endCursor }
       }
-      reviewThreads(first:100) {
+      reviewThreads(first:100, after:$threadsCursor) {
         nodes {
           id isResolved isOutdated
           comments(first:100) {
@@ -1047,7 +1112,7 @@ query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
             pageInfo { hasNextPage }
           }
         }
-        pageInfo { hasNextPage }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -1120,6 +1185,11 @@ def _validate_action_command(arguments: list[str]) -> None:
                 "name": "-f",
                 "number": "-F",
             }
+            optional_variables = {
+                "reviewsCursor": "-f",
+                "commentsCursor": "-f",
+                "threadsCursor": "-f",
+            }
         else:
             expected_variables = {
                 "owner": "-f",
@@ -1128,9 +1198,17 @@ def _validate_action_command(arguments: list[str]) -> None:
                 "targetNodeId": "-f",
                 "threadNodeId": "-f",
             }
-        if set(variables) != set(expected_variables) or any(
-            variables[key][0] != flag or not variables[key][1]
-            for key, flag in expected_variables.items()
+        allowed_variables = {
+            **expected_variables,
+            **(optional_variables if query == CURRENT_REVIEW_FEEDBACK_QUERY else {}),
+        }
+        if (
+            not set(expected_variables) <= set(variables) <= set(allowed_variables)
+            or any(
+                variables[key][0] != flag or not variables[key][1]
+                for key, flag in allowed_variables.items()
+                if key in variables
+            )
         ):
             raise MutationBlocked("GraphQL variables do not match the allowlisted document")
         return
@@ -1232,6 +1310,26 @@ def _bounded_nodes(connection: Any, label: str) -> list[dict[str, Any]]:
     return nodes
 
 
+def _page_nodes(connection: Any, label: str) -> tuple[list[dict[str, Any]], str | None]:
+    if not isinstance(connection, dict):
+        raise MutationBlocked(f"current {label} connection is incomplete")
+    nodes = connection.get("nodes")
+    page_info = connection.get("pageInfo")
+    if (
+        not isinstance(nodes, list)
+        or any(not isinstance(item, dict) for item in nodes)
+        or not isinstance(page_info, dict)
+        or not isinstance(page_info.get("hasNextPage"), bool)
+    ):
+        raise MutationBlocked(f"current {label} connection is incomplete")
+    if not page_info["hasNextPage"]:
+        return nodes, None
+    cursor = page_info.get("endCursor")
+    if not isinstance(cursor, str) or not cursor:
+        raise MutationBlocked(f"current {label} pagination cursor is incomplete")
+    return nodes, cursor
+
+
 def _live_reactions(connection: Any, label: str) -> list[dict[str, Any]]:
     return sorted(
         (
@@ -1246,6 +1344,44 @@ def _live_reactions(connection: Any, label: str) -> list[dict[str, Any]]:
     )
 
 
+def _validate_feedback_limits(
+    feedback: dict[str, Any], limits: dict[str, Any]
+) -> None:
+    thread_comments = [
+        comment
+        for thread in feedback["threads"]
+        for comment in thread["comments"]
+    ]
+    comment_count = len(feedback["conversation_comments"]) + len(thread_comments)
+    reaction_count = (
+        len(feedback["pull_request_reactions"])
+        + sum(len(item["reactions"]) for item in feedback["reviews"])
+        + sum(len(item["reactions"]) for item in feedback["conversation_comments"])
+        + sum(len(item["reactions"]) for item in thread_comments)
+    )
+    counts = {
+        "threads": len(feedback["threads"]),
+        "comments": comment_count,
+        "reactions": reaction_count,
+        "items": (
+            len(feedback["threads"])
+            + len(feedback["reviews"])
+            + comment_count
+            + reaction_count
+        ),
+    }
+    for label, limit_key in (
+        ("threads", "maximum_threads"),
+        ("comments", "maximum_comments"),
+        ("reactions", "maximum_reactions"),
+        ("items", "maximum_items"),
+    ):
+        if counts[label] > limits[limit_key]:
+            raise MutationBlocked(
+                f"current feedback {label} exceed the registered feedback limit"
+            )
+
+
 class LiveGitHub:
     def __init__(self, runner: ActionCommandRunner | None = None) -> None:
         self.runner = runner or ActionCommandRunner()
@@ -1254,7 +1390,7 @@ class LiveGitHub:
         try:
             value = self.runner.run(_graphql_arguments(VIEWER_IDENTITY_QUERY, {}))
             actor = _actor(value["data"]["viewer"])
-        except (ActionCommandFailure, KeyError, MutationBlocked, TypeError) as exc:
+        except (ActionCommandFailure, KeyError, TypeError) as exc:
             raise MutationFailure(str(exc)) from exc
         if any(actor.get(key) is None for key in ("login", "node_id", "database_id")):
             raise MutationBlocked("authenticated actor identity is incomplete")
@@ -1263,25 +1399,92 @@ class LiveGitHub:
     def read_current_feedback(self, plan: dict[str, Any]) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
         try:
-            payload = self.runner.run(
-                _graphql_arguments(
-                    CURRENT_REVIEW_FEEDBACK_QUERY,
-                    {"owner": owner, "name": name, "number": plan["pull_request_number"]},
+            limits = select_repository(load_registry(), plan["repository"])
+        except RegistryError as exc:
+            raise MutationBlocked("current feedback has no validated repository limits") from exc
+        base_variables = {
+            "owner": owner,
+            "name": name,
+            "number": plan["pull_request_number"],
+        }
+        connections = {
+            "reviews": [],
+            "comments": [],
+            "reviewThreads": [],
+        }
+        labels = {
+            "reviews": "reviews",
+            "comments": "conversation comments",
+            "reviewThreads": "review threads",
+        }
+        cursors: dict[str, str] = {}
+        seen_cursors = {key: set() for key in connections}
+        active = set(connections)
+        pull_request: dict[str, Any] | None = None
+        initial_pull_request: dict[str, Any] | None = None
+        call_count = 0
+        cursor_variables = {
+            "reviews": "reviewsCursor",
+            "comments": "commentsCursor",
+            "reviewThreads": "threadsCursor",
+        }
+        try:
+            while active:
+                variables = dict(base_variables)
+                variables.update(
+                    {
+                        cursor_variables[key]: cursor
+                        for key, cursor in cursors.items()
+                    }
                 )
-            )
-            pull_request = payload["data"]["repository"]["pullRequest"]
-        except (ActionCommandFailure, KeyError, MutationBlocked, TypeError) as exc:
+                if call_count >= limits["maximum_api_calls"]:
+                    raise MutationBlocked("current feedback pagination exceeds the API-call limit")
+                payload = self.runner.run(
+                    _graphql_arguments(CURRENT_REVIEW_FEEDBACK_QUERY, variables)
+                )
+                call_count += 1
+                pull_request = payload["data"]["repository"]["pullRequest"]
+                if not isinstance(pull_request, dict):
+                    raise MutationBlocked("current pull-request feedback is unavailable")
+                if initial_pull_request is None:
+                    initial_pull_request = pull_request
+                elif (
+                    pull_request.get("id") != initial_pull_request.get("id")
+                    or pull_request.get("headRefOid") != initial_pull_request.get("headRefOid")
+                    or pull_request.get("state") != initial_pull_request.get("state")
+                ):
+                    raise MutationBlocked("pull-request identity changed during bounded pagination")
+                next_active: set[str] = set()
+                next_cursors: dict[str, str] = {}
+                for key in active:
+                    nodes, cursor = _page_nodes(pull_request.get(key), labels[key])
+                    connections[key].extend(nodes)
+                    if cursor is not None:
+                        if cursor in seen_cursors[key]:
+                            raise MutationBlocked(f"current {labels[key]} pagination did not advance")
+                        seen_cursors[key].add(cursor)
+                        next_active.add(key)
+                        next_cursors[key] = cursor
+                active = next_active
+                cursors = next_cursors
+        except (ActionCommandFailure, KeyError, TypeError) as exc:
             raise MutationFailure(str(exc)) from exc
-        if not isinstance(pull_request, dict):
+        if initial_pull_request is None:
             raise MutationBlocked("current pull-request feedback is unavailable")
-
-        reviews = _bounded_nodes(pull_request.get("reviews"), "reviews")
-        comments = _bounded_nodes(
-            pull_request.get("comments"), "conversation comments"
-        )
-        threads = _bounded_nodes(
-            pull_request.get("reviewThreads"), "review threads"
-        )
+        pull_request = initial_pull_request
+        reviews = connections["reviews"]
+        comments = connections["comments"]
+        threads = connections["reviewThreads"]
+        for label, nodes in (
+            ("reviews", reviews),
+            ("conversation comments", comments),
+            ("review threads", threads),
+        ):
+            node_ids = [item.get("id") for item in nodes]
+            if any(not isinstance(node_id, str) or not node_id for node_id in node_ids):
+                raise MutationBlocked(f"current {label} contains an incomplete node identity")
+            if len(node_ids) != len(set(node_ids)):
+                raise MutationBlocked(f"current {label} contains a duplicate paginated node")
         normalized_threads = []
         for thread in threads:
             thread_comments = _bounded_nodes(
@@ -1306,7 +1509,7 @@ class LiveGitHub:
                     ],
                 }
             )
-        return {
+        result = {
             "head_sha": pull_request.get("headRefOid"),
             "pr_state": pull_request.get("state"),
             "feedback": {
@@ -1355,6 +1558,8 @@ class LiveGitHub:
                 ),
             },
         }
+        _validate_feedback_limits(result["feedback"], limits)
+        return result
 
     def read_current_state(self, plan: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
@@ -2339,6 +2544,7 @@ def build_resolution_evidence(
         "final_evidence_verified": False,
         "no_late_feedback": False,
         "all_threads_classified": False,
+        "manual_gates_verified": False,
         "registered_validation_verified": False,
     }
     try:
@@ -2372,6 +2578,10 @@ def build_resolution_evidence(
         )
     except (evidence.BlockedError, evidence.ContractError):
         local = {"blockers": ["local verification failed closed"]}
+    try:
+        registered = select_repository(load_registry(), plan["repository"])
+    except (KeyError, RegistryError):
+        registered = None
     result = {
         "local_verified": not local["blockers"],
         "final_evidence_verified": verified["evidence_verified"],
@@ -2382,11 +2592,15 @@ def build_resolution_evidence(
             verified_mutation_identities,
         ),
         "all_threads_classified": _all_initial_threads_classified(plan, initial_snapshot),
+        "manual_gates_verified": (
+            registered is not None and _manual_gates_verified(plan, registered)
+        ),
         "registered_validation_verified": False,
     }
     if all(result[key] for key in result if key != "registered_validation_verified"):
         try:
-            registered = select_repository(load_registry(), plan["repository"])
+            if registered is None:
+                raise RegistryError("repository has no validated registry entry")
             runner = validation_runner or _run_registered_validations
             result["registered_validation_verified"] = runner(
                 registered, Path(local["repository_root"])

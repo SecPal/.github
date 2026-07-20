@@ -117,8 +117,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/api",
@@ -184,8 +184,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/frontend",
@@ -272,8 +272,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/contracts",
@@ -339,8 +339,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/android",
@@ -427,8 +427,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/changelog",
@@ -494,8 +494,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/GuardGuide",
@@ -567,8 +567,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/guardguide.de",
@@ -652,8 +652,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     },
     {
       "repository": "SecPal/secpal.app",
@@ -737,8 +737,8 @@
       "maximum_api_calls": 200,
       "maximum_items": 10000,
       "maximum_threads": 500,
-      "maximum_comments": 10000,
-      "maximum_reactions": 10000
+      "maximum_comments": 100,
+      "maximum_reactions": 25
     }
   ]
 }

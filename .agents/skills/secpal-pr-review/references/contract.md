@@ -189,7 +189,7 @@ or changed target.
 
 The schema-bound plan contains its version, repository, PR, immutable snapshot
 digest, expected head, creation state, cycle, finite session counters, stable
-logical findings, and operations. Every operation contains an ID, one of
+logical findings, manual-gate evidence, and operations. Every operation contains an ID, one of
 `REACTION`, `EVIDENCE_REPLY`, or `THREAD_RESOLUTION`, exact target node/database
 and parent-thread IDs, expected current target state, expected authenticated
 writer identity, expected immutable source actor identity, classification,
@@ -210,12 +210,16 @@ requires its own safely disposed finding before resolution.
 Reactions nested under reviews, conversation comments, and inline review
 comments are likewise independent classification sources and require their own
 safely disposed findings.
+Every stable source item occurs in exactly one logical finding. A reaction is
+never folded into its parent comment's classification, and conflicting or
+duplicate classifications for one source ID are rejected.
 
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
 The session state is one exact state-machine value. Every pending operation is
 bound to its matching mutation phase, and terminal or unrelated phases cannot
-enter mutation preflight.
+enter mutation preflight. Mutation-capable phases also require their exact
+counter state, so a later session cannot be relabeled as an earlier phase.
 The helper independently verifies the supplied Package 2.1 evidence and refuses
 every operation when that evidence or the plan's finite session already records
 a terminal blocker.
@@ -255,6 +259,7 @@ independently prove all of the following:
 - every other unresolved target thread has complete classification/disposition;
 - every material top-level finding has a resolvable disposition;
 - no new feedback after the immutable snapshot;
+- explicit satisfied evidence for every repository-registered manual gate;
 - no head movement beyond the verified signed remediation descendant or other
   unsafe GitHub state; and
 - no counter limit exceeded.
@@ -265,7 +270,12 @@ performs one bounded live PR-wide feedback read. It compares the canonical
 reviews, conversation comments, review threads, inline comments, and reactions
 with the final snapshot, allowing only individually recorded earlier thread
 resolutions, and separately compares the complete live target-thread comment
-set with that snapshot.
+set with that snapshot. Top-level review, conversation-comment, and thread
+connections are cursor-paginated within the registered API and item caps; a
+missing, repeated, or non-advancing cursor fails closed.
+The aggregate registry caps of 100 comments and 25 reactions stay within every
+unpaginated nested connection, so Package 2.1 cannot accept evidence that the
+live guard is structurally unable to re-read.
 
 Resolution remains read-only until one individual operation is explicitly
 applied. An already-resolved target is accepted only when the plan records the
