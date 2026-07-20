@@ -567,6 +567,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
             ("github_invalid", "github_signature", "invalid"),
             ("local_unsigned", "local_signature", "unsigned"),
             ("local_unknown_key", "local_signature", "unknown_key"),
+            ("local_object_unavailable", "local_signature", "object_unavailable"),
         )
         for name, signature_name, state in cases:
             with self.subTest(case=name):
@@ -577,6 +578,10 @@ class SnapshotAndPaginationTests(unittest.TestCase):
                 self.assertIn(
                     "BLOCKED_INVALID_SIGNATURE",
                     [item["code"] for item in result["blockers"]],
+                )
+                self.assertTrue(
+                    any(state in item["reason"] for item in result["blockers"]),
+                    result["blockers"],
                 )
 
     def test_evidence_blocks_every_non_successful_required_check_outcome(self) -> None:

@@ -2408,26 +2408,36 @@ def verify_snapshot_evidence(
     signature_policy = configuration["signature_policy"]
     accepted_formats = set(signature_policy["accepted_formats"])
     for commit in snapshot["commits"]:
+        github_signature = commit["github_signature"]
         if signature_policy["require_github_verified"] and (
-            commit["github_signature"]["state"] != "valid"
-            or not commit["github_signature"]["verified"]
-            or commit["github_signature"]["format"] not in accepted_formats
+            github_signature["state"] != "valid"
+            or not github_signature["verified"]
+            or github_signature["format"] not in accepted_formats
         ):
             blockers.append(
                 {
                     "code": "BLOCKED_INVALID_SIGNATURE",
-                    "reason": f"GitHub signature invalid for {commit['oid']}",
+                    "reason": (
+                        "GitHub signature policy rejected "
+                        f"state={github_signature['state']}, "
+                        f"format={github_signature['format']} for {commit['oid']}"
+                    ),
                 }
             )
+        local_signature = commit["local_signature"]
         if signature_policy["require_local_verified"] and (
-            commit["local_signature"]["state"] != "valid"
-            or not commit["local_signature"]["verified"]
-            or commit["local_signature"]["format"] not in accepted_formats
+            local_signature["state"] != "valid"
+            or not local_signature["verified"]
+            or local_signature["format"] not in accepted_formats
         ):
             blockers.append(
                 {
                     "code": "BLOCKED_INVALID_SIGNATURE",
-                    "reason": f"Local signature invalid for {commit['oid']}",
+                    "reason": (
+                        "Local signature policy rejected "
+                        f"state={local_signature['state']}, "
+                        f"format={local_signature['format']} for {commit['oid']}"
+                    ),
                 }
             )
     required_sources = {
