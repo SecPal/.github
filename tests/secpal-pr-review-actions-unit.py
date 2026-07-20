@@ -710,13 +710,126 @@ class MutationTests(TestCase):
             self.assertEqual(result["status"], "APPLIED")
             self.assertEqual(github.calls.count(("WRITE", "REACTION")), 1)
 
-    def test_existing_actor_reaction_is_idempotent_and_other_actor_is_preserved(self) -> None:
+    def test_existing_actor_reaction_is_idempotent(self) -> None:
         github = FakeGitHub()
-        github.state["target"]["reactions"] = [
-            {"content": "THUMBS_UP", "actor": {"login": "someone-else", "node_id": "OTHER", "database_id": 8}},
-            {"content": "THUMBS_UP", "actor": copy.deepcopy(github.state["viewer"])},
+        existing = {
+            "mutation_id": "REACTION_EXISTING",
+            "content": "THUMBS_UP",
+            "actor": copy.deepcopy(github.state["viewer"]),
+        }
+        github.state["target"]["reactions"] = [existing]
+        github.state["target"]["thread_comments"][0]["reactions"] = [
+            copy.deepcopy(existing)
         ]
         result = self.apply(plan(operation()), "reaction-001", github)
+        self.assertEqual(result["status"], "ALREADY_APPLIED")
+        self.assertNotIn(("WRITE", "REACTION"), github.calls)
+
+    def test_intended_inline_reaction_does_not_hide_an_additional_late_reaction(self) -> None:
+        github = FakeGitHub()
+        intended = {
+            "mutation_id": "REACTION_EXISTING",
+            "content": "THUMBS_UP",
+            "actor": copy.deepcopy(github.state["viewer"]),
+        }
+        late = {
+            "mutation_id": "REACTION_LATE",
+            "content": "THUMBS_DOWN",
+            "actor": {
+                "login": "late-reviewer",
+                "node_id": "ACTOR_late",
+                "database_id": 19,
+            },
+        }
+        github.state["target"]["reactions"] = [intended, late]
+        github.state["target"]["thread_comments"][0]["reactions"] = copy.deepcopy(
+            github.state["target"]["reactions"]
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "feedback changed"):
+            self.apply(plan(operation()), "reaction-001", github)
+        self.assertNotIn(("WRITE", "REACTION"), github.calls)
+
+    def test_top_level_reaction_requires_the_complete_snapshot_reaction_set(self) -> None:
+        snapshot = evidence_snapshot()
+        review = p21.review_record()
+        snapshot["reviews"] = [review]
+        snapshot = p21.finalize_snapshot(snapshot)
+        op = operation()
+        op.update(
+            {
+                "target_node_id": review["id"],
+                "target_database_id": review["database_id"],
+                "parent_thread_id": None,
+            }
+        )
+        op["expected_current_state"].update(
+            {
+                "target_type": "PULL_REQUEST_REVIEW",
+                "body_digest": digest(review["body"]),
+                "is_resolved": None,
+            }
+        )
+        value = plan(op)
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        value["findings"][0].update(
+            {
+                "source_node_ids": [review["id"]],
+                "source_database_ids": [review["database_id"]],
+                "parent_thread_id": None,
+            }
+        )
+        github = FakeGitHub()
+        github.state["target"].update(
+            {
+                "node_id": review["id"],
+                "database_id": review["database_id"],
+                "parent_thread_id": None,
+                "target_type": "PULL_REQUEST_REVIEW",
+                "url": review["url"],
+                "body_digest": digest(review["body"]),
+                "is_resolved": None,
+                "reactions": [
+                    {
+                        "mutation_id": "REACTION_LATE",
+                        "content": "THUMBS_DOWN",
+                        "actor": {
+                            "login": "late-reviewer",
+                            "node_id": "ACTOR_late",
+                            "database_id": 19,
+                        },
+                    }
+                ],
+            }
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "target reactions changed"):
+            actions.execute_operation(
+                value,
+                "reaction-001",
+                snapshot,
+                p21.config(),
+                github,
+                apply=True,
+                resolution_evidence=None,
+            )
+        self.assertNotIn(("WRITE", "REACTION"), github.calls)
+
+        github.state["target"]["reactions"] = [
+            {
+                "mutation_id": "REACTION_EXISTING",
+                "content": "THUMBS_UP",
+                "actor": copy.deepcopy(github.state["viewer"]),
+            }
+        ]
+        result = actions.execute_operation(
+            value,
+            "reaction-001",
+            snapshot,
+            p21.config(),
+            github,
+            apply=True,
+            resolution_evidence=None,
+        )
         self.assertEqual(result["status"], "ALREADY_APPLIED")
         self.assertNotIn(("WRITE", "REACTION"), github.calls)
 
@@ -736,11 +849,20 @@ class MutationTests(TestCase):
         github = FakeGitHub()
         github.state["target"]["replies"] = [
             {
+                "mutation_id": "REPLY_EXISTING",
                 "body": op["reply_body"],
                 "actor": copy.deepcopy(github.state["viewer"]),
                 "reply_to_database_id": 21,
             }
         ]
+        github.state["target"]["thread_comments"].append(
+            {
+                "node_id": "REPLY_EXISTING",
+                "body_digest": digest(op["reply_body"]),
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reactions": [],
+            }
+        )
         self.assertEqual(self.apply(value, "reply-001", github)["status"], "ALREADY_APPLIED")
         self.assertNotIn(("WRITE", "EVIDENCE_REPLY"), github.calls)
 
@@ -805,6 +927,14 @@ class MutationTests(TestCase):
             )
 
         github.state["target"]["replies"][0]["reply_to_database_id"] = 21
+        github.state["target"]["thread_comments"].append(
+            {
+                "node_id": "REPLY_EXISTING",
+                "body_digest": digest(op["reply_body"]),
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reactions": [],
+            }
+        )
         self.assertEqual(
             actions._verify_retained_mutations(
                 value,
@@ -949,6 +1079,9 @@ class MutationTests(TestCase):
                 "actor": copy.deepcopy(github.state["viewer"]),
             }
         ]
+        github.state["target"]["thread_comments"][0]["reactions"] = copy.deepcopy(
+            github.state["target"]["reactions"]
+        )
         result = self.apply(value, "reaction-001", github)
         self.assertEqual(result["status"], "ALREADY_APPLIED_RECORDED")
         self.assertEqual(result["mutation_identity"], "REACTION_NEW")
@@ -973,6 +1106,11 @@ class MutationTests(TestCase):
             },
         )
         actions._validate_action_command(query)
+        feedback_query = actions._graphql_arguments(
+            actions.CURRENT_REVIEW_FEEDBACK_QUERY,
+            {"owner": "SecPal", "name": ".github", "number": 1},
+        )
+        actions._validate_action_command(feedback_query)
         add_reaction = actions._graphql_arguments(
             actions.ADD_REACTION_MUTATION,
             {"subjectId": "REVIEW_1", "content": "THUMBS_UP"},
@@ -1074,6 +1212,130 @@ class MutationTests(TestCase):
         ] = True
         with self.assertRaisesRegex(actions.MutationBlocked, "thread reactions exceed"):
             github.read_current_state(plan(operation()), operation())
+
+    def test_live_resolution_target_does_not_require_a_reaction_connection(self) -> None:
+        actor = {"id": "ACTOR_reviewer", "databaseId": 7, "login": "reviewer"}
+        thread = {
+            "id": "THREAD_1",
+            "isResolved": False,
+            "isOutdated": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "id": "RC_1",
+                        "databaseId": 21,
+                        "body": "Finding",
+                        "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
+                        "replyTo": None,
+                        "author": actor,
+                        "reactions": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+        }
+        payload = {
+            "data": {
+                "viewer": {"id": "USER_1", "databaseId": 7, "login": "aroviqen"},
+                "repository": {
+                    "pullRequest": {
+                        "id": "PR_1",
+                        "headRefOid": p21.HEAD,
+                        "state": "OPEN",
+                    }
+                },
+                "node": {
+                    "__typename": "PullRequestReviewThread",
+                    "id": "THREAD_1",
+                    "isResolved": False,
+                    "isOutdated": False,
+                },
+                "thread": thread,
+            }
+        }
+        github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: copy.deepcopy(payload))
+        )
+        resolution = operation(
+            "THREAD_RESOLUTION", operation_id="resolve-001", reaction=None
+        )
+        current = github.read_current_state(
+            plan(
+                resolution,
+                current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+            ),
+            resolution,
+        )
+        self.assertEqual(current["target"]["reactions"], [])
+        self.assertEqual(current["target"]["thread_comments"][0]["node_id"], "RC_1")
+
+    def test_live_pr_wide_feedback_is_normalized_and_bounded(self) -> None:
+        actor = {"id": "ACTOR_reviewer", "databaseId": 7, "login": "reviewer"}
+        empty = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+        payload = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "id": "PR_1",
+                        "headRefOid": p21.HEAD,
+                        "state": "OPEN",
+                        "reactions": copy.deepcopy(empty),
+                        "reviews": copy.deepcopy(empty),
+                        "comments": copy.deepcopy(empty),
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "THREAD_1",
+                                    "isResolved": False,
+                                    "isOutdated": False,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "RC_1",
+                                                "databaseId": 21,
+                                                "body": "Finding",
+                                                "author": actor,
+                                                "reactions": {
+                                                    "nodes": [
+                                                        {
+                                                            "id": "REACTION_1",
+                                                            "databaseId": 41,
+                                                            "content": "THUMBS_UP",
+                                                            "user": actor,
+                                                        }
+                                                    ],
+                                                    "pageInfo": {"hasNextPage": False},
+                                                },
+                                            }
+                                        ],
+                                        "pageInfo": {"hasNextPage": False},
+                                    },
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False},
+                        },
+                    }
+                }
+            }
+        }
+        runner = SimpleNamespace(run=lambda _arguments: copy.deepcopy(payload))
+        github = actions.LiveGitHub(runner)
+        current = github.read_current_feedback(plan())
+        self.assertEqual(
+            current["feedback"]["threads"][0]["comments"][0]["reactions"][0][
+                "mutation_id"
+            ],
+            "REACTION_1",
+        )
+
+        payload["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"][
+            "hasNextPage"
+        ] = True
+        with self.assertRaisesRegex(actions.MutationBlocked, "review threads exceeds"):
+            github.read_current_feedback(plan())
 
     def test_missing_trusted_gh_is_reported_as_a_guarded_blocker(self) -> None:
         with mock.patch.object(
@@ -1385,6 +1647,73 @@ class MutationTests(TestCase):
         )
         execute.assert_called_once()
 
+    def test_resolution_blocks_on_pr_wide_feedback_before_readiness_validation(self) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            reaction=None,
+        )
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        snapshot = evidence_snapshot()
+        arguments = SimpleNamespace(
+            command="resolve",
+            plan="plan.json",
+            snapshot="final.json",
+            config="config.json",
+            initial_snapshot="initial.json",
+            operation_id="resolve-001",
+            repo="SecPal/.github",
+            pr=1,
+            snapshot_digest=snapshot["snapshot_digest"],
+            expected_head=p21.HEAD,
+            apply=True,
+        )
+        github = FakeGitHub()
+        github.read_current_feedback = mock.Mock(
+            return_value={
+                "head_sha": p21.HEAD,
+                "pr_state": "OPEN",
+                "feedback": {
+                    "pull_request_reactions": [],
+                    "reviews": [
+                        {
+                            "node_id": "REVIEW_LATE",
+                            "body_digest": digest("Late review"),
+                            "actor": copy.deepcopy(github.state["actor"]),
+                            "state": "COMMENTED",
+                            "commit_oid": p21.HEAD,
+                            "reactions": [],
+                        }
+                    ],
+                    "conversation_comments": [],
+                    "threads": [],
+                },
+            }
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_load_inputs",
+                return_value=(value, snapshot, p21.config()),
+            ),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+            mock.patch.object(
+                actions, "_verify_retained_mutations", return_value=set()
+            ),
+            mock.patch.object(actions, "_read_json", wraps=actions._read_json) as read_json,
+            mock.patch.object(actions, "build_resolution_evidence") as readiness,
+            self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"),
+        ):
+            actions._command_mutation(arguments)
+        github.read_current_feedback.assert_called_once_with(value)
+        self.assertFalse(
+            any(call.args and call.args[0] == "initial.json" for call in read_json.call_args_list)
+        )
+        readiness.assert_not_called()
+
     def test_resolution_readiness_uses_initial_snapshot_and_blocks_late_feedback(self) -> None:
         initial = evidence_snapshot()
         final = copy.deepcopy(initial)
@@ -1463,6 +1792,78 @@ class MutationTests(TestCase):
             lambda _repository, _repository_root: True,
         )
         self.assertFalse(result["all_threads_classified"])
+
+    def test_inline_comment_reactions_are_independent_classification_sources(self) -> None:
+        initial = evidence_snapshot()
+        nested = p21.reaction("REACTION_NESTED", "THUMBS_UP")
+        initial["review_threads"][0]["comments"][0]["reactions"] = [nested]
+        initial = p21.finalize_snapshot(initial)
+        value = plan()
+        value["snapshot_digest"] = initial["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        value["findings"] = [finding()]
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
+        reaction_finding = finding(
+            "finding-reaction",
+            "INFORMATIONAL",
+            disposition="NON_ACTIONABLE",
+        )
+        reaction_finding.update(
+            {
+                "source_node_ids": [nested["id"]],
+                "source_database_ids": [],
+            }
+        )
+        value["findings"].append(reaction_finding)
+        self.assertTrue(actions._all_initial_threads_classified(value, initial))
+        self.assertEqual(actions.validate_plan(value, initial, p21.config()), value)
+
+    def test_pr_wide_feedback_projection_detects_late_top_level_feedback(self) -> None:
+        snapshot = evidence_snapshot()
+        snapshot["reviews"] = [p21.review_record()]
+        snapshot = p21.finalize_snapshot(snapshot)
+        value = plan()
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        current = {
+            "head_sha": p21.HEAD,
+            "pr_state": "OPEN",
+            "feedback": actions._snapshot_review_feedback(snapshot, value),
+        }
+        actions._verify_current_feedback(value, snapshot, current)
+        current["feedback"]["reviews"][0]["reactions"].append(
+            {
+                "mutation_id": "REACTION_LATE",
+                "content": "THUMBS_UP",
+                "actor": {
+                    "login": "late-reviewer",
+                    "node_id": "ACTOR_late",
+                    "database_id": 19,
+                },
+            }
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"):
+            actions._verify_current_feedback(value, snapshot, current)
+
+    def test_recorded_resolutions_are_the_only_allowed_pr_wide_state_delta(self) -> None:
+        snapshot = evidence_snapshot()
+        resolution = operation(
+            "THREAD_RESOLUTION", operation_id="resolve-001", reaction=None
+        )
+        resolution["applied_mutation_identity"] = "THREAD_1"
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["session"]["thread_resolutions"] = 1
+        current = {
+            "head_sha": p21.HEAD,
+            "pr_state": "OPEN",
+            "feedback": actions._snapshot_review_feedback(snapshot, value),
+        }
+        self.assertTrue(current["feedback"]["threads"][0]["is_resolved"])
+        actions._verify_current_feedback(value, snapshot, current)
 
     def test_recorded_reply_must_exist_in_the_final_snapshot(self) -> None:
         initial = evidence_snapshot()

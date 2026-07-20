@@ -515,6 +515,24 @@ def _snapshot_evidence_ids(
     thread_ids = {thread["id"] for thread in snapshot["review_threads"]}
     actors: dict[str, dict[str, Any]] = {}
     targets: dict[str, dict[str, Any]] = {}
+
+    def add_reaction_sources(
+        target: dict[str, Any], parent_thread_id: str | None, url: str
+    ) -> None:
+        for reaction in target["reactions"]:
+            node_ids.add(reaction["id"])
+            actors[reaction["id"]] = reaction["user"]
+            targets[reaction["id"]] = {
+                "target_type": "FEEDBACK_REACTION",
+                "database_id": None,
+                "parent_thread_id": parent_thread_id,
+                "reply_to_id": None,
+                "body_digest": sha256_text(reaction["content"]),
+                "is_resolved": None,
+                "is_outdated": False,
+                "url": url,
+            }
+
     for target_type, items in (
         ("PULL_REQUEST_REVIEW", snapshot["reviews"]),
         ("ISSUE_COMMENT", snapshot["conversation_comments"]),
@@ -533,19 +551,10 @@ def _snapshot_evidence_ids(
                 "is_outdated": False,
                 "url": item["url"],
             }
-    for reaction in snapshot["pull_request"]["reactions"]:
-        node_ids.add(reaction["id"])
-        actors[reaction["id"]] = reaction["user"]
-        targets[reaction["id"]] = {
-            "target_type": "PULL_REQUEST_REACTION",
-            "database_id": None,
-            "parent_thread_id": None,
-            "reply_to_id": None,
-            "body_digest": sha256_text(reaction["content"]),
-            "is_resolved": None,
-            "is_outdated": False,
-            "url": snapshot["pull_request"]["url"],
-        }
+            add_reaction_sources(item, None, item["url"])
+    add_reaction_sources(
+        snapshot["pull_request"], None, snapshot["pull_request"]["url"]
+    )
     for thread in snapshot["review_threads"]:
         thread_actor = thread["comments"][0]["author"] if thread["comments"] else None
         if thread_actor is not None:
@@ -574,6 +583,7 @@ def _snapshot_evidence_ids(
                 "is_outdated": thread["is_outdated"],
                 "url": item["url"],
             }
+            add_reaction_sources(item, thread["id"], item["url"])
     return node_ids, database_ids, thread_ids, actors, targets
 
 
@@ -912,6 +922,76 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
   }
 }
 """
+CURRENT_REVIEW_FEEDBACK_QUERY = r"""
+query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      id headRefOid state
+      reactions(first:100) {
+        nodes { id databaseId content user { id databaseId login } }
+        pageInfo { hasNextPage }
+      }
+      reviews(first:100) {
+        nodes {
+          id databaseId body state commit { oid }
+          author {
+            login
+            ... on User { id databaseId }
+            ... on Bot { id databaseId }
+            ... on Organization { id databaseId }
+            ... on Mannequin { id databaseId }
+          }
+          reactions(first:100) {
+            nodes { id databaseId content user { id databaseId login } }
+            pageInfo { hasNextPage }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+      comments(first:100) {
+        nodes {
+          id databaseId body updatedAt
+          author {
+            login
+            ... on User { id databaseId }
+            ... on Bot { id databaseId }
+            ... on Organization { id databaseId }
+            ... on Mannequin { id databaseId }
+          }
+          reactions(first:100) {
+            nodes { id databaseId content user { id databaseId login } }
+            pageInfo { hasNextPage }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+      reviewThreads(first:100) {
+        nodes {
+          id isResolved isOutdated
+          comments(first:100) {
+            nodes {
+              id databaseId body
+              author {
+                login
+                ... on User { id databaseId }
+                ... on Bot { id databaseId }
+                ... on Organization { id databaseId }
+                ... on Mannequin { id databaseId }
+              }
+              reactions(first:100) {
+                nodes { id databaseId content user { id databaseId login } }
+                pageInfo { hasNextPage }
+              }
+            }
+            pageInfo { hasNextPage }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}
+"""
 RESOLVE_REVIEW_THREAD_MUTATION = r"""
 mutation ResolveReviewThread($threadId:ID!) {
   resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } }
@@ -949,6 +1029,7 @@ def _validate_action_command(arguments: list[str]) -> None:
         query = arguments[6].split("=", 1)[1]
         if query not in {
             CURRENT_MUTATION_TARGET_QUERY,
+            CURRENT_REVIEW_FEEDBACK_QUERY,
             ADD_REACTION_MUTATION,
             RESOLVE_REVIEW_THREAD_MUTATION,
             VIEWER_IDENTITY_QUERY,
@@ -972,6 +1053,12 @@ def _validate_action_command(arguments: list[str]) -> None:
             expected_variables = {"threadId": "-f"}
         elif query == ADD_REACTION_MUTATION:
             expected_variables = {"subjectId": "-f", "content": "-f"}
+        elif query == CURRENT_REVIEW_FEEDBACK_QUERY:
+            expected_variables = {
+                "owner": "-f",
+                "name": "-f",
+                "number": "-F",
+            }
         else:
             expected_variables = {
                 "owner": "-f",
@@ -1067,6 +1154,37 @@ def _actor(value: Any) -> dict[str, Any]:
     }
 
 
+def _bounded_nodes(connection: Any, label: str) -> list[dict[str, Any]]:
+    if not isinstance(connection, dict):
+        raise MutationBlocked(f"current {label} connection is incomplete")
+    nodes = connection.get("nodes")
+    page_info = connection.get("pageInfo")
+    if (
+        not isinstance(nodes, list)
+        or any(not isinstance(item, dict) for item in nodes)
+        or not isinstance(page_info, dict)
+        or not isinstance(page_info.get("hasNextPage"), bool)
+    ):
+        raise MutationBlocked(f"current {label} connection is incomplete")
+    if page_info["hasNextPage"]:
+        raise MutationBlocked(f"current {label} exceeds the single bounded feedback read")
+    return nodes
+
+
+def _live_reactions(connection: Any, label: str) -> list[dict[str, Any]]:
+    return sorted(
+        (
+            {
+                "mutation_id": item.get("id") or str(item.get("databaseId") or ""),
+                "content": item.get("content"),
+                "actor": _actor(item.get("user")),
+            }
+            for item in _bounded_nodes(connection, label)
+        ),
+        key=lambda reaction: (reaction["mutation_id"], reaction["content"] or ""),
+    )
+
+
 class LiveGitHub:
     def __init__(self, runner: ActionCommandRunner | None = None) -> None:
         self.runner = runner or ActionCommandRunner()
@@ -1080,6 +1198,102 @@ class LiveGitHub:
         if any(actor.get(key) is None for key in ("login", "node_id", "database_id")):
             raise MutationBlocked("authenticated actor identity is incomplete")
         return actor
+
+    def read_current_feedback(self, plan: dict[str, Any]) -> dict[str, Any]:
+        owner, name = plan["repository"].split("/", 1)
+        try:
+            payload = self.runner.run(
+                _graphql_arguments(
+                    CURRENT_REVIEW_FEEDBACK_QUERY,
+                    {"owner": owner, "name": name, "number": plan["pull_request_number"]},
+                )
+            )
+            pull_request = payload["data"]["repository"]["pullRequest"]
+        except (ActionCommandFailure, KeyError, MutationBlocked, TypeError) as exc:
+            raise MutationFailure(str(exc)) from exc
+        if not isinstance(pull_request, dict):
+            raise MutationBlocked("current pull-request feedback is unavailable")
+
+        reviews = _bounded_nodes(pull_request.get("reviews"), "reviews")
+        comments = _bounded_nodes(
+            pull_request.get("comments"), "conversation comments"
+        )
+        threads = _bounded_nodes(
+            pull_request.get("reviewThreads"), "review threads"
+        )
+        normalized_threads = []
+        for thread in threads:
+            thread_comments = _bounded_nodes(
+                thread.get("comments"), f"thread {thread.get('id')} comments"
+            )
+            normalized_threads.append(
+                {
+                    "node_id": thread.get("id"),
+                    "is_resolved": thread.get("isResolved"),
+                    "is_outdated": bool(thread.get("isOutdated", False)),
+                    "comments": [
+                        {
+                            "node_id": item.get("id"),
+                            "body_digest": sha256_text(item.get("body", "")),
+                            "actor": _actor(item.get("author")),
+                            "reactions": _live_reactions(
+                                item.get("reactions"),
+                                f"thread comment {item.get('id')} reactions",
+                            ),
+                        }
+                        for item in thread_comments
+                    ],
+                }
+            )
+        return {
+            "head_sha": pull_request.get("headRefOid"),
+            "pr_state": pull_request.get("state"),
+            "feedback": {
+                "pull_request_reactions": _live_reactions(
+                    pull_request.get("reactions"), "pull-request reactions"
+                ),
+                "reviews": sorted(
+                    (
+                        {
+                            "node_id": item.get("id"),
+                            "body_digest": sha256_text(item.get("body", "")),
+                            "actor": _actor(item.get("author")),
+                            "state": item.get("state"),
+                            "commit_oid": (
+                                item.get("commit", {}).get("oid")
+                                if isinstance(item.get("commit"), dict)
+                                else None
+                            ),
+                            "reactions": _live_reactions(
+                                item.get("reactions"),
+                                f"review {item.get('id')} reactions",
+                            ),
+                        }
+                        for item in reviews
+                    ),
+                    key=lambda item: item["node_id"] or "",
+                ),
+                "conversation_comments": sorted(
+                    (
+                        {
+                            "node_id": item.get("id"),
+                            "body_digest": sha256_text(item.get("body", "")),
+                            "actor": _actor(item.get("author")),
+                            "updated_at": item.get("updatedAt"),
+                            "reactions": _live_reactions(
+                                item.get("reactions"),
+                                f"conversation comment {item.get('id')} reactions",
+                            ),
+                        }
+                        for item in comments
+                    ),
+                    key=lambda item: item["node_id"] or "",
+                ),
+                "threads": sorted(
+                    normalized_threads, key=lambda item: item["node_id"] or ""
+                ),
+            },
+        }
 
     def read_current_state(self, plan: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
@@ -1139,6 +1353,14 @@ class LiveGitHub:
         if target_type == "PULL_REQUEST_REVIEW_THREAD" and thread_comments:
             target_author = thread_comments[0].get("author")
             target_url = thread_comments[0].get("url")
+        target_reactions = (
+            []
+            if target_type == "PULL_REQUEST_REVIEW_THREAD"
+            else _live_reactions(
+                reactions_connection,
+                f"target {operation['target_node_id']} reactions",
+            )
+        )
         return {
             "head_sha": pull_request.get("headRefOid"),
             "pr_state": pull_request.get("state"),
@@ -1158,15 +1380,7 @@ class LiveGitHub:
                     if isinstance(target.get("replyTo"), dict)
                     else None
                 ),
-                "reactions": [
-                    {
-                        "mutation_id": item.get("id") or str(item.get("databaseId") or ""),
-                        "content": item.get("content"),
-                        "actor": _actor(item.get("user")),
-                    }
-                    for item in reactions_connection.get("nodes", [])
-                    if isinstance(item, dict)
-                ],
+                "reactions": target_reactions,
                 "replies": [
                     {
                         "mutation_id": item.get("id"),
@@ -1186,21 +1400,9 @@ class LiveGitHub:
                         "node_id": item.get("id"),
                         "body_digest": sha256_text(item.get("body", "")),
                         "actor": _actor(item.get("author")),
-                        "reactions": sorted(
-                            (
-                                {
-                                    "mutation_id": reaction.get("id")
-                                    or str(reaction.get("databaseId") or ""),
-                                    "content": reaction.get("content"),
-                                    "actor": _actor(reaction.get("user")),
-                                }
-                                for reaction in (item.get("reactions") or {}).get("nodes", [])
-                                if isinstance(reaction, dict)
-                            ),
-                            key=lambda reaction: (
-                                reaction["mutation_id"],
-                                reaction["content"] or "",
-                            ),
+                        "reactions": _live_reactions(
+                            item.get("reactions"),
+                            f"thread comment {item.get('id')} reactions",
                         ),
                     }
                     for item in thread_comments
@@ -1336,6 +1538,23 @@ def _enforce_mutation_preflight(plan: dict[str, Any]) -> None:
         raise MutationBlocked(f"{terminal_blocker}: session already records a terminal blocker")
 
 
+def _snapshot_reactions(target: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(
+        (
+            {
+                "mutation_id": reaction["id"],
+                "content": reaction["content"],
+                "actor": {
+                    key: reaction["user"].get(key)
+                    for key in ("login", "node_id", "database_id")
+                },
+            }
+            for reaction in target["reactions"]
+        ),
+        key=lambda reaction: (reaction["mutation_id"], reaction["content"]),
+    )
+
+
 def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[dict[str, Any]]:
     thread = next(
         (item for item in snapshot["review_threads"] if item["id"] == thread_id),
@@ -1351,26 +1570,101 @@ def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[
                 key: comment["author"].get(key)
                 for key in ("login", "node_id", "database_id")
             },
-            "reactions": sorted(
-                (
-                    {
-                        "mutation_id": reaction["id"],
-                        "content": reaction["content"],
-                        "actor": {
-                            key: reaction["user"].get(key)
-                            for key in ("login", "node_id", "database_id")
-                        },
-                    }
-                    for reaction in comment["reactions"]
-                ),
-                key=lambda reaction: (
-                    reaction["mutation_id"],
-                    reaction["content"],
-                ),
-            ),
+            "reactions": _snapshot_reactions(comment),
         }
         for comment in thread["comments"]
     ]
+
+
+def _snapshot_target_reactions(
+    snapshot: dict[str, Any], target_node_id: str
+) -> list[dict[str, Any]]:
+    targets = [*snapshot["reviews"], *snapshot["conversation_comments"]]
+    targets.extend(
+        comment
+        for thread in snapshot["review_threads"]
+        for comment in thread["comments"]
+    )
+    target = next((item for item in targets if item["id"] == target_node_id), None)
+    if target is None:
+        raise MutationBlocked(
+            "BLOCKED_UNSAFE_GITHUB_STATE: reaction target left the snapshot"
+        )
+    return _snapshot_reactions(target)
+
+
+def _snapshot_review_feedback(
+    snapshot: dict[str, Any], plan: dict[str, Any]
+) -> dict[str, Any]:
+    recorded_resolutions = {
+        operation["target_node_id"]
+        for operation in plan["operations"]
+        if operation["kind"] == "THREAD_RESOLUTION"
+        and operation["applied_mutation_identity"] == operation["target_node_id"]
+    }
+    return {
+        "pull_request_reactions": _snapshot_reactions(snapshot["pull_request"]),
+        "reviews": sorted(
+            (
+                {
+                    "node_id": item["id"],
+                    "body_digest": sha256_text(item["body"]),
+                    "actor": {
+                        key: item["author"].get(key)
+                        for key in ("login", "node_id", "database_id")
+                    },
+                    "state": item["state"],
+                    "commit_oid": item["commit_oid"],
+                    "reactions": _snapshot_reactions(item),
+                }
+                for item in snapshot["reviews"]
+            ),
+            key=lambda item: item["node_id"],
+        ),
+        "conversation_comments": sorted(
+            (
+                {
+                    "node_id": item["id"],
+                    "body_digest": sha256_text(item["body"]),
+                    "actor": {
+                        key: item["author"].get(key)
+                        for key in ("login", "node_id", "database_id")
+                    },
+                    "updated_at": item["updated_at"],
+                    "reactions": _snapshot_reactions(item),
+                }
+                for item in snapshot["conversation_comments"]
+            ),
+            key=lambda item: item["node_id"],
+        ),
+        "threads": sorted(
+            (
+                {
+                    "node_id": thread["id"],
+                    "is_resolved": (
+                        True if thread["id"] in recorded_resolutions else thread["is_resolved"]
+                    ),
+                    "is_outdated": thread["is_outdated"],
+                    "comments": _snapshot_thread_comments(snapshot, thread["id"]),
+                }
+                for thread in snapshot["review_threads"]
+            ),
+            key=lambda item: item["node_id"],
+        ),
+    }
+
+
+def _verify_current_feedback(
+    plan: dict[str, Any], snapshot: dict[str, Any], current: dict[str, Any]
+) -> None:
+    if current.get("head_sha") != plan["expected_head_sha"]:
+        raise MutationBlocked("BLOCKED_HEAD_MOVED: current PR head differs from the mutation plan")
+    if current.get("pr_state") != "OPEN":
+        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: pull request is not open")
+    if current.get("feedback") != _snapshot_review_feedback(snapshot, plan):
+        raise MutationBlocked(
+            "BLOCKED_INCOMPLETE_REVIEW_STATE: PR-wide feedback changed after the final snapshot"
+        )
 
 
 def _verify_current_state(
@@ -1414,13 +1708,95 @@ def _verify_current_state(
     for key in ("body_digest", "is_outdated"):
         if target.get(key) != operation["expected_current_state"][key]:
             raise MutationBlocked(f"BLOCKED_UNSAFE_GITHUB_STATE: target {key} changed")
+
+    matching_reaction = None
+    if operation["kind"] == "REACTION":
+        matching_reaction = next(
+            (
+                item
+                for item in target.get("reactions", [])
+                if item.get("content") == operation["reaction"]
+                and _same_actor(item.get("actor", {}), viewer)
+            ),
+            None,
+        )
+
+    matching_reply = None
+    if operation["kind"] == "EVIDENCE_REPLY":
+        if target.get("reply_to_database_id") is not None:
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: evidence reply target is not a top-level review comment"
+            )
+        matching_reply = next(
+            (
+                item
+                for item in target.get("replies", [])
+                if item.get("reply_to_database_id") == operation["target_database_id"]
+                and item.get("body") == operation["reply_body"]
+                and _same_actor(item.get("actor", {}), viewer)
+            ),
+            None,
+        )
+
     if operation["parent_thread_id"] is not None:
-        if target.get("thread_comments") != _snapshot_thread_comments(
+        expected_thread_comments = _snapshot_thread_comments(
             snapshot, operation["parent_thread_id"]
+        )
+        if matching_reaction is not None:
+            expected_target = next(
+                (
+                    item
+                    for item in expected_thread_comments
+                    if item["node_id"] == operation["target_node_id"]
+                ),
+                None,
+            )
+            if expected_target is None:
+                raise MutationBlocked(
+                    "BLOCKED_UNSAFE_GITHUB_STATE: reaction target left its snapshot thread"
+                )
+            if matching_reaction not in expected_target["reactions"]:
+                expected_target["reactions"].append(matching_reaction)
+                expected_target["reactions"].sort(
+                    key=lambda reaction: (
+                        reaction["mutation_id"],
+                        reaction["content"],
+                    )
+                )
+        if matching_reply is not None and not any(
+            item["node_id"] == matching_reply.get("mutation_id")
+            for item in expected_thread_comments
         ):
+            expected_thread_comments.append(
+                {
+                    "node_id": matching_reply.get("mutation_id"),
+                    "body_digest": sha256_text(operation["reply_body"]),
+                    "actor": viewer,
+                    "reactions": [],
+                }
+            )
+        if target.get("thread_comments") != expected_thread_comments:
             raise MutationBlocked(
                 "BLOCKED_INCOMPLETE_REVIEW_STATE: thread feedback changed after the bound snapshot"
             )
+
+    if operation["kind"] == "REACTION":
+        expected_reactions = _snapshot_target_reactions(
+            snapshot, operation["target_node_id"]
+        )
+        if matching_reaction is not None and matching_reaction not in expected_reactions:
+            expected_reactions.append(matching_reaction)
+            expected_reactions.sort(
+                key=lambda reaction: (
+                    reaction["mutation_id"],
+                    reaction["content"],
+                )
+            )
+        if target.get("reactions") != expected_reactions:
+            raise MutationBlocked(
+                "BLOCKED_INCOMPLETE_REVIEW_STATE: target reactions changed after the bound snapshot"
+            )
+
     if operation["kind"] == "THREAD_RESOLUTION":
         if target.get("is_resolved") is True:
             if operation["applied_mutation_identity"] == operation["target_node_id"]:
@@ -1430,24 +1806,16 @@ def _verify_current_state(
             )
     if target.get("is_resolved") is not operation["expected_current_state"]["is_resolved"]:
         raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: thread resolution state changed")
-    if operation["kind"] == "REACTION":
-        for item in target.get("reactions", []):
-            if item.get("content") == operation["reaction"] and _same_actor(
-                item.get("actor", {}), viewer
-            ):
-                return "ALREADY_APPLIED", item.get("mutation_id") or operation["target_node_id"]
-    if operation["kind"] == "EVIDENCE_REPLY":
-        if target.get("reply_to_database_id") is not None:
-            raise MutationBlocked(
-                "BLOCKED_UNSAFE_GITHUB_STATE: evidence reply target is not a top-level review comment"
-            )
-        for item in target.get("replies", []):
-            if (
-                item.get("reply_to_database_id") == operation["target_database_id"]
-                and item.get("body") == operation["reply_body"]
-                and _same_actor(item.get("actor", {}), viewer)
-            ):
-                return "ALREADY_APPLIED", item.get("mutation_id") or operation["target_node_id"]
+    if matching_reaction is not None:
+        return (
+            "ALREADY_APPLIED",
+            matching_reaction.get("mutation_id") or operation["target_node_id"],
+        )
+    if matching_reply is not None:
+        return (
+            "ALREADY_APPLIED",
+            matching_reply.get("mutation_id") or operation["target_node_id"],
+        )
     return None
 
 
@@ -1746,6 +2114,12 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
         for item in initial_snapshot[key]
     }
     initial_top_level_source_ids.update(
+        reaction["id"]
+        for key in ("reviews", "conversation_comments")
+        for item in initial_snapshot[key]
+        for reaction in item["reactions"]
+    )
+    initial_top_level_source_ids.update(
         reaction["id"] for reaction in initial_snapshot["pull_request"]["reactions"]
     )
     if not initial_top_level_source_ids <= covered_top_level_source_ids:
@@ -1764,8 +2138,15 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
             for finding in findings
             for source_id in finding["source_node_ids"]
         }
-        thread_comment_ids = {comment["id"] for comment in thread["comments"]}
-        if not thread_comment_ids <= covered_source_ids or any(
+        thread_source_ids = {
+            source_id
+            for comment in thread["comments"]
+            for source_id in (
+                comment["id"],
+                *(reaction["id"] for reaction in comment["reactions"]),
+            )
+        }
+        if not thread_source_ids <= covered_source_ids or any(
             finding["classification"] == "AMBIGUOUS_NEEDS_USER_DECISION"
             or finding["disposition"] not in RESOLVABLE_DISPOSITIONS
             for finding in findings
@@ -1963,6 +2344,8 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
             exclude_operation_id=arguments.operation_id,
         )
     if arguments.command == "resolve" and arguments.apply:
+        current_feedback = github.read_current_feedback(plan)
+        _verify_current_feedback(plan, snapshot, current_feedback)
         initial_snapshot = _read_json(arguments.initial_snapshot, "initial snapshot")
         resolution_evidence = build_resolution_evidence(
             plan,

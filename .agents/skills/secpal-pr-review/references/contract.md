@@ -175,11 +175,13 @@ bindings, policy, and transitions and uses no natural-language keyword classifie
 | Cross-repository/out of scope              | None                               | Only when a material misunderstanding requires evidence                  | Normally no                                      |
 | Security-weakening suggestion              | 👎 only when materially misleading | Evidence reply only when needed                                          | After evidence is retained                       |
 
-Before a reaction, read existing reactions, refuse a duplicate, and never remove
-another actor's reaction. Before a reply, search existing replies and refuse a
-duplicate evidence reply. Never post “fixed,” “addressed,” commit-SHA status, or
-progress messages. Before resolution, re-read the thread and refuse a resolved
-or changed target.
+Before a reaction, read the complete bounded target-reaction set, treat the exact
+intended writer reaction as already applied, and block every other delta from
+the snapshot. Never remove another actor's reaction. Before a reply, search the
+complete bounded thread, treat the exact intended evidence reply as already
+applied, and block every other delta. Never post “fixed,” “addressed,” commit-SHA
+status, or progress messages. Before resolution, re-read PR-wide feedback and
+the target thread and refuse a resolved or changed target.
 
 ## Mutation-plan and action-helper contract
 
@@ -203,6 +205,9 @@ non-null.
 Pull-request-level reactions are schema-addressable classification sources but
 are not mutation targets. Each such reaction in the immutable initial snapshot
 requires its own safely disposed finding before resolution.
+Reactions nested under reviews, conversation comments, and inline review
+comments are likewise independent classification sources and require their own
+safely disposed findings.
 
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
@@ -253,7 +258,11 @@ independently prove all of the following:
 
 Immediately before each resolution write, the helper runs the repository's
 registered focused and required local validation commands without a shell and
-compares the complete live target-thread comment set with the final snapshot.
+performs one bounded live PR-wide feedback read. It compares the canonical
+reviews, conversation comments, review threads, inline comments, and reactions
+with the final snapshot, allowing only individually recorded earlier thread
+resolutions, and separately compares the complete live target-thread comment
+set with that snapshot.
 
 Resolution remains read-only until one individual operation is explicitly
 applied. An already-resolved target is accepted only when the plan records the
