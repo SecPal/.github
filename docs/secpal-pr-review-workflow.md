@@ -66,7 +66,9 @@ At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default
 branch, allowed base repositories, reviewer identities, signature policy, check
 policy, and capture limits. The workflow-only validation fields never change the
-Package-2.1 schema.
+Package-2.1 schema. The action helper reloads the production registry for every
+plan validation and rejects unregistered repositories or caller-supplied policy
+drift.
 
 ## Finite execution
 
@@ -179,14 +181,19 @@ target, reaction, inline reply, and resolution documents/endpoints. It has no
 generic API passthrough, Git writes, review requests, review submissions, Ready
 transition, label/issue authority, merge, auto-merge, deletion, dismissal,
 thread unresolution, ruleset/settings changes, or branch-protection authority.
+Each operation target, database ID, parent thread, source actor, body digest,
+resolved state, and outdated state must match the same immutable snapshot item.
+Recorded mutation identities are re-read from live state before they are trusted.
 
 ## Snapshot changes, CI, and recovery
 
 The initial snapshot never changes. The one post-cycle-1 capture and one final
-capture are comparisons, not extensions. Any head movement or new/edited review
-feedback ends the invocation and requires a fresh explicit user request with a
-new immutable snapshot. There is no wait loop for CI; pending, failed, skipped,
-missing, or incomplete required-check evidence is a terminal blocker.
+capture are comparisons, not extensions. A signed remediation commit may advance
+the final head only as a verified descendant that retains every initial commit;
+any other head movement or new/edited review feedback ends the invocation and
+requires a fresh explicit user request with a new immutable snapshot. There is
+no wait loop for CI; pending, failed, skipped, missing, or incomplete
+required-check evidence is a terminal blocker.
 
 After any blocker, preserve the session report and do not retry a failed action.
 A fresh invocation starts from new evidence and re-verifies every anchor. The
@@ -196,6 +203,10 @@ Later-state plans retain the returned identity of each authorized reaction or
 reply. This lets comparison reads allow those exact writes while treating every
 other new or edited review, comment, reply, reaction, or resolution-state change
 as late feedback.
+
+The guarded-action unit, finite-policy, and fake-GitHub/temporary-HOME integration
+suites run in the repository's Code Quality workflow with read-only permissions,
+a bounded timeout, and cancellation of superseded runs.
 
 ## Skill installation and rollout
 

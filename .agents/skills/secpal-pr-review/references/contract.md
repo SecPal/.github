@@ -103,9 +103,10 @@ uses `--no-verify`, rewrites reviewed history, bypasses protection, or uses
 `HOLISTIC_AUDIT` runs once and covers correctness, security, privacy, data
 integrity, lifecycle, rollout, and avoidable complexity.
 
-`POST_CYCLE_1_SINGLE_GITHUB_READ` is one complete fresh capture. It detects head
-movement, new feedback, checks, and unresolved review state. Late feedback requires a fresh explicit user invocation and never silently enters this
-session.
+`POST_CYCLE_1_SINGLE_GITHUB_READ` is one complete fresh capture. It verifies that
+the final head is the expected signed remediation descendant and detects any
+other head movement, new feedback, checks, and unresolved review state.
+Late feedback requires a fresh explicit user invocation and never silently enters this session.
 
 `OPTIONAL_REMEDIATION_CYCLE_2` is allowed only for a still-valid initial-snapshot
 finding or one in-scope defect found by the holistic audit. The same test,
@@ -189,6 +190,12 @@ writer identity, expected immutable source actor identity, classification,
 evidence digest, operation payload, returned mutation identity when already
 applied, and any resolution preconditions.
 
+Each mutation target must be one of its logical finding's immutable source items,
+or that finding's exact parent thread for a resolution. Its database ID, parent
+thread, source actor, body digest, resolved state, and outdated state must match
+the same snapshot item rather than unrelated values that merely occur elsewhere
+in the snapshot.
+
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
 Prohibited kinds are review request, Ready transition, label, issue, review
@@ -203,8 +210,10 @@ is no generic API passthrough. The helper uses argument arrays, an exact endpoin
 and GraphQL-document allowlist, a pinned host, no shell, no Git write, no retry,
 no polling, and no sleep. It reads target state first, verifies actor, target,
 head, and idempotency, applies at most once, and reports the returned identity.
-Later-state plans retain identities for earlier authorized writes; every other
-new or changed comment, review, thread state, reply, or reaction is late feedback.
+Later-state plans retain identities for earlier authorized writes and increment
+the corresponding consumed counter exactly once. The helper re-reads those
+identities from live state before trusting them; every other new or changed
+comment, review, thread state, reply, or reaction is late feedback.
 
 ## Remediation-resolution readiness
 
@@ -222,7 +231,8 @@ independently prove all of the following:
 - every valid logical finding associated with it is corrected or disproven;
 - every other unresolved target thread has complete classification/disposition;
 - no new feedback after the immutable snapshot;
-- no head movement or unsafe GitHub state; and
+- no head movement beyond the verified signed remediation descendant or other
+  unsafe GitHub state; and
 - no counter limit exceeded.
 
 Resolution remains read-only until one individual operation is explicitly

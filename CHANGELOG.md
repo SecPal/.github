@@ -25,8 +25,12 @@ Log of notable changes to SecPal organization defaults (newest first).
   argument-array validation and explicit manual gates, plus an idempotent direct
   skill-link installer whose real user-level rollout remains post-merge
 - added offline unit, policy, fake-GitHub, fake-Git, and temporary-HOME coverage
-  while leaving the accepted Package-2.1 helper, review-memory automation,
-  repository instruction routing, and sibling repositories unchanged
+  to read-only bounded CI, with exact registry enforcement, relational immutable
+  snapshot bindings, cumulative mutation-counter checks, complete initial-thread
+  classification, verified remediation-head ancestry, live mutation-identity
+  checks, and host-independent installation fixtures, while leaving the accepted
+  Package-2.1 helper, review-memory automation, repository instruction routing,
+  and sibling repositories unchanged
 
 ---
 

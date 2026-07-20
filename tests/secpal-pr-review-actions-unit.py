@@ -115,7 +115,7 @@ def operation(
             if kind != "THREAD_RESOLUTION"
             else "PULL_REQUEST_REVIEW_THREAD",
             "body_digest": digest("Finding") if kind != "THREAD_RESOLUTION" else None,
-            "is_resolved": False if kind == "THREAD_RESOLUTION" else None,
+            "is_resolved": False,
             "is_outdated": False,
             "material_misunderstanding": kind == "EVIDENCE_REPLY",
             "invalidity_non_obvious": kind == "EVIDENCE_REPLY",
@@ -198,6 +198,7 @@ class FakeGitHub:
         self.fail = False
         self.state = {
             "head_sha": p21.HEAD,
+            "pr_state": "OPEN",
             "actor": {"login": "reviewer", "node_id": "ACTOR_reviewer", "database_id": 7},
             "viewer": {"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
             "target": {
@@ -205,8 +206,9 @@ class FakeGitHub:
                 "database_id": 21,
                 "parent_thread_id": "THREAD_1",
                 "target_type": "PULL_REQUEST_REVIEW_COMMENT",
+                "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
                 "body_digest": digest("Finding"),
-                "is_resolved": None,
+                "is_resolved": False,
                 "is_outdated": False,
                 "reactions": [],
                 "replies": [],
@@ -285,6 +287,78 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(actions.PlanError, "source node"):
             actions.validate_plan(changed, evidence_snapshot(), p21.config())
 
+    def test_plan_requires_the_registered_repository_configuration(self) -> None:
+        weakened = copy.deepcopy(p21.config())
+        weakened["signature_policy"]["require_github_verified"] = False
+        with self.assertRaisesRegex(actions.PlanError, "registry"):
+            actions.validate_plan(plan(operation()), evidence_snapshot(), weakened)
+
+        repository = "OutsideOrg/not-registered"
+        snapshot = evidence_snapshot()
+        snapshot["repository"].update(
+            {
+                "owner": "OutsideOrg",
+                "name": "not-registered",
+                "name_with_owner": repository,
+                "url": f"https://github.com/{repository}",
+            }
+        )
+        for key in ("base_repository", "head_repository"):
+            snapshot["pull_request"][key].update(
+                {
+                    "name_with_owner": repository,
+                    "url": f"https://github.com/{repository}",
+                }
+            )
+        snapshot["pull_request"]["url"] = f"https://github.com/{repository}/pull/1"
+        snapshot = p21.finalize_snapshot(snapshot)
+        configuration = copy.deepcopy(p21.config())
+        configuration["repository"] = repository
+        configuration["allowed_base_repositories"] = [repository]
+        value = plan(operation())
+        value["repository"] = repository
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        with self.assertRaisesRegex(actions.PlanError, "registry"):
+            actions.validate_plan(value, snapshot, configuration)
+
+    def test_operations_bind_to_their_finding_and_immutable_snapshot_state(self) -> None:
+        second_comment = p21.review_comment("RC_2", body="Independent finding")
+        second_comment["database_id"] = 22
+        snapshot = evidence_snapshot()
+        snapshot["review_threads"].append(
+            p21.thread("THREAD_2", comments=[second_comment])
+        )
+        snapshot = p21.finalize_snapshot(snapshot)
+
+        cross_target = plan(operation())
+        cross_target["snapshot_digest"] = snapshot["snapshot_digest"]
+        cross_target["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        cross_target["operations"][0].update(
+            {
+                "target_node_id": "RC_2",
+                "target_database_id": 22,
+                "parent_thread_id": "THREAD_2",
+            }
+        )
+        cross_target["operations"][0]["expected_current_state"]["body_digest"] = digest(
+            "Independent finding"
+        )
+        with self.assertRaisesRegex(actions.PlanError, "logical finding"):
+            actions.validate_plan(cross_target, snapshot, p21.config())
+
+        edited_state = plan(operation())
+        edited_state["operations"][0]["expected_current_state"]["body_digest"] = digest(
+            "Edited after immutable snapshot"
+        )
+        with self.assertRaisesRegex(actions.PlanError, "snapshot state"):
+            actions.validate_plan(edited_state, evidence_snapshot(), p21.config())
+
+        changed_thread_state = plan(operation())
+        changed_thread_state["operations"][0]["expected_current_state"]["is_resolved"] = True
+        with self.assertRaisesRegex(actions.PlanError, "snapshot state"):
+            actions.validate_plan(changed_thread_state, evidence_snapshot(), p21.config())
+
     def test_compound_source_items_require_stable_distinct_logical_findings(self) -> None:
         value = plan(operation())
         value["findings"].append(
@@ -343,6 +417,7 @@ class ContractTests(unittest.TestCase):
         value["operations"][0]["parent_thread_id"] = None
         value["operations"][0]["expected_current_state"]["target_type"] = "PULL_REQUEST_REVIEW"
         value["operations"][0]["expected_current_state"]["body_digest"] = digest(review["body"])
+        value["operations"][0]["expected_current_state"]["is_resolved"] = None
         normalized = actions.validate_plan(value, snapshot, p21.config())
         self.assertEqual(
             normalized["operations"][0]["expected_current_state"]["target_type"],
@@ -386,6 +461,40 @@ class ContractTests(unittest.TestCase):
         value["findings"] = findings
         with self.assertRaisesRegex(actions.PlanError, "evidence repl"):
             actions.validate_plan(value, evidence_snapshot(), p21.config())
+
+    def test_consumed_counters_reserve_capacity_for_pending_operations(self) -> None:
+        reaction = plan(operation())
+        reaction["session"]["reaction_writes"] = 1
+
+        reply_operation = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        reply = plan(reply_operation)
+        reply["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        reply["session"]["evidence_replies"] = 10
+
+        resolution = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        resolution["session"]["thread_resolutions"] = 1
+
+        for name, value in (
+            ("reaction", reaction),
+            ("reply", reply),
+            ("resolution", resolution),
+        ):
+            with self.subTest(kind=name), self.assertRaisesRegex(actions.PlanError, "counter"):
+                actions.validate_plan(value, evidence_snapshot(), p21.config())
 
 
 class MutationTests(unittest.TestCase):
@@ -459,6 +568,7 @@ class MutationTests(unittest.TestCase):
             ("actor.login", "intruder"),
             ("viewer.login", "intruder"),
             ("target.node_id", "CHANGED"),
+            ("target.url", "https://github.com/SecPal/.github/pull/2#discussion_r1"),
         )
         for path, replacement in mutations:
             github = FakeGitHub()
@@ -467,6 +577,55 @@ class MutationTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(actions.MutationBlocked):
                 self.apply(plan(operation()), "reaction-001", github)
             self.assertFalse(any(call[0] == "WRITE" for call in github.calls))
+
+    def test_closed_pr_and_changed_thread_state_are_refused_before_a_write(self) -> None:
+        github = FakeGitHub()
+        github.state["pr_state"] = "CLOSED"
+        with self.assertRaises(actions.MutationBlocked):
+            self.apply(plan(operation()), "reaction-001", github)
+        self.assertFalse(any(call[0] == "WRITE" for call in github.calls))
+
+        reply_operation = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        reply = plan(reply_operation)
+        reply["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        github = FakeGitHub()
+        github.state["target"]["is_resolved"] = True
+        with self.assertRaises(actions.MutationBlocked):
+            self.apply(reply, "reply-001", github)
+        self.assertFalse(any(call[0] == "WRITE" for call in github.calls))
+
+    def test_recorded_mutation_identity_requires_matching_live_state(self) -> None:
+        value = plan(operation())
+        value["operations"][0]["applied_mutation_identity"] = "REACTION_NEW"
+        value["session"]["reaction_writes"] = 1
+        github = FakeGitHub()
+        with self.assertRaises(actions.MutationBlocked):
+            self.apply(value, "reaction-001", github)
+        self.assertEqual(github.calls, [("READ", "current-state")])
+
+        github = FakeGitHub()
+        github.state["target"]["reactions"] = [
+            {
+                "mutation_id": "REACTION_NEW",
+                "content": "THUMBS_UP",
+                "actor": copy.deepcopy(github.state["viewer"]),
+            }
+        ]
+        result = self.apply(value, "reaction-001", github)
+        self.assertEqual(result["status"], "ALREADY_APPLIED_RECORDED")
+        self.assertEqual(result["mutation_identity"], "REACTION_NEW")
+        self.assertEqual(github.calls, [("READ", "current-state")])
 
     def test_mutation_failure_is_terminal_without_retry(self) -> None:
         github = FakeGitHub()
@@ -613,6 +772,81 @@ class MutationTests(unittest.TestCase):
             p21.FakeGitRunner(),
         )
         self.assertFalse(result["all_threads_classified"])
+
+    def test_resolution_readiness_accepts_a_verified_descendant_remediation_head(self) -> None:
+        initial = evidence_snapshot()
+        final_head = "d" * 40
+        final = copy.deepcopy(initial)
+        final["pull_request"].update(
+            {
+                "head_oid_before": final_head,
+                "head_oid_after": final_head,
+                "check_commit_oid": final_head,
+            }
+        )
+        remediation_commit = copy.deepcopy(final["commits"][-1])
+        remediation_commit.update(
+            {
+                "oid": final_head,
+                "parents": [p21.HEAD],
+                "authored_at": "2026-07-19T01:00:00Z",
+                "committed_at": "2026-07-19T01:00:00Z",
+            }
+        )
+        final["commits"].append(remediation_commit)
+        final = p21.finalize_snapshot(final)
+
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["snapshot_digest"] = final["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        value["expected_head_sha"] = final_head
+
+        runner = p21.FakeGitRunner()
+        runner.set(["git", "rev-parse", "HEAD"], 0, f"{final_head}\n")
+        runner.set(["git", "rev-parse", "@{upstream}"], 0, f"{final_head}\n")
+        runner.set(
+            ["git", "rev-list", "--reverse", f"{p21.BASE}..{final_head}"],
+            0,
+            f"{p21.HEAD}\n{final_head}\n",
+        )
+        runner.set(
+            ["git", "cat-file", "commit", final_head],
+            0,
+            "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n signature\n -----END SSH SIGNATURE-----\n\nmessage\n",
+        )
+        runner.set(
+            ["git", "verify-commit", "--raw", final_head],
+            0,
+            "",
+            'Good "git" signature for aroviqen with ED25519 key SHA256:test\n',
+        )
+
+        actions.validate_plan(value, final, p21.config())
+        result = actions.build_resolution_evidence(
+            value,
+            initial,
+            final,
+            p21.config(),
+            runner,
+        )
+        self.assertTrue(all(result.values()), result)
+
+    def test_resolution_requires_coverage_of_every_initial_thread_comment(self) -> None:
+        initial = evidence_snapshot()
+        second_comment = p21.review_comment("RC_2", body="Second independent finding")
+        second_comment["database_id"] = 22
+        initial["review_threads"][0]["comments"].append(second_comment)
+        initial = p21.finalize_snapshot(initial)
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["snapshot_digest"] = initial["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
 
 
 class RegistryTests(unittest.TestCase):

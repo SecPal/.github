@@ -12,6 +12,8 @@ ACTIONS="$REPO_ROOT/scripts/secpal-pr-review-actions.py"
 EVIDENCE="$REPO_ROOT/scripts/secpal-pr-review.py"
 REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.json"
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
+INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
+QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 
 fail() {
   printf 'policy failure: %s\n' "$1" >&2
@@ -67,6 +69,15 @@ cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show 833eef2afc063ae777e7e2b64b2f252e3fe1e
   || fail 'accepted P2.1 evidence helper changed'
 
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yml" || fail 'skill must not run automatically'
+if rg -n '/home/secpal' "$INTEGRATION"; then
+  fail 'integration test must not depend on one host account layout'
+fi
+grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'guarded-action unit tests are not enforced in CI'
+grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
+  || fail 'skill policy tests are not enforced in CI'
+grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
+  || fail 'skill integration tests are not enforced in CI'
 test "$(git -C "$REPO_ROOT" diff --name-only 833eef2afc063ae777e7e2b64b2f252e3fe1e49e -- .github/workflows/copilot-review-memory.yml scripts/copilot-review-tool.sh docs/copilot-review-automation.md | wc -l)" -eq 0 \
   || fail 'review-memory files changed'
 test "$(git -C "$REPO_ROOT" diff --name-only 833eef2afc063ae777e7e2b64b2f252e3fe1e49e -- AGENTS.md templates/polyscope-codex-AGENTS.md | wc -l)" -eq 0 \

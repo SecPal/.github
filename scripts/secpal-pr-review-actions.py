@@ -84,6 +84,19 @@ SESSION_LIMITS = {
     "fast_forward_pushes": 2,
     "evidence_replies": 10,
 }
+P21_CONFIGURATION_KEYS = (
+    "repository",
+    "default_branch",
+    "allowed_base_repositories",
+    "reviewer_identities",
+    "signature_policy",
+    "check_policy",
+    "maximum_api_calls",
+    "maximum_items",
+    "maximum_threads",
+    "maximum_comments",
+    "maximum_reactions",
+)
 RESOLVABLE_DISPOSITIONS = {
     "CORRECTED_AND_VERIFIED",
     "PROVEN_EXISTING_FIX",
@@ -177,6 +190,11 @@ def canonical_json_bytes(value: dict[str, Any]) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
+
+
+def _target_belongs_to_pull_request(url: Any, repository: str, number: int) -> bool:
+    prefix = f"https://github.com/{repository}/pull/{number}"
+    return isinstance(url, str) and (url == prefix or url.startswith(f"{prefix}#"))
 
 
 def _read_json(path: str, label: str) -> dict[str, Any]:
@@ -304,6 +322,11 @@ def _validate_operation_semantics(
     replied_findings: set[str] = set()
     resolved_threads: set[str] = set()
     reply_count = 0
+    recorded_writes = {
+        "REACTION": 0,
+        "EVIDENCE_REPLY": 0,
+        "THREAD_RESOLUTION": 0,
+    }
     for operation in plan["operations"]:
         operation_id = operation["operation_id"]
         if operation_id in operation_ids:
@@ -312,6 +335,11 @@ def _validate_operation_semantics(
         kind = operation["kind"]
         if kind not in ALLOWED_OPERATION_KINDS:
             raise PlanError(f"operation kind is prohibited: {kind}")
+        mutation_identity = operation["applied_mutation_identity"]
+        if mutation_identity is not None:
+            if not mutation_identity:
+                raise PlanError("recorded mutation identity must be non-empty")
+            recorded_writes[kind] += 1
         finding_id = operation["logical_finding_id"]
         finding = findings.get(finding_id)
         if finding is None:
@@ -392,6 +420,16 @@ def _validate_operation_semantics(
             resolved_threads.add(thread_id)
     if reply_count > SESSION_LIMITS["evidence_replies"]:
         raise PlanError("maximum evidence replies total is 10")
+    expected_counters = {
+        "reaction_writes": recorded_writes["REACTION"],
+        "evidence_replies": recorded_writes["EVIDENCE_REPLY"],
+        "thread_resolutions": recorded_writes["THREAD_RESOLUTION"],
+    }
+    for counter, recorded in expected_counters.items():
+        if plan["session"][counter] != recorded:
+            raise PlanError(
+                f"session counter {counter} must equal its recorded mutation identities"
+            )
     if len(reacted_findings) > len(findings):
         raise PlanError("reaction count exceeds initial logical finding count")
     if plan["created_for_state"] == "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES" and any(
@@ -407,23 +445,62 @@ def _validate_operation_semantics(
 
 def _snapshot_evidence_ids(
     snapshot: dict[str, Any],
-) -> tuple[set[str], set[int], set[str], dict[str, dict[str, Any]]]:
+) -> tuple[
+    set[str],
+    set[int],
+    set[str],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
     node_ids: set[str] = set()
     database_ids: set[int] = set()
     thread_ids = {thread["id"] for thread in snapshot["review_threads"]}
     actors: dict[str, dict[str, Any]] = {}
-    for item in (*snapshot["reviews"], *snapshot["conversation_comments"]):
-        node_ids.add(item["id"])
-        database_ids.add(item["database_id"])
-        actors[item["id"]] = item["author"]
+    targets: dict[str, dict[str, Any]] = {}
+    for target_type, items in (
+        ("PULL_REQUEST_REVIEW", snapshot["reviews"]),
+        ("ISSUE_COMMENT", snapshot["conversation_comments"]),
+    ):
+        for item in items:
+            node_ids.add(item["id"])
+            database_ids.add(item["database_id"])
+            actors[item["id"]] = item["author"]
+            targets[item["id"]] = {
+                "target_type": target_type,
+                "database_id": item["database_id"],
+                "parent_thread_id": None,
+                "body_digest": sha256_text(item["body"]),
+                "is_resolved": None,
+                "is_outdated": False,
+                "url": item["url"],
+            }
     for thread in snapshot["review_threads"]:
-        for comment in thread["comments"]:
-            node_ids.add(comment["id"])
-            database_ids.add(comment["database_id"])
-            actors[comment["id"]] = comment["author"]
-        if thread["comments"]:
-            actors[thread["id"]] = thread["comments"][0]["author"]
-    return node_ids, database_ids, thread_ids, actors
+        thread_actor = thread["comments"][0]["author"] if thread["comments"] else None
+        if thread_actor is not None:
+            actors[thread["id"]] = thread_actor
+        targets[thread["id"]] = {
+            "target_type": "PULL_REQUEST_REVIEW_THREAD",
+            "database_id": None,
+            "parent_thread_id": thread["id"],
+            "body_digest": None,
+            "is_resolved": thread["is_resolved"],
+            "is_outdated": thread["is_outdated"],
+            "url": thread["comments"][0]["url"] if thread["comments"] else None,
+        }
+        for item in thread["comments"]:
+            node_ids.add(item["id"])
+            database_ids.add(item["database_id"])
+            actors[item["id"]] = item["author"]
+            targets[item["id"]] = {
+                "target_type": "PULL_REQUEST_REVIEW_COMMENT",
+                "database_id": item["database_id"],
+                "parent_thread_id": thread["id"],
+                "body_digest": sha256_text(item["body"]),
+                "is_resolved": thread["is_resolved"],
+                "is_outdated": thread["is_outdated"],
+                "url": item["url"],
+            }
+    return node_ids, database_ids, thread_ids, actors, targets
 
 
 def _validate_snapshot_bindings(
@@ -431,26 +508,58 @@ def _validate_snapshot_bindings(
     snapshot: dict[str, Any],
     findings: dict[str, dict[str, Any]],
 ) -> None:
-    node_ids, database_ids, thread_ids, actors = _snapshot_evidence_ids(snapshot)
+    node_ids, database_ids, thread_ids, actors, targets = _snapshot_evidence_ids(snapshot)
     commit_ids = {commit["oid"] for commit in snapshot["commits"]}
     for finding in findings.values():
         if not set(finding["source_node_ids"]) <= node_ids:
             raise PlanError("logical finding source node is absent from the bound snapshot")
-        if not set(finding["source_database_ids"]) <= database_ids:
-            raise PlanError("logical finding source database ID is absent from the bound snapshot")
+        source_targets = [targets[node_id] for node_id in finding["source_node_ids"]]
+        source_database_ids = {
+            target["database_id"]
+            for target in source_targets
+            if target["database_id"] is not None
+        }
+        if set(finding["source_database_ids"]) != source_database_ids:
+            raise PlanError("logical finding source IDs do not identify the same snapshot feedback")
+        source_thread_ids = {target["parent_thread_id"] for target in source_targets}
+        if source_thread_ids != {finding["parent_thread_id"]}:
+            raise PlanError("logical finding sources do not belong to its declared thread")
         if finding["parent_thread_id"] is not None and finding["parent_thread_id"] not in thread_ids:
             raise PlanError("logical finding parent thread is absent from the bound snapshot")
         if finding["commit_sha"] is not None and finding["commit_sha"] not in commit_ids:
             raise PlanError("logical finding commit is absent from the bound snapshot")
     for operation in plan["operations"]:
+        finding = findings[operation["logical_finding_id"]]
         if operation["kind"] == "THREAD_RESOLUTION":
             if operation["target_node_id"] not in thread_ids:
                 raise PlanError("resolution target is absent from the bound snapshot")
+            if finding["parent_thread_id"] != operation["target_node_id"]:
+                raise PlanError("resolution target does not belong to its logical finding")
         elif (
             operation["target_node_id"] not in node_ids
             or operation["target_database_id"] not in database_ids
         ):
             raise PlanError("mutation target is absent from the bound snapshot")
+        elif operation["target_node_id"] not in finding["source_node_ids"]:
+            raise PlanError("mutation target does not belong to its logical finding")
+        snapshot_target = targets[operation["target_node_id"]]
+        if not _target_belongs_to_pull_request(
+            snapshot_target["url"],
+            plan["repository"],
+            plan["pull_request_number"],
+        ):
+            raise PlanError("mutation target does not belong to the bound pull request")
+        if (
+            operation["target_database_id"] != snapshot_target["database_id"]
+            or operation["parent_thread_id"] != snapshot_target["parent_thread_id"]
+        ):
+            raise PlanError("mutation target identity differs from the bound snapshot")
+        expected_state = operation["expected_current_state"]
+        if any(
+            expected_state[key] != snapshot_target[key]
+            for key in ("target_type", "body_digest", "is_resolved", "is_outdated")
+        ):
+            raise PlanError("mutation expected current state differs from immutable snapshot state")
         expected_actor = operation["expected_source_actor_identity"]
         source_actor = actors.get(operation["target_node_id"])
         if source_actor is None or any(
@@ -477,6 +586,13 @@ def validate_plan(
         evidence.validate_snapshot(snapshot)
     except evidence.ContractError as exc:
         raise PlanError(f"accepted P2.1 evidence validation failed: {exc}") from exc
+    try:
+        registered = select_repository(load_registry(), plan["repository"])
+    except RegistryError as exc:
+        raise PlanError(f"production registry rejected the mutation plan: {exc}") from exc
+    registered_configuration = _package_21_configuration(registered)
+    if configuration != registered_configuration:
+        raise PlanError("repository configuration differs from the production registry entry")
     if plan["repository"] != configuration["repository"] or plan["repository"] != snapshot["repository"]["name_with_owner"]:
         raise PlanError("mutation plan repository identity does not match supplied evidence")
     if plan["pull_request_number"] != snapshot["pull_request"]["number"]:
@@ -546,23 +662,7 @@ def validate_registry(registry: dict[str, Any]) -> dict[str, Any]:
         if repository in repositories:
             raise RegistryError(f"duplicate repository registry entry: {repository}")
         repositories.add(repository)
-        p21_configuration = {
-            key: copy.deepcopy(entry[key])
-            for key in (
-                "repository",
-                "default_branch",
-                "allowed_base_repositories",
-                "reviewer_identities",
-                "signature_policy",
-                "check_policy",
-                "maximum_api_calls",
-                "maximum_items",
-                "maximum_threads",
-                "maximum_comments",
-                "maximum_reactions",
-            )
-        }
-        p21_configuration["schema_version"] = "1.0"
+        p21_configuration = _package_21_configuration(entry)
         try:
             evidence.validate_config(p21_configuration)
         except evidence.ContractError as exc:
@@ -574,6 +674,15 @@ def validate_registry(registry: dict[str, Any]) -> dict[str, Any]:
         if set(entry["unsupported_operations"]) != set(PROHIBITED_OPERATION_KINDS):
             raise RegistryError("unsupported operations must retain every prohibited capability")
     return copy.deepcopy(registry)
+
+
+def _package_21_configuration(entry: dict[str, Any]) -> dict[str, Any]:
+    configuration = {
+        key: copy.deepcopy(entry[key])
+        for key in P21_CONFIGURATION_KEYS
+    }
+    configuration["schema_version"] = "1.0"
+    return configuration
 
 
 def load_registry(path: str | None = None) -> dict[str, Any]:
@@ -593,21 +702,21 @@ CURRENT_MUTATION_TARGET_QUERY = r"""
 query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $targetNodeId:ID!, $threadNodeId:ID!) {
   viewer { id databaseId login }
   repository(owner:$owner, name:$name) {
-    pullRequest(number:$number) { id headRefOid }
+    pullRequest(number:$number) { id headRefOid state }
   }
   node(id:$targetNodeId) {
     __typename
     ... on IssueComment {
-      id databaseId body author { id databaseId login }
-      reactions(first:100) { nodes { content user { id databaseId login } } pageInfo { hasNextPage } }
+      id databaseId body url author { id databaseId login }
+      reactions(first:100) { nodes { id databaseId content user { id databaseId login } } pageInfo { hasNextPage } }
     }
     ... on PullRequestReviewComment {
-      id databaseId body author { id databaseId login }
-      reactions(first:100) { nodes { content user { id databaseId login } } pageInfo { hasNextPage } }
+      id databaseId body url author { id databaseId login }
+      reactions(first:100) { nodes { id databaseId content user { id databaseId login } } pageInfo { hasNextPage } }
     }
     ... on PullRequestReview {
-      id databaseId body author { id databaseId login }
-      reactions(first:100) { nodes { content user { id databaseId login } } pageInfo { hasNextPage } }
+      id databaseId body url author { id databaseId login }
+      reactions(first:100) { nodes { id databaseId content user { id databaseId login } } pageInfo { hasNextPage } }
     }
     ... on PullRequestReviewThread { id isResolved isOutdated }
   }
@@ -615,7 +724,7 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
     ... on PullRequestReviewThread {
       id isResolved isOutdated
       comments(first:100) {
-        nodes { id databaseId body author { id databaseId login } }
+        nodes { id databaseId body url author { id databaseId login } }
         pageInfo { hasNextPage }
       }
     }
@@ -835,10 +944,13 @@ class LiveGitHub:
             item for item in comments_connection.get("nodes", []) if isinstance(item, dict)
         ]
         target_author = target.get("author")
+        target_url = target.get("url")
         if target_type == "PULL_REQUEST_REVIEW_THREAD" and thread_comments:
             target_author = thread_comments[0].get("author")
+            target_url = thread_comments[0].get("url")
         return {
             "head_sha": pull_request.get("headRefOid"),
+            "pr_state": pull_request.get("state"),
             "actor": _actor(target_author),
             "viewer": _actor(data.get("viewer")),
             "target": {
@@ -846,16 +958,25 @@ class LiveGitHub:
                 "database_id": target.get("databaseId"),
                 "parent_thread_id": thread.get("id") or operation["parent_thread_id"],
                 "target_type": target_type,
+                "url": target_url,
                 "body_digest": sha256_text(target.get("body", "")) if "body" in target else None,
                 "is_resolved": thread.get("isResolved"),
                 "is_outdated": bool(thread.get("isOutdated", False)),
                 "reactions": [
-                    {"content": item.get("content"), "actor": _actor(item.get("user"))}
+                    {
+                        "mutation_id": item.get("id") or str(item.get("databaseId") or ""),
+                        "content": item.get("content"),
+                        "actor": _actor(item.get("user")),
+                    }
                     for item in reactions_connection.get("nodes", [])
                     if isinstance(item, dict)
                 ],
                 "replies": [
-                    {"body": item.get("body"), "actor": _actor(item.get("author"))}
+                    {
+                        "mutation_id": item.get("id"),
+                        "body": item.get("body"),
+                        "actor": _actor(item.get("author")),
+                    }
                     for item in thread_comments
                     if item.get("id") != operation["target_node_id"]
                 ],
@@ -954,9 +1075,15 @@ def _same_actor(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
     return all(actual.get(key) == expected.get(key) for key in ("login", "node_id", "database_id"))
 
 
-def _verify_current_state(plan: dict[str, Any], operation: dict[str, Any], current: dict[str, Any]) -> str | None:
+def _verify_current_state(
+    plan: dict[str, Any],
+    operation: dict[str, Any],
+    current: dict[str, Any],
+) -> tuple[str, str] | None:
     if current.get("head_sha") != plan["expected_head_sha"]:
         raise MutationBlocked("BLOCKED_HEAD_MOVED: current PR head differs from the mutation plan")
+    if current.get("pr_state") != "OPEN":
+        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: pull request is not open")
     if not _same_actor(current.get("actor", {}), operation["expected_source_actor_identity"]):
         raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: source actor identity changed")
     viewer = current.get("viewer")
@@ -979,26 +1106,32 @@ def _verify_current_state(plan: dict[str, Any], operation: dict[str, Any], curre
         or target.get("target_type") != operation["expected_current_state"]["target_type"]
     ):
         raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: mutation target identity changed")
+    if not _target_belongs_to_pull_request(
+        target.get("url"),
+        plan["repository"],
+        plan["pull_request_number"],
+    ):
+        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: target pull request changed")
     for key in ("body_digest", "is_outdated"):
         if target.get(key) != operation["expected_current_state"][key]:
             raise MutationBlocked(f"BLOCKED_UNSAFE_GITHUB_STATE: target {key} changed")
     if operation["kind"] == "THREAD_RESOLUTION":
         if target.get("is_resolved") is True:
-            return "ALREADY_APPLIED"
-        if target.get("is_resolved") is not operation["expected_current_state"]["is_resolved"]:
-            raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: thread resolution state changed")
-    if operation["kind"] == "REACTION" and any(
-        item.get("content") == operation["reaction"]
-        and _same_actor(item.get("actor", {}), viewer)
-        for item in target.get("reactions", [])
-    ):
-        return "ALREADY_APPLIED"
-    if operation["kind"] == "EVIDENCE_REPLY" and any(
-        item.get("body") == operation["reply_body"]
-        and _same_actor(item.get("actor", {}), viewer)
-        for item in target.get("replies", [])
-    ):
-        return "ALREADY_APPLIED"
+            return "ALREADY_APPLIED", operation["target_node_id"]
+    if target.get("is_resolved") is not operation["expected_current_state"]["is_resolved"]:
+        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: thread resolution state changed")
+    if operation["kind"] == "REACTION":
+        for item in target.get("reactions", []):
+            if item.get("content") == operation["reaction"] and _same_actor(
+                item.get("actor", {}), viewer
+            ):
+                return "ALREADY_APPLIED", item.get("mutation_id") or operation["target_node_id"]
+    if operation["kind"] == "EVIDENCE_REPLY":
+        for item in target.get("replies", []):
+            if item.get("body") == operation["reply_body"] and _same_actor(
+                item.get("actor", {}), viewer
+            ):
+                return "ALREADY_APPLIED", item.get("mutation_id") or operation["target_node_id"]
     return None
 
 
@@ -1019,21 +1152,28 @@ def execute_operation(
     )
     if operation is None:
         raise PlanError(f"unknown operation ID: {operation_id}")
-    if operation["applied_mutation_identity"] is not None:
+    current = github.read_current_state(validated, operation)
+    current_status = _verify_current_state(validated, operation, current)
+    recorded_identity = operation["applied_mutation_identity"]
+    if recorded_identity is not None:
+        if current_status is None or current_status[1] != recorded_identity:
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: recorded mutation identity is absent or changed"
+            )
         return {
             "status": "ALREADY_APPLIED_RECORDED",
             "operation_id": operation_id,
             "kind": operation["kind"],
-            "mutation_identity": operation["applied_mutation_identity"],
+            "mutation_identity": recorded_identity,
             "retry_performed": False,
         }
-    current = github.read_current_state(validated, operation)
-    if status := _verify_current_state(validated, operation, current):
+    if current_status is not None:
+        status, mutation_identity = current_status
         return {
             "status": status,
             "operation_id": operation_id,
             "kind": operation["kind"],
-            "mutation_identity": operation["target_node_id"],
+            "mutation_identity": mutation_identity,
             "retry_performed": False,
         }
     if operation["kind"] == "THREAD_RESOLUTION":
@@ -1213,7 +1353,13 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
         if thread["is_resolved"]:
             continue
         findings = findings_by_thread.get(thread["id"], [])
-        if not findings or any(
+        covered_source_ids = {
+            source_id
+            for finding in findings
+            for source_id in finding["source_node_ids"]
+        }
+        thread_comment_ids = {comment["id"] for comment in thread["comments"]}
+        if not thread_comment_ids <= covered_source_ids or any(
             finding["classification"] == "AMBIGUOUS_NEEDS_USER_DECISION"
             or finding["disposition"] not in RESOLVABLE_DISPOSITIONS
             for finding in findings
@@ -1243,7 +1389,16 @@ def build_resolution_evidence(
         initial_snapshot["snapshot_digest"] != plan["initial_snapshot_digest"]
         or initial_snapshot["repository"]["name_with_owner"] != plan["repository"]
         or initial_snapshot["pull_request"]["number"] != plan["pull_request_number"]
-        or initial_snapshot["pull_request"]["head_oid_after"] != plan["expected_head_sha"]
+        or final_snapshot["repository"]["name_with_owner"] != plan["repository"]
+        or final_snapshot["pull_request"]["number"] != plan["pull_request_number"]
+        or final_snapshot["pull_request"]["head_oid_after"] != plan["expected_head_sha"]
+        or not {
+            commit["oid"] for commit in initial_snapshot["commits"]
+        } <= {
+            commit["oid"] for commit in final_snapshot["commits"]
+        }
+        or initial_snapshot["pull_request"]["head_oid_after"]
+        not in {commit["oid"] for commit in final_snapshot["commits"]}
     ):
         return {
             "local_verified": False,

@@ -28,10 +28,12 @@ outputs, commands, and Package 2.1 non-goals.
 Validates deterministic Package-2.2 mutation plans and applies at most one
 explicitly selected, anchor-bound reaction, inline evidence reply, or eligible
 thread resolution. The helper performs one current-target idempotency read even
-in audit mode; a write additionally requires `--apply`. Its exact command and
-endpoint allowlists provide no review-request, Ready-transition, generic API,
-Git-write, label/issue, merge, or auto-merge capability, and failures are never
-retried.
+in audit mode; a write additionally requires `--apply`. Every plan must match the
+checked-in repository registry and binds its finding, target, immutable target
+state, counters, and recorded mutation identities before a write. Its exact
+command and endpoint allowlists provide no review-request, Ready-transition,
+generic API, Git-write, label/issue, merge, or auto-merge capability, and failures
+are never retried.
 
 ### `install-secpal-pr-review-skill.sh`
 

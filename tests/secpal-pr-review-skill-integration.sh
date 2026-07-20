@@ -12,7 +12,12 @@ FIXTURES="$SCRIPT_DIR/fixtures/secpal-pr-review-actions"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-skill-integration.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
-mkdir -p "$workspace/bin" "$workspace/home" "$workspace/sibling-style/repository"
+mkdir -p \
+  "$workspace/bin" \
+  "$workspace/home/.codex" \
+  "$workspace/sibling-style/repository"
+global_agents="$workspace/home/.codex/AGENTS.md"
+ln -s "$workspace/global-agents-source" "$global_agents"
 cp "$FIXTURES/fake-gh.py" "$workspace/bin/gh"
 chmod 0700 "$workspace/bin/gh"
 export FAKE_ACTION_GH_LOG="$workspace/gh.log"
@@ -61,7 +66,7 @@ operation = {
     "expected_current_state": {
         "target_type": "PULL_REQUEST_REVIEW_COMMENT",
         "body_digest": actions.sha256_text("Finding"),
-        "is_resolved": None,
+        "is_resolved": False,
         "is_outdated": False,
         "material_misunderstanding": False,
         "invalidity_non_obvious": False,
@@ -186,7 +191,7 @@ PY
 # Installer fixtures 70-79: clean install, idempotency, correct link, wrong-link
 # refusal/repair, non-link refusal, parent creation, missing source, direct link,
 # unchanged global AGENTS, and sibling-style user discovery.
-global_agents_before="$(readlink /home/secpal/.codex/AGENTS.md)"
+global_agents_before="$(readlink "$global_agents")"
 target_root="$workspace/home/.agents/skills"
 HOME="$workspace/home" bash "$INSTALLER" --target-root "$target_root" >"$workspace/install-1.txt"
 link="$target_root/secpal-pr-review"
@@ -230,7 +235,6 @@ fi
   cd "$workspace/sibling-style/repository"
   test -f "$workspace/new-home/.agents/skills/secpal-pr-review/SKILL.md"
 )
-test "$(readlink /home/secpal/.codex/AGENTS.md)" = "$global_agents_before"
-test ! -e /home/secpal/.agents/skills/secpal-pr-review
+test "$(readlink "$global_agents")" = "$global_agents_before"
 
 printf '✓ finite secpal-pr-review skill integration checks passed\n'

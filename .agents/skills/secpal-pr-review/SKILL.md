@@ -93,9 +93,11 @@ detected. Green CI alone never establishes technical truth or merge readiness.
 
 Validate plans against
 [references/mutation-plan.schema.json](references/mutation-plan.schema.json).
-The plan must preserve every source ID, contain no secrets, bind the exact
-repository/PR/snapshot/head, and serialize deterministically. It may contain only
-`REACTION`, `EVIDENCE_REPLY`, and `THREAD_RESOLUTION` operations.
+The plan must preserve every source ID, contain no secrets, match the selected
+production registry entry, bind each operation to the same immutable
+repository/PR/snapshot/finding/target/head state, and serialize deterministically.
+It may contain only `REACTION`, `EVIDENCE_REPLY`, and `THREAD_RESOLUTION`
+operations.
 
 `inspect-actor` is an exact read-only identity query used to bind the intended
 writer. Each operation separately binds its immutable source actor. Without

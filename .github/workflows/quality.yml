@@ -23,7 +23,30 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  pr-review-workflow:
+    name: Finite PR Review Workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Run guarded-action unit tests
+        run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
+
+      - name: Run finite skill policy tests
+        run: bash tests/secpal-pr-review-skill-policy.sh
+
+      - name: Run fake-GitHub and temporary-HOME integration tests
+        run: bash tests/secpal-pr-review-skill-integration.sh
+
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest

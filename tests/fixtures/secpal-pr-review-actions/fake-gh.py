@@ -36,12 +36,13 @@ if arguments[3] == "graphql":
                 {
                     "data": {
                         "viewer": {"login": "aroviqen", "id": "USER_1", "databaseId": 7},
-                        "repository": {"pullRequest": {"headRefOid": "a" * 40}},
+                        "repository": {"pullRequest": {"headRefOid": "a" * 40, "state": "OPEN"}},
                         "node": {
                             "__typename": "PullRequestReviewComment",
                             "id": "RC_1",
                             "databaseId": 21,
                             "body": "Finding",
+                            "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
                             "author": {"login": "reviewer", "id": "ACTOR_reviewer", "databaseId": 7},
                             "pullRequestReviewThread": {"id": "THREAD_1", "isResolved": False, "isOutdated": False},
                             "reactions": {"nodes": [], "pageInfo": {"hasNextPage": False}},
