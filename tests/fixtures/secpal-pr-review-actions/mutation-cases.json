@@ -1,0 +1,27 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "cases": [
+    { "number": 39, "name": "valid thumbs-up reaction" },
+    { "number": 40, "name": "valid thumbs-down reaction" },
+    { "number": 41, "name": "no reaction for informational finding" },
+    { "number": 42, "name": "existing reaction not duplicated" },
+    { "number": 43, "name": "another actor reaction preserved" },
+    { "number": 44, "name": "obvious invalid finding produces no reply" },
+    { "number": 45, "name": "non-obvious invalid finding permits one reply" },
+    { "number": 46, "name": "duplicate reply refused" },
+    { "number": 47, "name": "fixed status reply refused" },
+    { "number": 48, "name": "resolution before push refused" },
+    { "number": 49, "name": "resolution before valid signature refused" },
+    { "number": 50, "name": "resolution while CI pending refused" },
+    { "number": 51, "name": "resolution with failed CI refused" },
+    { "number": 52, "name": "resolution after successful verification allowed" },
+    { "number": 53, "name": "already resolved thread refused idempotently" },
+    { "number": 54, "name": "changed thread identity refused" },
+    { "number": 55, "name": "late feedback blocks resolution" },
+    { "number": 56, "name": "unresolved unclassified thread blocks readiness" },
+    { "number": 57, "name": "no review-request endpoint exists" },
+    { "number": 58, "name": "no merge endpoint exists" },
+    { "number": 59, "name": "no generic mutation passthrough exists" },
+    { "number": 60, "name": "no retry after mutation failure" }
+  ]
+}

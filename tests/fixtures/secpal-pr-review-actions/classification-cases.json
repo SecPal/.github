@@ -1,0 +1,49 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "cases": [
+    { "number": 1, "name": "zero findings", "classifications": [] },
+    { "number": 2, "name": "informational review only", "classifications": ["INFORMATIONAL"] },
+    { "number": 3, "name": "one valid finding", "classifications": ["VALID_ACTIONABLE"] },
+    {
+      "number": 4,
+      "name": "one invalid finding",
+      "classifications": ["INVALID_FALSE_OR_MISLEADING"]
+    },
+    {
+      "number": 5,
+      "name": "duplicate finding",
+      "classifications": ["VALID_ACTIONABLE", "DUPLICATE"]
+    },
+    { "number": 6, "name": "outdated but valid", "classifications": ["OUTDATED_BUT_STILL_VALID"] },
+    {
+      "number": 7,
+      "name": "outdated and obsolete",
+      "classifications": ["OUTDATED_AND_OBSOLETE", "SUPERSEDED"]
+    },
+    { "number": 8, "name": "already fixed", "classifications": ["ALREADY_FIXED_ON_SNAPSHOT_HEAD"] },
+    { "number": 9, "name": "ambiguous", "classifications": ["AMBIGUOUS_NEEDS_USER_DECISION"] },
+    { "number": 10, "name": "requested-changes review", "classifications": ["VALID_ACTIONABLE"] },
+    { "number": 11, "name": "unresolved human thread", "classifications": ["VALID_ACTIONABLE"] },
+    {
+      "number": 12,
+      "name": "Copilot and Codex findings together",
+      "classifications": ["VALID_ACTIONABLE", "INVALID_FALSE_OR_MISLEADING"]
+    },
+    { "number": 13, "name": "conflicting reviewers", "classifications": ["CONFLICTING_REVIEWERS"] },
+    {
+      "number": 14,
+      "name": "security-weakening suggestion",
+      "classifications": ["SECURITY_WEAKENING_SUGGESTION"]
+    },
+    {
+      "number": 15,
+      "name": "cross-repository finding",
+      "classifications": ["CROSS_REPOSITORY", "OUTSIDE_PR_SCOPE"]
+    },
+    {
+      "number": 16,
+      "name": "compound comment with multiple findings",
+      "classifications": ["VALID_ACTIONABLE", "INFORMATIONAL"]
+    }
+  ]
+}

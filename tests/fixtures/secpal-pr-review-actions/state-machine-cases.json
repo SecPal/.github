@@ -1,0 +1,137 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "cases": [
+    {
+      "number": 17,
+      "name": "first cycle sufficient",
+      "overrides": { "remediation_cycles": 1, "state_captures": 3 },
+      "expected": "READY_FOR_USER_AUTHORIZED_SQUASH_MERGE"
+    },
+    {
+      "number": 18,
+      "name": "second cycle required",
+      "overrides": { "remediation_cycles": 2, "state_captures": 3 },
+      "expected": "READY_FOR_USER_AUTHORIZED_SQUASH_MERGE"
+    },
+    {
+      "number": 19,
+      "name": "third cycle prohibited",
+      "overrides": { "remediation_cycles": 3 },
+      "expected": "BLOCKED_CYCLE_LIMIT_REACHED"
+    },
+    {
+      "number": 20,
+      "name": "late feedback after immutable snapshot",
+      "overrides": { "late_feedback_detected": true },
+      "expected": "BLOCKED_INCOMPLETE_REVIEW_STATE"
+    },
+    {
+      "number": 21,
+      "name": "head movement before snapshot",
+      "overrides": { "head_matches": false },
+      "expected": "BLOCKED_HEAD_MOVED"
+    },
+    {
+      "number": 22,
+      "name": "head movement after snapshot",
+      "overrides": { "head_matches": false, "state_captures": 2 },
+      "expected": "BLOCKED_HEAD_MOVED"
+    },
+    {
+      "number": 23,
+      "name": "unexplained commit",
+      "overrides": { "unexplained_commit": true },
+      "expected": "BLOCKED_UNEXPLAINED_COMMIT"
+    },
+    {
+      "number": 24,
+      "name": "dirty worktree",
+      "overrides": { "worktree_clean": false },
+      "expected": "BLOCKED_UNCLEAN_WORKTREE"
+    },
+    {
+      "number": 25,
+      "name": "invalid signature",
+      "overrides": { "signatures_valid": false },
+      "expected": "BLOCKED_INVALID_SIGNATURE"
+    },
+    {
+      "number": 26,
+      "name": "unsigned commit",
+      "overrides": { "signatures_valid": false },
+      "expected": "BLOCKED_INVALID_SIGNATURE"
+    },
+    {
+      "number": 27,
+      "name": "pending CI",
+      "overrides": { "ci_state": "PENDING" },
+      "expected": "BLOCKED_FAILED_OR_PENDING_CI"
+    },
+    {
+      "number": 28,
+      "name": "failed CI",
+      "overrides": { "ci_state": "FAILED" },
+      "expected": "BLOCKED_FAILED_OR_PENDING_CI"
+    },
+    {
+      "number": 29,
+      "name": "missing required check",
+      "overrides": { "ci_state": "MISSING" },
+      "expected": "BLOCKED_FAILED_OR_PENDING_CI"
+    },
+    {
+      "number": 30,
+      "name": "successful required checks",
+      "overrides": { "ci_state": "SUCCESS" },
+      "expected": "READY_FOR_USER_AUTHORIZED_SQUASH_MERGE"
+    },
+    {
+      "number": 31,
+      "name": "push failure",
+      "overrides": { "push_failed": true },
+      "expected": "NOT_READY_FOR_MERGE"
+    },
+    {
+      "number": 32,
+      "name": "reaction failure",
+      "overrides": { "mutation_failed": true },
+      "expected": "BLOCKED_MUTATION_FAILED"
+    },
+    {
+      "number": 33,
+      "name": "reply failure",
+      "overrides": { "mutation_failed": true },
+      "expected": "BLOCKED_MUTATION_FAILED"
+    },
+    {
+      "number": 34,
+      "name": "resolution failure",
+      "overrides": { "mutation_failed": true },
+      "expected": "BLOCKED_MUTATION_FAILED"
+    },
+    {
+      "number": 35,
+      "name": "mutation-plan head mismatch",
+      "overrides": { "head_matches": false },
+      "expected": "BLOCKED_HEAD_MOVED"
+    },
+    {
+      "number": 36,
+      "name": "snapshot-digest mismatch",
+      "overrides": { "snapshot_digest_matches": false },
+      "expected": "BLOCKED_INCOMPLETE_REVIEW_STATE"
+    },
+    {
+      "number": 37,
+      "name": "incomplete review state",
+      "overrides": { "evidence_complete": false },
+      "expected": "BLOCKED_INCOMPLETE_REVIEW_STATE"
+    },
+    {
+      "number": 38,
+      "name": "scope requiring another repository",
+      "overrides": { "scope_requires_other_repository": true },
+      "expected": "BLOCKED_SCOPE_REQUIRES_OTHER_REPOSITORY"
+    }
+  ]
+}
