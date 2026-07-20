@@ -18,11 +18,11 @@ Each ADR follows this structure:
 ```markdown
 # ADR-XXX: Title
 
-**Status:** Proposed | Accepted | Deprecated | Superseded by ADR-YYY
+**Status:** Proposed | Accepted | Deprecated | Superseded by ADR-YYY | Partially Superseded by ADR-YYY
 
 **Date:** YYYY-MM-DD
 
-**Deciders:** @kevalyq (+ others as project grows)
+**Decision authority:** Role or accountable decision-making body
 
 ## Context
 
@@ -85,6 +85,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
+- [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20
 - [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
@@ -93,23 +94,25 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15
 - [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06
-- [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27
 - [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24
-- [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19
-- [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11
-- [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08
 
 ### Proposed
 
-- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21 (Partially superseded by ADR-011)
-- [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26
 - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27
 - [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27
 - [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27
 
 ### Superseded
 
-_None yet_
+- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+- [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+- [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+
+### Partially Superseded
+
+- [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+- [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+- [ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions](20251108-rbac-spatie-temporal-extension.md) - 2025-11-08; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 ## When to Write an ADR
 

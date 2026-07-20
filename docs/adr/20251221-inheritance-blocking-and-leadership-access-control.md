@@ -7,15 +7,15 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Partially Superseded by [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md)** (Management level implementation changed)
-
-**Proposed** (Draft - awaiting review for permission inheritance blocking)
+**Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)**
 
 ## Date
 
 2025-12-21
 
 **Last Updated:** 2025-12-27 (Management level implementation updated)
+
+**Supersession notice:** [ADR-014](20260720-tenant-identity-access-model-adr014.md) removes Organizational Unit-based permission inheritance and inheritance blocking. Leadership, reporting, and rank hierarchies create no rights, and `management_level` must not imply permissions. The historical content below, including the earlier partial supersession by ADR-011, is retained for context.
 
 ## Context
 

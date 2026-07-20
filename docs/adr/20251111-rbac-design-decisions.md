@@ -5,13 +5,15 @@ SPDX-License-Identifier: CC0-1.0
 
 # ADR-005: RBAC Design Decisions
 
-**Status:** Accepted
+**Status:** Partially Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 **Date:** 2025-11-11
 
 **Last Updated:** 2025-12-21 (ADR-009: Leadership-Based Access Control)
 
 **Deciders:** @kevalyq
+
+**Supersession notice:** The absence of specially protected roles, roles as permission bundles, direct permissions alongside roles, and indefinite or time-limited assignments remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces assignments directly to Users, User-centered pivot and API structures, explicit deny or override logic, permissions without applicable scope, and functional rights outside a TenantMembership. ADR-014 starts with allow-only authorization and deny-by-default. The historical content below is retained for context.
 
 ## Context
 
