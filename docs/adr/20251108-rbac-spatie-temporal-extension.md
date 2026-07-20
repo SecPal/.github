@@ -1,15 +1,17 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
 # ADR-004: RBAC System with Spatie Laravel-Permission and Temporal Extensions
 
-**Status:** Accepted
+**Status:** Partially Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 **Date:** 2025-11-08
 
 **Deciders:** @kevalyq
+
+**Supersession notice:** Database-backed roles and permissions, time-limited assignments, and auditing of grants and revocations remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces direct User role or permission assignments, User-based `model_has_roles` semantics, Spatie `team_id` as the functional Tenant association, and Tenant context derived from User roles. Functional rights now attach to TenantMemberships through Access Assignments. The historical content below is retained for context.
 
 ## Context
 
