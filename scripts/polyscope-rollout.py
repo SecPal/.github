@@ -179,6 +179,7 @@ def open_api_worktree_bootstrap_lock_directory() -> tuple[int, pathlib.Path]:
         try:
             os.mkdir(lock_directory.name, 0o700, dir_fd=state_descriptor)
         except FileExistsError:
+            # A concurrent bootstrap may create it first; the open and validation below still fail closed.
             pass
         try:
             lock_directory_descriptor = os.open(
