@@ -22,8 +22,6 @@ fail() {
   exit 1
 }
 
-command -v rg >/dev/null 2>&1 || fail 'ripgrep (rg) is required'
-
 for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$REGISTRY" "$PLAN_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
@@ -53,15 +51,15 @@ for phrase in \
   grep -Fqi "$phrase" "$CONTRACT" || fail "missing contract phrase: $phrase"
 done
 
-if rg -n 'sleep\(|time\.sleep|while[[:space:]]+true|for[[:space:]].*retry|retrying' "$ACTIONS"; then
+if grep -En 'sleep\(|time\.sleep|while[[:space:]]+true|for[[:space:]].*retry|retrying' "$ACTIONS"; then
   fail 'mutation helper contains polling or retry behavior'
 fi
 
-if rg -n 'gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue' "$ACTIONS"; then
+if grep -En 'gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue' "$ACTIONS"; then
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
-if rg -n 'subprocess\.(run|Popen).*shell[[:space:]]*=[[:space:]]*True|\beval\(' "$ACTIONS"; then
+if grep -En 'subprocess\.(run|Popen).*shell[[:space:]]*=[[:space:]]*True|(^|[^[:alnum:]_])eval\(' "$ACTIONS"; then
   fail 'mutation helper permits shell execution'
 fi
 
@@ -77,7 +75,7 @@ cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-revi
 
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yml" || fail 'skill must not run automatically'
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yaml" || fail 'skill must not run automatically'
-if rg -n '/home/secpal' "$INTEGRATION"; then
+if grep -En '/home/secpal' "$INTEGRATION"; then
   fail 'integration test must not depend on one host account layout'
 fi
 grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_WORKFLOW" \

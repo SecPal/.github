@@ -14,8 +14,10 @@ import json
 import os
 import pwd
 import re
+import site
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -50,6 +52,8 @@ def _load_evidence_helper() -> Any:
 
 evidence = _load_evidence_helper()
 ACCOUNT_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+ACCOUNT_NAME = pwd.getpwuid(os.getuid()).pw_name
+USER_SITE_PACKAGES = site.getusersitepackages()
 LOCAL_VALIDATION_COMMAND_DIRECTORIES = (
     *evidence.TRUSTED_COMMAND_DIRECTORIES,
     ACCOUNT_HOME / ".local/bin",
@@ -149,6 +153,15 @@ RESOLVABLE_CLASSIFICATIONS = {
     "SUPERSEDED",
     "SECURITY_WEAKENING_SUGGESTION",
 }
+REQUIRED_RESOLUTION_EVIDENCE = frozenset(
+    {
+        "local_verified",
+        "final_evidence_verified",
+        "no_late_feedback",
+        "all_threads_classified",
+        "registered_validation_verified",
+    }
+)
 REPLY_CLASSIFICATIONS = {
     "INVALID_FALSE_OR_MISLEADING",
     "OUTSIDE_PR_SCOPE",
@@ -224,8 +237,17 @@ def canonical_json_bytes(value: dict[str, Any]) -> bytes:
 
 
 def _target_belongs_to_pull_request(url: Any, repository: str, number: int) -> bool:
-    prefix = f"https://github.com/{repository}/pull/{number}"
-    return isinstance(url, str) and (url == prefix or url.startswith(f"{prefix}#"))
+    if not isinstance(url, str):
+        return False
+    pull_prefix = f"https://github.com/{repository}/pull/{number}"
+    issue_comment_prefix = (
+        f"https://github.com/{repository}/issues/{number}#issuecomment-"
+    )
+    return (
+        url == pull_prefix
+        or url.startswith(f"{pull_prefix}#")
+        or url.startswith(issue_comment_prefix)
+    )
 
 
 def _read_json(path: str, label: str) -> dict[str, Any]:
@@ -827,29 +849,68 @@ def _run_registered_validations(
     if not repository_root.is_dir():
         return False
     commands = (*repository["focused_validation"], *repository["required_local_validation"])
-    for command in commands:
-        _validate_command(command)
-        working_directory = (repository_root / command["working_directory"]).resolve()
-        if working_directory != repository_root and repository_root not in working_directory.parents:
-            return False
-        try:
-            executable = _validation_executable(
-                command, working_directory, repository_root
-            )
-            completed = subprocess.run(
-                [executable, *command["argv"][1:]],
-                cwd=working_directory,
-                env=evidence.command_environment("git"),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired, RegistryError):
-            return False
-        if completed.returncode != 0:
-            return False
+    try:
+        validation_home = tempfile.TemporaryDirectory(
+            prefix="secpal-pr-review-validation-"
+        )
+    except OSError:
+        return False
+    with validation_home:
+        sandbox = Path(validation_home.name)
+        environment = {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "HOME": str(sandbox),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "LOGNAME": ACCOUNT_NAME,
+            "NO_COLOR": "1",
+            "PAGER": "cat",
+            "PATH": os.pathsep.join(
+                str(directory) for directory in LOCAL_VALIDATION_COMMAND_DIRECTORIES
+            ),
+            "PYTHONPATH": os.pathsep.join(
+                USER_SITE_PACKAGES
+                if isinstance(USER_SITE_PACKAGES, list)
+                else [USER_SITE_PACKAGES]
+            ),
+            "TMPDIR": str(sandbox),
+            "USER": ACCOUNT_NAME,
+            "XDG_CACHE_HOME": str(sandbox / ".cache"),
+            "XDG_CONFIG_HOME": str(sandbox / ".config"),
+            "XDG_DATA_HOME": str(sandbox / ".local/share"),
+        }
+        for command in commands:
+            _validate_command(command)
+            working_directory = (
+                repository_root / command["working_directory"]
+            ).resolve()
+            if (
+                working_directory != repository_root
+                and repository_root not in working_directory.parents
+            ):
+                return False
+            try:
+                executable = _validation_executable(
+                    command, working_directory, repository_root
+                )
+                completed = subprocess.run(
+                    [executable, *command["argv"][1:]],
+                    cwd=working_directory,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.TimeoutExpired, RegistryError):
+                return False
+            if completed.returncode != 0:
+                return False
     return True
 
 
@@ -1577,23 +1638,6 @@ def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[
     ]
 
 
-def _snapshot_target_reactions(
-    snapshot: dict[str, Any], target_node_id: str
-) -> list[dict[str, Any]]:
-    targets = [*snapshot["reviews"], *snapshot["conversation_comments"]]
-    targets.extend(
-        comment
-        for thread in snapshot["review_threads"]
-        for comment in thread["comments"]
-    )
-    target = next((item for item in targets if item["id"] == target_node_id), None)
-    if target is None:
-        raise MutationBlocked(
-            "BLOCKED_UNSAFE_GITHUB_STATE: reaction target left the snapshot"
-        )
-    return _snapshot_reactions(target)
-
-
 def _snapshot_review_feedback(
     snapshot: dict[str, Any], plan: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1854,10 +1898,21 @@ def _verify_current_state(
             None,
         )
 
+    expected_feedback = _snapshot_review_feedback(snapshot, plan)
     if operation["parent_thread_id"] is not None:
-        expected_thread_comments = _snapshot_thread_comments(
-            snapshot, operation["parent_thread_id"]
+        expected_thread = next(
+            (
+                item
+                for item in expected_feedback["threads"]
+                if item["node_id"] == operation["parent_thread_id"]
+            ),
+            None,
         )
+        if expected_thread is None:
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: mutation thread left the snapshot"
+            )
+        expected_thread_comments = expected_thread["comments"]
         if matching_reaction is not None:
             expected_target = next(
                 (
@@ -1897,9 +1952,14 @@ def _verify_current_state(
             )
 
     if operation["kind"] == "REACTION":
-        expected_reactions = _snapshot_target_reactions(
-            snapshot, operation["target_node_id"]
+        expected_target = _feedback_target(
+            expected_feedback, operation["target_node_id"]
         )
+        if expected_target is None:
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: reaction target left the snapshot"
+            )
+        expected_reactions = expected_target["reactions"]
         if matching_reaction is not None and matching_reaction not in expected_reactions:
             expected_reactions.append(matching_reaction)
             expected_reactions.sort(
@@ -2010,15 +2070,9 @@ def execute_operation(
             "retry_performed": False,
         }
     if operation["kind"] == "THREAD_RESOLUTION":
-        required = {
-            "local_verified",
-            "final_evidence_verified",
-            "no_late_feedback",
-            "all_threads_classified",
-            "registered_validation_verified",
-        }
         if not isinstance(resolution_evidence, dict) or not all(
-            resolution_evidence.get(key) is True for key in required
+            resolution_evidence.get(key) is True
+            for key in REQUIRED_RESOLUTION_EVIDENCE
         ):
             raise MutationBlocked("BLOCKED_UNRESOLVED_MATERIAL_FINDING: resolution evidence is incomplete")
     method = {
@@ -2470,6 +2524,15 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
             configuration,
             verified_mutation_identities=verified_mutation_identities,
         )
+        if not all(
+            resolution_evidence.get(key) is True
+            for key in REQUIRED_RESOLUTION_EVIDENCE
+        ):
+            raise MutationBlocked(
+                "BLOCKED_UNRESOLVED_MATERIAL_FINDING: resolution evidence is incomplete"
+            )
+        current_feedback = github.read_current_feedback(plan)
+        _verify_current_feedback(plan, snapshot, current_feedback, operation)
     result = execute_operation(
         plan,
         arguments.operation_id,

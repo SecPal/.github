@@ -38,9 +38,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify finite workflow dependencies
-        run: command -v rg >/dev/null
-
       - name: Run guarded-action unit tests
         run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
 

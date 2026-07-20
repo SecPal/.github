@@ -602,6 +602,52 @@ class ContractTests(TestCase):
             "PULL_REQUEST_REVIEW",
         )
 
+    def test_issue_comment_reactions_accept_the_canonical_issue_url(self) -> None:
+        snapshot = evidence_snapshot()
+        conversation = {
+            "id": "CONVERSATION_1",
+            "database_id": 12,
+            "author": p21.actor("reviewer"),
+            "body": "Top-level review feedback",
+            "url": "https://github.com/SecPal/.github/issues/1#issuecomment-12",
+            "created_at": "2026-07-19T00:00:00Z",
+            "updated_at": "2026-07-19T00:00:00Z",
+            "reactions": [],
+        }
+        snapshot["conversation_comments"] = [conversation]
+        snapshot = p21.finalize_snapshot(snapshot)
+        reaction = operation()
+        reaction.update(
+            {
+                "target_node_id": conversation["id"],
+                "target_database_id": conversation["database_id"],
+                "parent_thread_id": None,
+            }
+        )
+        reaction["expected_current_state"].update(
+            {
+                "target_type": "ISSUE_COMMENT",
+                "body_digest": digest(conversation["body"]),
+                "is_resolved": None,
+                "is_outdated": False,
+            }
+        )
+        value = plan(reaction)
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        value["findings"][0].update(
+            {
+                "source_node_ids": [conversation["id"]],
+                "source_database_ids": [conversation["database_id"]],
+                "parent_thread_id": None,
+            }
+        )
+        normalized = actions.validate_plan(value, snapshot, p21.config())
+        self.assertEqual(
+            normalized["operations"][0]["expected_current_state"]["target_type"],
+            "ISSUE_COMMENT",
+        )
+
     def test_fixed_or_status_replies_are_refused(self) -> None:
         for body in ("fixed", "Addressed.", f"Fixed in {p21.HEAD}", "status: complete"):
             op = operation(
@@ -919,7 +965,7 @@ class MutationTests(TestCase):
                 "reply_to_database_id": 999,
             }
         ]
-        with self.assertRaisesRegex(actions.MutationBlocked, "retained mutation identity"):
+        with self.assertRaisesRegex(actions.MutationBlocked, "feedback changed"):
             actions._verify_retained_mutations(
                 value,
                 evidence_snapshot(),
@@ -942,6 +988,68 @@ class MutationTests(TestCase):
                 github,
             ),
             {"REPLY_EXISTING"},
+        )
+
+    def test_retained_mutations_include_sibling_writes_in_the_same_thread(self) -> None:
+        recorded_reaction = operation()
+        recorded_reaction["applied_mutation_identity"] = "REACTION_RECORDED"
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-002",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["logical_finding_id"] = "finding-002"
+        recorded_reply["applied_mutation_identity"] = "REPLY_RECORDED"
+        value = plan(
+            recorded_reaction,
+            recorded_reply,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["findings"].append(
+            finding(
+                "finding-002",
+                "INVALID_FALSE_OR_MISLEADING",
+                disposition="DISPROVEN_WITH_EVIDENCE",
+            )
+        )
+        value["session"]["reaction_writes"] = 1
+        value["session"]["evidence_replies"] = 1
+        github = FakeGitHub()
+        recorded_reaction_state = {
+            "mutation_id": "REACTION_RECORDED",
+            "content": "THUMBS_UP",
+            "actor": copy.deepcopy(github.state["viewer"]),
+        }
+        github.state["target"]["reactions"] = [recorded_reaction_state]
+        github.state["target"]["replies"] = [
+            {
+                "mutation_id": "REPLY_RECORDED",
+                "body": "Independent evidence",
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_database_id": 21,
+            }
+        ]
+        github.state["target"]["thread_comments"] = [
+            {
+                **github.state["target"]["thread_comments"][0],
+                "reactions": [copy.deepcopy(recorded_reaction_state)],
+            },
+            {
+                "node_id": "REPLY_RECORDED",
+                "body_digest": digest("Independent evidence"),
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reactions": [],
+            },
+        ]
+        self.assertEqual(
+            actions._verify_retained_mutations(
+                value,
+                evidence_snapshot(),
+                github,
+            ),
+            {"REACTION_RECORDED", "REPLY_RECORDED"},
         )
 
     def test_retained_thread_resolution_is_verified_against_live_state(self) -> None:
@@ -1737,6 +1845,83 @@ class MutationTests(TestCase):
         )
         readiness.assert_not_called()
 
+    def test_resolution_rechecks_pr_wide_feedback_after_readiness_validation(self) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            reaction=None,
+        )
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        snapshot = evidence_snapshot()
+        arguments = SimpleNamespace(
+            command="resolve",
+            plan="plan.json",
+            snapshot="final.json",
+            config="config.json",
+            initial_snapshot="initial.json",
+            operation_id="resolve-001",
+            repo="SecPal/.github",
+            pr=1,
+            snapshot_digest=snapshot["snapshot_digest"],
+            expected_head=p21.HEAD,
+            apply=True,
+        )
+        github = FakeGitHub()
+        expected_feedback = actions._snapshot_review_feedback(snapshot, value)
+        late_feedback = copy.deepcopy(expected_feedback)
+        late_feedback["reviews"].append(
+            {
+                "node_id": "REVIEW_LATE",
+                "body_digest": digest("Late review after validation"),
+                "actor": copy.deepcopy(github.state["actor"]),
+                "state": "COMMENTED",
+                "commit_oid": p21.HEAD,
+                "reactions": [],
+            }
+        )
+        github.read_current_feedback = mock.Mock(
+            side_effect=[
+                {
+                    "head_sha": p21.HEAD,
+                    "pr_state": "OPEN",
+                    "feedback": expected_feedback,
+                },
+                {
+                    "head_sha": p21.HEAD,
+                    "pr_state": "OPEN",
+                    "feedback": late_feedback,
+                },
+            ]
+        )
+        registered = actions.load_registry()
+        with (
+            mock.patch.object(
+                actions,
+                "_load_inputs",
+                return_value=(value, snapshot, p21.config()),
+            ),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+            mock.patch.object(
+                actions, "_verify_retained_mutations", return_value=set()
+            ),
+            mock.patch.object(actions, "load_registry", return_value=registered),
+            mock.patch.object(actions, "_read_json", return_value=snapshot),
+            mock.patch.object(
+                actions,
+                "build_resolution_evidence",
+                return_value=complete_resolution_evidence(),
+            ) as readiness,
+            mock.patch.object(actions, "execute_operation") as execute,
+            self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"),
+        ):
+            actions._command_mutation(arguments)
+        self.assertEqual(github.read_current_feedback.call_count, 2)
+        readiness.assert_called_once()
+        execute.assert_not_called()
+
     def test_resolution_readiness_uses_initial_snapshot_and_blocks_late_feedback(self) -> None:
         initial = evidence_snapshot()
         final = copy.deepcopy(initial)
@@ -2424,6 +2609,68 @@ class RegistryTests(TestCase):
                     str(executable),
                 )
 
+    def test_registered_validations_receive_a_minimal_secret_free_environment(self) -> None:
+        repository = registry_entry("SecPal/.github")
+        completed = SimpleNamespace(returncode=0)
+        with (
+            mock.patch.dict(
+                actions.os.environ,
+                {
+                    "GH_TOKEN": "parent-token-placeholder",
+                    "AWS_SECRET_ACCESS_KEY": "parent-secret",
+                    "PYTHONPATH": "/tmp/parent-controlled-pythonpath",
+                    "UNRELATED_PARENT_VALUE": "must-not-leak",
+                },
+                clear=False,
+            ),
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=completed,
+            ) as run,
+        ):
+            self.assertTrue(
+                actions._run_registered_validations(repository, REPO_ROOT)
+            )
+        self.assertGreater(run.call_count, 0)
+        for call in run.call_args_list:
+            environment = call.kwargs["env"]
+            self.assertNotIn("GH_TOKEN", environment)
+            self.assertNotIn("AWS_SECRET_ACCESS_KEY", environment)
+            self.assertNotIn("UNRELATED_PARENT_VALUE", environment)
+            self.assertNotEqual(
+                environment["PYTHONPATH"], "/tmp/parent-controlled-pythonpath"
+            )
+            self.assertNotEqual(environment.get("HOME"), str(actions.ACCOUNT_HOME))
+            self.assertEqual(
+                set(environment),
+                {
+                    "GIT_CONFIG_GLOBAL",
+                    "GIT_CONFIG_NOSYSTEM",
+                    "GIT_NO_LAZY_FETCH",
+                    "GIT_NO_REPLACE_OBJECTS",
+                    "GIT_OPTIONAL_LOCKS",
+                    "HOME",
+                    "LANG",
+                    "LC_ALL",
+                    "LOGNAME",
+                    "NO_COLOR",
+                    "PAGER",
+                    "PATH",
+                    "PYTHONPATH",
+                    "TMPDIR",
+                    "USER",
+                    "XDG_CACHE_HOME",
+                    "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME",
+                },
+            )
+
 
 class AuditModeTests(TestCase):
     def test_cases_80_to_90_have_no_default_writes_and_handle_untrusted_data(self) -> None:
@@ -2501,12 +2748,13 @@ class PolicyScriptTests(TestCase):
         policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("command -v rg", policy)
+        self.assertNotIn("command -v rg", policy)
+        self.assertNotIn("rg -n", policy)
         self.assertIn("git -C \"$REPO_ROOT\" cat-file -e", policy)
         self.assertIn(".github/workflows/secpal-pr-review.yaml", policy)
         quality = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
         self.assertNotIn("apt-get install", quality)
-        self.assertIn("command -v rg", quality)
+        self.assertNotIn("command -v rg", quality)
 
 
 if __name__ == "__main__":
