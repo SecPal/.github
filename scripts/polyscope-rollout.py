@@ -108,6 +108,10 @@ def default_provision_lock_path() -> pathlib.Path:
     return pathlib.Path.home() / ".local" / "state" / "polyscope" / "worktree-provision.lock"
 
 
+def default_api_worktree_bootstrap_lock_directory() -> pathlib.Path:
+    return default_provision_lock_path().parent / "api-worktree-bootstrap-locks"
+
+
 @contextlib.contextmanager
 def provision_worktree_lock(lock_path: pathlib.Path):
     """Serialize provisioners without making the lock itself a watched input."""
@@ -130,6 +134,106 @@ def provision_worktree_lock(lock_path: pathlib.Path):
         yield
     finally:
         os.close(descriptor)
+
+
+def canonical_api_worktree_path(worktree_path: pathlib.Path) -> pathlib.Path:
+    try:
+        resolved_worktree = worktree_path.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(f"API worktree cannot be resolved for bootstrap locking: {worktree_path}") from error
+    if not resolved_worktree.is_dir():
+        raise RuntimeError(f"API worktree is not a directory: {resolved_worktree}")
+    return resolved_worktree
+
+
+def api_worktree_bootstrap_lock_path(worktree_path: pathlib.Path) -> pathlib.Path:
+    resolved_worktree = canonical_api_worktree_path(worktree_path)
+    lock_identifier = hashlib.sha256(os.fsencode(resolved_worktree)).hexdigest()
+    return default_api_worktree_bootstrap_lock_directory() / f"{lock_identifier}.lock"
+
+
+def validate_private_lock_directory(descriptor: int, directory_path: pathlib.Path) -> None:
+    directory_stat = os.fstat(descriptor)
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        raise RuntimeError(f"API bootstrap lock directory is not a directory: {directory_path}")
+    if directory_stat.st_uid != os.geteuid():
+        raise RuntimeError(f"API bootstrap lock directory is not owned by the caller: {directory_path}")
+    if stat.S_IMODE(directory_stat.st_mode) & 0o077:
+        raise RuntimeError(f"API bootstrap lock directory is not private: {directory_path}")
+
+
+def open_api_worktree_bootstrap_lock_directory() -> tuple[int, pathlib.Path]:
+    lock_directory = default_api_worktree_bootstrap_lock_directory()
+    state_directory = lock_directory.parent
+    state_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    try:
+        state_descriptor = os.open(state_directory, directory_flags)
+    except OSError as error:
+        raise RuntimeError(f"unable to open private Polyscope state directory: {state_directory}") from error
+    try:
+        validate_private_lock_directory(state_descriptor, state_directory)
+        try:
+            os.mkdir(lock_directory.name, 0o700, dir_fd=state_descriptor)
+        except FileExistsError:
+            # A concurrent bootstrap may create it first; the open and validation below still fail closed.
+            pass
+        try:
+            lock_directory_descriptor = os.open(
+                lock_directory.name,
+                directory_flags,
+                dir_fd=state_descriptor,
+            )
+        except OSError as error:
+            raise RuntimeError(f"unable to open private API bootstrap lock directory: {lock_directory}") from error
+    finally:
+        os.close(state_descriptor)
+
+    try:
+        validate_private_lock_directory(lock_directory_descriptor, lock_directory)
+    except BaseException:
+        os.close(lock_directory_descriptor)
+        raise
+    return lock_directory_descriptor, lock_directory
+
+
+@contextlib.contextmanager
+def acquire_api_worktree_bootstrap_lock(worktree_path: pathlib.Path):
+    """Serialize the complete API bootstrap for one canonical physical worktree."""
+    resolved_worktree = canonical_api_worktree_path(worktree_path)
+    lock_path = api_worktree_bootstrap_lock_path(resolved_worktree)
+    lock_directory_descriptor, lock_directory = open_api_worktree_bootstrap_lock_directory()
+    descriptor = -1
+    try:
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(
+                lock_path.name,
+                flags,
+                0o600,
+                dir_fd=lock_directory_descriptor,
+            )
+        except OSError as error:
+            raise RuntimeError(f"unable to open API bootstrap lock in {lock_directory}") from error
+        lock_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            raise RuntimeError(f"API bootstrap lock must be a regular file: {lock_path}")
+        if lock_stat.st_uid != os.geteuid() or lock_stat.st_nlink != 1:
+            raise RuntimeError(f"API bootstrap lock must be owned by the caller and have one link: {lock_path}")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if canonical_api_worktree_path(worktree_path) != resolved_worktree:
+            raise RuntimeError(f"API worktree changed while waiting for bootstrap lock: {worktree_path}")
+        yield resolved_worktree
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(lock_directory_descriptor)
 
 
 def resolve_path_for_matching(path: pathlib.Path) -> str:
@@ -573,15 +677,6 @@ def build_fail_closed_setup_command(commands: list[str]) -> str:
 
     setup_script = "set -euo pipefail\n" + "\n".join(grouped_commands)
     return f"bash -c {shlex.quote(setup_script)}"
-
-
-def build_api_preview_env_setup_command(source_repo_path: pathlib.Path) -> str:
-    rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
-    source_repo = shlex.quote(str(source_repo_path))
-    return (
-        f"python3 {rollout_script} --prepare-api-worktree \"$PWD\" "
-        f"--source-repo-path {source_repo}"
-    )
 
 
 def build_api_preview_runtime_shell_command(command: str, source_repo_path: pathlib.Path) -> str:
@@ -1185,26 +1280,18 @@ def discard_stale_preview_kek(
     return True
 
 
-def bootstrap_api_worktree(
+def _bootstrap_api_worktree_locked(
     worktree_path: pathlib.Path,
     source_repo_path: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    preview_storage_target: str | None = None,
     migration_command: list[str] | None = None,
     migration_label: str = "running migrations",
     allow_tenant_key_recovery: bool = True,
 ) -> tuple[bool, str | None]:
+    """Run the API mutation pipeline while the caller holds its worktree lock."""
     env_path = worktree_path / ".env"
-    preview_storage_target: str | None = None
-    if not env_path.exists():
-        ready, preview_storage_target = ensure_api_worktree_ready(
-            worktree_path,
-            source_repo_path,
-            db_path=db_path,
-        )
-        if not ready:
-            return ready, preview_storage_target
-
     env_values = load_env_assignments(env_path)
     if preview_storage_target is None:
         preview_storage_target = build_api_preview_storage_target(env_values)
@@ -1275,10 +1362,11 @@ def bootstrap_api_worktree(
             raise
 
         print(f"{prefix} recovering stale preview tenant key material")
-        return bootstrap_api_worktree(
+        return _bootstrap_api_worktree_locked(
             worktree_path,
             source_repo_path,
             db_path=db_path,
+            preview_storage_target=preview_storage_target,
             migration_command=["php", "artisan", "migrate:fresh", "--force"],
             migration_label="resetting preview database after tenant key recovery",
             allow_tenant_key_recovery=False,
@@ -1294,19 +1382,54 @@ def bootstrap_api_worktree(
     return True, preview_storage_target
 
 
+def prepare_api_worktree(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+) -> tuple[bool, str | None]:
+    with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
+        return ensure_api_worktree_ready(
+            locked_worktree_path,
+            source_repo_path,
+            db_path=db_path,
+        )
+
+
+def bootstrap_api_worktree(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    db_path: pathlib.Path | None = None,
+    migration_command: list[str] | None = None,
+    migration_label: str = "running migrations",
+    allow_tenant_key_recovery: bool = True,
+) -> tuple[bool, str | None]:
+    with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
+        ready, preview_storage_target = ensure_api_worktree_ready(
+            locked_worktree_path,
+            source_repo_path,
+            db_path=db_path,
+        )
+        if not ready:
+            return ready, preview_storage_target
+        return _bootstrap_api_worktree_locked(
+            locked_worktree_path,
+            source_repo_path,
+            db_path=db_path,
+            preview_storage_target=preview_storage_target,
+            migration_command=migration_command,
+            migration_label=migration_label,
+            allow_tenant_key_recovery=allow_tenant_key_recovery,
+        )
+
+
 def refresh_api_worktree(
     worktree_path: pathlib.Path,
     source_repo_path: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
-    ready, preview_storage_target = ensure_api_worktree_ready(
-        worktree_path,
-        source_repo_path,
-        db_path=db_path,
-    )
-    if not ready:
-        return ready, preview_storage_target
     return bootstrap_api_worktree(
         worktree_path,
         source_repo_path,
@@ -2323,7 +2446,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "preview": {"url": build_preview_url_template("api")},
             "scripts": {
                 "setup": [
-                    "test -d vendor || composer install",
                     API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
@@ -2873,7 +2995,6 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         spec["copilot_instructions"] = repo_path / settings["copilot_instructions"]
         spec["focus_instruction_paths"] = [repo_path / path for path in settings["focus_instruction_paths"]]
         if repo_name == "api":
-            spec["local_config"]["scripts"]["setup"].insert(0, build_api_preview_env_setup_command(repo_path))
             spec["local_config"]["scripts"]["setup"] = [
                 build_api_preview_bootstrap_command(repo_path)
                 if command == API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER
@@ -3213,11 +3334,15 @@ def validate_local_config_command(
     package_lock_path = repo_path / "package-lock.json"
     composer_json_path = repo_path / "composer.json"
     artisan_path = repo_path / "artisan"
+    references_api_bootstrap = "--bootstrap-api-worktree" in command
 
-    if re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command) and not composer_json_path.exists():
+    if (
+        re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command)
+        or references_api_bootstrap
+    ) and not composer_json_path.exists():
         raise SystemExit(f"{repo_name} polyscope config references composer without a composer.json at the repo root")
 
-    if re.search(r"\bphp\s+artisan\b", command) and not artisan_path.exists():
+    if (re.search(r"\bphp\s+artisan\b", command) or references_api_bootstrap) and not artisan_path.exists():
         raise SystemExit(f"{repo_name} polyscope config references artisan without an artisan file at the repo root")
 
     references_npm = any(
@@ -3469,7 +3594,10 @@ def collect_setup_inputs(worktree_path: pathlib.Path, setup_commands: list[str])
     if re.search(r"\bnpm\s+(?:ci|install|run)\b|\bnpx\b", command_text):
         candidate_paths.extend([worktree_path / "package.json", worktree_path / "package-lock.json"])
 
-    if re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command_text):
+    if (
+        re.search(r"\bcomposer\s+(?:install|run(?:-script)?)\b", command_text)
+        or "--bootstrap-api-worktree" in command_text
+    ):
         candidate_paths.extend([worktree_path / "composer.json", worktree_path / "composer.lock"])
 
     for path in candidate_paths:
@@ -3860,11 +3988,6 @@ def provision_worktrees(
     for repo_name, spec in repo_specs.items():
         validation_commands = list(spec[NATIVE_SETUP_COMMANDS_KEY])
         setup_commands = validation_commands
-        if repo_name == "api":
-            # The external provisioner already validated the candidate and the
-            # API bootstrap command performs its own readiness preparation.
-            # Skip the native runner's prepare entry here.
-            setup_commands = setup_commands[1:]
 
         for worktree_path in registered_worktrees[repo_name]:
             if not worktree_path.is_dir() or worktree_path.is_symlink():
@@ -3947,45 +4070,70 @@ def provision_worktrees(
             ensure_workspace_alias(worktree_path, db_path=db_path)
             sync_worktree_auxiliary_files(repo_name, worktree_path)
             ensure_worktree_hooks(worktree_path)
-            linked_setup_context = collect_linked_setup_context(worktree_path, db_path=db_path)
-            workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
-            setup_hash = build_setup_hash(
-                worktree_path,
-                setup_commands,
-                db_path=db_path,
-                linked_context=linked_setup_context,
+            lock_context = (
+                acquire_api_worktree_bootstrap_lock(worktree_path)
+                if repo_name == "api"
+                else contextlib.nullcontext(worktree_path)
             )
+            with lock_context as locked_worktree_path:
+                # API state is intentionally derived only after the same lock
+                # used by native setup, direct bootstrap, and refresh callers.
+                linked_setup_context = collect_linked_setup_context(locked_worktree_path, db_path=db_path)
+                workspace = resolve_current_workspace_name(locked_worktree_path, db_path=db_path)
+                setup_hash = build_setup_hash(
+                    locked_worktree_path,
+                    setup_commands,
+                    db_path=db_path,
+                    linked_context=linked_setup_context,
+                )
 
-            preview_storage_target: str | None = None
-            if repo_name == "api":
-                ready, preview_storage_target = ensure_api_worktree_ready(worktree_path, spec["path"], db_path=db_path)
-                if not ready:
-                    continue
+                preview_storage_target: str | None = None
+                if repo_name == "api":
+                    ready, preview_storage_target = ensure_api_worktree_ready(
+                        locked_worktree_path,
+                        spec["path"],
+                        db_path=db_path,
+                    )
+                    if not ready:
+                        continue
 
-            marker_path = worktree_path / PROVISION_MARKER_FILENAME
-            marker = load_provision_marker(marker_path)
-            if marker is not None and marker.get("setup_hash") == setup_hash:
-                if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
-                    continue
+                marker_path = locked_worktree_path / PROVISION_MARKER_FILENAME
+                marker = load_provision_marker(marker_path)
+                if marker is not None and marker.get("setup_hash") == setup_hash:
+                    if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                        continue
 
-            if setup_commands:
-                print(f"Provisioning {repo_name} worktree {worktree_path.name} at {worktree_path}")
-                run_setup_commands(worktree_path, setup_commands, db_path=db_path)
+                if setup_commands:
+                    print(
+                        f"Provisioning {repo_name} worktree {locked_worktree_path.name} "
+                        f"at {locked_worktree_path}"
+                    )
+                    if repo_name == "api":
+                        ready, preview_storage_target = _bootstrap_api_worktree_locked(
+                            locked_worktree_path,
+                            spec["path"],
+                            db_path=db_path,
+                            preview_storage_target=preview_storage_target,
+                        )
+                        if not ready:
+                            continue
+                    else:
+                        run_setup_commands(locked_worktree_path, setup_commands, db_path=db_path)
 
-            marker_payload: dict[str, Any] = {
-                "repo": repo_name,
-                "workspace": workspace,
-                "physical_workspace": worktree_path.name,
-                "setup_hash": setup_hash,
-                "provisioned_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if repo_name == "api" and preview_storage_target is not None:
-                marker_payload["preview_storage_target"] = preview_storage_target
-            if linked_setup_context:
-                marker_payload["linked_workspaces"] = linked_setup_context
+                marker_payload: dict[str, Any] = {
+                    "repo": repo_name,
+                    "workspace": workspace,
+                    "physical_workspace": locked_worktree_path.name,
+                    "setup_hash": setup_hash,
+                    "provisioned_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if repo_name == "api" and preview_storage_target is not None:
+                    marker_payload["preview_storage_target"] = preview_storage_target
+                if linked_setup_context:
+                    marker_payload["linked_workspaces"] = linked_setup_context
 
-            marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
-            provisioned_worktrees.append(f"{repo_name}:{workspace}")
+                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+                provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)
             print(
@@ -4642,7 +4790,7 @@ def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> 
     )
 
     if mode == "prepare_api_worktree":
-        ready, _preview_storage_target = ensure_api_worktree_ready(
+        ready, _preview_storage_target = prepare_api_worktree(
             worktree_path,
             source_repo_path,
             db_path=args.db_path,

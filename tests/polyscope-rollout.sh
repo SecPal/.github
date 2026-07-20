@@ -38,6 +38,7 @@ trap 'rm -rf "$workspace"' EXIT
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"
 mkdir -p "$workspace_root" "$home_dir"
+export HOME="$home_dir"
 
 create_repo() {
     local repo_name="$1"
@@ -1185,6 +1186,504 @@ assert not (isolated_root / "polyscope.db").exists()
 assert "All tests passed" not in isolated_result.stderr
 PY
 
+# Concurrent direct API bootstrap invocations must serialize the complete
+# mutation sequence for a physical worktree and an alias to that worktree. The
+# fake migration deliberately holds the first process after it has loaded a
+# pending plan; without serialization the alias invocation records the same
+# migration first and the held process reports PostgreSQL duplicate-column
+# behavior when it resumes.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
+import importlib.util
+import os
+import pathlib
+import re
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import time
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+repo_root = pathlib.Path(sys.argv[3])
+fixture = workspace / "concurrent-api-bootstrap-fixture"
+source_workspace = fixture / "source-workspace"
+source_api = source_workspace / "api"
+physical_worktree = fixture / "clones" / "api12345" / "quiet-finch-d35c0cdc"
+alias_worktree = physical_worktree.parent / "quiet-finch"
+fake_bin = fixture / "fake-bin"
+race_state = fixture / "migration-state"
+command_log = fixture / "commands.log"
+release_first = fixture / "release-first"
+
+
+def write_valid_instruction_root(root: pathlib.Path) -> None:
+    (root / ".github").mkdir(parents=True)
+    shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
+    (root / "AGENTS.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Runtime Instructions\n\n"
+        "- Preserve existing work.\n"
+    )
+    (root / ".github" / "copilot-instructions.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Review Profile\n\n"
+        "- Review the complete diff.\n"
+    )
+
+
+write_valid_instruction_root(source_api)
+write_valid_instruction_root(physical_worktree)
+(source_api / ".github" / "instructions").mkdir()
+for instruction_name, instruction_title in (
+    ("org-shared.instructions.md", "Shared Test Rules"),
+    ("php-laravel.instructions.md", "PHP Test Rules"),
+):
+    source_api.joinpath(".github", "instructions", instruction_name).write_text(
+        "---\n"
+        f"name: {instruction_title}\n"
+        "applyTo: '**'\n"
+        "---\n\n"
+        f"# {instruction_title}\n\n"
+        "- Preserve deterministic fixtures.\n"
+    )
+(physical_worktree / ".git" / "info").mkdir(parents=True)
+(physical_worktree / ".git" / "hooks").mkdir()
+for repository_root in (source_api, physical_worktree):
+    repository_root.joinpath("composer.json").write_text("{}\n")
+    repository_root.joinpath("artisan").write_text("#!/usr/bin/env php\n")
+fake_bin.mkdir(parents=True)
+race_state.mkdir()
+alias_worktree.symlink_to(physical_worktree.name)
+os.mkfifo(release_first)
+
+source_api.joinpath(".env.example").write_text(
+    "APP_ENV=local\n"
+    "APP_KEY=\n"
+    "APP_URL=http://localhost\n"
+    "FRONTEND_URL=http://localhost\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=fixture-db-password\n"
+)
+physical_worktree.joinpath(".env").write_text(
+    "APP_ENV=local\n"
+    "APP_KEY=base64:fixture-app-key\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__quiet_finch\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=fixture-db-password\n"
+    "POLYSCOPE_BASE_DB_DATABASE=secpal\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+)
+
+fake_bin.joinpath("composer").write_text(
+    """#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
+    handle.write(f'{os.environ["RACE_LABEL"]}:composer\\n')
+Path("vendor").mkdir(exist_ok=True)
+Path("vendor/autoload.php").touch()
+"""
+)
+fake_bin.joinpath("psql").write_text(
+    """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+sql = sys.argv[-1]
+with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
+    handle.write(f'{os.environ["RACE_LABEL"]}:psql:{sql}\\n')
+if "rolcreatedb" in sql:
+    print("t")
+elif "FROM pg_database" in sql:
+    print("1")
+"""
+)
+fake_bin.joinpath("php").write_text(
+    """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+label = os.environ["RACE_LABEL"]
+state = Path(os.environ["RACE_STATE"])
+command = sys.argv[1:]
+with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
+    handle.write(f"{label}:php:{' '.join(command)}\\n")
+if len(command) < 2 or command[0] != "artisan" or command[1] not in {"migrate", "migrate:fresh"}:
+    raise SystemExit(0)
+
+recorded = state / "migration-recorded"
+column = state / "column-present"
+if recorded.exists():
+    (state / f"{label}-revalidated").touch()
+    raise SystemExit(0)
+
+(state / f"{label}-pending").touch()
+if os.environ.get("RACE_HOLD") == "1":
+    with Path(os.environ["RACE_RELEASE_FIFO"]).open("rb") as release:
+        release.read(1)
+
+if os.environ.get("RACE_FAIL") == "1":
+    print("representative migration failure")
+    raise SystemExit(19)
+if column.exists():
+    print('SQLSTATE[42701]: Duplicate column: column "firearms_license_number_enc" already exists')
+    raise SystemExit(17)
+column.touch()
+recorded.touch()
+"""
+)
+for executable in ("composer", "psql", "php"):
+    fake_bin.joinpath(executable).chmod(0o755)
+
+
+def wait_for(path: pathlib.Path, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.01)
+    return path.exists()
+
+
+def start_api_mode(
+    target: pathlib.Path,
+    label: str,
+    *,
+    mode: str = "bootstrap",
+    hold: bool = False,
+    fail: bool = False,
+    state: pathlib.Path = race_state,
+) -> subprocess.Popen[str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(fixture / "home"),
+            "PATH": str(fake_bin) + os.pathsep + environment["PATH"],
+            "RACE_COMMAND_LOG": str(command_log),
+            "RACE_LABEL": label,
+            "RACE_RELEASE_FIFO": str(release_first),
+            "RACE_STATE": str(state),
+        }
+    )
+    if hold:
+        environment["RACE_HOLD"] = "1"
+    if fail:
+        environment["RACE_FAIL"] = "1"
+    return subprocess.Popen(
+        [
+            sys.executable,
+            str(script_path),
+            f"--{mode}-api-worktree",
+            str(target),
+            "--source-repo-path",
+            str(source_api),
+        ],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+first = start_api_mode(physical_worktree, "physical", hold=True)
+assert wait_for(race_state / "physical-pending", 10), "first migration did not load its pending plan"
+second = start_api_mode(alias_worktree, "alias")
+alias_loaded_concurrently = wait_for(race_state / "alias-pending", 2)
+commands_while_held = command_log.read_text()
+
+with release_first.open("wb") as release:
+    release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+second_output, _ = second.communicate(timeout=10)
+
+assert not alias_loaded_concurrently, (
+    "alias bootstrap loaded the same pending migration before the physical bootstrap finished\n"
+    f"commands while held:\n{commands_while_held}\n"
+    f"physical output:\n{first_output}\n"
+    f"alias output:\n{second_output}"
+)
+assert "alias:" not in commands_while_held, commands_while_held
+assert first.returncode == 0, first_output
+assert second.returncode == 0, second_output
+assert race_state.joinpath("alias-revalidated").is_file()
+assert race_state.joinpath("migration-recorded").is_file()
+assert race_state.joinpath("column-present").is_file()
+
+
+def reset_case_state(state: pathlib.Path) -> None:
+    state.mkdir(exist_ok=True)
+    for entry in state.iterdir():
+        entry.unlink()
+    command_log.write_text("")
+
+
+# Refresh shares the same boundary and cannot begin config or destructive
+# migration work while a normal bootstrap holds the target lock.
+reset_case_state(race_state)
+first = start_api_mode(physical_worktree, "bootstrap-before-refresh", hold=True)
+assert wait_for(race_state / "bootstrap-before-refresh-pending", 10)
+second = start_api_mode(alias_worktree, "refresh", mode="refresh")
+refresh_loaded_concurrently = wait_for(race_state / "refresh-pending", 2)
+refresh_commands_while_held = command_log.read_text()
+with release_first.open("wb") as release:
+    release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+second_output, _ = second.communicate(timeout=10)
+assert not refresh_loaded_concurrently, refresh_commands_while_held
+assert not any(
+    line.startswith("refresh:")
+    for line in refresh_commands_while_held.splitlines()
+), refresh_commands_while_held
+assert first.returncode == second.returncode == 0, (first_output, second_output)
+assert "refresh:php:artisan migrate:fresh --force" in command_log.read_text()
+
+# An exception releases the lock; the already-waiting invocation then derives
+# fresh migration state and completes normally.
+reset_case_state(race_state)
+first = start_api_mode(physical_worktree, "failing", hold=True, fail=True)
+assert wait_for(race_state / "failing-pending", 10)
+second = start_api_mode(alias_worktree, "after-failure")
+failure_contender_started = wait_for(race_state / "after-failure-pending", 2)
+with release_first.open("wb") as release:
+    release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+second_output, _ = second.communicate(timeout=10)
+assert not failure_contender_started, command_log.read_text()
+assert first.returncode != 0 and second.returncode == 0, (first_output, second_output)
+assert race_state.joinpath("migration-recorded").is_file()
+
+# A distinct physical API worktree uses a distinct lock and may complete while
+# the first worktree remains deliberately paused.
+reset_case_state(race_state)
+other_worktree = physical_worktree.parent / "brisk-fox-a1b2c3d4"
+other_state = fixture / "other-migration-state"
+write_valid_instruction_root(other_worktree)
+other_state.mkdir()
+other_worktree.joinpath(".env").write_text(
+    physical_worktree.joinpath(".env").read_text().replace(
+        "secpal__preview__quiet_finch",
+        "secpal__preview__brisk_fox",
+    )
+)
+first = start_api_mode(physical_worktree, "held-worktree", hold=True)
+assert wait_for(race_state / "held-worktree-pending", 10)
+second = start_api_mode(other_worktree, "other-worktree", state=other_state)
+different_worktree_overlapped = wait_for(other_state / "other-worktree-pending", 2)
+if different_worktree_overlapped:
+    second_output, _ = second.communicate(timeout=10)
+else:
+    second_output = ""
+with release_first.open("wb") as release:
+    release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+if second.poll() is None:
+    second_output, _ = second.communicate(timeout=10)
+assert different_worktree_overlapped, command_log.read_text()
+assert first.returncode == second.returncode == 0, (first_output, second_output)
+
+# A service-style background provision call and direct setup call meet at the
+# same per-worktree boundary even though only the background process also owns
+# the existing global provision lock.
+reset_case_state(race_state)
+background_db = fixture / "background-polyscope.db"
+with sqlite3.connect(background_db) as connection:
+    connection.executescript(
+        """
+        create table repositories (id text primary key, name text not null, path text not null);
+        create table worktrees (
+            id text primary key,
+            repo_id text not null,
+            branch text not null,
+            path text not null,
+            status text default 'active' not null,
+            created_at text default (datetime('now')) not null
+        );
+        """
+    )
+    connection.execute(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        ("api12345", "SecPal/api", str(source_api)),
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, branch, path) values (?, ?, ?, ?)",
+        ("quiet-finch", "api12345", "fixture", str(physical_worktree)),
+    )
+background_lock_attempted = fixture / "background-lock-attempted"
+background_probe = """
+import contextlib
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+source_workspace = pathlib.Path(sys.argv[2])
+clone_root = pathlib.Path(sys.argv[3])
+db_path = pathlib.Path(sys.argv[4])
+attempted = pathlib.Path(sys.argv[5])
+global_lock = pathlib.Path(sys.argv[6])
+spec = importlib.util.spec_from_file_location("polyscope_rollout_background", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+original_lock = module.acquire_api_worktree_bootstrap_lock
+
+@contextlib.contextmanager
+def observed_lock(worktree_path):
+    attempted.touch()
+    with original_lock(worktree_path) as locked_worktree:
+        yield locked_worktree
+
+module.acquire_api_worktree_bootstrap_lock = observed_lock
+repo_state = {
+    "api": {
+        "id": "api12345",
+        "name": "SecPal/api",
+        "path": str(source_workspace / "api"),
+    }
+}
+repo_specs = {"api": module.build_repo_specs(source_workspace)["api"]}
+with module.provision_worktree_lock(global_lock):
+    provisioned, _cleaned, failures = module.provision_worktrees(
+        repo_state,
+        repo_specs,
+        clone_root,
+        db_path=db_path,
+    )
+assert failures == [], failures
+assert provisioned == ["api:quiet-finch"], provisioned
+"""
+first = start_api_mode(physical_worktree, "direct-before-background", hold=True)
+assert wait_for(race_state / "direct-before-background-pending", 10)
+background_environment = os.environ.copy()
+background_environment.update(
+    {
+        "HOME": str(fixture / "home"),
+        "PATH": str(fake_bin) + os.pathsep + background_environment["PATH"],
+        "RACE_COMMAND_LOG": str(command_log),
+        "RACE_LABEL": "background",
+        "RACE_RELEASE_FIFO": str(release_first),
+        "RACE_STATE": str(race_state),
+    }
+)
+background = subprocess.Popen(
+    [
+        sys.executable,
+        "-B",
+        "-c",
+        background_probe,
+        str(script_path),
+        str(source_workspace),
+        str(fixture / "clones"),
+        str(background_db),
+        str(background_lock_attempted),
+        str(fixture / "global-provision.lock"),
+    ],
+    env=background_environment,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+)
+assert wait_for(background_lock_attempted, 10), "background provision did not reach the API lock"
+background_commands_while_held = command_log.read_text()
+assert not any(
+    line.startswith(("background:php:", "background:composer"))
+    for line in background_commands_while_held.splitlines()
+), background_commands_while_held
+with release_first.open("wb") as release:
+    release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+background_output, _ = background.communicate(timeout=20)
+assert first.returncode == background.returncode == 0, (first_output, background_output)
+assert race_state.joinpath("background-revalidated").is_file()
+assert physical_worktree.joinpath(".polyscope-secpal-provisioned.json").is_file()
+
+# Lock identities are canonical, deterministic, private, and secret-free.
+module_spec = importlib.util.spec_from_file_location("polyscope_rollout_locking", script_path)
+module = importlib.util.module_from_spec(module_spec)
+assert module_spec.loader is not None
+module_spec.loader.exec_module(module)
+original_home = os.environ["HOME"]
+security_home = fixture / "security-home"
+os.environ["HOME"] = str(security_home)
+physical_lock = module.api_worktree_bootstrap_lock_path(physical_worktree)
+alias_lock = module.api_worktree_bootstrap_lock_path(alias_worktree)
+other_lock = module.api_worktree_bootstrap_lock_path(other_worktree)
+assert physical_lock == alias_lock
+assert physical_lock != other_lock
+assert re.fullmatch(r"[0-9a-f]{64}\.lock", physical_lock.name), physical_lock
+assert not any(
+    secret in str(physical_lock)
+    for secret in ("fixture-db-password", "fixture-app-key", "secpal__preview__quiet_finch")
+)
+with module.acquire_api_worktree_bootstrap_lock(physical_worktree):
+    pass
+assert stat.S_IMODE(physical_lock.parent.stat().st_mode) == 0o700
+assert stat.S_IMODE(physical_lock.stat().st_mode) == 0o600
+
+unsafe_mode_home = fixture / "unsafe-mode-home"
+unsafe_state = unsafe_mode_home / ".local" / "state" / "polyscope"
+unsafe_state.mkdir(parents=True)
+unsafe_state.chmod(0o777)
+os.environ["HOME"] = str(unsafe_mode_home)
+try:
+    with module.acquire_api_worktree_bootstrap_lock(physical_worktree):
+        raise AssertionError("world-accessible lock directory must fail closed")
+except RuntimeError as error:
+    assert "not private" in str(error), error
+
+symlink_home = fixture / "symlink-lock-home"
+symlink_state_parent = symlink_home / ".local" / "state"
+symlink_target = fixture / "replaceable-lock-state"
+symlink_state_parent.mkdir(parents=True)
+symlink_target.mkdir()
+symlink_state_parent.joinpath("polyscope").symlink_to(symlink_target)
+os.environ["HOME"] = str(symlink_home)
+try:
+    with module.acquire_api_worktree_bootstrap_lock(physical_worktree):
+        raise AssertionError("symlinked lock directory must fail closed")
+except RuntimeError as error:
+    assert "state directory" in str(error), error
+
+os.environ["HOME"] = str(security_home)
+physical_lock.unlink()
+lock_sentinel = fixture / "lock-sentinel"
+lock_sentinel.write_text("unchanged")
+physical_lock.symlink_to(lock_sentinel)
+try:
+    with module.acquire_api_worktree_bootstrap_lock(physical_worktree):
+        raise AssertionError("symlinked API bootstrap lock must fail closed")
+except RuntimeError as error:
+    assert "unable to open API bootstrap lock" in str(error), error
+assert lock_sentinel.read_text() == "unchanged"
+os.environ["HOME"] = original_home
+PY
+
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --db-path "$db_path" \
@@ -1357,8 +1856,12 @@ assert_rollout_rejects_invalid_local_config \
 grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --prepare-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
+if grep -qF -- '--prepare-api-worktree' "$workspace_root/api/polyscope.local.json" \
+    || grep -qF 'test -d vendor || composer install' "$workspace_root/api/polyscope.local.json"; then
+    echo "generated API setup must enter the locked bootstrap boundary exactly once" >&2
+    exit 1
+fi
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3'" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan schedule:work'" "$workspace_root/api/polyscope.local.json"
@@ -3281,6 +3784,7 @@ PY
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import pathlib
+import signal
 import subprocess
 import sys
 
@@ -3324,7 +3828,16 @@ def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_e
         )
 module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
 
-ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
+def fail_on_deadlock(_signum, _frame):
+    raise AssertionError("tenant-key recovery deadlocked while holding the API bootstrap lock")
+
+previous_alarm_handler = signal.signal(signal.SIGALRM, fail_on_deadlock)
+signal.alarm(5)
+try:
+    ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
+finally:
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous_alarm_handler)
 assert ready is True
 assert target == "database:secpal__preview__coral_crow", target
 assert not kek_path.exists(), "recovery must remove the stale isolated-preview KEK"
@@ -4776,7 +5289,11 @@ grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clon
 grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.production.local"
 test -f "$api_clone/polyscope.local.json"
 test -f "$frontend_clone/polyscope.local.json"
-grep -qF 'prepare-api-worktree' "$api_clone/polyscope.local.json"
+grep -qF 'bootstrap-api-worktree' "$api_clone/polyscope.local.json"
+if grep -qF 'prepare-api-worktree' "$api_clone/polyscope.local.json"; then
+    echo "provisioned API config must not split readiness from locked bootstrap" >&2
+    exit 1
+fi
 grep -qF 'source-repo-path' "$api_clone/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$frontend_clone/polyscope.local.json"
 python3 - "$api_clone/.polyscope-secpal-provisioned.json" "$frontend_clone/.polyscope-secpal-provisioned.json" <<'PY'
@@ -5250,7 +5767,7 @@ assert 'secpal__preview__broken_mole' not in cleaned, cleaned
 assert any(
     entry.get('repo') == 'api'
     and entry.get('workspace') == 'abort-hawk'
-    and '--bootstrap-api-worktree "$PWD"' in entry.get('error', '')
+    and "Command '['php', 'artisan', 'config:clear']'" in entry.get('error', '')
     for entry in failed
 ), failed
 assert any(
@@ -5580,8 +6097,8 @@ grep -qF 'DROP SCHEMA IF EXISTS "secpal__preview__schema_badger" CASCADE' "$fake
 
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
-    '"test -d vendor || composer install",' \
-    '"test -d vendor || composer install",\n                    "npm ci",' \
+    'API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,' \
+    'API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,\n                    "npm ci",' \
     "api polyscope config references npm without a package.json at the repo root"
 
 assert_rollout_rejects_invalid_local_config \
