@@ -9,6 +9,8 @@ SPDX-License-Identifier: CC0-1.0
 
 **Partially Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)**
 
+**Previous status:** Accepted; implemented in [SecPal/api#399](https://github.com/SecPal/api/issues/399) through [SecPal/api#434](https://github.com/SecPal/api/pull/434) and [SecPal/frontend#397](https://github.com/SecPal/frontend/pull/397).
+
 ## Date
 
 2025-12-27

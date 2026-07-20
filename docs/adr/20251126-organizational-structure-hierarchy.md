@@ -7,6 +7,8 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
+**Previous status:** Partially Implemented
+
 **Date:** 2025-11-26
 
 **Last Updated:** 2026-06-21 (Terminology editorial alignment)
