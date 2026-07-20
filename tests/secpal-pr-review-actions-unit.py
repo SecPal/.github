@@ -1150,6 +1150,17 @@ class MutationTests(TestCase):
         for actor_type in ("User", "Bot", "Organization", "Mannequin"):
             self.assertIn(f"... on {actor_type} {{ id databaseId }}", query)
 
+    def test_pr_wide_query_stays_below_githubs_possible_node_limit(self) -> None:
+        query = actions.CURRENT_REVIEW_FEEDBACK_QUERY
+        self.assertRegex(
+            query,
+            r"(?s)reviewThreads\(first:100\).*comments\(first:100\).*reactions\(first:25\)",
+        )
+        self.assertNotRegex(
+            query,
+            r"(?s)reviewThreads\(first:100\).*comments\(first:100\).*reactions\(first:100\)",
+        )
+
     def test_live_thread_comment_reactions_are_normalized_and_bounded(self) -> None:
         actor = {"id": "ACTOR_reviewer", "databaseId": 7, "login": "reviewer"}
         payload = {
@@ -1536,6 +1547,7 @@ class MutationTests(TestCase):
             "mutation_failed": True,
             "push_failed": True,
             "github_state_safe": False,
+            "ci_state": "FAILED",
         }
         for key, blocked_value in blocker_values.items():
             value = plan(operation())
@@ -1576,6 +1588,7 @@ class MutationTests(TestCase):
             "mutation_failed": True,
             "push_failed": True,
             "github_state_safe": False,
+            "ci_state": "PENDING",
         }
         for key, blocked_value in blocker_values.items():
             value = plan(
@@ -1619,6 +1632,15 @@ class MutationTests(TestCase):
             apply=True,
         )
         github = FakeGitHub()
+        github.read_current_feedback = mock.Mock(
+            return_value={
+                "head_sha": p21.HEAD,
+                "pr_state": "OPEN",
+                "feedback": actions._snapshot_review_feedback(
+                    evidence_snapshot(), value
+                ),
+            }
+        )
         with (
             mock.patch.object(
                 actions,
@@ -1645,6 +1667,7 @@ class MutationTests(TestCase):
             github,
             exclude_operation_id="reaction-001",
         )
+        github.read_current_feedback.assert_called_once_with(value)
         execute.assert_called_once()
 
     def test_resolution_blocks_on_pr_wide_feedback_before_readiness_validation(self) -> None:
@@ -1845,6 +1868,116 @@ class MutationTests(TestCase):
         )
         with self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"):
             actions._verify_current_feedback(value, snapshot, current)
+
+    def test_pr_wide_feedback_allows_only_the_pending_inline_write_delta(self) -> None:
+        snapshot = evidence_snapshot()
+        viewer = {"login": "aroviqen", "node_id": "USER_1", "database_id": 7}
+        reaction_operation = operation()
+        reaction_plan = plan(reaction_operation)
+        reaction_feedback = actions._snapshot_review_feedback(
+            snapshot, reaction_plan
+        )
+        reaction_feedback["threads"][0]["comments"][0]["reactions"].append(
+            {
+                "mutation_id": "REACTION_EXISTING",
+                "content": "THUMBS_UP",
+                "actor": viewer,
+            }
+        )
+        actions._verify_current_feedback(
+            reaction_plan,
+            snapshot,
+            {
+                "head_sha": p21.HEAD,
+                "pr_state": "OPEN",
+                "feedback": reaction_feedback,
+            },
+            reaction_operation,
+        )
+
+        reply_operation = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        reply_plan = plan(reply_operation)
+        reply_plan["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        reply_feedback = actions._snapshot_review_feedback(snapshot, reply_plan)
+        reply_feedback["threads"][0]["comments"].append(
+            {
+                "node_id": "REPLY_EXISTING",
+                "body_digest": digest(reply_operation["reply_body"]),
+                "actor": viewer,
+                "reactions": [],
+            }
+        )
+        actions._verify_current_feedback(
+            reply_plan,
+            snapshot,
+            {
+                "head_sha": p21.HEAD,
+                "pr_state": "OPEN",
+                "feedback": reply_feedback,
+            },
+            reply_operation,
+        )
+
+        reply_feedback["threads"][0]["comments"].append(
+            {
+                "node_id": "REPLY_LATE",
+                "body_digest": digest("Late feedback"),
+                "actor": copy.deepcopy(snapshot["review_threads"][0]["comments"][0]["author"]),
+                "reactions": [],
+            }
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"):
+            actions._verify_current_feedback(
+                reply_plan,
+                snapshot,
+                {
+                    "head_sha": p21.HEAD,
+                    "pr_state": "OPEN",
+                    "feedback": reply_feedback,
+                },
+                reply_operation,
+            )
+
+    def test_recorded_inline_writes_are_part_of_the_expected_global_feedback(self) -> None:
+        snapshot = evidence_snapshot()
+        recorded_reaction = operation()
+        recorded_reaction["applied_mutation_identity"] = "REACTION_RECORDED"
+        reaction_plan = plan(recorded_reaction)
+        reaction_plan["session"]["reaction_writes"] = 1
+        reaction_feedback = actions._snapshot_review_feedback(snapshot, reaction_plan)
+        self.assertEqual(
+            reaction_feedback["threads"][0]["comments"][0]["reactions"][0][
+                "mutation_id"
+            ],
+            "REACTION_RECORDED",
+        )
+
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["applied_mutation_identity"] = "REPLY_RECORDED"
+        reply_plan = plan(recorded_reply)
+        reply_plan["session"]["evidence_replies"] = 1
+        reply_feedback = actions._snapshot_review_feedback(snapshot, reply_plan)
+        self.assertEqual(
+            reply_feedback["threads"][0]["comments"][-1]["node_id"],
+            "REPLY_RECORDED",
+        )
 
     def test_recorded_resolutions_are_the_only_allowed_pr_wide_state_delta(self) -> None:
         snapshot = evidence_snapshot()
@@ -2372,7 +2505,8 @@ class PolicyScriptTests(TestCase):
         self.assertIn("git -C \"$REPO_ROOT\" cat-file -e", policy)
         self.assertIn(".github/workflows/secpal-pr-review.yaml", policy)
         quality = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
-        self.assertIn("sudo apt-get install --yes ripgrep", quality)
+        self.assertNotIn("apt-get install", quality)
+        self.assertIn("command -v rg", quality)
 
 
 if __name__ == "__main__":

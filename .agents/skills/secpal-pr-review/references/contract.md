@@ -180,8 +180,10 @@ intended writer reaction as already applied, and block every other delta from
 the snapshot. Never remove another actor's reaction. Before a reply, search the
 complete bounded thread, treat the exact intended evidence reply as already
 applied, and block every other delta. Never post “fixed,” “addressed,” commit-SHA
-status, or progress messages. Before resolution, re-read PR-wide feedback and
-the target thread and refuse a resolved or changed target.
+status, or progress messages. Before every write, re-read PR-wide feedback and
+block every delta except an exact intended or individually recorded policy
+write. Before resolution, also re-read the target thread and refuse a resolved
+or changed target.
 
 ## Mutation-plan and action-helper contract
 
@@ -232,8 +234,9 @@ head, and idempotency, applies at most once, and reports the returned identity.
 Later-state plans retain identities for earlier authorized writes and increment
 the corresponding consumed counter exactly once. Before each new write, the
 helper re-reads every earlier retained reaction, reply, and thread resolution
-identity from live state before trusting it; every other new or changed
-comment, review, thread state, reply, or reaction is late feedback.
+identity from live state before trusting it. It then compares one bounded,
+canonical PR-wide feedback projection before every new write; every other new
+or changed comment, review, thread state, reply, or reaction is late feedback.
 
 ## Remediation-resolution readiness
 

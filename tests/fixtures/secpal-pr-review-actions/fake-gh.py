@@ -80,6 +80,52 @@ if arguments[3] == "graphql":
             )
         )
         raise SystemExit(0)
+    if "query CurrentReviewFeedback" in query:
+        empty = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+        print(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "headRefOid": "a" * 40,
+                                "state": "OPEN",
+                                "reactions": empty,
+                                "reviews": empty,
+                                "comments": empty,
+                                "reviewThreads": {
+                                    "nodes": [
+                                        {
+                                            "id": "THREAD_1",
+                                            "isResolved": False,
+                                            "isOutdated": False,
+                                            "comments": {
+                                                "nodes": [
+                                                    {
+                                                        "id": "RC_1",
+                                                        "body": "Finding",
+                                                        "author": {
+                                                            "login": "reviewer",
+                                                            "id": "ACTOR_reviewer",
+                                                            "databaseId": 7,
+                                                        },
+                                                        "reactions": empty,
+                                                    }
+                                                ],
+                                                "pageInfo": {"hasNextPage": False},
+                                            },
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                            }
+                        }
+                    }
+                },
+                separators=(",", ":"),
+            )
+        )
+        raise SystemExit(0)
     if re.search(r"\bmutation\b", query):
         raise SystemExit("unexpected GraphQL mutation in reaction integration fixture")
     raise SystemExit("unknown fake GraphQL query")

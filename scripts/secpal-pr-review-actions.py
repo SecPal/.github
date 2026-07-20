@@ -978,7 +978,7 @@ query CurrentReviewFeedback($owner:String!, $name:String!, $number:Int!) {
                 ... on Organization { id databaseId }
                 ... on Mannequin { id databaseId }
               }
-              reactions(first:100) {
+              reactions(first:25) {
                 nodes { id databaseId content user { id databaseId login } }
                 pageInfo { hasNextPage }
               }
@@ -1518,6 +1518,7 @@ def _terminal_mutation_blocker(session: dict[str, Any]) -> str | None:
         (session["mutation_failed"], "BLOCKED_MUTATION_FAILED"),
         (session["push_failed"], "NOT_READY_FOR_MERGE"),
         (not session["github_state_safe"], "BLOCKED_UNSAFE_GITHUB_STATE"),
+        (session["ci_state"] != "SUCCESS", "BLOCKED_FAILED_OR_PENDING_CI"),
     )
     return next((outcome for blocked, outcome in hard_blockers if blocked), None)
 
@@ -1602,7 +1603,7 @@ def _snapshot_review_feedback(
         if operation["kind"] == "THREAD_RESOLUTION"
         and operation["applied_mutation_identity"] == operation["target_node_id"]
     }
-    return {
+    feedback = {
         "pull_request_reactions": _snapshot_reactions(snapshot["pull_request"]),
         "reviews": sorted(
             (
@@ -1652,16 +1653,131 @@ def _snapshot_review_feedback(
             key=lambda item: item["node_id"],
         ),
     }
+    for operation in plan["operations"]:
+        mutation_id = operation["applied_mutation_identity"]
+        if mutation_id is None:
+            continue
+        if operation["kind"] == "REACTION":
+            target = _feedback_target(feedback, operation["target_node_id"])
+            if target is None:
+                raise MutationBlocked(
+                    "BLOCKED_UNSAFE_GITHUB_STATE: recorded reaction target left the snapshot"
+                )
+            reaction = {
+                "mutation_id": mutation_id,
+                "content": operation["reaction"],
+                "actor": operation["expected_actor_identity"],
+            }
+            if reaction not in target["reactions"]:
+                target["reactions"].append(reaction)
+                target["reactions"].sort(
+                    key=lambda item: (item["mutation_id"], item["content"])
+                )
+        elif operation["kind"] == "EVIDENCE_REPLY":
+            thread = next(
+                (
+                    item
+                    for item in feedback["threads"]
+                    if item["node_id"] == operation["parent_thread_id"]
+                ),
+                None,
+            )
+            if thread is None:
+                raise MutationBlocked(
+                    "BLOCKED_UNSAFE_GITHUB_STATE: recorded reply thread left the snapshot"
+                )
+            if not any(item["node_id"] == mutation_id for item in thread["comments"]):
+                thread["comments"].append(
+                    {
+                        "node_id": mutation_id,
+                        "body_digest": sha256_text(operation["reply_body"]),
+                        "actor": operation["expected_actor_identity"],
+                        "reactions": [],
+                    }
+                )
+    return feedback
+
+
+def _feedback_target(
+    feedback: dict[str, Any], target_node_id: str
+) -> dict[str, Any] | None:
+    targets = [*feedback["reviews"], *feedback["conversation_comments"]]
+    targets.extend(
+        comment
+        for thread in feedback["threads"]
+        for comment in thread["comments"]
+    )
+    return next((item for item in targets if item["node_id"] == target_node_id), None)
 
 
 def _verify_current_feedback(
-    plan: dict[str, Any], snapshot: dict[str, Any], current: dict[str, Any]
+    plan: dict[str, Any],
+    snapshot: dict[str, Any],
+    current: dict[str, Any],
+    operation: dict[str, Any] | None = None,
 ) -> None:
     if current.get("head_sha") != plan["expected_head_sha"]:
         raise MutationBlocked("BLOCKED_HEAD_MOVED: current PR head differs from the mutation plan")
     if current.get("pr_state") != "OPEN":
         raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: pull request is not open")
-    if current.get("feedback") != _snapshot_review_feedback(snapshot, plan):
+    expected = _snapshot_review_feedback(snapshot, plan)
+    actual = current.get("feedback")
+    if actual == expected:
+        return
+    if operation is not None and operation["applied_mutation_identity"] is None:
+        expected = copy.deepcopy(expected)
+        if operation["kind"] == "REACTION" and isinstance(actual, dict):
+            expected_target = _feedback_target(expected, operation["target_node_id"])
+            actual_target = _feedback_target(actual, operation["target_node_id"])
+            if expected_target is not None and actual_target is not None:
+                candidates = [
+                    item
+                    for item in actual_target["reactions"]
+                    if item not in expected_target["reactions"]
+                    and item.get("content") == operation["reaction"]
+                    and _same_actor(
+                        item.get("actor", {}), operation["expected_actor_identity"]
+                    )
+                ]
+                if len(candidates) == 1:
+                    expected_target["reactions"].append(candidates[0])
+                    expected_target["reactions"].sort(
+                        key=lambda item: (item["mutation_id"], item["content"])
+                    )
+        elif operation["kind"] == "EVIDENCE_REPLY" and isinstance(actual, dict):
+            expected_thread = next(
+                (
+                    item
+                    for item in expected["threads"]
+                    if item["node_id"] == operation["parent_thread_id"]
+                ),
+                None,
+            )
+            actual_thread = next(
+                (
+                    item
+                    for item in actual["threads"]
+                    if item["node_id"] == operation["parent_thread_id"]
+                ),
+                None,
+            )
+            if expected_thread is not None and actual_thread is not None:
+                expected_ids = {
+                    item["node_id"] for item in expected_thread["comments"]
+                }
+                candidates = [
+                    item
+                    for item in actual_thread["comments"]
+                    if item["node_id"] not in expected_ids
+                    and item.get("body_digest") == sha256_text(operation["reply_body"])
+                    and _same_actor(
+                        item.get("actor", {}), operation["expected_actor_identity"]
+                    )
+                    and item.get("reactions") == []
+                ]
+                if len(candidates) == 1:
+                    expected_thread["comments"].append(candidates[0])
+    if actual != expected:
         raise MutationBlocked(
             "BLOCKED_INCOMPLETE_REVIEW_STATE: PR-wide feedback changed after the final snapshot"
         )
@@ -2343,9 +2459,9 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
             github,
             exclude_operation_id=arguments.operation_id,
         )
-    if arguments.command == "resolve" and arguments.apply:
         current_feedback = github.read_current_feedback(plan)
-        _verify_current_feedback(plan, snapshot, current_feedback)
+        _verify_current_feedback(plan, snapshot, current_feedback, operation)
+    if arguments.command == "resolve" and arguments.apply:
         initial_snapshot = _read_json(arguments.initial_snapshot, "initial snapshot")
         resolution_evidence = build_resolution_evidence(
             plan,

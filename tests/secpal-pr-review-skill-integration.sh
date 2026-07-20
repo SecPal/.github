@@ -181,11 +181,12 @@ import json
 import sys
 
 calls = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-assert len(calls) == 3, calls
+assert len(calls) == 4, calls
 assert "query CurrentMutationTarget" in next(value.split("=", 1)[1] for value in calls[0] if value.startswith("query="))
-assert "query CurrentMutationTarget" in next(value.split("=", 1)[1] for value in calls[1] if value.startswith("query="))
-assert calls[2][calls[2].index("--method") + 1] == "POST"
-assert calls[2][3] == "repos/SecPal/.github/pulls/comments/21/reactions"
+assert "query CurrentReviewFeedback" in next(value.split("=", 1)[1] for value in calls[1] if value.startswith("query="))
+assert "query CurrentMutationTarget" in next(value.split("=", 1)[1] for value in calls[2] if value.startswith("query="))
+assert calls[3][calls[3].index("--method") + 1] == "POST"
+assert calls[3][3] == "repos/SecPal/.github/pulls/comments/21/reactions"
 PY
 
 # Installer fixtures 70-79: clean install, idempotency, correct link, wrong-link
