@@ -12,7 +12,10 @@ This directory contains utility scripts for SecPal development.
 ### `secpal-pr-review.py`
 
 Captures deterministic, thread-aware GitHub pull-request evidence and verifies
-local Git state through a strict read-only command boundary. Canonical JSON is
+immutable evidence and local Git state through a strict read-only command
+boundary. `verify-evidence` supports open, closed, and merged snapshots;
+`verify-gate` reuses that evidence path and additionally evaluates current
+open-PR merge readiness. Neither command authorizes merge. Canonical JSON is
 the authority; Markdown is an escaped derived view. The helper performs no
 review request, reaction, reply, thread resolution, push, or merge operation.
 

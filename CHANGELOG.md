@@ -9,6 +9,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-20 - Separate Post-Merge Evidence From Merge Readiness
+
+**Fixed:**
+
+- added a read-only `verify-evidence` command that validates canonical snapshot,
+  pagination, identity, commit, signature, rule, check, cap, and raw review-state
+  evidence for open, closed, or merged pull requests without treating a merged
+  PR's `UNKNOWN` mergeability fields as current merge-candidate evidence
+- retained `verify-gate` as the strict open, non-Draft PR readiness command while
+  sharing the same evidence-verification path, keeping merged PRs ineligible for
+  the open gate without misreporting their immutable evidence as invalid
+- added merged-state consistency and fake-GitHub regression coverage while
+  preserving the helper's zero-mutation, zero-polling, and zero-merge-authority
+  boundary
+
+---
+
 ## 2026-07-19 - Add Deterministic PR Evidence State Layer
 
 **Added:**

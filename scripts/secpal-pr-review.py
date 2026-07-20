@@ -1417,6 +1417,10 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
         raise ContractError("Pull request URL does not match its repository and number")
     if pr["is_merged"] is not (pr["state"] == "MERGED"):
         raise ContractError("Pull request merged state is internally inconsistent")
+    if pr["state"] == "MERGED" and pr["is_draft"]:
+        raise ContractError("A merged pull request cannot remain Draft")
+    if pr["state"] == "OPEN" and pr["mergeable"] is None:
+        raise ContractError("Open pull request mergeability is unavailable")
     head_repository = pr["head_repository"]
     head_values = (
         head_repository["id"],
@@ -1766,7 +1770,10 @@ def extract_anchor(payload: dict[str, Any]) -> dict[str, Any]:
             None,
         )
     mergeable = pull_request.get("mergeable")
-    if mergeable not in {"MERGEABLE", "CONFLICTING", "UNKNOWN"}:
+    state = pull_request.get("state")
+    if mergeable not in {"MERGEABLE", "CONFLICTING", "UNKNOWN"} and not (
+        mergeable is None and state in {"CLOSED", "MERGED"}
+    ):
         raise BlockedError(
             BLOCKED_INCOMPLETE,
             "Pull request mergeability is unavailable",
@@ -2332,7 +2339,39 @@ def merge_state_blocker(snapshot: dict[str, Any], policy: dict[str, Any]) -> dic
     return None
 
 
-def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
+def evaluate_raw_review_state(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Summarize captured review evidence without classifying technical findings."""
+
+    pull_request = snapshot["pull_request"]
+    unresolved = [item for item in snapshot["review_threads"] if not item["is_resolved"]]
+    requested_changes = pull_request["review_decision"] == "CHANGES_REQUESTED"
+    review_required = pull_request["review_decision"] == "REVIEW_REQUIRED"
+    review_requested = bool(
+        pull_request["requested_reviewers"] or pull_request["requested_teams"]
+    )
+    return {
+        "reviews": len(snapshot["reviews"]),
+        "conversation_comments": len(snapshot["conversation_comments"]),
+        "review_threads": len(snapshot["review_threads"]),
+        "reactions": len(snapshot_reactions(snapshot)),
+        "resolved_threads": len(snapshot["review_threads"]) - len(unresolved),
+        "unresolved_threads": len(unresolved),
+        "outdated_threads": sum(item["is_outdated"] for item in snapshot["review_threads"]),
+        "requested_changes": requested_changes,
+        "requested_changes_reviews": sum(
+            item["state"] == "CHANGES_REQUESTED" for item in snapshot["reviews"]
+        ),
+        "review_required": review_required,
+        "review_requested": review_requested,
+    }
+
+
+def verify_snapshot_evidence(
+    snapshot: dict[str, Any],
+    configuration: dict[str, Any],
+) -> dict[str, Any]:
+    """Verify immutable snapshot evidence without evaluating merge candidacy."""
+
     validate_config(configuration)
     validate_snapshot(snapshot)
     blockers: list[dict[str, str]] = []
@@ -2365,25 +2404,7 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
                 "reason": "PR base branch does not match configuration",
             }
         )
-    if pr["head_repository"]["name_with_owner"] is None or pr["head_ref"] is None:
-        blockers.append(
-            {
-                "code": "BLOCKED_UNSAFE_GITHUB_STATE",
-                "reason": "PR head repository or branch is unavailable",
-            }
-        )
-    if pr["state"] != "OPEN" or pr["is_merged"] or pr["is_draft"]:
-        blockers.append(
-            {
-                "code": "BLOCKED_UNSAFE_GITHUB_STATE",
-                "reason": "PR is not an open non-draft merge candidate",
-            }
-        )
-    if pr["mergeable"] != "MERGEABLE":
-        blockers.append({"code": "BLOCKED_UNSAFE_GITHUB_STATE", "reason": "PR mergeability is conflicting or unknown"})
     check_policy = configuration["check_policy"]
-    if blocker := merge_state_blocker(snapshot, check_policy):
-        blockers.append(blocker)
     signature_policy = configuration["signature_policy"]
     accepted_formats = set(signature_policy["accepted_formats"])
     for commit in snapshot["commits"]:
@@ -2464,12 +2485,71 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
                         "reason": f"{item['name']}: {item['evidence_state']}",
                     }
                 )
-    unresolved = [item for item in snapshot["review_threads"] if not item["is_resolved"]]
-    requested_changes = pr["review_decision"] == "CHANGES_REQUESTED"
-    review_required = pr["review_decision"] == "REVIEW_REQUIRED"
-    review_requested = bool(pr["requested_reviewers"] or pr["requested_teams"])
-    reaction_count = len(snapshot_reactions(snapshot))
-    if unresolved or requested_changes or review_required or review_requested:
+    raw_review_state = evaluate_raw_review_state(snapshot)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "snapshot_digest": snapshot["snapshot_digest"],
+        "status": "BLOCKED" if blockers else "EVIDENCE_VERIFIED",
+        "evidence_verified": not blockers,
+        "pull_request_state": pr["state"],
+        "blockers": blockers,
+        "raw_review_state": raw_review_state,
+        "technical_classification_required": bool(
+            snapshot["reviews"]
+            or snapshot["conversation_comments"]
+            or snapshot["review_threads"]
+            or raw_review_state["reactions"]
+        ),
+        "merge_authorized": False,
+    }
+
+
+def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]) -> dict[str, Any]:
+    """Verify evidence, then apply strict readiness rules for an open pull request."""
+
+    evidence = verify_snapshot_evidence(snapshot, configuration)
+    blockers = copy.deepcopy(evidence["blockers"])
+    pull_request = snapshot["pull_request"]
+    open_candidate = (
+        pull_request["state"] == "OPEN"
+        and not pull_request["is_merged"]
+        and not pull_request["is_draft"]
+    )
+    if not open_candidate:
+        blockers.append(
+            {
+                "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                "reason": "PR is not an open non-draft merge candidate",
+            }
+        )
+    else:
+        if (
+            pull_request["head_repository"]["name_with_owner"] is None
+            or pull_request["head_ref"] is None
+        ):
+            blockers.append(
+                {
+                    "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                    "reason": "PR head repository or branch is unavailable",
+                }
+            )
+        if pull_request["mergeable"] != "MERGEABLE":
+            blockers.append(
+                {
+                    "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                    "reason": "PR mergeability is conflicting or unknown",
+                }
+            )
+        if blocker := merge_state_blocker(snapshot, configuration["check_policy"]):
+            blockers.append(blocker)
+
+    raw_review_state = evidence["raw_review_state"]
+    if (
+        raw_review_state["unresolved_threads"]
+        or raw_review_state["requested_changes"]
+        or raw_review_state["review_required"]
+        or raw_review_state["review_requested"]
+    ):
         blockers.append(
             {
                 "code": "NOT_READY_FOR_MERGE",
@@ -2477,28 +2557,9 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
             }
         )
     return {
-        "schema_version": SCHEMA_VERSION,
-        "snapshot_digest": snapshot["snapshot_digest"],
+        **evidence,
         "status": "BLOCKED" if blockers else "PACKAGE_2_2_CLASSIFICATION_REQUIRED",
         "blockers": blockers,
-        "raw_review_state": {
-            "reviews": len(snapshot["reviews"]),
-            "conversation_comments": len(snapshot["conversation_comments"]),
-            "review_threads": len(snapshot["review_threads"]),
-            "reactions": reaction_count,
-            "resolved_threads": len(snapshot["review_threads"]) - len(unresolved),
-            "unresolved_threads": len(unresolved),
-            "requested_changes": requested_changes,
-            "review_required": review_required,
-            "review_requested": review_requested,
-        },
-        "technical_classification_required": bool(
-            snapshot["reviews"]
-            or snapshot["conversation_comments"]
-            or snapshot["review_threads"]
-            or reaction_count
-        ),
-        "merge_authorized": False,
     }
 
 
@@ -4031,6 +4092,13 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--snapshot", required=True, help="Canonical snapshot JSON.")
     gate_parser.add_argument("--config", help="Repository configuration JSON.")
 
+    evidence_parser = subparsers.add_parser(
+        "verify-evidence",
+        help="Verify immutable snapshot evidence without evaluating merge candidacy.",
+    )
+    evidence_parser.add_argument("--snapshot", required=True, help="Canonical snapshot JSON.")
+    evidence_parser.add_argument("--config", help="Repository configuration JSON.")
+
     render_parser = subparsers.add_parser("render", help="Render derived non-authoritative evidence.")
     render_parser.add_argument("--snapshot", required=True, help="Canonical snapshot JSON.")
     render_parser.add_argument("--format", required=True, choices=("markdown",))
@@ -4091,6 +4159,15 @@ def _command_verify_gate(arguments: argparse.Namespace) -> int:
     return 0 if not result["blockers"] else 3
 
 
+def _command_verify_evidence(arguments: argparse.Namespace) -> int:
+    value = _load_snapshot_file(arguments.snapshot)
+    repository = value["repository"]["name_with_owner"]
+    configuration = load_config(arguments.config, repository)
+    result = verify_snapshot_evidence(value, configuration)
+    print(_json_report(result), end="")
+    return 0 if result["evidence_verified"] else 3
+
+
 def _command_render(arguments: argparse.Namespace) -> int:
     value = _load_snapshot_file(arguments.snapshot)
     if arguments.format != "markdown":
@@ -4109,6 +4186,8 @@ def main(argv: list[str] | None = None) -> int:
             return _command_verify_local(arguments)
         if arguments.command == "verify-gate":
             return _command_verify_gate(arguments)
+        if arguments.command == "verify-evidence":
+            return _command_verify_evidence(arguments)
         if arguments.command == "render":
             return _command_render(arguments)
         raise ContractError(f"Unknown command: {arguments.command}")

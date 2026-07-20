@@ -437,6 +437,42 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         self.assertEqual(gate["status"], "PACKAGE_2_2_CLASSIFICATION_REQUIRED")
         self.assertEqual(gate["blockers"], [])
 
+    def test_closed_pr_evidence_is_verified_but_cannot_pass_the_open_gate(self) -> None:
+        value = snapshot()
+        value["pull_request"]["state"] = "CLOSED"
+        value["pull_request"]["mergeable"] = None
+        value["pull_request"]["merge_state_status"] = "UNKNOWN"
+        value["pull_request"]["potential_merge_commit_oid"] = None
+        value = finalize_snapshot(value)
+        evidence = review.verify_snapshot_evidence(value, config())
+        gate = review.verify_snapshot_gate(value, config())
+        self.assertTrue(evidence["evidence_verified"])
+        self.assertEqual(evidence["pull_request_state"], "CLOSED")
+        self.assertEqual(
+            gate["blockers"],
+            [
+                {
+                    "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                    "reason": "PR is not an open non-draft merge candidate",
+                }
+            ],
+        )
+
+    def test_open_pr_unknown_or_conflicting_mergeability_still_blocks_the_gate(self) -> None:
+        for mergeable in ("UNKNOWN", "CONFLICTING"):
+            with self.subTest(mergeable=mergeable):
+                value = snapshot()
+                value["pull_request"]["mergeable"] = mergeable
+                result = review.verify_snapshot_gate(finalize_snapshot(value), config())
+                self.assertTrue(result["evidence_verified"])
+                self.assertIn(
+                    {
+                        "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                        "reason": "PR mergeability is conflicting or unknown",
+                    },
+                    result["blockers"],
+                )
+
     def test_merged_raw_review_state_remains_visible_to_evidence_verification(self) -> None:
         value = merged_snapshot()
         informational = review_record("COMMENTED")

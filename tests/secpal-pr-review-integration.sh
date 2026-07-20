@@ -199,7 +199,7 @@ for call in gh_calls:
     if "query PullRequestAnchor" in query:
         anchor_calls += 1
 
-assert anchor_calls == 12, anchor_calls
+assert anchor_calls == 15, anchor_calls
 
 prohibited_git = {"push", "commit", "checkout", "switch", "reset", "clean", "stash", "fetch"}
 assert all(not call or call[0] not in prohibited_git for call in git_calls)
