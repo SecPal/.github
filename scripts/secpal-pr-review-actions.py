@@ -533,6 +533,19 @@ def _snapshot_evidence_ids(
                 "is_outdated": False,
                 "url": item["url"],
             }
+    for reaction in snapshot["pull_request"]["reactions"]:
+        node_ids.add(reaction["id"])
+        actors[reaction["id"]] = reaction["user"]
+        targets[reaction["id"]] = {
+            "target_type": "PULL_REQUEST_REACTION",
+            "database_id": None,
+            "parent_thread_id": None,
+            "reply_to_id": None,
+            "body_digest": sha256_text(reaction["content"]),
+            "is_resolved": None,
+            "is_outdated": False,
+            "url": snapshot["pull_request"]["url"],
+        }
     for thread in snapshot["review_threads"]:
         thread_actor = thread["comments"][0]["author"] if thread["comments"] else None
         if thread_actor is not None:
@@ -1701,8 +1714,6 @@ def _no_late_feedback(
 
 
 def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict[str, Any]) -> bool:
-    if initial_snapshot["pull_request"]["reactions"]:
-        return False
     findings_by_thread: dict[str, list[dict[str, Any]]] = {}
     findings_by_id = {
         finding["logical_finding_id"]: finding for finding in plan["findings"]
@@ -1734,6 +1745,9 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
         for key in ("reviews", "conversation_comments")
         for item in initial_snapshot[key]
     }
+    initial_top_level_source_ids.update(
+        reaction["id"] for reaction in initial_snapshot["pull_request"]["reactions"]
+    )
     if not initial_top_level_source_ids <= covered_top_level_source_ids:
         return False
     initial_thread_ids = {thread["id"] for thread in initial_snapshot["review_threads"]}

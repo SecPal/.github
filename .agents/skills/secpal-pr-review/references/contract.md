@@ -200,9 +200,9 @@ in the snapshot. A source actor may retain the Package 2.1 all-null identity for
 a deleted account; the authenticated writer identity remains complete and
 non-null.
 
-Pull-request-level reactions are not schema-addressable finding sources. Any
-such reaction in the immutable initial snapshot therefore blocks resolution
-until the classification model explicitly supports binding it to a finding.
+Pull-request-level reactions are schema-addressable classification sources but
+are not mutation targets. Each such reaction in the immutable initial snapshot
+requires its own safely disposed finding before resolution.
 
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.

@@ -1734,7 +1734,7 @@ class MutationTests(TestCase):
         )
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
 
-    def test_resolution_blocks_initial_pr_level_reactions_without_finding_bindings(self) -> None:
+    def test_resolution_requires_classification_of_pr_level_reactions(self) -> None:
         initial = evidence_snapshot()
         initial["pull_request"]["reactions"] = [
             p21.reaction("PR_REACTION_1", "THUMBS_UP")
@@ -1745,6 +1745,29 @@ class MutationTests(TestCase):
             current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
         )
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
+        value["findings"].append(
+            {
+                **finding(
+                    "pr-reaction-informational",
+                    "INFORMATIONAL",
+                    thread_id=None,
+                    disposition="NON_ACTIONABLE",
+                ),
+                "source_node_ids": ["PR_REACTION_1"],
+                "source_database_ids": [],
+                "commit_sha": None,
+                "test_evidence": [],
+            }
+        )
+        self.assertTrue(actions._all_initial_threads_classified(value, initial))
+        value["snapshot_digest"] = initial["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        self.assertEqual(
+            actions.validate_plan(value, initial, p21.config())["findings"][-1][
+                "logical_finding_id"
+            ],
+            "pr-reaction-informational",
+        )
 
     def test_resolution_evidence_runs_registered_validations_fail_closed(self) -> None:
         initial = evidence_snapshot()
