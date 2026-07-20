@@ -1370,13 +1370,13 @@ def _validate_feedback_limits(
             + reaction_count
         ),
     }
-    for label, limit_key in (
-        ("threads", "maximum_threads"),
-        ("comments", "maximum_comments"),
-        ("reactions", "maximum_reactions"),
-        ("items", "maximum_items"),
+    for label, limit_key, divisor in (
+        ("threads", "maximum_threads", 1),
+        ("comments", "maximum_comments", 2),
+        ("reactions", "maximum_reactions", 2),
+        ("items", "maximum_items", 1),
     ):
-        if counts[label] > limits[limit_key]:
+        if counts[label] > limits[limit_key] // divisor:
             raise MutationBlocked(
                 f"current feedback {label} exceed the registered feedback limit"
             )

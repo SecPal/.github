@@ -226,8 +226,8 @@ def registry_entry(repository: str) -> dict[str, Any]:
         "maximum_api_calls": 200,
         "maximum_items": 10000,
         "maximum_threads": 500,
-        "maximum_comments": 100,
-        "maximum_reactions": 25,
+        "maximum_comments": 200,
+        "maximum_reactions": 50,
     }
 
 
@@ -1589,6 +1589,16 @@ class MutationTests(TestCase):
         with self.assertRaisesRegex(actions.MutationBlocked, "items"):
             actions._validate_feedback_limits(feedback, limits)
 
+        feedback["reviews"] = [
+            {
+                "node_id": "REVIEW_1",
+                "reactions": [{} for _index in range(26)],
+            }
+        ]
+        limits.update(maximum_items=1000, maximum_reactions=50)
+        with self.assertRaisesRegex(actions.MutationBlocked, "reactions"):
+            actions._validate_feedback_limits(feedback, limits)
+
     def test_missing_trusted_gh_is_reported_as_a_guarded_blocker(self) -> None:
         with mock.patch.object(
             actions.evidence,
@@ -2704,8 +2714,8 @@ class RegistryTests(TestCase):
         registry = actions.load_registry()
         for entry in registry["repositories"]:
             with self.subTest(repository=entry["repository"]):
-                self.assertLessEqual(entry["maximum_comments"], 100)
-                self.assertLessEqual(entry["maximum_reactions"], 25)
+                self.assertLessEqual(entry["maximum_comments"], 200)
+                self.assertLessEqual(entry["maximum_reactions"], 50)
 
     def test_registry_cases_61_to_69(self) -> None:
         registry = {"schema_version": "1.0", "repositories": [registry_entry(repo) for repo in self.repositories]}

@@ -273,9 +273,10 @@ resolutions, and separately compares the complete live target-thread comment
 set with that snapshot. Top-level review, conversation-comment, and thread
 connections are cursor-paginated within the registered API and item caps; a
 missing, repeated, or non-advancing cursor fails closed.
-The aggregate registry caps of 100 comments and 25 reactions stay within every
-unpaginated nested connection, so Package 2.1 cannot accept evidence that the
-live guard is structurally unable to re-read.
+The aggregate registry budgets of 200 recorded comments and 50 recorded
+reactions include Package 2.1's mandatory second observation. Their effective
+live limits of 100 comments and 25 reactions stay within every unpaginated
+nested connection, so accepted evidence remains structurally re-readable.
 
 Resolution remains read-only until one individual operation is explicitly
 applied. An already-resolved target is accepted only when the plan records the
