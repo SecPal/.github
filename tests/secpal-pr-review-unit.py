@@ -1703,6 +1703,115 @@ class SignatureAndCheckTests(unittest.TestCase):
         self.assertEqual(checks[0]["evidence_state"], "required_missing")
         self.assertEqual(evidence["missing"], ["check:1:tests"])
 
+    def test_newer_check_run_supersedes_an_older_failure_from_the_same_app(self) -> None:
+        raw = []
+        for stable_id, conclusion, started_at in (
+            ("check_run:OLD", "FAILURE", "2026-07-20T08:45:24Z"),
+            ("check_run:NEW", "SUCCESS", "2026-07-20T09:04:05Z"),
+        ):
+            raw.append(
+                {
+                    "stable_id": stable_id,
+                    "name": "tests",
+                    "application": {
+                        "id": "APP_1",
+                        "database_id": 1,
+                        "name": "Actions",
+                        "slug": "github-actions",
+                    },
+                    "status": "COMPLETED",
+                    "conclusion": conclusion,
+                    "started_at": started_at,
+                    "created_at": None,
+                    "details_url": f"https://github.com/SecPal/.github/actions/runs/{stable_id[-3:]}",
+                }
+            )
+
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        by_id = {item["stable_id"]: item for item in checks}
+        self.assertFalse(by_id["check_run:OLD"]["is_effective"])
+        self.assertTrue(by_id["check_run:NEW"]["is_effective"])
+
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+        self.assertTrue(result["evidence_verified"])
+        self.assertEqual(result["blockers"], [])
+
+    def test_latest_required_check_failure_cannot_be_hidden_by_an_older_success(self) -> None:
+        raw = []
+        for stable_id, conclusion, started_at in (
+            ("check_run:OLD", "SUCCESS", "2026-07-20T08:45:24Z"),
+            ("check_run:NEW", "FAILURE", "2026-07-20T09:04:05Z"),
+        ):
+            raw.append(
+                {
+                    "stable_id": stable_id,
+                    "name": "tests",
+                    "application": {
+                        "id": "APP_1",
+                        "database_id": 1,
+                        "name": "Actions",
+                        "slug": "github-actions",
+                    },
+                    "status": "COMPLETED",
+                    "conclusion": conclusion,
+                    "started_at": started_at,
+                    "created_at": None,
+                    "details_url": f"https://github.com/SecPal/.github/actions/runs/{stable_id[-3:]}",
+                }
+            )
+
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+        self.assertFalse(result["evidence_verified"])
+        self.assertEqual(
+            [item["reason"] for item in result["blockers"]],
+            ["tests: required_failed"],
+        )
+
+    def test_duplicate_check_runs_without_ordering_evidence_remain_fail_closed(self) -> None:
+        raw = [
+            {
+                "stable_id": f"check_run:{suffix}",
+                "name": "tests",
+                "application": {
+                    "id": "APP_1",
+                    "database_id": 1,
+                    "name": "Actions",
+                    "slug": "github-actions",
+                },
+                "status": "COMPLETED",
+                "conclusion": conclusion,
+                "details_url": None,
+            }
+            for suffix, conclusion in (("OLD", "FAILURE"), ("NEW", "SUCCESS"))
+        ]
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        self.assertTrue(all(item["is_effective"] for item in checks))
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+        self.assertFalse(result["evidence_verified"])
+        self.assertIn("tests: required_failed", [item["reason"] for item in result["blockers"]])
+
     def test_generic_requirement_is_satisfied_by_the_only_present_context_kind(self) -> None:
         raw = [check() | {"requiredness": None, "evidence_state": None}]
         _, evidence = review.evaluate_checks(

@@ -314,6 +314,17 @@ hide a failed same-named counterpart. It does not invent an absent context
 kind; application-specific requirements remain bound to a check run from that
 application.
 
+GitHub can retain several runs of the same check name and application on one
+commit after reruns or pull-request metadata events. The snapshot retains every
+run and its stable identity, plus the check-run start time or status-context
+creation time used to identify the effective observation from that producer.
+An older failure from the same producer cannot override a newer success, while
+a newer failure or pending run still blocks. If repeated observations lack
+usable ordering evidence or share the latest timestamp, they all remain
+effective and the result fails closed. Check runs and legacy status contexts
+remain separate producers, matching GitHub's requirement that both kinds pass
+when they share a required name.
+
 Evidence distinguishes required success, pending, failure, and absence;
 non-required success, pending, and failure; and unknown requiredness. Required
 skipped checks follow the explicit `check_policy.expected_skipped` value.

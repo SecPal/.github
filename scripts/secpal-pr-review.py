@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -2039,6 +2040,61 @@ def _check_outcome(status: str | None, conclusion: str | None, expected_skipped:
     return "failed"
 
 
+def _check_observed_at(item: dict[str, Any]) -> datetime | None:
+    """Return comparable GitHub ordering evidence for one check observation."""
+
+    stable_id = str(item.get("stable_id") or "")
+    value = item.get("started_at") if stable_id.startswith("check_run:") else item.get("created_at")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        observed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return observed if observed.tzinfo is not None else None
+
+
+def _check_producer_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    """Identify repeated observations from the same check producer."""
+
+    stable_id = str(item.get("stable_id") or "")
+    name = str(item.get("name") or "")
+    if stable_id.startswith("status_context:"):
+        return ("status_context", name)
+    if stable_id.startswith("check_run:"):
+        application = item.get("application")
+        if not isinstance(application, dict):
+            return ("check_run", name, stable_id)
+        producer = (
+            application.get("database_id"),
+            application.get("id"),
+            application.get("slug"),
+        )
+        if all(value is None for value in producer):
+            return ("check_run", name, stable_id)
+        return ("check_run", name, *producer)
+    return ("unrecognized", stable_id)
+
+
+def _mark_effective_checks(checks: list[dict[str, Any]]) -> None:
+    """Mark the latest same-producer observation without hiding ambiguous state."""
+
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for item in checks:
+        item.setdefault("started_at", None)
+        item.setdefault("created_at", None)
+        groups.setdefault(_check_producer_key(item), []).append(item)
+    for group in groups.values():
+        observations = [_check_observed_at(item) for item in group]
+        if len(group) == 1 or any(value is None for value in observations):
+            for item in group:
+                item["is_effective"] = True
+            continue
+        latest = max(value for value in observations if value is not None)
+        for item, observed in zip(group, observations, strict=True):
+            item["is_effective"] = observed == latest
+
+
 def evaluate_checks(
     raw_checks: list[dict[str, Any]],
     required_specs: list[dict[str, Any]] | None,
@@ -2046,6 +2102,7 @@ def evaluate_checks(
     sources: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     checks = [copy.deepcopy(item) for item in raw_checks]
+    _mark_effective_checks(checks)
     if required_specs is None:
         for item in checks:
             item["requiredness"] = "unknown"
@@ -2070,7 +2127,8 @@ def evaluate_checks(
             if key[0] == name and (key[1] is None or key[1] == app_id)
         ]
         if matching:
-            matched.update(matching)
+            if item["is_effective"]:
+                matched.update(matching)
             item["requiredness"] = "required"
             outcome = _check_outcome(item.get("status"), item.get("conclusion"), policy["expected_skipped"])
             item["evidence_state"] = f"required_{outcome}"
@@ -2097,6 +2155,9 @@ def evaluate_checks(
                 },
                 "status": "MISSING",
                 "conclusion": None,
+                "started_at": None,
+                "created_at": None,
+                "is_effective": True,
                 "requiredness": "required",
                 "evidence_state": "required_missing",
                 "details_url": None,
@@ -2263,10 +2324,12 @@ def validate_required_check_metadata(snapshot: dict[str, Any]) -> None:
         "application",
         "status",
         "conclusion",
+        "started_at",
+        "created_at",
         "details_url",
     )
     raw_checks = [
-        {key: copy.deepcopy(item[key]) for key in raw_fields}
+        {key: copy.deepcopy(item.get(key)) for key in raw_fields}
         for item in stored_checks
         if item["status"] != "MISSING"
     ]
@@ -2289,8 +2352,10 @@ def validate_required_check_metadata(snapshot: dict[str, Any]) -> None:
     for stable_id, expected in expected_by_id.items():
         stored = stored_by_id[stable_id]
         for key in (*raw_fields[1:], "requiredness"):
-            if stored[key] != expected[key]:
+            if stored.get(key) != expected[key]:
                 raise ContractError(f"Check requiredness or identity is inconsistent for {stable_id}")
+        if stored.get("is_effective", True) != expected["is_effective"]:
+            raise ContractError(f"Effective check selection is inconsistent for {stable_id}")
         if stored["status"] == "MISSING":
             allowed_states = {"required_missing"}
         else:
@@ -2466,8 +2531,11 @@ def verify_snapshot_evidence(
                 "application",
                 "status",
                 "conclusion",
+                "started_at",
+                "created_at",
                 "details_url",
             )
+            if key in item
         }
         for item in snapshot["checks"]
         if item["status"] != "MISSING"
@@ -2481,7 +2549,7 @@ def verify_snapshot_evidence(
             sorted(required_sources),
         )
         for item in evaluated_checks:
-            if item["evidence_state"] in {
+            if item["is_effective"] and item["evidence_state"] in {
                 "required_pending",
                 "required_failed",
                 "required_missing",
@@ -3087,6 +3155,7 @@ query CommitChecks($owner:String!, $name:String!, $number:Int!, $oid:GitObjectID
                 name
                 status
                 conclusion
+                startedAt
                 detailsUrl
                 checkSuite {
                   app { id databaseId name slug }
@@ -3096,6 +3165,7 @@ query CommitChecks($owner:String!, $name:String!, $number:Int!, $oid:GitObjectID
                 id
                 context
                 state
+                createdAt
                 targetUrl
                 creator {
                   __typename
@@ -3641,6 +3711,8 @@ def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
             "application": application,
             "status": value.get("status"),
             "conclusion": value.get("conclusion"),
+            "started_at": value.get("startedAt"),
+            "created_at": None,
             "details_url": value.get("detailsUrl"),
         }
     if typename == "StatusContext":
@@ -3663,6 +3735,8 @@ def _normalize_check(value: dict[str, Any]) -> dict[str, Any]:
             },
             "status": state,
             "conclusion": state if str(state).upper() != "PENDING" else None,
+            "started_at": None,
+            "created_at": value.get("createdAt"),
             "details_url": value.get("targetUrl"),
         }
     raise BlockedError(BLOCKED_INCOMPLETE, f"Unsupported check type: {typename!r}", "checks", None)

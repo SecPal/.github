@@ -23,6 +23,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added merged-state consistency and fake-GitHub regression coverage while
   preserving the helper's zero-mutation, zero-polling, and zero-merge-authority
   boundary
+- retained every repeated check observation while selecting the latest
+  timestamped run from the same check producer for required-check outcomes, so
+  obsolete failures cannot override a newer success and missing ordering
+  evidence continues to fail closed
 
 ---
 
