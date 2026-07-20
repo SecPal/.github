@@ -194,10 +194,15 @@ Each mutation target must be one of its logical finding's immutable source items
 or that finding's exact parent thread for a resolution. Its database ID, parent
 thread, source actor, body digest, resolved state, and outdated state must match
 the same snapshot item rather than unrelated values that merely occur elsewhere
-in the snapshot.
+in the snapshot. A source actor may retain the Package 2.1 all-null identity for
+a deleted account; the authenticated writer identity remains complete and
+non-null.
 
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
+The helper independently verifies the supplied Package 2.1 evidence and refuses
+every operation when that evidence or the plan's finite session already records
+a terminal blocker.
 Prohibited kinds are review request, Ready transition, label, issue, review
 submission, merge, auto-merge, comment deletion, review dismissal, and branch
 write.
@@ -230,10 +235,15 @@ independently prove all of the following:
 - the target remains unresolved and its classification permits resolution;
 - every valid logical finding associated with it is corrected or disproven;
 - every other unresolved target thread has complete classification/disposition;
+- every material top-level finding has a resolvable disposition;
 - no new feedback after the immutable snapshot;
 - no head movement beyond the verified signed remediation descendant or other
   unsafe GitHub state; and
 - no counter limit exceeded.
+
+Immediately before each resolution write, the helper runs the repository's
+registered focused and required local validation commands without a shell and
+compares the complete live target-thread comment set with the final snapshot.
 
 Resolution remains read-only until one individual operation is explicitly
 applied. Already-resolved or changed targets are refused idempotently.

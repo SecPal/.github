@@ -174,7 +174,9 @@ and zero writes. An individually authorized operation additionally requires
 `--initial-snapshot` and refuses the write until final evidence proves clean and
 matching heads, accepted signatures, complete validation, successful required
 checks, no late feedback, and complete dispositions for all unresolved initial
-threads.
+threads and material top-level findings. Each resolution invocation also runs
+the checked-in focused and required local validation commands and compares the
+complete live target-thread comment set with the final snapshot.
 
 The helper pins GitHub.com, uses argument arrays, and exposes only exact current
 target, reaction, inline reply, and resolution documents/endpoints. It has no
@@ -183,6 +185,10 @@ transition, label/issue authority, merge, auto-merge, deletion, dismissal,
 thread unresolution, ruleset/settings changes, or branch-protection authority.
 Each operation target, database ID, parent thread, source actor, body digest,
 resolved state, and outdated state must match the same immutable snapshot item.
+Deleted source accounts retain their accepted all-null Package 2.1 identity;
+the authenticated writer must always have a complete identity. Before any
+operation, the helper independently verifies the supplied Package 2.1 evidence
+and rejects a plan whose finite session already records a terminal blocker.
 Recorded mutation identities are re-read from live state before they are trusted.
 
 ## Snapshot changes, CI, and recovery

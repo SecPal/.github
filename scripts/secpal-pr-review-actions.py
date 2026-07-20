@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import pwd
 import re
 import subprocess
 import sys
@@ -34,6 +35,7 @@ REGISTRY_PATH = (
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
+LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
 
 
 def _load_evidence_helper() -> Any:
@@ -47,6 +49,12 @@ def _load_evidence_helper() -> Any:
 
 
 evidence = _load_evidence_helper()
+ACCOUNT_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+LOCAL_VALIDATION_COMMAND_DIRECTORIES = (
+    *evidence.TRUSTED_COMMAND_DIRECTORIES,
+    ACCOUNT_HOME / ".local/bin",
+    ACCOUNT_HOME / f"Library/Python/{sys.version_info.major}.{sys.version_info.minor}/bin",
+)
 
 CLASSIFICATIONS = (
     "VALID_ACTIONABLE",
@@ -599,6 +607,12 @@ def validate_plan(
     registered_configuration = _package_21_configuration(registered)
     if configuration != registered_configuration:
         raise PlanError("repository configuration differs from the production registry entry")
+    try:
+        verified_evidence = evidence.verify_snapshot_evidence(snapshot, configuration)
+    except (evidence.ContractError, evidence.BlockedError) as exc:
+        raise PlanError(f"accepted P2.1 evidence verification failed: {exc}") from exc
+    if not verified_evidence["evidence_verified"]:
+        raise PlanError("accepted P2.1 evidence verification is blocked")
     if plan["repository"] != configuration["repository"] or plan["repository"] != snapshot["repository"]["name_with_owner"]:
         raise PlanError("mutation plan repository identity does not match supplied evidence")
     if plan["pull_request_number"] != snapshot["pull_request"]["number"]:
@@ -702,6 +716,65 @@ def select_repository(registry: dict[str, Any], repository: str) -> dict[str, An
         if entry["repository"] == repository:
             return entry
     raise RegistryError(f"unsupported repository: {repository}")
+
+
+def _validation_executable(
+    command: dict[str, Any],
+    working_directory: Path,
+    repository_root: Path,
+) -> str:
+    executable = command["argv"][0]
+    if executable.startswith("./"):
+        try:
+            candidate = (working_directory / executable).resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise RegistryError("registered validation executable is unavailable") from exc
+        if (
+            candidate != repository_root
+            and repository_root not in candidate.parents
+        ) or not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise RegistryError("registered validation executable is unsafe or not executable")
+        return str(candidate)
+    for directory in LOCAL_VALIDATION_COMMAND_DIRECTORIES:
+        candidate = directory / executable
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise RegistryError("registered validation executable is unavailable")
+
+
+def _run_registered_validations(
+    repository: dict[str, Any], repository_root: Path
+) -> bool:
+    """Run every checked-in validation command once, without a shell or diagnostic output."""
+
+    repository_root = repository_root.resolve()
+    if not repository_root.is_dir():
+        return False
+    commands = (*repository["focused_validation"], *repository["required_local_validation"])
+    for command in commands:
+        _validate_command(command)
+        working_directory = (repository_root / command["working_directory"]).resolve()
+        if working_directory != repository_root and repository_root not in working_directory.parents:
+            return False
+        try:
+            executable = _validation_executable(
+                command, working_directory, repository_root
+            )
+            completed = subprocess.run(
+                [executable, *command["argv"][1:]],
+                cwd=working_directory,
+                env=evidence.command_environment("git"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired, RegistryError):
+            return False
+        if completed.returncode != 0:
+            return False
+    return True
 
 
 CURRENT_MUTATION_TARGET_QUERY = r"""
@@ -1016,6 +1089,14 @@ class LiveGitHub:
                     for item in thread_comments
                     if item.get("id") != operation["target_node_id"]
                 ],
+                "thread_comments": [
+                    {
+                        "node_id": item.get("id"),
+                        "body_digest": sha256_text(item.get("body", "")),
+                        "actor": _actor(item.get("author")),
+                    }
+                    for item in thread_comments
+                ],
             },
         }
 
@@ -1111,10 +1192,51 @@ def _same_actor(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
     return all(actual.get(key) == expected.get(key) for key in ("login", "node_id", "database_id"))
 
 
+def _terminal_mutation_blocker(session: dict[str, Any]) -> str | None:
+    hard_blockers = (
+        (not session["worktree_clean"], "BLOCKED_UNCLEAN_WORKTREE"),
+        (not session["head_matches"], "BLOCKED_HEAD_MOVED"),
+        (session["unexplained_commit"], "BLOCKED_UNEXPLAINED_COMMIT"),
+        (not session["signatures_valid"], "BLOCKED_INVALID_SIGNATURE"),
+        (
+            not session["snapshot_digest_matches"]
+            or not session["evidence_complete"]
+            or session["late_feedback_detected"],
+            "BLOCKED_INCOMPLETE_REVIEW_STATE",
+        ),
+        (session["scope_requires_other_repository"], "BLOCKED_SCOPE_REQUIRES_OTHER_REPOSITORY"),
+        (session["mutation_failed"], "BLOCKED_MUTATION_FAILED"),
+        (session["push_failed"], "NOT_READY_FOR_MERGE"),
+        (not session["github_state_safe"], "BLOCKED_UNSAFE_GITHUB_STATE"),
+    )
+    return next((outcome for blocked, outcome in hard_blockers if blocked), None)
+
+
+def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[dict[str, Any]]:
+    thread = next(
+        (item for item in snapshot["review_threads"] if item["id"] == thread_id),
+        None,
+    )
+    if thread is None:
+        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: resolution thread left the snapshot")
+    return [
+        {
+            "node_id": comment["id"],
+            "body_digest": sha256_text(comment["body"]),
+            "actor": {
+                key: comment["author"].get(key)
+                for key in ("login", "node_id", "database_id")
+            },
+        }
+        for comment in thread["comments"]
+    ]
+
+
 def _verify_current_state(
     plan: dict[str, Any],
     operation: dict[str, Any],
     current: dict[str, Any],
+    snapshot: dict[str, Any],
 ) -> tuple[str, str] | None:
     if current.get("head_sha") != plan["expected_head_sha"]:
         raise MutationBlocked("BLOCKED_HEAD_MOVED: current PR head differs from the mutation plan")
@@ -1152,6 +1274,12 @@ def _verify_current_state(
         if target.get(key) != operation["expected_current_state"][key]:
             raise MutationBlocked(f"BLOCKED_UNSAFE_GITHUB_STATE: target {key} changed")
     if operation["kind"] == "THREAD_RESOLUTION":
+        if target.get("thread_comments") != _snapshot_thread_comments(
+            snapshot, operation["target_node_id"]
+        ):
+            raise MutationBlocked(
+                "BLOCKED_INCOMPLETE_REVIEW_STATE: thread comments changed after the final snapshot"
+            )
         if target.get("is_resolved") is True:
             return "ALREADY_APPLIED", operation["target_node_id"]
     if target.get("is_resolved") is not operation["expected_current_state"]["is_resolved"]:
@@ -1188,8 +1316,11 @@ def execute_operation(
     )
     if operation is None:
         raise PlanError(f"unknown operation ID: {operation_id}")
+    terminal_blocker = _terminal_mutation_blocker(validated["session"])
+    if terminal_blocker is not None:
+        raise MutationBlocked(f"{terminal_blocker}: session already records a terminal blocker")
     current = github.read_current_state(validated, operation)
-    current_status = _verify_current_state(validated, operation, current)
+    current_status = _verify_current_state(validated, operation, current, snapshot)
     recorded_identity = operation["applied_mutation_identity"]
     if recorded_identity is not None:
         if current_status is None or current_status[1] != recorded_identity:
@@ -1218,6 +1349,7 @@ def execute_operation(
             "final_evidence_verified",
             "no_late_feedback",
             "all_threads_classified",
+            "registered_validation_verified",
         }
         if not isinstance(resolution_evidence, dict) or not all(
             resolution_evidence.get(key) is True for key in required
@@ -1374,10 +1506,25 @@ def _no_late_feedback(
 
 def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict[str, Any]) -> bool:
     findings_by_thread: dict[str, list[dict[str, Any]]] = {}
+    covered_top_level_source_ids: set[str] = set()
     for finding in plan["findings"]:
         thread_id = finding["parent_thread_id"]
         if thread_id:
             findings_by_thread.setdefault(thread_id, []).append(finding)
+        elif (
+            finding["classification"] == "AMBIGUOUS_NEEDS_USER_DECISION"
+            or finding["disposition"] not in RESOLVABLE_DISPOSITIONS
+        ):
+            return False
+        else:
+            covered_top_level_source_ids.update(finding["source_node_ids"])
+    initial_top_level_source_ids = {
+        item["id"]
+        for key in ("reviews", "conversation_comments")
+        for item in initial_snapshot[key]
+    }
+    if not initial_top_level_source_ids <= covered_top_level_source_ids:
+        return False
     initial_thread_ids = {thread["id"] for thread in initial_snapshot["review_threads"]}
     if any(
         operation["kind"] == "THREAD_RESOLUTION"
@@ -1410,17 +1557,20 @@ def build_resolution_evidence(
     final_snapshot: dict[str, Any],
     configuration: dict[str, Any],
     command_runner: Any | None = None,
+    validation_runner: Any | None = None,
 ) -> dict[str, bool]:
+    empty = {
+        "local_verified": False,
+        "final_evidence_verified": False,
+        "no_late_feedback": False,
+        "all_threads_classified": False,
+        "registered_validation_verified": False,
+    }
     try:
         evidence.validate_snapshot(initial_snapshot)
         verified = evidence.verify_snapshot_evidence(final_snapshot, configuration)
     except (evidence.ContractError, evidence.BlockedError):
-        return {
-            "local_verified": False,
-            "final_evidence_verified": False,
-            "no_late_feedback": False,
-            "all_threads_classified": False,
-        }
+        return empty
     if (
         initial_snapshot["snapshot_digest"] != plan["initial_snapshot_digest"]
         or initial_snapshot["repository"]["name_with_owner"] != plan["repository"]
@@ -1436,27 +1586,45 @@ def build_resolution_evidence(
         or initial_snapshot["pull_request"]["head_oid_after"]
         not in {commit["oid"] for commit in final_snapshot["commits"]}
     ):
-        return {
-            "local_verified": False,
-            "final_evidence_verified": False,
-            "no_late_feedback": False,
-            "all_threads_classified": False,
-        }
+        return empty
+    local_runner = command_runner or evidence.CommandRunner()
     try:
         local = evidence.verify_local_against_snapshot(
             final_snapshot,
             configuration,
-            command_runner or evidence.CommandRunner(),
+            local_runner,
             plan["expected_head_sha"],
         )
     except (evidence.BlockedError, evidence.ContractError):
         local = {"blockers": ["local verification failed closed"]}
-    return {
+    result = {
         "local_verified": not local["blockers"],
         "final_evidence_verified": verified["evidence_verified"],
         "no_late_feedback": _no_late_feedback(plan, initial_snapshot, final_snapshot),
         "all_threads_classified": _all_initial_threads_classified(plan, initial_snapshot),
+        "registered_validation_verified": False,
     }
+    if all(result[key] for key in result if key != "registered_validation_verified"):
+        try:
+            registered = select_repository(load_registry(), plan["repository"])
+            runner = validation_runner or _run_registered_validations
+            result["registered_validation_verified"] = runner(
+                registered, Path(local["repository_root"])
+            ) is True
+        except (OSError, RegistryError):
+            result["registered_validation_verified"] = False
+    if result["registered_validation_verified"]:
+        try:
+            final_local = evidence.verify_local_against_snapshot(
+                final_snapshot,
+                configuration,
+                local_runner,
+                plan["expected_head_sha"],
+            )
+            result["local_verified"] = not final_local["blockers"]
+        except (evidence.BlockedError, evidence.ContractError):
+            result["local_verified"] = False
+    return result
 
 
 def _positive_integer(value: str) -> int:

@@ -11,6 +11,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,16 @@ def base_session() -> dict[str, Any]:
         "mutation_failed": False,
         "actionable_findings": True,
         "merge_ready_evidence": True,
+    }
+
+
+def complete_resolution_evidence() -> dict[str, bool]:
+    return {
+        "local_verified": True,
+        "final_evidence_verified": True,
+        "no_late_feedback": True,
+        "all_threads_classified": True,
+        "registered_validation_verified": True,
     }
 
 
@@ -212,6 +223,17 @@ class FakeGitHub:
                 "is_outdated": False,
                 "reactions": [],
                 "replies": [],
+                "thread_comments": [
+                    {
+                        "node_id": "RC_1",
+                        "body_digest": digest("Finding"),
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "ACTOR_reviewer",
+                            "database_id": 7,
+                        },
+                    }
+                ],
             },
         }
 
@@ -337,6 +359,37 @@ class ContractTests(unittest.TestCase):
         value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
         with self.assertRaisesRegex(actions.PlanError, "registry"):
             actions.validate_plan(value, snapshot, configuration)
+
+    def test_plan_rejects_structurally_valid_but_blocked_p21_evidence(self) -> None:
+        snapshot = evidence_snapshot()
+        snapshot["commits"][0]["github_signature"].update(
+            {"state": "invalid", "verified": False, "reason": "bad_signature"}
+        )
+        snapshot = p21.finalize_snapshot(snapshot)
+        value = plan(operation())
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        with self.assertRaisesRegex(actions.PlanError, "evidence verification"):
+            actions.validate_plan(value, snapshot, p21.config())
+
+    def test_plan_accepts_a_deleted_source_actor_without_weakening_writer_identity(self) -> None:
+        snapshot = evidence_snapshot()
+        snapshot["review_threads"][0]["comments"][0]["author"] = p21.actor(None)
+        snapshot = p21.finalize_snapshot(snapshot)
+        value = plan(operation())
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        value["operations"][0]["expected_source_actor_identity"] = {
+            "login": None,
+            "node_id": None,
+            "database_id": None,
+        }
+        normalized = actions.validate_plan(value, snapshot, p21.config())
+        self.assertEqual(
+            normalized["operations"][0]["expected_source_actor_identity"]["login"],
+            None,
+        )
+        self.assertEqual(normalized["operations"][0]["expected_actor_identity"]["login"], "aroviqen")
 
     def test_operations_bind_to_their_finding_and_immutable_snapshot_state(self) -> None:
         second_comment = p21.review_comment("RC_2", body="Independent finding")
@@ -716,7 +769,7 @@ class MutationTests(unittest.TestCase):
                 "is_resolved": False,
             }
         )
-        complete = {"local_verified": True, "final_evidence_verified": True, "no_late_feedback": True, "all_threads_classified": True}
+        complete = complete_resolution_evidence()
         result = actions.execute_operation(
             value, "resolve-001", evidence_snapshot(), p21.config(), github, apply=True,
             resolution_evidence=complete,
@@ -735,10 +788,68 @@ class MutationTests(unittest.TestCase):
         value = plan(op, current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
         github = FakeGitHub()
         github.state["target"].update({"node_id": "THREAD_1", "database_id": None, "target_type": "PULL_REQUEST_REVIEW_THREAD", "body_digest": None, "is_resolved": True})
-        evidence = {"local_verified": True, "final_evidence_verified": True, "no_late_feedback": True, "all_threads_classified": True}
+        evidence = complete_resolution_evidence()
         result = actions.execute_operation(value, "resolve-001", evidence_snapshot(), p21.config(), github, apply=True, resolution_evidence=evidence)
         self.assertEqual(result["status"], "ALREADY_APPLIED")
         self.assertNotIn(("WRITE", "THREAD_RESOLUTION"), github.calls)
+
+    def test_resolution_rechecks_the_complete_live_thread_comment_set(self) -> None:
+        op = operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
+        value = plan(op, current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
+        github = FakeGitHub()
+        github.state["target"].update(
+            {
+                "node_id": "THREAD_1",
+                "database_id": None,
+                "target_type": "PULL_REQUEST_REVIEW_THREAD",
+                "body_digest": None,
+                "is_resolved": False,
+            }
+        )
+        github.state["target"]["thread_comments"].append(
+            {
+                "node_id": "RC_LATE",
+                "body_digest": digest("Late material feedback"),
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_reviewer",
+                    "database_id": 7,
+                },
+            }
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "comments changed"):
+            actions.execute_operation(
+                value,
+                "resolve-001",
+                evidence_snapshot(),
+                p21.config(),
+                github,
+                apply=True,
+                resolution_evidence=complete_resolution_evidence(),
+            )
+        self.assertNotIn(("WRITE", "THREAD_RESOLUTION"), github.calls)
+
+    def test_terminal_session_blockers_stop_before_live_reads_or_writes(self) -> None:
+        blocker_values = {
+            "worktree_clean": False,
+            "head_matches": False,
+            "unexplained_commit": True,
+            "signatures_valid": False,
+            "snapshot_digest_matches": False,
+            "evidence_complete": False,
+            "late_feedback_detected": True,
+            "scope_requires_other_repository": True,
+            "mutation_failed": True,
+            "push_failed": True,
+            "github_state_safe": False,
+        }
+        for key, blocked_value in blocker_values.items():
+            value = plan(operation())
+            value["session"][key] = blocked_value
+            github = FakeGitHub()
+            with self.subTest(blocker=key), self.assertRaises(actions.MutationBlocked):
+                self.apply(value, "reaction-001", github)
+            self.assertEqual(github.calls, [])
 
     def test_resolution_readiness_uses_initial_snapshot_and_blocks_late_feedback(self) -> None:
         initial = evidence_snapshot()
@@ -751,6 +862,7 @@ class MutationTests(unittest.TestCase):
             final,
             p21.config(),
             p21.FakeGitRunner(),
+            lambda _repository, _repository_root: True,
         )
         self.assertTrue(all(result.values()), result)
 
@@ -765,6 +877,7 @@ class MutationTests(unittest.TestCase):
             late,
             p21.config(),
             p21.FakeGitRunner(),
+            lambda _repository, _repository_root: True,
         )
         self.assertFalse(result["no_late_feedback"])
 
@@ -799,6 +912,7 @@ class MutationTests(unittest.TestCase):
             final,
             p21.config(),
             p21.FakeGitRunner(),
+            lambda _repository, _repository_root: True,
         )
         self.assertFalse(result["all_threads_classified"])
 
@@ -860,6 +974,7 @@ class MutationTests(unittest.TestCase):
             final,
             p21.config(),
             runner,
+            lambda _repository, _repository_root: True,
         )
         self.assertTrue(all(result.values()), result)
 
@@ -876,6 +991,79 @@ class MutationTests(unittest.TestCase):
         value["snapshot_digest"] = initial["snapshot_digest"]
         value["initial_snapshot_digest"] = initial["snapshot_digest"]
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
+    def test_resolution_blocks_pending_material_top_level_findings(self) -> None:
+        initial = evidence_snapshot()
+        review = p21.review_record()
+        initial["reviews"] = [review]
+        initial = p21.finalize_snapshot(initial)
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+        value["findings"].append(
+            {
+                **finding("top-level-pending", disposition="PENDING"),
+                "source_node_ids": [review["id"]],
+                "source_database_ids": [review["database_id"]],
+                "parent_thread_id": None,
+                "commit_sha": None,
+            }
+        )
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
+    def test_resolution_evidence_runs_registered_validations_fail_closed(self) -> None:
+        initial = evidence_snapshot()
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        observed: list[tuple[str, Path]] = []
+
+        def reject_validations(repository: dict[str, Any], repository_root: Path) -> bool:
+            observed.append((repository["repository"], repository_root))
+            return False
+
+        result = actions.build_resolution_evidence(
+            value,
+            initial,
+            initial,
+            p21.config(),
+            p21.FakeGitRunner(),
+            reject_validations,
+        )
+        self.assertEqual(observed, [("SecPal/.github", Path("/repo"))])
+        self.assertFalse(result["registered_validation_verified"])
+
+    def test_resolution_reverifies_local_state_after_registered_validations(self) -> None:
+        initial = evidence_snapshot()
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        runner = p21.FakeGitRunner()
+
+        def dirty_worktree_after_validation(
+            _repository: dict[str, Any], _repository_root: Path
+        ) -> bool:
+            runner.set(
+                ["git", "status", "--porcelain=v2", "--untracked-files=all"],
+                0,
+                "? generated-by-validation\n",
+            )
+            return True
+
+        result = actions.build_resolution_evidence(
+            value,
+            initial,
+            initial,
+            p21.config(),
+            runner,
+            dirty_worktree_after_validation,
+        )
+        self.assertTrue(result["registered_validation_verified"])
+        self.assertFalse(result["local_verified"])
 
 
 class RegistryTests(unittest.TestCase):
@@ -925,6 +1113,26 @@ class RegistryTests(unittest.TestCase):
             actions.validate_registry(aliases)
         with self.assertRaises(actions.RegistryError):
             actions.select_repository(registry, "SecPal/unsupported")
+
+    def test_validation_executable_uses_only_explicit_trusted_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "validator"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o700)
+            command = {
+                "argv": ["validator"],
+                "working_directory": ".",
+                "purpose": "fixture",
+            }
+            with mock.patch.object(
+                actions,
+                "LOCAL_VALIDATION_COMMAND_DIRECTORIES",
+                (Path(directory),),
+            ):
+                self.assertEqual(
+                    actions._validation_executable(command, REPO_ROOT, REPO_ROOT),
+                    str(executable),
+                )
 
 
 class AuditModeTests(unittest.TestCase):

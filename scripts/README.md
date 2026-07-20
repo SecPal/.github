@@ -33,7 +33,9 @@ checked-in repository registry and binds its finding, target, immutable target
 state, counters, and recorded mutation identities before a write. Its exact
 command and endpoint allowlists provide no review-request, Ready-transition,
 generic API, Git-write, label/issue, merge, or auto-merge capability, and failures
-are never retried.
+are never retried. It independently verifies Package-2.1 evidence before every
+operation; resolutions additionally run all registered local validations and
+re-check the complete live thread comment set.
 
 ### `install-secpal-pr-review-skill.sh`
 

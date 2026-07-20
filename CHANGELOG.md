@@ -41,6 +41,11 @@ Log of notable changes to SecPal organization defaults (newest first).
   Package-2.1 baseline commit is unavailable and prohibited both `.yml` and
   `.yaml` variants of an automatic review workflow, while enforcing executable
   mode for the registered review-memory error suite
+- made every guarded operation verify accepted Package-2.1 evidence and stop on
+  recorded terminal blockers; resolution now re-runs registered local
+  validation, re-checks the complete live thread comment set, and blocks pending
+  material top-level findings, while retaining deleted source-actor evidence
+  without weakening the authenticated writer identity
 
 ---
 
