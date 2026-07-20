@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -72,6 +73,15 @@ def signature(state: str = "valid", signature_format: str | None = "ssh") -> dic
         "format": signature_format,
         "reason": "valid" if state == "valid" else state,
         "signer": actor(),
+    }
+
+
+def reaction(reaction_id: str = "REACTION_1", content: str = "THUMBS_DOWN") -> dict[str, Any]:
+    return {
+        "id": reaction_id,
+        "content": content,
+        "created_at": "2026-07-19T00:01:00Z",
+        "user": actor("reactor"),
     }
 
 
@@ -390,6 +400,37 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         self.assertEqual(result["raw_review_state"]["reviews"], 1)
         self.assertTrue(result["technical_classification_required"])
 
+    def test_reaction_only_feedback_requires_classification(self) -> None:
+        value = snapshot()
+        value["pull_request"]["reactions"] = [reaction()]
+        result = review.verify_snapshot_gate(finalize_snapshot(value), config())
+        self.assertEqual(result["raw_review_state"]["reactions"], 1)
+        self.assertTrue(result["technical_classification_required"])
+
+    def test_raw_review_state_counts_reactions_on_every_supported_subject(self) -> None:
+        value = snapshot()
+        value["pull_request"]["reactions"] = [reaction("REACTION_PR")]
+        submitted_review = review_record()
+        submitted_review["reactions"] = [reaction("REACTION_REVIEW")]
+        value["reviews"] = [submitted_review]
+        comment = review_comment()
+        comment["reactions"] = [reaction("REACTION_REVIEW_COMMENT")]
+        value["review_threads"] = [thread(comments=[comment])]
+        value["conversation_comments"] = [
+            {
+                "id": "CONVERSATION_1",
+                "database_id": 12,
+                "author": actor(),
+                "body": "Reaction subject",
+                "url": "https://github.com/SecPal/.github/pull/1#issuecomment-12",
+                "created_at": "2026-07-19T00:00:00Z",
+                "updated_at": "2026-07-19T00:00:00Z",
+                "reactions": [reaction("REACTION_CONVERSATION")],
+            }
+        ]
+        result = review.verify_snapshot_gate(finalize_snapshot(value), config())
+        self.assertEqual(result["raw_review_state"]["reactions"], 4)
+
     def test_03_resolved_and_unresolved_threads(self) -> None:
         value = snapshot()
         value["review_threads"] = [
@@ -681,6 +722,22 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         with self.assertRaises(review.ContractError):
             review.validate_snapshot(value)
 
+    def test_snapshot_rejects_every_connection_that_exceeds_its_page_capacity(self) -> None:
+        value = finalize_snapshot(snapshot())
+        connections = value["completeness"]["fully_paginated_connections"]
+        for index, item in enumerate(connections):
+            with self.subTest(connection=item["connection"]):
+                candidate = copy.deepcopy(value)
+                candidate["completeness"]["fully_paginated_connections"][index]["items"] = 101
+                candidate = review.attach_digest(candidate)
+                with self.assertRaisesRegex(review.ContractError, "page capacity"):
+                    review.validate_snapshot(candidate)
+
+    def test_snapshot_accepts_an_exact_full_page(self) -> None:
+        value = snapshot()
+        value["pull_request"]["labels"] = [f"label-{index}" for index in range(100)]
+        review.validate_snapshot(finalize_snapshot(value))
+
     def test_snapshot_rejects_commit_evidence_without_the_head_commit(self) -> None:
         value = snapshot()
         value["commits"][0]["oid"] = PARENT
@@ -918,6 +975,15 @@ class SnapshotAndPaginationTests(unittest.TestCase):
     def test_thread_metadata_query_does_not_multiply_nested_connections(self) -> None:
         self.assertNotIn("comments(first:", review.REVIEW_THREADS_QUERY)
         self.assertIn("comments(first:100", review.REVIEW_THREAD_COMMENTS_QUERY)
+
+    def test_all_graphql_page_sizes_match_the_snapshot_capacity_invariant(self) -> None:
+        sizes = {
+            int(size)
+            for name, document in vars(review).items()
+            if name.endswith("_QUERY") and isinstance(document, str)
+            for size in re.findall(r"first:(\d+)", document)
+        }
+        self.assertEqual(sizes, {review.CAPTURE_PAGE_SIZE})
 
     def test_review_and_pull_request_reactions_have_independent_paginated_queries(self) -> None:
         self.assertIn("reactions(first:100)", review.PULL_REQUEST_REVIEWS_QUERY)
@@ -1508,6 +1574,70 @@ class SignatureAndCheckTests(unittest.TestCase):
         value = review.attach_digest(value)
         with self.assertRaisesRegex(review.ContractError, "workflow"):
             review.validate_snapshot(value)
+
+    def test_ruleset_generic_requirement_survives_app_bound_branch_protection(self) -> None:
+        required = review.require_rule_evidence(
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "tests", "integration_id": None}
+                        ],
+                        "strict_required_status_checks_policy": True,
+                    },
+                }
+            ],
+            {
+                "strict": True,
+                "contexts": ["tests"],
+                "checks": [{"context": "tests", "app_id": 1}],
+            },
+            config()["check_policy"],
+        )
+        self.assertEqual(
+            required,
+            [
+                {"context": "tests", "integration_id": None},
+                {"context": "tests", "integration_id": 1},
+            ],
+        )
+        checks, evidence = review.evaluate_checks(
+            [
+                check() | {"requiredness": None, "evidence_state": None},
+                {
+                    "stable_id": "status_context:STATUS_1",
+                    "name": "tests",
+                    "application": {
+                        "id": None,
+                        "database_id": None,
+                        "name": "legacy-status",
+                        "slug": "legacy-status",
+                    },
+                    "status": "FAILURE",
+                    "conclusion": "FAILURE",
+                    "details_url": None,
+                },
+            ],
+            required,
+            config()["check_policy"],
+        )
+        self.assertEqual(evidence["missing"], [])
+        states = {item["stable_id"]: item["evidence_state"] for item in checks}
+        self.assertEqual(states["check:1:tests"], "required_successful")
+        self.assertEqual(states["status_context:STATUS_1"], "required_failed")
+
+    def test_branch_protection_app_requirement_still_refines_its_legacy_context(self) -> None:
+        required = review.require_rule_evidence(
+            [],
+            {
+                "strict": True,
+                "contexts": ["tests"],
+                "checks": [{"context": "tests", "app_id": 1}],
+            },
+            config()["check_policy"],
+        )
+        self.assertEqual(required, [{"context": "tests", "integration_id": 1}])
 
     def test_branch_protection_preserves_required_check_with_null_app_id(self) -> None:
         required = review.require_rule_evidence(

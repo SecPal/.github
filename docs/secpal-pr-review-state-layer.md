@@ -141,9 +141,11 @@ The gate verifies schema version, digest, complete pagination, stored anchor
 counts, an unchanged repository and pull-request anchor, safe repository and PR
 identity, the current signature and check policies, required-check evidence,
 strict up-to-date-base requirements, check outcomes, required or requested
-reviews, and raw unresolved thread state. It reports separately whether raw
-unresolved items exist and whether Package 2.2 technical classification remains
-necessary.
+reviews, reactions on every supported PR subject, and raw unresolved thread
+state. It reports separately whether raw unresolved items exist and whether
+Package 2.2 technical classification remains necessary. Direct PR reactions
+therefore cannot disappear merely because no review or comment accompanies
+them.
 
 The current repository configuration is authoritative at gate time. Recorded
 API calls, aggregate items, threads, comments, and reactions must fit its current
@@ -210,7 +212,10 @@ prepared.
 Independent cursors prevent unequal page counts from causing duplicate or
 omitted reads. `completeness.fully_paginated_connections` records pages and
 items for every completed connection. `completeness.api_calls` and
-`completeness.items` record actual bounded work.
+`completeness.items` record actual bounded work. Every paginated request uses a
+page size of 100, and loaded evidence is rejected when its item count could not
+fit within the recorded number of pages. This keeps recomputed digests from
+legitimizing impossible, under-reported API-call evidence.
 
 The configured defaults are 200 API calls, 10,000 aggregate items, 500 threads,
 10,000 comments, and 10,000 reactions. Reaching a cap while `hasNextPage` is
@@ -250,9 +255,13 @@ from a hard-coded workflow name or from visible green checks alone. Check runs
 and status contexts retain stable GitHub identities and are matched to required
 contexts plus application IDs when those IDs are governed. Gate verification
 rebuilds requiredness and outcomes from the supplied current policy rather than
-trusting capture-time outcome labels. It also retains each configured source's
-strict up-to-date policy and blocks a `BEHIND` merge state whenever either
-enabled source requires checks against the current base.
+trusting capture-time outcome labels. Enabled rulesets and branch protection
+layer together: an application-specific branch-protection requirement cannot
+erase a generic same-named ruleset requirement. Within branch-protection
+evidence itself, the application-bound form still refines its legacy generic
+context. The gate also retains each configured source's strict up-to-date
+policy and blocks a `BEHIND` merge state whenever either enabled source requires
+checks against the current base.
 
 The anchor records GitHub's potential test-merge commit. When that commit has
 any check or status context, its fully paginated rollup is authoritative;

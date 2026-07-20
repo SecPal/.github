@@ -43,6 +43,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - rejected ambiguous reviewer aliases across every supported identity namespace
   and failed closed when required-workflow rules cannot be mapped completely to
   captured check evidence
+- rejected pagination evidence whose items cannot fit in its recorded pages,
+  preserved generic ruleset checks when app-bound branch protection also
+  applies, and included direct and nested reactions in raw review classification
 
 ## 2026-07-19 - Complete Polyscope Workspace Lifecycle Closure
 

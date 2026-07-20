@@ -31,6 +31,7 @@ DEFAULT_MAXIMUM_THREADS = 500
 DEFAULT_MAXIMUM_COMMENTS = 10_000
 DEFAULT_MAXIMUM_REACTIONS = 10_000
 DEFAULT_EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
+CAPTURE_PAGE_SIZE = 100
 BLOCKED_INCOMPLETE = "BLOCKED_INCOMPLETE_REVIEW_STATE"
 ZERO_AUTHOR = {
     "kind": "deleted_or_unavailable",
@@ -284,7 +285,7 @@ def validate_external_command(arguments: list[str]) -> None:
     encoded_ref = r"[A-Za-z0-9._~%-]+"
     endpoint = arguments[6]
     allowed_endpoint = re.fullmatch(
-        rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page=100&page=[1-9][0-9]*",
+        rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page={CAPTURE_PAGE_SIZE}&page=[1-9][0-9]*",
         endpoint,
     ) or re.fullmatch(
         rf"repos/{repository}/branches/{encoded_ref}/protection/required_status_checks",
@@ -1215,6 +1216,8 @@ def validate_completeness(snapshot: dict[str, Any]) -> None:
         connection = item["connection"]
         if connection in evidence:
             raise ContractError(f"Duplicate pagination evidence for {connection}")
+        if item["items"] > item["pages"] * CAPTURE_PAGE_SIZE:
+            raise ContractError(f"Pagination evidence exceeds page capacity for {connection}")
         evidence[connection] = item["items"]
     missing = sorted(expected.keys() - evidence.keys())
     extra = sorted(evidence.keys() - expected.keys())
@@ -1311,13 +1314,24 @@ def validate_stable_evidence_identities(snapshot: dict[str, Any]) -> None:
         for comment in thread["comments"]
     ]
     _require_unique_identities("review comment", (item.get("id") for item in review_comments))
-    reactions = [
+    reactions = snapshot_reactions(snapshot)
+    _require_unique_identities("reaction", (item.get("id") for item in reactions))
+
+
+def snapshot_reactions(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every reaction captured on a supported pull-request subject."""
+
+    review_comments = [
+        comment
+        for thread in snapshot["review_threads"]
+        for comment in thread["comments"]
+    ]
+    return [
         *snapshot["pull_request"]["reactions"],
         *(reaction for item in snapshot["reviews"] for reaction in item["reactions"]),
         *(reaction for item in snapshot["conversation_comments"] for reaction in item["reactions"]),
         *(reaction for item in review_comments for reaction in item["reactions"]),
     ]
-    _require_unique_identities("reaction", (item.get("id") for item in reactions))
 
 
 def validate_snapshot(snapshot: dict[str, Any]) -> None:
@@ -2108,6 +2122,7 @@ def require_rule_evidence(
             None,
         )
     specifications: dict[tuple[str, int | None], dict[str, Any]] = {}
+    generic_ruleset_contexts: set[str] = set()
     for rule in rulesets or []:
         if not isinstance(rule, dict):
             raise BlockedError(BLOCKED_INCOMPLETE, "Malformed applicable rule", "rulesets", None)
@@ -2149,6 +2164,8 @@ def require_rule_evidence(
                 "context": context,
                 "integration_id": integration_id,
             }
+            if integration_id is None:
+                generic_ruleset_contexts.add(context)
     if isinstance(branch_protection, dict):
         if policy["require_branch_protection_evidence"] and not isinstance(branch_protection.get("strict"), bool):
             raise BlockedError(
@@ -2183,7 +2200,7 @@ def require_rule_evidence(
             ):
                 raise BlockedError(BLOCKED_INCOMPLETE, "Malformed required check identity", "branch_protection", None)
             specifications[(context, app_id)] = {"context": context, "integration_id": app_id}
-            if app_id is not None:
+            if app_id is not None and context not in generic_ruleset_contexts:
                 specifications.pop((context, None), None)
     return [specifications[key] for key in sorted(specifications, key=lambda value: (value[0], value[1] or 0))]
 
@@ -2451,6 +2468,7 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
     requested_changes = pr["review_decision"] == "CHANGES_REQUESTED"
     review_required = pr["review_decision"] == "REVIEW_REQUIRED"
     review_requested = bool(pr["requested_reviewers"] or pr["requested_teams"])
+    reaction_count = len(snapshot_reactions(snapshot))
     if unresolved or requested_changes or review_required or review_requested:
         blockers.append(
             {
@@ -2467,6 +2485,7 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
             "reviews": len(snapshot["reviews"]),
             "conversation_comments": len(snapshot["conversation_comments"]),
             "review_threads": len(snapshot["review_threads"]),
+            "reactions": reaction_count,
             "resolved_threads": len(snapshot["review_threads"]) - len(unresolved),
             "unresolved_threads": len(unresolved),
             "requested_changes": requested_changes,
@@ -2474,7 +2493,10 @@ def verify_snapshot_gate(snapshot: dict[str, Any], configuration: dict[str, Any]
             "review_requested": review_requested,
         },
         "technical_classification_required": bool(
-            snapshot["reviews"] or snapshot["conversation_comments"] or snapshot["review_threads"]
+            snapshot["reviews"]
+            or snapshot["conversation_comments"]
+            or snapshot["review_threads"]
+            or reaction_count
         ),
         "merge_authorized": False,
     }
@@ -3701,7 +3723,7 @@ def _capture_rules(
         base_endpoint = f"repos/{client.owner}/{client.name}/rules/branches/{encoded_ref}"
         page_number = 1
         while True:
-            endpoint = f"{base_endpoint}?per_page=100&page={page_number}"
+            endpoint = f"{base_endpoint}?per_page={CAPTURE_PAGE_SIZE}&page={page_number}"
             page = client.rest(endpoint, connection, str(page_number))
             if not isinstance(page, list):
                 raise BlockedError(
@@ -3712,7 +3734,7 @@ def _capture_rules(
                 )
             client.budget.add_items(len(page), connection, str(page_number))
             rulesets.extend(page)
-            if len(page) < 100:
+            if len(page) < CAPTURE_PAGE_SIZE:
                 client.budget.record_connection(connection, page_number, len(rulesets))
                 break
             page_number += 1
