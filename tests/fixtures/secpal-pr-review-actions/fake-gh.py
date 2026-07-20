@@ -43,9 +43,36 @@ if arguments[3] == "graphql":
                             "databaseId": 21,
                             "body": "Finding",
                             "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
+                            "replyTo": None,
                             "author": {"login": "reviewer", "id": "ACTOR_reviewer", "databaseId": 7},
                             "pullRequestReviewThread": {"id": "THREAD_1", "isResolved": False, "isOutdated": False},
                             "reactions": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                        },
+                        "thread": {
+                            "id": "THREAD_1",
+                            "isResolved": False,
+                            "isOutdated": False,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "id": "RC_1",
+                                        "databaseId": 21,
+                                        "body": "Finding",
+                                        "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
+                                        "replyTo": None,
+                                        "author": {
+                                            "login": "reviewer",
+                                            "id": "ACTOR_reviewer",
+                                            "databaseId": 7,
+                                        },
+                                        "reactions": {
+                                            "nodes": [],
+                                            "pageInfo": {"hasNextPage": False},
+                                        },
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False},
+                            },
                         },
                     }
                 },

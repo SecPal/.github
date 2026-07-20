@@ -200,8 +200,15 @@ in the snapshot. A source actor may retain the Package 2.1 all-null identity for
 a deleted account; the authenticated writer identity remains complete and
 non-null.
 
+Pull-request-level reactions are not schema-addressable finding sources. Any
+such reaction in the immutable initial snapshot therefore blocks resolution
+until the classification model explicitly supports binding it to a finding.
+
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
+The session state is one exact state-machine value. Every pending operation is
+bound to its matching mutation phase, and terminal or unrelated phases cannot
+enter mutation preflight.
 The helper independently verifies the supplied Package 2.1 evidence and refuses
 every operation when that evidence or the plan's finite session already records
 a terminal blocker.
@@ -218,8 +225,9 @@ and GraphQL-document allowlist, a pinned host, no shell, no Git write, no retry,
 no polling, and no sleep. It reads target state first, verifies actor, target,
 head, and idempotency, applies at most once, and reports the returned identity.
 Later-state plans retain identities for earlier authorized writes and increment
-the corresponding consumed counter exactly once. The helper re-reads those
-identities from live state before trusting them; every other new or changed
+the corresponding consumed counter exactly once. Before each new write, the
+helper re-reads every earlier retained reaction, reply, and thread resolution
+identity from live state before trusting it; every other new or changed
 comment, review, thread state, reply, or reaction is late feedback.
 
 ## Remediation-resolution readiness

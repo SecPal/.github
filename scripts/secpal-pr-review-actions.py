@@ -72,6 +72,29 @@ CLASSIFICATIONS = (
     "SECURITY_WEAKENING_SUGGESTION",
 )
 ALLOWED_OPERATION_KINDS = ("REACTION", "EVIDENCE_REPLY", "THREAD_RESOLUTION")
+SESSION_STATES = (
+    "INITIALIZE",
+    "VERIFY_LOCAL_AND_PR_STATE",
+    "CAPTURE_ONE_IMMUTABLE_SNAPSHOT",
+    "CLASSIFY_ALL_SNAPSHOT_ITEMS",
+    "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES",
+    "REMEDIATION_CYCLE_1",
+    "LOCAL_VALIDATE_SIGN_COMMIT_FAST_FORWARD_PUSH",
+    "HOLISTIC_AUDIT",
+    "POST_CYCLE_1_SINGLE_GITHUB_READ",
+    "OPTIONAL_REMEDIATION_CYCLE_2",
+    "FINAL_SINGLE_GITHUB_READ",
+    "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+    "WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION",
+    "TERMINAL",
+)
+MUTATION_KINDS_BY_STATE = {
+    "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES": {
+        "REACTION",
+        "EVIDENCE_REPLY",
+    },
+    "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE": {"THREAD_RESOLUTION"},
+}
 PROHIBITED_OPERATION_KINDS = (
     "REVIEW_REQUEST",
     "READY_TRANSITION",
@@ -237,6 +260,8 @@ def _all_strings(value: Any) -> Iterable[str]:
 def validate_session_state(session: dict[str, Any]) -> None:
     if not isinstance(session, dict):
         raise PlanError("session must be an object")
+    if session.get("state") not in SESSION_STATES:
+        raise PlanError("session state must be an exact finite workflow state")
     for key, maximum in SESSION_LIMITS.items():
         value = session.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
@@ -453,15 +478,27 @@ def _validate_operation_semantics(
             )
     if len(reacted_findings) > len(findings):
         raise PlanError("reaction count exceeds initial logical finding count")
-    if plan["created_for_state"] == "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES" and any(
-        item["kind"] == "THREAD_RESOLUTION" for item in plan["operations"]
+
+
+def _validate_plan_phase(plan: dict[str, Any]) -> None:
+    """Bind a mutation plan and every pending write to one exact finite phase."""
+
+    state = plan["session"]["state"]
+    pending_operations = [
+        operation
+        for operation in plan["operations"]
+        if operation["applied_mutation_identity"] is None
+    ]
+    if not pending_operations:
+        return
+    if state != plan["created_for_state"]:
+        raise PlanError("session state must match the plan creation state")
+    allowed_pending_kinds = MUTATION_KINDS_BY_STATE.get(state, set())
+    if any(
+        operation["kind"] not in allowed_pending_kinds
+        for operation in pending_operations
     ):
-        raise PlanError("resolution operations require the final verified state")
-    if plan["created_for_state"] == "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE" and any(
-        item["kind"] != "THREAD_RESOLUTION" and item["applied_mutation_identity"] is None
-        for item in plan["operations"]
-    ):
-        raise PlanError("final-state plans may retain only recorded prior reaction or reply operations")
+        raise PlanError("pending operation kind is not allowed in the exact operation phase")
 
 
 def _snapshot_evidence_ids(
@@ -644,6 +681,7 @@ def validate_plan(
     if any(SECRET_VALUE.search(value) for value in _all_strings(plan)):
         raise PlanError("mutation plan must not contain credentials or secrets")
     validate_session_state(plan["session"])
+    _validate_plan_phase(plan)
     if plan["cycle_number"] != plan["session"]["remediation_cycles"]:
         raise PlanError("plan cycle number must match the finite session counter")
     findings = _validate_finding_semantics(plan["findings"])
@@ -849,6 +887,10 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
             ... on Bot { id databaseId }
             ... on Organization { id databaseId }
             ... on Mannequin { id databaseId }
+          }
+          reactions(first:100) {
+            nodes { id databaseId content user { id databaseId login } }
+            pageInfo { hasNextPage }
           }
         }
         pageInfo { hasNextPage }
@@ -1072,6 +1114,13 @@ class LiveGitHub:
         thread_comments = [
             item for item in comments_connection.get("nodes", []) if isinstance(item, dict)
         ]
+        if any(
+            (item.get("reactions") or {}).get("pageInfo", {}).get("hasNextPage")
+            for item in thread_comments
+        ):
+            raise MutationBlocked(
+                "current thread reactions exceed the single bounded idempotency read"
+            )
         target_author = target.get("author")
         target_url = target.get("url")
         if target_type == "PULL_REQUEST_REVIEW_THREAD" and thread_comments:
@@ -1124,6 +1173,22 @@ class LiveGitHub:
                         "node_id": item.get("id"),
                         "body_digest": sha256_text(item.get("body", "")),
                         "actor": _actor(item.get("author")),
+                        "reactions": sorted(
+                            (
+                                {
+                                    "mutation_id": reaction.get("id")
+                                    or str(reaction.get("databaseId") or ""),
+                                    "content": reaction.get("content"),
+                                    "actor": _actor(reaction.get("user")),
+                                }
+                                for reaction in (item.get("reactions") or {}).get("nodes", [])
+                                if isinstance(reaction, dict)
+                            ),
+                            key=lambda reaction: (
+                                reaction["mutation_id"],
+                                reaction["content"] or "",
+                            ),
+                        ),
                     }
                     for item in thread_comments
                 ],
@@ -1242,13 +1307,29 @@ def _terminal_mutation_blocker(session: dict[str, Any]) -> str | None:
     return next((outcome for blocked, outcome in hard_blockers if blocked), None)
 
 
+def _enforce_mutation_preflight(plan: dict[str, Any]) -> None:
+    """Reject terminal or phase-invalid sessions before any live or retained-state work."""
+
+    _validate_plan_phase(plan)
+    if (
+        plan["session"]["state"] != plan["created_for_state"]
+        or plan["session"]["state"] not in MUTATION_KINDS_BY_STATE
+    ):
+        raise MutationBlocked(
+            "BLOCKED_UNSAFE_GITHUB_STATE: session is outside an authorized mutation phase"
+        )
+    terminal_blocker = _terminal_mutation_blocker(plan["session"])
+    if terminal_blocker is not None:
+        raise MutationBlocked(f"{terminal_blocker}: session already records a terminal blocker")
+
+
 def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[dict[str, Any]]:
     thread = next(
         (item for item in snapshot["review_threads"] if item["id"] == thread_id),
         None,
     )
     if thread is None:
-        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: resolution thread left the snapshot")
+        raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: mutation thread left the snapshot")
     return [
         {
             "node_id": comment["id"],
@@ -1257,6 +1338,23 @@ def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[
                 key: comment["author"].get(key)
                 for key in ("login", "node_id", "database_id")
             },
+            "reactions": sorted(
+                (
+                    {
+                        "mutation_id": reaction["id"],
+                        "content": reaction["content"],
+                        "actor": {
+                            key: reaction["user"].get(key)
+                            for key in ("login", "node_id", "database_id")
+                        },
+                    }
+                    for reaction in comment["reactions"]
+                ),
+                key=lambda reaction: (
+                    reaction["mutation_id"],
+                    reaction["content"],
+                ),
+            ),
         }
         for comment in thread["comments"]
     ]
@@ -1303,13 +1401,14 @@ def _verify_current_state(
     for key in ("body_digest", "is_outdated"):
         if target.get(key) != operation["expected_current_state"][key]:
             raise MutationBlocked(f"BLOCKED_UNSAFE_GITHUB_STATE: target {key} changed")
-    if operation["kind"] == "THREAD_RESOLUTION":
+    if operation["parent_thread_id"] is not None:
         if target.get("thread_comments") != _snapshot_thread_comments(
-            snapshot, operation["target_node_id"]
+            snapshot, operation["parent_thread_id"]
         ):
             raise MutationBlocked(
-                "BLOCKED_INCOMPLETE_REVIEW_STATE: thread comments changed after the final snapshot"
+                "BLOCKED_INCOMPLETE_REVIEW_STATE: thread feedback changed after the bound snapshot"
             )
+    if operation["kind"] == "THREAD_RESOLUTION":
         if target.get("is_resolved") is True:
             if operation["applied_mutation_identity"] == operation["target_node_id"]:
                 return "ALREADY_APPLIED", operation["target_node_id"]
@@ -1339,17 +1438,19 @@ def _verify_current_state(
     return None
 
 
-def _verify_retained_feedback_mutations(
+def _verify_retained_mutations(
     plan: dict[str, Any],
     snapshot: dict[str, Any],
     github: Any,
+    *,
+    exclude_operation_id: str | None = None,
 ) -> set[str]:
-    """Verify every retained reaction or reply against its exact live target."""
+    """Verify every retained mutation against its exact live target."""
 
     verified: set[str] = set()
     for operation in plan["operations"]:
         identity = operation["applied_mutation_identity"]
-        if operation["kind"] not in {"REACTION", "EVIDENCE_REPLY"} or identity is None:
+        if identity is None or operation["operation_id"] == exclude_operation_id:
             continue
         current = github.read_current_state(plan, operation)
         current_status = _verify_current_state(plan, operation, current, snapshot)
@@ -1378,9 +1479,7 @@ def execute_operation(
     )
     if operation is None:
         raise PlanError(f"unknown operation ID: {operation_id}")
-    terminal_blocker = _terminal_mutation_blocker(validated["session"])
-    if terminal_blocker is not None:
-        raise MutationBlocked(f"{terminal_blocker}: session already records a terminal blocker")
+    _enforce_mutation_preflight(validated)
     current = github.read_current_state(validated, operation)
     current_status = _verify_current_state(validated, operation, current, snapshot)
     recorded_identity = operation["applied_mutation_identity"]
@@ -1602,6 +1701,8 @@ def _no_late_feedback(
 
 
 def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict[str, Any]) -> bool:
+    if initial_snapshot["pull_request"]["reactions"]:
+        return False
     findings_by_thread: dict[str, list[dict[str, Any]]] = {}
     findings_by_id = {
         finding["logical_finding_id"]: finding for finding in plan["findings"]
@@ -1836,15 +1937,19 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
     )
     if not isinstance(operation, dict) or operation.get("kind") != expected_kind:
         raise PlanError(f"{arguments.command} requires an operation of kind {expected_kind}")
+    _enforce_mutation_preflight(plan)
     resolution_evidence = None
     github = LiveGitHub()
-    if arguments.command == "resolve" and arguments.apply:
-        initial_snapshot = _read_json(arguments.initial_snapshot, "initial snapshot")
-        verified_mutation_identities = _verify_retained_feedback_mutations(
+    verified_mutation_identities: set[str] = set()
+    if arguments.apply:
+        verified_mutation_identities = _verify_retained_mutations(
             plan,
             snapshot,
             github,
+            exclude_operation_id=arguments.operation_id,
         )
+    if arguments.command == "resolve" and arguments.apply:
+        initial_snapshot = _read_json(arguments.initial_snapshot, "initial snapshot")
         resolution_evidence = build_resolution_evidence(
             plan,
             initial_snapshot,

@@ -92,7 +92,24 @@
         "merge_ready_evidence"
       ],
       "properties": {
-        "state": { "type": "string", "minLength": 1 },
+        "state": {
+          "enum": [
+            "INITIALIZE",
+            "VERIFY_LOCAL_AND_PR_STATE",
+            "CAPTURE_ONE_IMMUTABLE_SNAPSHOT",
+            "CLASSIFY_ALL_SNAPSHOT_ITEMS",
+            "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES",
+            "REMEDIATION_CYCLE_1",
+            "LOCAL_VALIDATE_SIGN_COMMIT_FAST_FORWARD_PUSH",
+            "HOLISTIC_AUDIT",
+            "POST_CYCLE_1_SINGLE_GITHUB_READ",
+            "OPTIONAL_REMEDIATION_CYCLE_2",
+            "FINAL_SINGLE_GITHUB_READ",
+            "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+            "WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION",
+            "TERMINAL"
+          ]
+        },
         "state_captures": { "type": "integer", "minimum": 0, "maximum": 3 },
         "remediation_cycles": { "type": "integer", "minimum": 0, "maximum": 2 },
         "holistic_audits": { "type": "integer", "minimum": 0, "maximum": 1 },

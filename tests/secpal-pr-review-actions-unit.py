@@ -165,6 +165,8 @@ def operation(
 
 def plan(*operations: dict[str, Any], current_state: str = "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES") -> dict[str, Any]:
     snapshot = evidence_snapshot()
+    session = base_session()
+    session["state"] = current_state
     return {
         "schema_version": "1.0",
         "repository": "SecPal/.github",
@@ -174,7 +176,7 @@ def plan(*operations: dict[str, Any], current_state: str = "APPLY_JUSTIFIED_REAC
         "expected_head_sha": p21.HEAD,
         "created_for_state": current_state,
         "cycle_number": 1,
-        "session": base_session(),
+        "session": session,
         "findings": [finding()],
         "operations": list(operations),
     }
@@ -234,6 +236,7 @@ class FakeGitHub:
                             "node_id": "ACTOR_reviewer",
                             "database_id": 7,
                         },
+                        "reactions": [],
                     }
                 ],
             },
@@ -309,6 +312,69 @@ class ContractTests(TestCase):
             session[key] = maximum + 1
             with self.subTest(counter=key), self.assertRaises(actions.PlanError):
                 actions.validate_session_state(session)
+
+    def test_session_state_is_closed_and_bound_to_the_plan_phase(self) -> None:
+        schema = json.loads(actions.PLAN_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(
+            tuple(schema["$defs"]["session"]["properties"]["state"]["enum"]),
+            actions.SESSION_STATES,
+        )
+        session = base_session()
+        session["state"] = "UNRECOGNIZED_PHASE"
+        with self.assertRaisesRegex(actions.PlanError, "finite workflow state"):
+            actions.validate_session_state(session)
+
+        for kind, required_state in (
+            ("REACTION", "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"),
+            ("EVIDENCE_REPLY", "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"),
+            ("THREAD_RESOLUTION", "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE"),
+        ):
+            operation_value = operation(
+                kind,
+                operation_id=f"{kind.lower()}-001",
+                classification=(
+                    "INVALID_FALSE_OR_MISLEADING"
+                    if kind == "EVIDENCE_REPLY"
+                    else "VALID_ACTIONABLE"
+                ),
+                reaction=None if kind != "REACTION" else "THUMBS_UP",
+                reply_body="Independent evidence" if kind == "EVIDENCE_REPLY" else None,
+            )
+            value = plan(operation_value, current_state=required_state)
+            if kind == "EVIDENCE_REPLY":
+                value["findings"][0].update(
+                    {
+                        "classification": "INVALID_FALSE_OR_MISLEADING",
+                        "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    }
+                )
+            wrong_state = (
+                "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"
+                if required_state == "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE"
+                else "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE"
+            )
+            changed = copy.deepcopy(value)
+            changed["session"]["state"] = wrong_state
+            with self.subTest(kind=kind, mismatch="session"), self.assertRaisesRegex(
+                actions.PlanError, "creation state"
+            ):
+                actions.validate_plan(changed, evidence_snapshot(), p21.config())
+            changed = copy.deepcopy(value)
+            changed["created_for_state"] = wrong_state
+            changed["session"]["state"] = changed["created_for_state"]
+            with self.subTest(kind=kind, mismatch="operation"), self.assertRaisesRegex(
+                actions.PlanError, "operation phase"
+            ):
+                actions.validate_plan(changed, evidence_snapshot(), p21.config())
+
+        classification = plan()
+        classification["session"]["state"] = "CLASSIFY_ALL_SNAPSHOT_ITEMS"
+        self.assertEqual(
+            actions.validate_plan(classification, evidence_snapshot(), p21.config())[
+                "session"
+            ]["state"],
+            "CLASSIFY_ALL_SNAPSHOT_ITEMS",
+        )
 
     def test_plan_is_deterministic_and_bound_to_p21_snapshot(self) -> None:
         value = plan(operation())
@@ -732,7 +798,7 @@ class MutationTests(TestCase):
             }
         ]
         with self.assertRaisesRegex(actions.MutationBlocked, "retained mutation identity"):
-            actions._verify_retained_feedback_mutations(
+            actions._verify_retained_mutations(
                 value,
                 evidence_snapshot(),
                 github,
@@ -740,13 +806,44 @@ class MutationTests(TestCase):
 
         github.state["target"]["replies"][0]["reply_to_database_id"] = 21
         self.assertEqual(
-            actions._verify_retained_feedback_mutations(
+            actions._verify_retained_mutations(
                 value,
                 evidence_snapshot(),
                 github,
             ),
             {"REPLY_EXISTING"},
         )
+
+    def test_retained_thread_resolution_is_verified_against_live_state(self) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            reaction=None,
+        )
+        resolution["applied_mutation_identity"] = "THREAD_1"
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["session"]["thread_resolutions"] = 1
+        github = FakeGitHub()
+        github.state["target"].update(
+            {
+                "node_id": "THREAD_1",
+                "database_id": None,
+                "target_type": "PULL_REQUEST_REVIEW_THREAD",
+                "body_digest": None,
+                "is_resolved": True,
+            }
+        )
+        self.assertEqual(
+            actions._verify_retained_mutations(value, evidence_snapshot(), github),
+            {"THREAD_1"},
+        )
+
+        github.state["target"]["is_resolved"] = False
+        with self.assertRaisesRegex(actions.MutationBlocked, "retained mutation identity"):
+            actions._verify_retained_mutations(value, evidence_snapshot(), github)
 
     def test_evidence_reply_rejects_a_snapshot_reply_as_its_parent(self) -> None:
         snapshot = evidence_snapshot()
@@ -908,8 +1005,75 @@ class MutationTests(TestCase):
         query = actions.CURRENT_MUTATION_TARGET_QUERY
         self.assertNotIn("author { id databaseId login }", query)
         self.assertIn("replyTo { databaseId }", query)
+        self.assertRegex(
+            query,
+            r"(?s)comments\(first:100\).*reactions\(first:100\).*pageInfo \{ hasNextPage \}",
+        )
         for actor_type in ("User", "Bot", "Organization", "Mannequin"):
             self.assertIn(f"... on {actor_type} {{ id databaseId }}", query)
+
+    def test_live_thread_comment_reactions_are_normalized_and_bounded(self) -> None:
+        actor = {"id": "ACTOR_reviewer", "databaseId": 7, "login": "reviewer"}
+        payload = {
+            "data": {
+                "viewer": {"id": "USER_1", "databaseId": 7, "login": "aroviqen"},
+                "repository": {
+                    "pullRequest": {"id": "PR_1", "headRefOid": p21.HEAD, "state": "OPEN"}
+                },
+                "node": {
+                    "__typename": "PullRequestReviewComment",
+                    "id": "RC_1",
+                    "databaseId": 21,
+                    "body": "Finding",
+                    "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
+                    "replyTo": None,
+                    "author": actor,
+                    "reactions": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                },
+                "thread": {
+                    "id": "THREAD_1",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "RC_1",
+                                "databaseId": 21,
+                                "body": "Finding",
+                                "url": "https://github.com/SecPal/.github/pull/1#discussion_r1",
+                                "replyTo": None,
+                                "author": actor,
+                                "reactions": {
+                                    "nodes": [
+                                        {
+                                            "id": "REACTION_1",
+                                            "databaseId": 41,
+                                            "content": "THUMBS_UP",
+                                            "user": actor,
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                },
+            }
+        }
+        runner = SimpleNamespace(run=lambda _arguments: copy.deepcopy(payload))
+        github = actions.LiveGitHub(runner)
+        current = github.read_current_state(plan(operation()), operation())
+        self.assertEqual(
+            current["target"]["thread_comments"][0]["reactions"][0]["mutation_id"],
+            "REACTION_1",
+        )
+
+        payload["data"]["thread"]["comments"]["nodes"][0]["reactions"]["pageInfo"][
+            "hasNextPage"
+        ] = True
+        with self.assertRaisesRegex(actions.MutationBlocked, "thread reactions exceed"):
+            github.read_current_state(plan(operation()), operation())
 
     def test_missing_trusted_gh_is_reported_as_a_guarded_blocker(self) -> None:
         with mock.patch.object(
@@ -1001,7 +1165,7 @@ class MutationTests(TestCase):
                 },
             }
         )
-        with self.assertRaisesRegex(actions.MutationBlocked, "comments changed"):
+        with self.assertRaisesRegex(actions.MutationBlocked, "thread feedback changed"):
             actions.execute_operation(
                 value,
                 "resolve-001",
@@ -1012,6 +1176,90 @@ class MutationTests(TestCase):
                 resolution_evidence=complete_resolution_evidence(),
             )
         self.assertNotIn(("WRITE", "THREAD_RESOLUTION"), github.calls)
+
+    def test_every_thread_sensitive_mutation_rechecks_complete_thread_feedback(self) -> None:
+        cases = (
+            ("REACTION", "reaction-001", "VALID_ACTIONABLE"),
+            ("EVIDENCE_REPLY", "reply-001", "INVALID_FALSE_OR_MISLEADING"),
+            ("THREAD_RESOLUTION", "resolve-001", "VALID_ACTIONABLE"),
+        )
+        for kind, operation_id, classification in cases:
+            op = operation(
+                kind,
+                operation_id=operation_id,
+                classification=classification,
+                reaction="THUMBS_UP" if kind == "REACTION" else None,
+                reply_body="Independent evidence" if kind == "EVIDENCE_REPLY" else None,
+            )
+            state = (
+                "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE"
+                if kind == "THREAD_RESOLUTION"
+                else "APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES"
+            )
+            value = plan(op, current_state=state)
+            if kind == "EVIDENCE_REPLY":
+                value["findings"][0].update(
+                    {
+                        "classification": classification,
+                        "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    }
+                )
+            github = FakeGitHub()
+            if kind == "THREAD_RESOLUTION":
+                github.state["target"].update(
+                    {
+                        "node_id": "THREAD_1",
+                        "database_id": None,
+                        "target_type": "PULL_REQUEST_REVIEW_THREAD",
+                        "body_digest": None,
+                    }
+                )
+            github.state["target"]["thread_comments"].append(
+                {
+                    "node_id": "RC_LATE",
+                    "body_digest": digest("Late material feedback"),
+                    "actor": {
+                        "login": "reviewer",
+                        "node_id": "ACTOR_reviewer",
+                        "database_id": 7,
+                    },
+                    "reactions": [],
+                }
+            )
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                actions.MutationBlocked, "thread feedback changed"
+            ):
+                actions.execute_operation(
+                    value,
+                    operation_id,
+                    evidence_snapshot(),
+                    p21.config(),
+                    github,
+                    apply=True,
+                    resolution_evidence=(
+                        complete_resolution_evidence()
+                        if kind == "THREAD_RESOLUTION"
+                        else None
+                    ),
+                )
+            self.assertFalse(any(call[0] == "WRITE" for call in github.calls))
+
+    def test_late_thread_comment_reaction_blocks_a_mutation(self) -> None:
+        github = FakeGitHub()
+        github.state["target"]["thread_comments"][0]["reactions"] = [
+            {
+                "mutation_id": "REACTION_LATE",
+                "content": "THUMBS_UP",
+                "actor": {
+                    "login": "late-reactor",
+                    "node_id": "ACTOR_late",
+                    "database_id": 19,
+                },
+            }
+        ]
+        with self.assertRaisesRegex(actions.MutationBlocked, "thread feedback changed"):
+            self.apply(plan(operation()), "reaction-001", github)
+        self.assertFalse(any(call[0] == "WRITE" for call in github.calls))
 
     def test_terminal_session_blockers_stop_before_live_reads_or_writes(self) -> None:
         blocker_values = {
@@ -1034,6 +1282,108 @@ class MutationTests(TestCase):
             with self.subTest(blocker=key), self.assertRaises(actions.MutationBlocked):
                 self.apply(value, "reaction-001", github)
             self.assertEqual(github.calls, [])
+
+    def test_command_preflight_blocks_before_resolution_reads_and_validations(self) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            reaction=None,
+        )
+        arguments = SimpleNamespace(
+            command="resolve",
+            plan="plan.json",
+            snapshot="final.json",
+            config="config.json",
+            initial_snapshot="initial.json",
+            operation_id="resolve-001",
+            repo="SecPal/.github",
+            pr=1,
+            snapshot_digest=evidence_snapshot()["snapshot_digest"],
+            expected_head=p21.HEAD,
+            apply=True,
+        )
+        blocker_values = {
+            "worktree_clean": False,
+            "head_matches": False,
+            "unexplained_commit": True,
+            "signatures_valid": False,
+            "snapshot_digest_matches": False,
+            "evidence_complete": False,
+            "late_feedback_detected": True,
+            "scope_requires_other_repository": True,
+            "mutation_failed": True,
+            "push_failed": True,
+            "github_state_safe": False,
+        }
+        for key, blocked_value in blocker_values.items():
+            value = plan(
+                resolution,
+                current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+            )
+            value["session"][key] = blocked_value
+            with (
+                self.subTest(blocker=key),
+                mock.patch.object(
+                    actions,
+                    "_load_inputs",
+                    return_value=(value, evidence_snapshot(), p21.config()),
+                ),
+                mock.patch.object(actions, "LiveGitHub") as live_github,
+                mock.patch.object(actions, "_read_json", wraps=actions._read_json) as read_json,
+                mock.patch.object(actions, "_verify_retained_mutations") as retained,
+                mock.patch.object(actions, "build_resolution_evidence") as resolution_evidence,
+                self.assertRaises(actions.MutationBlocked),
+            ):
+                actions._command_mutation(arguments)
+            live_github.assert_not_called()
+            self.assertFalse(
+                any(call.args and call.args[0] == "initial.json" for call in read_json.call_args_list)
+            )
+            retained.assert_not_called()
+            resolution_evidence.assert_not_called()
+
+    def test_command_verifies_all_prior_mutations_before_each_new_write(self) -> None:
+        value = plan(operation())
+        arguments = SimpleNamespace(
+            command="react",
+            plan="plan.json",
+            snapshot="snapshot.json",
+            config="config.json",
+            operation_id="reaction-001",
+            repo="SecPal/.github",
+            pr=1,
+            snapshot_digest=evidence_snapshot()["snapshot_digest"],
+            expected_head=p21.HEAD,
+            apply=True,
+        )
+        github = FakeGitHub()
+        with (
+            mock.patch.object(
+                actions,
+                "_load_inputs",
+                return_value=(value, evidence_snapshot(), p21.config()),
+            ),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+            mock.patch.object(
+                actions,
+                "_verify_retained_mutations",
+                return_value=set(),
+            ) as retained,
+            mock.patch.object(
+                actions,
+                "execute_operation",
+                return_value={"status": "APPLIED"},
+            ) as execute,
+            mock.patch.object(actions.sys, "stdout", SimpleNamespace(buffer=io.BytesIO())),
+        ):
+            self.assertEqual(actions._command_mutation(arguments), 0)
+        retained.assert_called_once_with(
+            value,
+            evidence_snapshot(),
+            github,
+            exclude_operation_id="reaction-001",
+        )
+        execute.assert_called_once()
 
     def test_resolution_readiness_uses_initial_snapshot_and_blocks_late_feedback(self) -> None:
         initial = evidence_snapshot()
@@ -1236,8 +1586,11 @@ class MutationTests(TestCase):
                 "actor": copy.deepcopy(github.state["viewer"]),
             }
         ]
+        github.state["target"]["thread_comments"][0]["reactions"] = copy.deepcopy(
+            github.state["target"]["reactions"]
+        )
         self.assertEqual(
-            actions._verify_retained_feedback_mutations(recorded, final, github),
+            actions._verify_retained_mutations(recorded, final, github),
             {"REACTION_FORGED"},
         )
 
@@ -1378,6 +1731,18 @@ class MutationTests(TestCase):
                 "parent_thread_id": None,
                 "commit_sha": None,
             }
+        )
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
+    def test_resolution_blocks_initial_pr_level_reactions_without_finding_bindings(self) -> None:
+        initial = evidence_snapshot()
+        initial["pull_request"]["reactions"] = [
+            p21.reaction("PR_REACTION_1", "THUMBS_UP")
+        ]
+        initial = p21.finalize_snapshot(initial)
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
         )
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
 
