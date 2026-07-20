@@ -64,23 +64,23 @@ The existing tenant KEK is a separate file and is not derived from `APP_KEY`. Th
 
 ## Assets and classification
 
-| Asset                           | Classification and required treatment                                                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Original email                  | Personal data and authentication identifier; transient plaintext only at validated input, authorized display, or immediate mail delivery boundaries.                                  |
-| Normalized email                | High-value correlation and lookup material; never persisted or logged in plaintext.                                                                                                   |
-| Blind index                     | Pseudonymous deterministic identifier; confidential metadata subject to equality, frequency, and guessing leakage.                                                                    |
-| Password hash                   | Credential verifier; use the framework's memory-hard/password hashing policy, never encrypt as a substitute for hashing.                                                              |
-| Reset and verification tokens   | Bearer credentials; store only keyed or password hashes, bind to `user_id` or a pending operation, expire, and consume once.                                                          |
-| Invitation addresses            | Personal data; store encrypted with an invitation-specific purpose or reference an existing `user_id`; do not reuse the user lookup index.                                            |
-| MFA secrets                     | High-impact credentials; encrypt under a dedicated Global Identity credential purpose, not merely `APP_KEY`. Recovery codes remain one-time verifiers.                                |
-| Passkey metadata                | Authentication metadata, including credential ID, public key, AAGUID, transports, counters, and backup state; protect access and minimize disclosure, but public keys are not secret. |
-| Session and access tokens       | Bearer credentials; persist only established hashes or opaque session state, bind to `user_id`, expire or revoke according to policy.                                                 |
-| Global Identity Root/KEK        | Critical root secret; never store plaintext in the database, application logs, images, or the same backup set as database data.                                                       |
-| Encryption keys                 | Confidential working keys; randomly generated, purpose-bound, versioned, wrapped at rest, and zeroized when practical.                                                                |
-| Blind-index keys                | Confidential high-value guessing-oracle keys; separate from encryption keys, purpose-bound, versioned, and wrapped at rest.                                                           |
-| Key versions and metadata       | Integrity-sensitive operational metadata; database-backed, audited, backed up, and validated before use.                                                                              |
-| Backups                         | Potentially complete historical disclosure set; encrypted, access-controlled, version-aware, and separated from root-secret backups.                                                  |
-| Logs, traces, and error reports | Broadly replicated operational data; must contain identifiers, versions, event types, and redacted diagnostics, not plaintext identity data or secrets.                               |
+| Asset                                              | Classification and required treatment                                                                                                                                                 |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Original email                                     | Personal data and authentication identifier; transient plaintext only at validated input, authorized display, or immediate mail delivery boundaries.                                  |
+| Normalized email                                   | High-value correlation and lookup material; never persisted or logged in plaintext.                                                                                                   |
+| Blind index                                        | Pseudonymous deterministic identifier; confidential metadata subject to equality, frequency, and guessing leakage.                                                                    |
+| Password hash                                      | Credential verifier; use the framework's memory-hard/password hashing policy, never encrypt as a substitute for hashing.                                                              |
+| Reset, verification, invitation, and change tokens | Bearer credentials; persist a non-decryptable verifier plus a temporary, purpose-bound encrypted delivery copy; bind to one operation, expire, and consume once.                      |
+| Invitation addresses                               | Personal data; store encrypted with an invitation-specific purpose or reference an existing `user_id`; do not reuse the user lookup index.                                            |
+| MFA secrets                                        | High-impact credentials; encrypt under a dedicated Global Identity credential purpose, not merely `APP_KEY`. Recovery codes remain one-time verifiers.                                |
+| Passkey metadata                                   | Authentication metadata, including credential ID, public key, AAGUID, transports, counters, and backup state; protect access and minimize disclosure, but public keys are not secret. |
+| Session and access tokens                          | Bearer credentials; persist only established hashes or opaque session state, bind to `user_id`, expire or revoke according to policy.                                                 |
+| Global Identity Root/KEK                           | Critical root secret; never store plaintext in the database, application logs, images, or the same backup set as database data.                                                       |
+| Encryption keys                                    | Confidential working keys; randomly generated, purpose-bound, versioned, wrapped at rest, and zeroized when practical.                                                                |
+| Blind-index keys                                   | Confidential high-value guessing-oracle keys; separate from encryption keys, purpose-bound, versioned, and wrapped at rest.                                                           |
+| Key versions and metadata                          | Integrity-sensitive operational metadata; database-backed, audited, backed up, and validated before use.                                                                              |
+| Backups                                            | Potentially complete historical disclosure set; encrypted, access-controlled, version-aware, and separated from root-secret backups.                                                  |
+| Logs, traces, and error reports                    | Broadly replicated operational data; must contain identifiers, versions, event types, and redacted diagnostics, not plaintext identity data or secrets.                               |
 
 ## Threat model
 
@@ -140,13 +140,17 @@ flowchart TD
     R["Global Identity Root / KEK<br/>external custody; versioned"]
     E["Global Identity Encryption Key<br/>purpose: global-identity/email-encryption"]
     I["Global Identity Blind-Index Key<br/>purpose: global-identity/user-email-lookup"]
+    D["Global Identity Delivery-Secret Key<br/>purpose: global-identity/operation-delivery-secret"]
     C["users.email_enc<br/>versioned AEAD envelope"]
     X["users.email_idx<br/>versioned keyed exact index"]
+    O["Active token operations<br/>temporary delivery_token_enc"]
 
     R -->|"AEAD wrap + purpose-bound AAD"| E
     R -->|"AEAD wrap + purpose-bound AAD"| I
+    R -->|"AEAD wrap + purpose-bound AAD"| D
     E --> C
     I --> X
+    D --> O
 ```
 
 Each key record has a stable key ID, numeric version, purpose, algorithm, lifecycle state, creation/activation timestamps, wrapped key bytes, wrapping nonce, wrapping algorithm, root/KEK ID and version, and non-secret audit metadata. The root derives no working key by reusing raw bytes. Working keys are independently random. If derivation is later required inside an HSM, a standard KDF with distinct, fixed purpose labels and contexts must provide equivalent domain separation.
@@ -155,6 +159,7 @@ The minimum purpose labels are:
 
 - `secpal/global-identity/email-encryption/v1`;
 - `secpal/global-identity/user-email-lookup/v1`;
+- `secpal/global-identity/operation-delivery-secret/v1`;
 - distinct labels for invitation addresses, pending email changes, MFA credentials, and any future persistent index.
 
 ## V1 user email schema
@@ -294,16 +299,93 @@ Registration, invitation acceptance that creates a user, and email activation ru
 
 The user lookup index is not reused across tables. Reuse would let a database-only attacker correlate the same address across user, invitation, reset, and security-event datasets.
 
-| Purpose                                 | Persistent representation                                                                                                                                                                                                                         |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| User login and global uniqueness        | `users.email_idx` with the user-lookup purpose and version; required.                                                                                                                                                                             |
-| Invitations for an existing user        | Store `user_id`; do not store another email index. Resolve the delivery address at send time.                                                                                                                                                     |
-| Invitations for a not-yet-existing user | Store authenticated ciphertext under an invitation-address purpose. If exact deduplication is required, use an invitation-specific index key/purpose; never the user index.                                                                       |
-| Pending email change                    | Store encrypted candidate address plus a purpose-specific global uniqueness reservation. The reservation may use the user lookup family only inside the controlled ownership/rotation protocol; it is not exposed as a general cross-table index. |
-| Password reset                          | Store `user_id`, `email_version`, token hash, expiry, creation time, and consumption time. No email value or email index is stored.                                                                                                               |
-| Email verification                      | Bind to `user_id` and the current email version, or to a concrete pending-change operation. No email lookup field is stored.                                                                                                                      |
-| Rate limiting                           | Use HMAC of normalized input under a short-lived rate-limit purpose key plus IP/scope as needed, or `user_id` after lookup. Never place plaintext or a reusable database index in cache keys.                                                     |
-| Security events                         | Store `user_id` when known and a non-reversible event-scoped correlation identifier when unknown. Do not store email, normalized email, or the persistent user index.                                                                             |
+| Purpose                                 | Persistent representation                                                                                                                                                                                               |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User login and global uniqueness        | `users.email_idx` with the user-lookup purpose and version; required.                                                                                                                                                   |
+| Invitations for an existing user        | Store `user_id`, token verifier, and temporary encrypted delivery token; do not store another email index. Resolve the delivery address at send time.                                                                   |
+| Invitations for a not-yet-existing user | Store authenticated address ciphertext under an invitation purpose plus the verifier and temporary encrypted delivery token. An optional deduplication index uses an invitation-specific purpose, never the user index. |
+| Pending email change                    | Store encrypted candidate address, purpose-specific global uniqueness reservation, token verifier, and temporary encrypted delivery token. Recipient and token ciphertexts use separate purposes and contexts.          |
+| Password reset                          | Store `user_id`, `email_version`, token verifier, temporary encrypted delivery token, lifecycle timestamps, and delivery state. No email value or email index is stored.                                                |
+| Email verification                      | Bind the verifier and temporary encrypted delivery token to `user_id` plus the current email version, or to a concrete pending-change operation. No email lookup field is stored.                                       |
+| Rate limiting                           | Use HMAC of normalized input under a short-lived rate-limit purpose key plus IP/scope as needed, or `user_id` after lookup. Never place plaintext or a reusable database index in cache keys.                           |
+| Security events                         | Store `user_id` when known and a non-reversible event-scoped correlation identifier when unknown. Do not store email, normalized email, or the persistent user index.                                                   |
+
+## Asynchronous operation-token delivery
+
+Every mail-based bearer-token operation stores two separate representations of the same cryptographically random token:
+
+```text
+token_hash
+delivery_token_enc
+```
+
+`token_hash` is the only verification representation. It uses a maintained strong token-hash or keyed-verifier facility, is not decryptable, and follows the operation's consumption, expiry, revocation, cancellation, and supersession lifecycle. No verification path decrypts or compares `delivery_token_enc`.
+
+`delivery_token_enc` contains exactly the generated plaintext token and exists only so an asynchronous worker can render the authorized link. V1 encrypts it under an independently random, root-wrapped, independently versioned Global Identity Delivery-Secret Working Key with purpose `secpal/global-identity/operation-delivery-secret/v1`. The key is separate from the email-encryption key, blind-index key, every `TenantKey`, and `APP_KEY`. The operation type is authenticated in AAD rather than selecting a shared cross-purpose ciphertext context.
+
+### Delivery-secret envelope and context
+
+Delivery secrets use the established V1 AEAD envelope:
+
+```json
+{
+  "format_version": 1,
+  "algorithm": "XCHACHA20-POLY1305-IETF",
+  "key_id": "<stable identifier>",
+  "key_version": 1,
+  "nonce": "<base64url-no-padding>",
+  "ciphertext_and_tag": "<base64url-no-padding>"
+}
+```
+
+The canonical, fixed-order, length-delimited AAD contains at least:
+
+```text
+format_version
+algorithm
+key_purpose
+key_id
+key_version
+operation_type
+operation_id
+user_id_or_null
+email_version_or_null
+invitation_id_or_null
+tenant_id_or_null
+```
+
+Every optional value has an explicit canonical absent encoding distinct from an empty value. IDs use their canonical representations. For invitations, `operation_id` equals the canonical `invitation_id`, and `user_id_or_null` represents `intended_user_id_or_null`. AAD is reconstructed from trusted operation context and envelope key metadata. Moving a delivery secret to another operation type, operation, user, email version, invitation, or tenant fails authentication.
+
+### Shared delivery lifecycle and state
+
+Every token operation follows this lifecycle:
+
+1. Generate a cryptographically random bearer token.
+2. Store its non-decryptable verifier as `token_hash`.
+3. Store the exact same plaintext token as purpose-bound, authenticated `delivery_token_enc`.
+4. Commit the operation, hash, encrypted delivery secret, and initial delivery state atomically; if any part fails, persist none of them.
+5. Queue only the operation ID. Never serialize the token, recipient, delivery envelope, or a full model snapshot.
+6. The worker loads and locks the operation in a short transaction.
+7. It confirms that the operation is active, unexpired, unconsumed, not revoked, not cancelled or superseded, and that its bound user and optional `email_version` remain current. It then atomically claims one delivery attempt, increments `delivery_attempt_count`, and records an expiring non-secret attempt lease before releasing the row lock. Only one live attempt may send.
+8. The claimed worker authenticates and decrypts `delivery_token_enc`; failure is fail-closed and sends nothing.
+9. Immediately before rendering, it decrypts or resolves the authorized recipient and then decrypts the token. Plaintext may exist only in the authorized link/mail body and immediate transport call.
+10. After confirmed successful handoff to the mail transport, the worker atomically sets `delivery_state = delivered`, sets `delivered_at`, clears the attempt lease, and deletes or irreversibly clears `delivery_token_enc`. It retains `token_hash` for later verification.
+11. Before confirmed handoff, a retryable failure preserves only the encrypted secret, clears or expires the attempt lease, and records an allowlisted error class. Retry and exception metadata contain no plaintext.
+12. Expiry, revocation, consumption, cancellation, or supersession sets a terminal operation/delivery state, deletes `delivery_token_enc`, and prevents every further send.
+13. Token verification uses only `token_hash`; successful or failed delivery never changes that rule.
+
+The logical delivery status contains at least:
+
+```text
+delivery_state
+delivered_at
+delivery_attempt_count
+last_delivery_error_class
+```
+
+`delivery_state` distinguishes pending, in-progress, retryable, delivered, and terminally cancelled delivery. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content. A deterministic operation-scoped transport idempotency key is used where the mail transport supports it. If the process crashes after external acceptance but before the success transaction, a retry may duplicate the same mail but cannot create a second token or credential; reconciliation must still clear the encrypted delivery secret once acceptance is established.
+
+Delivery claims and invalidating lifecycle transitions use the same operation/user lock order and fencing state. A reset, verification, email-change, or invitation transition that commits first prevents a later claim; an already claimed attempt must reach a terminal attempt result or lose its lease before the invalidating transition completes. No worker may send under a claim invalidated by an already committed email-version change, revocation, consumption, cancellation, or supersession.
 
 ## Login flow
 
@@ -335,57 +417,81 @@ flowchart TD
     G --> H["Consume invitation once and return neutral success"]
 ```
 
-- Invitation creation chooses `user_id` when an identity already exists. Otherwise it stores only invitation-purpose ciphertext and a single-use, hashed token.
+- Invitation creation chooses `user_id` when an identity already exists. Otherwise it stores only invitation-purpose address ciphertext. Every invitation operation stores the single-use verifier as `token_hash` and the temporary encrypted token as `delivery_token_enc`.
 - Public request and repeat/replay failures are neutral. Possession of an address alone never confirms account existence.
 - Acceptance is bound to the invitation token and its intended operation. Identity proof and mailbox verification rules remain explicit; an invitation token is consumed exactly once.
 - User creation, global-address ownership, membership, initial rights, and invitation consumption are atomic. A parallel or repeated acceptance either observes the committed result idempotently where safe or returns the same neutral conflict/failure response.
-- Queued invitation work carries an invitation record ID, not plaintext email or a full model snapshot. The worker decrypts only at the delivery boundary.
+- Queued invitation work contains only `invitation_id`, not plaintext email, token, delivery envelope, or a full model snapshot. Invitation delivery-secret AAD binds `operation_type = invitation`, `invitation_id`, `tenant_id`, and `intended_user_id_or_null`. The worker decrypts the intended address and token only at the delivery boundary. Later acceptance verifies only `token_hash` and the invitation lifecycle rules.
 
 ## Password reset
 
 The preferred persistent model is:
 
 ```text
-user_id | email_version | token_hash | expires_at | created_at | consumed_at
+user_id
+email_version
+token_hash
+delivery_token_enc
+expires_at
+created_at
+delivered_at
+consumed_at
 ```
 
-The reset-request endpoint normalizes and indexes the submitted email, resolves `user_id`, performs equalized work for missing accounts, and returns one neutral response. The operation captures the user's current `email_version` and stores no email or email index. It stores only a strong token hash bound to the operation; plaintext email is not a table key, lookup key, URL parameter, log property, or job payload. The delivery job contains only the reset-operation ID, or `user_id` plus the reset-operation ID. Immediately before delivery, the worker locks or reloads the operation and user, confirms that the bound `email_version` is still active, and only then decrypts the current address. A stale job does not send to an address replaced after the reset request. The plaintext token exists only at generation and delivery boundaries.
+The reset-request endpoint normalizes and indexes the submitted email, resolves `user_id`, performs equalized work for missing accounts, and returns one neutral response. The operation captures the user's current `email_version` and stores no email or email index. The queue contains only the reset-operation ID. Immediately before delivery, the worker rechecks that `email_version` is still active, decrypts the current recipient and delivery token, and renders the link. A stale operation does not send to an address replaced after the request. Successful transport handoff deletes `delivery_token_enc`, not `token_hash`.
 
-Reset consumption locks the operation, checks that its `email_version` remains current, checks expiry and the maintained token-hash verifier, changes the password, consumes all outstanding reset operations, clears the defined credentials and remember state, and revokes sessions and access tokens atomically. Email activation atomically revokes every reset operation bound to an older email version. Tokens are strongly hashed, expiring, and single-use; replay and parallel consumption permit one winner.
+Reset consumption locks the operation, checks that its `email_version` remains current, checks expiry and only `token_hash`, changes the password, consumes all outstanding reset operations, clears the defined credentials and remember state, and revokes sessions and access tokens atomically. Email activation atomically revokes every reset operation bound to an older email version and deletes its delivery secret. Tokens are strongly verified, expiring, and single-use; replay and parallel consumption permit one winner.
 
 ## Email verification
 
 Active-email verification is bound to exactly:
 
 ```text
-user_id | email_version | verification_operation_id | token_hash
+user_id
+email_version
+verification_operation_id
+token_hash
+delivery_token_enc
 ```
 
-Alternatively, candidate-address verification binds to one explicit pending email-change operation. The stored token is strongly hashed, expires, and is consumed once. The verification URL needs an opaque operation identifier and token, not email. A signature derived from plaintext email is not the identity binding.
+Alternatively, candidate-address verification binds to one explicit pending email-change operation. The operation stores the verifier in `token_hash` and its temporary delivery copy in `delivery_token_enc`; the token expires and is consumed once. The verification URL needs an opaque operation identifier and token, not email. A signature derived from plaintext email is not the identity binding, and verification uses only the hash.
 
-Verification of the active address updates only that exact email version. Verification of a pending address does not mutate the active address until the email-change activation transaction succeeds. Resend uses `user_id` and invalidates or supersedes prior operations according to policy.
+Verification of the active address updates only that exact email version. Verification of a pending address binds delivery-secret AAD to the concrete email-change operation and does not mutate the active address until activation succeeds. Its queue contains only the verification-operation ID or, for a pending change, only the change-operation ID. Resend creates a new operation or new token and unambiguously revokes or supersedes the prior operation, deletes its delivery secret, and prevents stale delivery.
 
 ## Email change
 
 The pending operation stores:
 
 ```text
-operation_id | user_id | operation_version | candidate_email_enc | normalization_version | index_key_version | candidate_email_idx_reservation | token_hash | expires_at
+operation_id
+user_id
+operation_version
+candidate_email_enc
+normalization_version
+index_key_version
+candidate_email_idx_reservation
+token_hash
+delivery_token_enc
+expires_at
 ```
 
 1. Require recent step-up authentication using password plus MFA/passkey according to account policy.
 2. Validate and preserve the candidate's original representation, normalize it, reject a no-op against the current address, calculate indexes for every accepted lookup-version pair, and reserve global uniqueness under transaction-scoped locks.
 3. Persist the candidate only as purpose-bound authenticated ciphertext in a pending operation with expiry, requester `user_id`, monotonically increasing operation version, explicit normalization and index-key versions, reservation, and hashed verification token. The candidate encryption purpose is separate from the active user-email purpose. Never replace the active email before verification.
-4. Send verification to the candidate address by pending-operation ID. Send a security notification to the old active address without placing either address in logs or job payloads.
+4. Queue only the pending operation ID. The worker decrypts `candidate_email_enc` only as the immediate recipient and decrypts `delivery_token_enc` only immediately before link rendering. The two ciphertexts use separate key purposes and AAD contexts. Send a security notification to the old active address without placing either address in logs or job payloads.
 5. On token consumption, lock the user and pending reservation, recheck uniqueness across accepted lookup-version pairs, and atomically write the candidate original representation to `email_enc`, activate its `email_idx` and independent versions, increment `email_version`, mark that version verified, release the old index, consume competing pending operations, and record an audit event.
-6. Atomically revoke password-reset and email-verification operations bound to the replaced email version, plus remember tokens, sessions, and access tokens according to the credential-revocation policy. Require fresh login unless the accepted product policy explicitly preserves the initiating session.
+6. Atomically revoke password-reset and email-verification operations bound to the replaced email version, delete their delivery secrets, and revoke remember tokens, sessions, and access tokens according to the credential-revocation policy. Require fresh login unless the accepted product policy explicitly preserves the initiating session.
 7. Concurrent changes for one user use a monotonically increasing operation version; only the latest active operation may win. Concurrent claims by different users are serialized by the global reservation protocol.
 
 Cancellation, expiry, failure, or lost-key conditions release reservations safely and leave the old active email unchanged.
 
 ## Mail decryption boundary
 
-Email is decrypted only immediately before handing a recipient address to the mail transport or rendering an authorized response that requires it. Delivery workers receive `user_id`, invitation/reset/change operation ID, or an encrypted record reference. Persistent queue payloads, failed-job tables, retry metadata, exception contexts, and monitoring events must not contain plaintext email, normalized email, decrypted model snapshots, or complete tokens.
+Email is decrypted only immediately before handing a recipient address to the mail transport or rendering an authorized response that requires it. Delivery workers receive only the applicable operation ID. Persistent queue payloads, failed-job tables, retry metadata, exception contexts, and monitoring events must not contain plaintext email, normalized email, delivery envelopes, decrypted model snapshots, complete tokens, or complete delivery URLs.
+
+`email_enc` preserves the validated original representation for authorized display. Immediately before transport, a separate deterministic transport-canonicalization function converts the already validated domain to its lowercase ASCII A-label representation while preserving the validated original spelling and case of the ASCII local part. Transport canonicalization is not lookup normalization and is never persisted as a second email value. It neither lowercases the local part nor changes dots or plus suffixes.
+
+For token mail, the worker decrypts the recipient and delivery token only after it has successfully claimed and revalidated the operation. Those plaintext values may exist only during link rendering and the immediate transport invocation. Neither value is written back to the operation, job, failure record, audit event, API response, trace, or exception context.
 
 Mail delivery fails closed if the required key or ciphertext cannot be authenticated. The system records a redacted delivery failure keyed by operation ID, user ID where known, key version, and error class. It does not fall back to a plaintext column or guess another recipient.
 
@@ -417,6 +523,14 @@ All rotations require an approved operation ID, current backups and recovery tes
 5. Completion requires zero references to old versions, full integrity sampling or verification, successful backup/restore rehearsal, and reconciled counts.
 6. Mark old keys decrypt-only, then retired. Delete wrapped old keys only after all live data and every retained backup no longer references them and policy authorizes destruction. Rollback can return writes to the old key only before new-only data or key destruction makes that unsafe.
 
+### Delivery-secret-key rotation
+
+1. Create, wrap, verify, and activate a new Delivery-Secret Working Key version. New operations use it; workers select the exact version in each active envelope.
+2. Either re-encrypt every active, undelivered `delivery_token_enc` in resumable authenticated batches with fresh nonces and unchanged operation-bound AAD context, or retain the old version as readable until all such operations become delivered or terminal.
+3. Re-encryption locks and revalidates the operation, decrypts only in memory, writes the replacement envelope atomically, and never changes `token_hash` or queues a delivery.
+4. Completion requires no active delivery envelope referencing the old version, reconciled counts, successful retry and restore tests, and confirmation that retained backups can still restore every referenced version.
+5. Retire or destroy an old key only after no live delivery secret and no relevant retained backup refers to it.
+
 ### Blind-index-key rotation
 
 1. Create, wrap, and verify a new index-key version. Keep the old version accepted for reads.
@@ -442,11 +556,13 @@ Suspected compromise freezes discretionary key changes, preserves evidence, iden
 
 ## Backup and recovery
 
-- Database backups include ciphertext, blind indexes, normalization and key versions, rotation state, checkpoints, key IDs, root IDs/versions, purposes, algorithms, lifecycle states, and authenticated wrapped working keys.
+- Database backups include ciphertext, active `delivery_token_enc` values, blind indexes, normalization and key versions, delivery/rotation state, checkpoints, key IDs, root IDs/versions, purposes, algorithms, lifecycle states, and authenticated wrapped working keys.
 - Every retained Global Identity Root/KEK version required by active data or a retained backup is backed up separately from database and object-storage backups, encrypted under an independent recovery control, stored in a different security and failure domain, and accessible only to explicitly authorized recovery roles. No real key value belongs in documentation.
 - Backup systems use least privilege, encryption in transit and at rest, immutable or append-protected retention where practical, access audit, and regular restore sampling.
 - Restore order is: isolate the environment; inventory database key references and rotation epoch; obtain the exact required root versions through recovery authorization; restore key-provider access; restore database and storage; verify wrapped-key and ciphertext authentication; resume or reconcile interrupted rotations; run integrity, uniqueness, login, and mail-boundary checks; then permit traffic.
 - Restoring a backup created before or during rotation requires every root, encryption, and index version it references. The restored system must not silently use only today's write key or delete historical versions.
+- Every Delivery-Secret Working Key version remains recoverable through the end of each referencing operation and relevant backup retention. Expired, revoked, consumed, cancelled, superseded, or delivered operations have no recoverable delivery secret after lifecycle cleanup.
+- Restore keeps all restored token-delivery operations quarantined until it reconciles them with a separately retained, append-protected terminal-operation journal newer than the database backup. That journal contains only operation IDs, terminal state, and timestamps, never tokens, addresses, or ciphertext. Delivered or otherwise terminal operations are tombstoned and have any restored delivery secret deleted. Delivery resumes only for an operation proven active in both the restored database and reconciliation state; uncertainty fails closed and never resends.
 - Recovery exercises occur on a defined schedule and after material key, provider, backup, or deployment changes. They prove old- and new-rotation restores, document measured recovery time, and destroy exercise plaintext and temporary key access afterward.
 - If active root access is temporarily unavailable, global identity reads, writes, authentication by email, and mail delivery fail closed. Operations may restore an authorized root backup; they may not create a replacement key for existing ciphertext.
 
@@ -454,29 +570,30 @@ Loss of the final recoverable Global Identity Root Key can make encrypted global
 
 ## Failure behavior
 
-| Failure                                | Required behavior                                                                                                                            |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Missing or inaccessible root           | Fail readiness for identity-dependent operations; return a generic service-unavailable response; never generate a replacement automatically. |
-| Unknown key or root version            | Fail closed, identify only record/key IDs in restricted audit, and block affected operation or rotation completion.                          |
-| Malformed ciphertext or envelope       | Reject before decryption; record a redacted integrity event; do not repair, skip, or return partial data.                                    |
-| Invalid authentication tag or AAD      | Treat as integrity/security failure, fail closed, and alert according to incident policy.                                                    |
-| Index calculation failure              | Perform no lookup or write; return a generic error; never fall back to plaintext or decryption search.                                       |
-| Duplicate index or reservation         | Roll back atomically and return a neutral conflict outcome; audit identifiers and versions without the index value.                          |
-| Incomplete rotation                    | Continue exact-version reads, keep required old keys, block retirement, and resume from checkpoint.                                          |
-| Restore missing a required key version | Keep the restored service isolated and unavailable until the authorized version is recovered.                                                |
-| Mail decryption failure                | Do not send; retain/retry by operation reference according to policy; emit a redacted operational event.                                     |
+| Failure                                         | Required behavior                                                                                                                            |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Missing or inaccessible root                    | Fail readiness for identity-dependent operations; return a generic service-unavailable response; never generate a replacement automatically. |
+| Unknown key or root version                     | Fail closed, identify only record/key IDs in restricted audit, and block affected operation or rotation completion.                          |
+| Malformed ciphertext or envelope                | Reject before decryption; record a redacted integrity event; do not repair, skip, or return partial data.                                    |
+| Invalid authentication tag or AAD               | Treat as integrity/security failure, fail closed, and alert according to incident policy.                                                    |
+| Index calculation failure                       | Perform no lookup or write; return a generic error; never fall back to plaintext or decryption search.                                       |
+| Duplicate index or reservation                  | Roll back atomically and return a neutral conflict outcome; audit identifiers and versions without the index value.                          |
+| Incomplete rotation                             | Continue exact-version reads, keep required old keys, block retirement, and resume from checkpoint.                                          |
+| Restore missing a required key version          | Keep the restored service isolated and unavailable until the authorized version is recovered.                                                |
+| Delivery-secret or recipient decryption failure | Do not send; fail the claimed attempt closed, retain encrypted retry material only when lifecycle permits, and emit a redacted event.        |
+| Invalid or terminal delivery state              | Do not decrypt or send; delete residual delivery secrets for terminal operations and audit only allowlisted state metadata.                  |
 
 ## Audit and redaction
 
-Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, and credential revocation. Events include stable operation IDs, actor/service identity, affected key IDs and versions, record counts, timestamps, result, and approved reason.
+Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, transport handoff, retry, and terminal delivery cleanup. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt count, timestamps, and allowlisted result/error class.
 
-Never log or attach plaintext email, normalized email, ciphertext plaintext, raw root or working keys, wrapped-key plaintext, blind-index values, full reset/verification/invitation/access tokens, MFA secrets, recovery codes, session payloads, or decrypted recipient values. Exception messages, validation context, traces, APM attributes, activity properties, mail events, and failed-job payloads follow the same rule.
+Never log, persist outside the protected operation field, or attach plaintext email, normalized email, ciphertext plaintext, raw root or working keys, wrapped-key plaintext, blind-index values, plaintext bearer tokens, complete delivery URLs, `delivery_token_enc`, full reset/verification/invitation/access tokens, MFA secrets, recovery codes, session payloads, or decrypted recipient values. Queue and failed-job payloads, exception context, validation context, traces, APM attributes, activity properties, mail events, audits, and API output follow the same rule.
 
 Known-user security events use `user_id`. Unknown-input events use a separately keyed, event-scoped short-lived correlation value that cannot be joined to `users.email_idx`. Logging pipelines enforce allowlists and automated redaction tests rather than relying on individual callers.
 
 ## Privacy and data minimization
 
-Encryption does not anonymize global identity data. Ciphertext, keyed indexes, user IDs, key metadata, and access logs remain personal or linkable data where applicable. Access is limited by purpose and role; retention is defined for active identities, pending operations, tokens, logs, rotation artifacts, and backups. Expired invitations, resets, verification operations, email reservations, and rotation sidecars are deleted when their security and recovery obligations end.
+Encryption does not anonymize global identity data. Ciphertext, keyed indexes, user IDs, key metadata, and access logs remain personal or linkable data where applicable. Access is limited by purpose and role; retention is defined for active identities, pending operations, tokens, logs, rotation artifacts, and backups. Delivery secrets are deleted immediately after confirmed transport handoff or any terminal lifecycle transition. Expired invitations, resets, verification operations, email reservations, terminal-operation journal entries, and rotation sidecars are deleted when their security, anti-replay, and recovery obligations end.
 
 Responses decrypt and expose email only to the data subject or an explicitly authorized administrative purpose. Analytics and security monitoring use aggregate counts or scoped pseudonymous identifiers. Cross-table correlation is minimized through separate index purposes and by preferring `user_id` references.
 
@@ -502,6 +619,14 @@ Implementation work must add positive, negative, concurrency, failure-injection,
 - the versioned file-based root provider, including ownership/permission/type/length rejection, atomic no-overwrite publication, exact-version selection, concurrent old/new root availability, and failure when a historical root version is missing;
 - restore from backups before, during, and after every rotation; missing active or historical root/key version; corrupt metadata; and final root-loss runbook behavior;
 - mail decryption only at delivery, failed delivery without plaintext leakage, and comprehensive log/error/job redaction.
+- a worker producing a valid operation-bound link from only an operation ID while queue and failed-job payloads contain no token;
+- database and backup inspection finding no plaintext bearer token, and proof that `token_hash` cannot produce a delivery link or plaintext token;
+- wrong operation ID, operation type, user, email version, invitation, tenant, or relocated ciphertext failing delivery-secret AAD authentication;
+- successful transport handoff clearing `delivery_token_enc` while retaining `token_hash`, and a pre-handoff retryable failure retaining only the encrypted secret;
+- expired, consumed, revoked, cancelled, or superseded operations sending nothing, including stale reset/verification `email_version` bindings;
+- invitation and pending-email-change delivery tokens authenticating only for the correct operation, with recipient and token ciphertexts remaining purpose-separated;
+- restore never resending a delivered or terminal operation and retaining exact historical delivery-key versions only while referenced;
+- transport using the deterministic ASCII A-label domain while preserving the stored original representation and original validated ASCII local part;
 
 Cryptographic encoding, normalization, AAD, and index functions require stable test vectors. Tests must use synthetic values and keys only; fixtures must never copy operational secrets.
 
@@ -541,7 +666,7 @@ Database, storage, and backup disclosure no longer yields global email plaintext
 
 ### Negative
 
-Equality, access-pattern, and limited frequency leakage remain inherent to exact lookup; index-key compromise enables offline guessing despite ciphertext confidentiality. Key custody, backup, rotation, incident response, and recovery become critical operations. Email-dependent surfaces require coordinated refactoring and concurrency tests; authorized display/mail adds decryption and availability failure modes; index rotation needs a temporary second representation and uniqueness coordination. Permanent root-material loss can permanently destroy access to encrypted identity data.
+Equality, access-pattern, and limited frequency leakage remain inherent to exact lookup; index-key compromise enables offline guessing despite ciphertext confidentiality. Key custody, backup, rotation, incident response, and recovery become critical operations. Email-dependent surfaces require coordinated refactoring and concurrency tests; authorized display/mail and temporary delivery-secret custody add decryption, retry, reconciliation, and availability failure modes; index rotation needs a temporary second representation and uniqueness coordination. Permanent root-material loss can permanently destroy access to encrypted identity data.
 
 ## Rejected alternatives
 
@@ -556,6 +681,9 @@ Equality, access-pattern, and limited frequency leakage remain inherent to exact
 - Custom cryptographic primitives: unnecessary and unsafe compared with maintained libraries.
 - Plaintext email in reset or verification tables: recreates the protected identifier outside `users`.
 - Plaintext email in logs, traces, failed jobs, or rate-limit keys: creates broadly replicated shadow datasets.
+- Persisting only `token_hash` for asynchronous delivery: a worker cannot reconstruct the link token from a verifier.
+- Putting plaintext tokens or complete URLs in queue or failed-job payloads: creates bearer-credential copies outside the protected operation lifecycle.
+- Using one reversible token field for both delivery and verification: unnecessarily exposes the verification path to decryption and prevents prompt delivery-secret deletion.
 - Provider-specific normalization, dot removal, plus-suffix stripping, or heuristic alias merging: can merge independently controlled addresses and is not globally correct.
 - A permanent fallback `users.email` column: bypasses the security boundary and becomes an undeletable dependency.
 - Dual-writing the old plaintext model: ADR-014 defines a clean 0.x baseline without compatibility requirements.
@@ -580,11 +708,11 @@ These choices do not reopen the binding security boundaries above:
 
 1. Accept this ADR before implementation and create separately scoped implementation issues under the ADR-014 delivery epic.
 2. Introduce the Global Identity key-provider/wrapper interface, versioned key registry, self-hosted root custody, redacted audit events, and recovery tooling with synthetic tests.
-3. Implement `normalizeEmailV1`, AAD encoding, versioned XChaCha20-Poly1305 envelopes, HMAC-SHA-256 index calculation, fixed vectors, and fail-closed error types.
+3. Implement `normalizeEmailV1`, transport canonicalization, AAD encoding, versioned XChaCha20-Poly1305 email and delivery-secret envelopes, HMAC-SHA-256 index calculation, fixed vectors, and fail-closed error types.
 4. Establish the clean user schema with `email_enc`, `email_idx`, `email_normalization_version`, `email_idx_key_version`, monotonically increasing `email_version`, encryption metadata, constraints, and no plaintext or compatibility columns.
 5. Add a single global identity repository/service for atomic create, lookup, authorized decrypt, reservation, and concurrency control; prohibit direct email queries.
 6. Convert login, rate limiting, responses, sessions, Sanctum, passkey presentation, MFA identifiers, and activity/security logging.
-7. Replace password-reset and verification persistence with `user_id`- and `email_version`-bound opaque operations and redacted queued delivery.
+7. Replace reset, verification, invitation, and pending-change token persistence with hash-only verification, temporary encrypted delivery secrets, operation-ID-only jobs, atomic delivery claims, lifecycle cleanup, and redacted retry state.
 8. Implement invitation/registration and dedicated pending email-change flows with atomic membership/right creation and global reservations.
 9. Move MFA secrets and recovery data from the broad `APP_KEY` boundary to a dedicated global credential purpose while preserving fail-closed migration rules in the clean baseline.
 10. Implement and exercise encryption-key, blind-index-key, root/KEK, and emergency rotation state machines, including interrupted operations and uniqueness stress tests.
