@@ -84,25 +84,27 @@ The existing tenant KEK is a separate file and is not derived from `APP_KEY`. Th
 
 ## Threat model
 
-| Scenario                                                | Required protection and residual risk                                                                                                                                                                                                                                                 |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Isolated database exfiltration                       | Email ciphertext and wrapped keys do not disclose email without root and working keys. A keyed index prevents direct hashing but still leaks equality, frequency, row relationships, and enables guesses only after index-key compromise.                                             |
-| 2. Database and object-storage exfiltration             | The same guarantee applies to encrypted database and object data if root material and runtime secrets are absent. Storage metadata and access patterns may remain visible.                                                                                                            |
-| 3. Backup exfiltration                                  | Encrypted database backups remain protected when root-secret backups are separately controlled. Historical ciphertext and index versions increase the attack window.                                                                                                                  |
-| 4. Log or error-tracking exfiltration                   | Redaction and identifier-only events prevent logs from becoming a plaintext identity replica. Operational metadata still leaks event timing and user IDs.                                                                                                                             |
-| 5. Loss of `APP_KEY`                                    | Global email encryption and lookup remain recoverable because their root is independent. Framework cookies, sessions, current MFA ciphertexts, and other Laravel-encrypted values may fail until separately migrated or recovered.                                                    |
-| 6. Global Identity Root compromise                      | An attacker with the database can unwrap all retained global identity keys and decrypt data or compute indexes. Emergency root rotation limits future exposure but cannot undo prior disclosure.                                                                                      |
-| 7. Encryption-key compromise                            | Ciphertexts for that key version become readable. Blind indexes remain protected by a separate key. Re-encryption and credential review are required.                                                                                                                                 |
-| 8. Blind-index-key compromise                           | Email guesses can be tested offline and matching rows correlated, but ciphertext remains confidential. Re-indexing and abuse review are required.                                                                                                                                     |
-| 9. Ciphertext manipulation                              | AEAD authentication plus AAD binding causes a fail-closed integrity error; modified data is never returned or silently repaired.                                                                                                                                                      |
-| 10. Offline email-index dictionary attacks              | HMAC prevents testing without the index key. If the index key is stolen, the low-entropy and enumerable nature of many addresses permits guessing; rate limits do not protect an offline attacker.                                                                                    |
-| 11. Account enumeration                                 | Login, reset, invitation, verification, and registration endpoints use neutral externally observable responses and comparable work where practical. Internal audits must not expose existence to unauthorized callers.                                                                |
-| 12. Concurrent registration                             | Database uniqueness plus transaction-scoped serialization across every accepted index version permits exactly one global identity for a normalized address. Losers receive a neutral conflict outcome.                                                                                |
-| 13. Concurrent email change                             | A globally unique pending reservation and row locking permit only one active owner; activation is atomic and stale operations cannot overwrite a newer request.                                                                                                                       |
-| 14. Faulty rotation                                     | Versioned keys, resumable checkpoints, authenticated test reads, reference counts, and explicit completion criteria prevent premature key deletion and expose partial progress.                                                                                                       |
-| 15. Restore of an old backup                            | The recovery set must retain every key version referenced by the backup. Restore runs isolated, detects the restored rotation epoch, and completes or rolls back the relevant cryptographic phase before serving traffic.                                                             |
-| 16. Complete control of the running application process | Application encryption does not protect plaintext or loaded keys from an attacker controlling the process, debugger, host memory, or authorized decryption path. KMS/HSM custody can reduce key export but cannot stop an authorized compromised process from requesting decryptions. |
-| 17. Permanent loss of all root material                 | Encrypted global identity data and wrapped working keys become permanently unrecoverable. No bypass, default key, or plaintext fallback is allowed.                                                                                                                                   |
+| Scenario                                                 | Required protection and residual risk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Isolated database exfiltration                        | Email ciphertext and wrapped keys do not disclose email without root and working keys. A keyed index prevents direct hashing but still leaks equality, frequency, row relationships, and enables guesses only after index-key compromise.                                                                                                                                                                                                                                                                                                                                             |
+| 2. Database and object-storage exfiltration              | The same guarantee applies to encrypted database and object data if root material and runtime secrets are absent. Storage metadata and access patterns may remain visible.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 3. Backup exfiltration                                   | Encrypted database backups remain protected when root-secret backups are separately controlled. Historical ciphertext and index versions increase the attack window.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 4. Log or error-tracking exfiltration                    | Redaction and identifier-only events prevent logs from becoming a plaintext identity replica. Operational metadata still leaks event timing and user IDs.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 5. Loss of `APP_KEY`                                     | Global email encryption and lookup remain recoverable because their root is independent. Framework cookies, sessions, current MFA ciphertexts, and other Laravel-encrypted values may fail until separately migrated or recovered.                                                                                                                                                                                                                                                                                                                                                    |
+| 6. Global Identity Root compromise                       | An attacker with the database can unwrap all retained global identity keys and decrypt data or compute indexes. Emergency root rotation limits future exposure but cannot undo prior disclosure.                                                                                                                                                                                                                                                                                                                                                                                      |
+| 7. Encryption-key compromise                             | Ciphertexts for that key version become readable. Blind indexes remain protected by a separate key. Re-encryption and credential review are required.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 8. Blind-index-key compromise                            | Email guesses can be tested offline and matching rows correlated, but ciphertext remains confidential. Re-indexing and abuse review are required.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 9. Ciphertext manipulation                               | AEAD authentication plus AAD binding causes a fail-closed integrity error; modified data is never returned or silently repaired.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 10. Offline email-index dictionary attacks               | HMAC prevents testing without the index key. If the index key is stolen, the low-entropy and enumerable nature of many addresses permits guessing; rate limits do not protect an offline attacker.                                                                                                                                                                                                                                                                                                                                                                                    |
+| 11. Account enumeration                                  | Login, reset, invitation, verification, and registration endpoints use neutral externally observable responses and comparable work where practical. Internal audits must not expose existence to unauthorized callers.                                                                                                                                                                                                                                                                                                                                                                |
+| 12. Concurrent registration                              | Database uniqueness plus transaction-scoped serialization across every accepted index version permits exactly one global identity for a normalized address. Losers receive a neutral conflict outcome.                                                                                                                                                                                                                                                                                                                                                                                |
+| 13. Concurrent email change                              | A globally unique pending reservation and row locking permit only one active owner; activation is atomic and stale operations cannot overwrite a newer request.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 14. Faulty rotation                                      | Versioned keys, resumable checkpoints, authenticated test reads, reference counts, and explicit completion criteria prevent premature key deletion and expose partial progress.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 15. Restore of an old backup                             | The recovery set must retain every key version referenced by the backup. Restore runs isolated, detects the restored rotation epoch, and completes or rolls back the relevant cryptographic phase before serving traffic.                                                                                                                                                                                                                                                                                                                                                             |
+| 16. Complete control of the running application process  | Application encryption does not protect plaintext or loaded keys from an attacker controlling the process, debugger, host memory, or authorized decryption path. KMS/HSM custody can reduce key export but cannot stop an authorized compromised process from requesting decryptions.                                                                                                                                                                                                                                                                                                 |
+| 17. Permanent loss of all root material                  | Encrypted global identity data and wrapped working keys become permanently unrecoverable. No bypass, default key, or plaintext fallback is allowed.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 18. Delivery-Secret-Key compromise                       | An attacker holding an affected key version plus a database or backup copy can decrypt active delivery secrets and expose reset, verification, invitation, and email-change tokens. Re-encryption cannot restore secrecy. Revoke every active or still-valid delivered operation referencing that version, reject its verifier, delete its delivery ciphertext, assign a terminal security-revocation state, rotate the key, and issue a new operation with a new random token only when required. Retain or destroy the compromised version according to backup and incident policy. |
+| 19. Delivery-Secret-Key loss without compromise evidence | Undelivered operations referencing the unavailable version cannot be sent. There is no fallback and no reconstruction from `token_hash`. Recover the exact key when safely possible; otherwise terminalize affected operations, audit the outage with redacted metadata, and create new operations with new tokens under an available version when required. Any uncertainty between loss and compromise invokes the stricter compromise response.                                                                                                                                    |
 
 Application-layer encryption primarily protects data at rest from isolated database, storage, backup, log, and snapshot disclosure where root secrets and the live process are not compromised. It does not protect against a fully compromised running process, malicious authorized application behavior, plaintext captured before encryption or after decryption, endpoint compromise, or an attacker holding both the relevant ciphertext and keys.
 
@@ -356,6 +358,28 @@ tenant_id_or_null
 
 Every optional value has an explicit canonical absent encoding distinct from an empty value. IDs use their canonical representations. For invitations, `operation_id` equals the canonical `invitation_id`, and `user_id_or_null` represents `intended_user_id_or_null`. AAD is reconstructed from trusted operation context and envelope key metadata. Moving a delivery secret to another operation type, operation, user, email version, invitation, or tenant fails authentication.
 
+After `delivery_token_enc` is created, these AAD-bound operation values are immutable:
+
+```text
+operation_type
+operation_id
+user_id_or_null
+email_version_or_null
+invitation_id_or_null
+tenant_id_or_null
+```
+
+Changing any binding value requires this transition:
+
+```text
+terminalize old operation
+→ delete old delivery secret
+→ generate new random token
+→ create new operation/envelope with new AAD
+```
+
+Delivery status, attempt, and lease fields may change according to the lifecycle because they are not cryptographic AAD inputs. They cannot be used to reinterpret or move an existing envelope.
+
 ### Shared delivery lifecycle and state
 
 Every token operation follows this lifecycle:
@@ -368,7 +392,7 @@ Every token operation follows this lifecycle:
 6. The worker loads and locks the operation in a short transaction.
 7. It confirms that the operation is active, unexpired, unconsumed, not revoked, not cancelled or superseded, and that its bound user and optional `email_version` remain current. It then atomically claims one delivery attempt, increments `delivery_attempt_count`, and records an expiring non-secret attempt lease before releasing the row lock. Only one live attempt may send.
 8. The claimed worker authenticates and decrypts `delivery_token_enc`; failure is fail-closed and sends nothing.
-9. Immediately before rendering, it decrypts or resolves the authorized recipient and then decrypts the token. Plaintext may exist only in the authorized link/mail body and immediate transport call.
+9. It decrypts or resolves the authorized recipient and token into short-lived protected memory, performs the final atomic fence validation defined below, and only then renders and invokes the transport. Plaintext may exist only for that validation/render/transport sequence.
 10. After confirmed successful handoff to the mail transport, the worker atomically sets `delivery_state = delivered`, sets `delivered_at`, clears the attempt lease, and deletes or irreversibly clears `delivery_token_enc`. It retains `token_hash` for later verification.
 11. Before confirmed handoff, a retryable failure preserves only the encrypted secret, clears or expires the attempt lease, and records an allowlisted error class. Retry and exception metadata contain no plaintext.
 12. Expiry, revocation, consumption, cancellation, or supersession sets a terminal operation/delivery state, deletes `delivery_token_enc`, and prevents every further send.
@@ -381,11 +405,29 @@ delivery_state
 delivered_at
 delivery_attempt_count
 last_delivery_error_class
+delivery_attempt_id
+delivery_fence_version
+lease_expires_at
 ```
 
-`delivery_state` distinguishes pending, in-progress, retryable, delivered, and terminally cancelled delivery. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content. A deterministic operation-scoped transport idempotency key is used where the mail transport supports it. If the process crashes after external acceptance but before the success transaction, a retry may duplicate the same mail but cannot create a second token or credential; reconciliation must still clear the encrypted delivery secret once acceptance is established.
+`delivery_state` distinguishes pending, in-progress, retryable, delivered, and terminally cancelled delivery. `delivery_attempt_id` is a unique random identifier for one claim, `delivery_fence_version` increases monotonically whenever a claim is created, replaced, expired, or invalidated, and `lease_expires_at` bounds the claim. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content. A deterministic operation-scoped transport idempotency key is used where the mail transport supports it. If the process crashes after external acceptance but before the success transaction, a retry may duplicate the same mail but cannot create a second token or credential; reconciliation must still clear the encrypted delivery secret once acceptance is established.
 
-Delivery claims and invalidating lifecycle transitions use the same operation/user lock order and fencing state. A reset, verification, email-change, or invitation transition that commits first prevents a later claim; an already claimed attempt must reach a terminal attempt result or lose its lease before the invalidating transition completes. No worker may send under a claim invalidated by an already committed email-version change, revocation, consumption, cancellation, or supersession.
+Delivery claims and invalidating lifecycle transitions use the same operation/user lock order and fencing state. A reset, verification, email-change, or invitation transition that commits before the final fence increments the fence version, invalidates any claim, terminalizes the operation as applicable, and prevents transport. Once a worker has passed the final fence and holds the transport lock, a competing invalidation waits because the authorized transport side effect has already begun. No worker may send under a claim invalidated by an already committed email-version change, revocation, consumption, cancellation, or supersession.
+
+### Final worker fence validation
+
+After authenticating and decrypting the required ciphertexts but immediately before rendering or invoking the mail transport, the worker reacquires the operation lock and atomically verifies:
+
+- its `delivery_attempt_id` is still the current attempt;
+- `lease_expires_at` has not passed;
+- `delivery_fence_version` equals the version captured by the worker;
+- the operation remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded;
+- no terminal lifecycle transition has committed;
+- the bound `email_version`, when present, is still the user's current version.
+
+The final fence transaction retains the operation lock through the bounded render and immediate mail-transport handoff, so an invalidating transition cannot commit between validation and the side effect. On successful handoff it records delivery and deletes the delivery secret before releasing the lock; on a pre-handoff transport failure it records the allowlisted retry state before release. Implementations must enforce a strict transport timeout so the security serialization does not create an unbounded lock.
+
+If any final check fails, the worker does not render or call the transport, discards any decrypted recipient and token immediately, applies the operation's current terminal or retry lifecycle to the delivery secret, records a redacted audit event, and cannot reuse the claim automatically. An expired, replaced, or stale worker can never send later.
 
 ## Login flow
 
@@ -531,6 +573,26 @@ All rotations require an approved operation ID, current backups and recovery tes
 4. Completion requires no active delivery envelope referencing the old version, reconciled counts, successful retry and restore tests, and confirmation that retained backups can still restore every referenced version.
 5. Retire or destroy an old key only after no live delivery secret and no relevant retained backup refers to it.
 
+Re-encryption of existing delivery tokens is allowed only for planned or non-compromise rotation. It is prohibited as the sole response to suspected or confirmed Delivery-Secret-Key compromise.
+
+### Delivery-secret compromise and loss response
+
+Operations retain their non-secret Delivery-Secret Key ID/version metadata after `delivery_token_enc` is deleted, through token validity and incident-retention windows. This permits identification of already delivered but still-valid tokens by the key version that protected their delivery copy.
+
+Suspected or confirmed compromise uses this mandatory sequence:
+
+```text
+revoke old operations
+→ invalidate old token hashes
+→ delete old delivery ciphertext
+→ rotate key
+→ create new operation and new random token when required
+```
+
+Incident response inventories every live operation and retained backup that references the affected version and immediately blocks new writes with it. It terminally marks every active or already delivered but unconsumed and still-valid operation as security-revoked, makes its `token_hash` unacceptable, deletes any remaining `delivery_token_enc`, and never reuses or merely re-encrypts the token. Required replacement work creates a wholly new operation, random token, verifier, envelope, and AAD under an uncompromised version; each replacement records the incident reference without token, email, or ciphertext. The compromised key is rotated and retained, quarantined, or destroyed according to backup retention and incident policy. Abuse monitoring covers reset, verification, invitation, and email-change endpoints and token-consumption attempts.
+
+Loss without evidence of compromise fails delivery closed for every undelivered operation referencing the unavailable version. There is no fallback key and no token reconstruction from `token_hash`. If authorized recovery of the exact key is impossible, affected operations enter a terminal key-unavailable state, delete residual delivery ciphertext where possible, and are recreated with new random tokens under an available version only when still required. The outage audit contains only redacted operation and key metadata. Any uncertainty whether the key was lost or compromised invokes the stricter compromise response.
+
 ### Blind-index-key rotation
 
 1. Create, wrap, and verify a new index-key version. Keep the old version accepted for reads.
@@ -552,7 +614,11 @@ This dual-index interval is an explicitly time-limited cryptographic rotation ph
 
 ### Emergency rotation
 
-Suspected compromise freezes discretionary key changes, preserves evidence, identifies affected versions and time windows, restricts access, and invokes the incident-response owner. Rotate the compromised layer and every descendant whose confidentiality can no longer be trusted. A root compromise requires new root custody and rewrapping/rotating descendants according to exposure analysis; an encryption-key compromise requires re-encryption; an index-key compromise requires re-indexing and account-abuse monitoring. Assume already exfiltrated plaintext cannot be recovered by rotation. Record incident and rotation IDs, version transitions, counts, and decisions without secrets.
+Suspected compromise freezes discretionary key changes, preserves evidence, identifies affected versions and time windows, restricts access, and invokes the incident-response owner. Rotate the compromised layer and every descendant whose confidentiality can no longer be trusted. A root compromise requires new root custody and rewrapping/rotating descendants according to exposure analysis; an encryption-key compromise requires re-encryption; an index-key compromise requires re-indexing and account-abuse monitoring.
+
+A Delivery-Secret-Key incident additionally inventories all operations and backups referencing the affected version, immediately blocks new writes with it, and revokes both active and already delivered but unconsumed and still-valid operations. Existing tokens are never reused; replacements are new operations with new random tokens and incident references. Monitor reset, verification, invitation, and email-change request and consumption endpoints for abuse. Audit operation IDs, key versions, state transitions, counts, and incident references without token, email address, delivery ciphertext, or complete URL.
+
+Assume already exfiltrated plaintext cannot be recovered by rotation. Record incident and rotation IDs, version transitions, counts, and decisions without secrets.
 
 ## Backup and recovery
 
@@ -562,7 +628,18 @@ Suspected compromise freezes discretionary key changes, preserves evidence, iden
 - Restore order is: isolate the environment; inventory database key references and rotation epoch; obtain the exact required root versions through recovery authorization; restore key-provider access; restore database and storage; verify wrapped-key and ciphertext authentication; resume or reconcile interrupted rotations; run integrity, uniqueness, login, and mail-boundary checks; then permit traffic.
 - Restoring a backup created before or during rotation requires every root, encryption, and index version it references. The restored system must not silently use only today's write key or delete historical versions.
 - Every Delivery-Secret Working Key version remains recoverable through the end of each referencing operation and relevant backup retention. Expired, revoked, consumed, cancelled, superseded, or delivered operations have no recoverable delivery secret after lifecycle cleanup.
-- Restore keeps all restored token-delivery operations quarantined until it reconciles them with a separately retained, append-protected terminal-operation journal newer than the database backup. That journal contains only operation IDs, terminal state, and timestamps, never tokens, addresses, or ciphertext. Delivered or otherwise terminal operations are tombstoned and have any restored delivery secret deleted. Delivery resumes only for an operation proven active in both the restored database and reconciliation state; uncertainty fails closed and never resends.
+- Restore keeps all restored token-delivery operations quarantined until it reconciles them with a separately retained, append-protected terminal-operation journal newer than the database backup. That journal contains only operation IDs, terminal state, key ID/version, incident reference where applicable, and timestamps, never tokens, addresses, or ciphertext. Delivered or otherwise terminal operations are tombstoned and have any restored delivery secret deleted.
+
+The journal provides a verifiable completeness boundary containing at least:
+
+```text
+backup_epoch
+journal_sequence
+journal_checkpoint
+```
+
+The restore process authenticates the checkpoint and proves uninterrupted sequence continuity from the restored `backup_epoch` through that checkpoint. Absence of a terminal entry is meaningful only inside that proven complete interval. Missing, discontinuous, stale, or unverifiable journal data fails closed: operations of unknown state are not delivered, and no backed-up token is sent. An authorized recovery process may terminalize an uncertain operation and create a new operation with a new random token when the business action is still required. Delivery resumes only for an operation proven active in both the restored database and the verified journal interval.
+
 - Recovery exercises occur on a defined schedule and after material key, provider, backup, or deployment changes. They prove old- and new-rotation restores, document measured recovery time, and destroy exercise plaintext and temporary key access afterward.
 - If active root access is temporarily unavailable, global identity reads, writes, authentication by email, and mail delivery fail closed. Operations may restore an authorized root backup; they may not create a replacement key for existing ciphertext.
 
@@ -570,22 +647,25 @@ Loss of the final recoverable Global Identity Root Key can make encrypted global
 
 ## Failure behavior
 
-| Failure                                         | Required behavior                                                                                                                            |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Missing or inaccessible root                    | Fail readiness for identity-dependent operations; return a generic service-unavailable response; never generate a replacement automatically. |
-| Unknown key or root version                     | Fail closed, identify only record/key IDs in restricted audit, and block affected operation or rotation completion.                          |
-| Malformed ciphertext or envelope                | Reject before decryption; record a redacted integrity event; do not repair, skip, or return partial data.                                    |
-| Invalid authentication tag or AAD               | Treat as integrity/security failure, fail closed, and alert according to incident policy.                                                    |
-| Index calculation failure                       | Perform no lookup or write; return a generic error; never fall back to plaintext or decryption search.                                       |
-| Duplicate index or reservation                  | Roll back atomically and return a neutral conflict outcome; audit identifiers and versions without the index value.                          |
-| Incomplete rotation                             | Continue exact-version reads, keep required old keys, block retirement, and resume from checkpoint.                                          |
-| Restore missing a required key version          | Keep the restored service isolated and unavailable until the authorized version is recovered.                                                |
-| Delivery-secret or recipient decryption failure | Do not send; fail the claimed attempt closed, retain encrypted retry material only when lifecycle permits, and emit a redacted event.        |
-| Invalid or terminal delivery state              | Do not decrypt or send; delete residual delivery secrets for terminal operations and audit only allowlisted state metadata.                  |
+| Failure                                              | Required behavior                                                                                                                            |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Missing or inaccessible root                         | Fail readiness for identity-dependent operations; return a generic service-unavailable response; never generate a replacement automatically. |
+| Unknown key or root version                          | Fail closed, identify only record/key IDs in restricted audit, and block affected operation or rotation completion.                          |
+| Malformed ciphertext or envelope                     | Reject before decryption; record a redacted integrity event; do not repair, skip, or return partial data.                                    |
+| Invalid authentication tag or AAD                    | Treat as integrity/security failure, fail closed, and alert according to incident policy.                                                    |
+| Index calculation failure                            | Perform no lookup or write; return a generic error; never fall back to plaintext or decryption search.                                       |
+| Duplicate index or reservation                       | Roll back atomically and return a neutral conflict outcome; audit identifiers and versions without the index value.                          |
+| Incomplete rotation                                  | Continue exact-version reads, keep required old keys, block retirement, and resume from checkpoint.                                          |
+| Restore missing a required key version               | Keep the restored service isolated and unavailable until the authorized version is recovered.                                                |
+| Delivery-secret or recipient decryption failure      | Do not send; fail the claimed attempt closed, retain encrypted retry material only when lifecycle permits, and emit a redacted event.        |
+| Invalid or terminal delivery state                   | Do not decrypt or send; delete residual delivery secrets for terminal operations and audit only allowlisted state metadata.                  |
+| Delivery-Secret-Key unavailable                      | Fail delivery closed; if exact recovery is impossible, terminalize and reissue required affected operations with new tokens.                 |
+| Delivery-Secret-Key suspected compromised            | Revoke every affected active or still-valid delivered operation; never merely re-encrypt or reuse the existing token.                        |
+| Historical backup contains affected delivery secrets | Keep it quarantined; reconcile and revoke affected operations before any service or delivery resumes.                                        |
 
 ## Audit and redaction
 
-Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, transport handoff, retry, and terminal delivery cleanup. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt count, timestamps, and allowlisted result/error class.
+Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, transport handoff, retry, terminal delivery cleanup, Delivery-Secret-Key loss/compromise inventories, security revocation, and replacement-operation incident links. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt count, fence version, timestamps, and allowlisted result/error class.
 
 Never log, persist outside the protected operation field, or attach plaintext email, normalized email, ciphertext plaintext, raw root or working keys, wrapped-key plaintext, blind-index values, plaintext bearer tokens, complete delivery URLs, `delivery_token_enc`, full reset/verification/invitation/access tokens, MFA secrets, recovery codes, session payloads, or decrypted recipient values. Queue and failed-job payloads, exception context, validation context, traces, APM attributes, activity properties, mail events, audits, and API output follow the same rule.
 
@@ -627,6 +707,17 @@ Implementation work must add positive, negative, concurrency, failure-injection,
 - invitation and pending-email-change delivery tokens authenticating only for the correct operation, with recipient and token ciphertexts remaining purpose-separated;
 - restore never resending a delivered or terminal operation and retaining exact historical delivery-key versions only while referenced;
 - transport using the deterministic ASCII A-label domain while preserving the stored original representation and original validated ASCII local part;
+- Delivery-Secret-Key compromise revoking every active operation that references the affected version;
+- an already delivered but still-valid token becoming unacceptable after compromise of its former delivery-key version;
+- policy enforcement rejecting re-encryption of the same token as a compromise response;
+- every replacement operation using a newly random token, new verifier, new envelope, and incident reference;
+- unrecoverable Delivery-Secret-Key loss failing delivery closed and permitting only controlled new-operation creation;
+- AAD-bound operation fields rejecting mutation unless the old operation is terminalized and replaced;
+- workers with expired leases or stale `delivery_fence_version` values never rendering or sending;
+- revocation, consumption, expiry, cancellation, supersession, or email-version change between claim and final fence preventing transport;
+- incomplete or unverifiable terminal-journal continuity preventing every restored delivery;
+- a verified `journal_checkpoint` tombstoning terminal operations and preventing replay from an older backup;
+- final-fence failure discarding decrypted plaintext, emitting only redacted audit metadata, and never automatically reusing the claim;
 
 Cryptographic encoding, normalization, AAD, and index functions require stable test vectors. Tests must use synthetic values and keys only; fixtures must never copy operational secrets.
 
