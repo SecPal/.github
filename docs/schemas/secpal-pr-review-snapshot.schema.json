@@ -415,6 +415,9 @@
         },
         "status": { "$ref": "#/$defs/nullable_string" },
         "conclusion": { "$ref": "#/$defs/nullable_string" },
+        "started_at": { "$ref": "#/$defs/nullable_string" },
+        "created_at": { "$ref": "#/$defs/nullable_string" },
+        "is_effective": { "type": "boolean" },
         "requiredness": { "enum": ["required", "non_required", "unknown"] },
         "evidence_state": {
           "enum": [

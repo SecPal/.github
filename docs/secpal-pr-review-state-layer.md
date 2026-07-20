@@ -7,8 +7,9 @@ SPDX-License-Identifier: CC0-1.0
 
 Governance Package 2.1 provides a deterministic, read-only Git and GitHub data
 layer for a later finite pull-request review procedure. It captures canonical
-evidence, verifies local Git state, evaluates mechanical merge-gate evidence,
-and produces a safely escaped display rendering.
+evidence, verifies immutable snapshot evidence and local Git state, evaluates
+open-pull-request merge-gate evidence, and produces a safely escaped display
+rendering.
 
 Package 2.1 does not classify technical findings, remediate code, resolve
 threads, authorize a merge, or make the finite workflow operational. The
@@ -129,7 +130,39 @@ are pinned to their standard names within that trusted command path. Standard
 input is closed and each external command has a 30-second timeout. The
 `fetched` result is always `false`.
 
-### Verify the mechanical gate
+### Verify immutable evidence
+
+```bash
+python3 scripts/secpal-pr-review.py verify-evidence \
+  --snapshot snapshot.json \
+  --config path/to/repository-config.json
+```
+
+`verify-evidence` validates the schema, canonical digest, repository and PR
+identity, stable head anchors, lifecycle-state consistency, captured commit
+set, signature policy, applicable-rule evidence, required-check identities and
+outcomes, configured capture caps, pagination completeness, and raw review
+state. It is suitable for open, closed, and merged snapshots, including
+historical read-only audits and post-merge acceptance.
+
+A merged snapshot must consistently report `state: MERGED`, `is_merged: true`,
+`is_draft: false`, and equal before/after head OIDs. Post-merge
+`mergeable: UNKNOWN` or `null` and `merge_state_status: UNKNOWN` do not make
+otherwise complete immutable evidence invalid: those live merge-candidate
+fields are no longer meaningful after merge. The final PR head must still be
+present in the captured commit evidence, and every configured signature,
+ruleset, branch-protection, required-check, cap, and completeness policy
+continues to apply.
+
+The structured report uses `EVIDENCE_VERIFIED` only when the evidence contract
+and current repository policy succeed. It always sets `merge_authorized` to
+`false`, retains raw review counts and effective review state, and states when
+Package 2.2 technical classification remains necessary. Unresolved or
+historical review evidence is reported rather than silently discarded;
+evidence integrity alone does not classify a finding or establish merge
+readiness.
+
+### Verify the open-PR mechanical gate
 
 ```bash
 python3 scripts/secpal-pr-review.py verify-gate \
@@ -137,15 +170,12 @@ python3 scripts/secpal-pr-review.py verify-gate \
   --config path/to/repository-config.json
 ```
 
-The gate verifies schema version, digest, complete pagination, stored anchor
-counts, an unchanged repository and pull-request anchor, safe repository and PR
-identity, the current signature and check policies, required-check evidence,
-strict up-to-date-base requirements, check outcomes, required or requested
-reviews, reactions on every supported PR subject, and raw unresolved thread
-state. It reports separately whether raw unresolved items exist and whether
-Package 2.2 technical classification remains necessary. Direct PR reactions
-therefore cannot disappear merely because no review or comment accompanies
-them.
+The gate first invokes the same evidence-verification path as
+`verify-evidence`. It then adds current merge-candidate requirements for an
+open, non-Draft PR: an available head branch, mergeable state, safe GitHub merge
+state, strict up-to-date-base requirements, and the absence of required,
+requested, or unresolved review blockers. Direct PR reactions remain visible
+even when no review or comment accompanies them.
 
 The current repository configuration is authoritative at gate time. Recorded
 API calls, aggregate items, threads, comments, and reactions must fit its current
@@ -154,13 +184,20 @@ required by the current configuration was not captured, the gate retains the
 snapshot digest and all accumulated blockers in its structured report and does
 not attempt to infer missing required checks from placeholder evidence.
 
-A clean mechanical result is named `PACKAGE_2_2_CLASSIFICATION_REQUIRED`; it is
-not merge readiness or merge authorization. Draft, closed, merged, conflicting,
-or not-yet-computed mergeability states block the mechanical gate. GitHub merge
-states `DIRTY`, `UNKNOWN`, `BLOCKED`, and `DRAFT` fail closed. `UNSTABLE`
+A clean open-PR mechanical result is named
+`PACKAGE_2_2_CLASSIFICATION_REQUIRED`; it is not merge authorization. Draft,
+closed, merged, conflicting, or not-yet-computed mergeability states block this
+open-PR gate. A closed or merged PR receives the lifecycle blocker without
+having its post-merge mergeability values reinterpreted as evidence-integrity
+failures. GitHub merge states `DIRTY`, `UNKNOWN`, `BLOCKED`, and `DRAFT` fail
+closed for an open candidate. `UNSTABLE`
 continues through the granular required-check policy so an optional failure is
 not promoted into a required failure; `CLEAN` and `HAS_HOOKS` add no merge-state
 blocker, while `BEHIND` follows the configured strict up-to-date-base policy.
+
+In short: `verify-evidence` validates evidence integrity; `verify-gate`
+additionally evaluates open-PR merge readiness. Neither command authorizes
+merge.
 
 ### Render Markdown
 
@@ -242,7 +279,8 @@ The evidence distinguishes `valid`, `invalid`, `unsigned`, `unknown_key`,
 reported as cryptographically verified. A `valid` state requires
 `verified: true`; every other state requires `verified: false`. Required
 invalid, unsigned, unknown, pending, unavailable, or internally inconsistent
-verification blocks the gate. The helper does not import keys or persist
+verification blocks evidence verification, and therefore also blocks the
+open-PR gate. The helper does not import keys or persist
 signing configuration. Verification still uses the configured trust material,
 while command-scoped overrides prevent configuration from substituting the
 verifier executables themselves.
@@ -254,7 +292,8 @@ enabled by configuration. Disabled sources are not called. It is not derived
 from a hard-coded workflow name or from visible green checks alone. Check runs
 and status contexts retain stable GitHub identities and are matched to required
 contexts plus application IDs when those IDs are governed. Gate verification
-rebuilds requiredness and outcomes from the supplied current policy rather than
+is preceded by evidence verification, which rebuilds requiredness and outcomes
+from the supplied current policy rather than
 trusting capture-time outcome labels. Enabled rulesets and branch protection
 layer together: an application-specific branch-protection requirement cannot
 erase a generic same-named ruleset requirement. Within branch-protection
@@ -274,6 +313,17 @@ status-context entry when both kinds are present, so one successful kind cannot
 hide a failed same-named counterpart. It does not invent an absent context
 kind; application-specific requirements remain bound to a check run from that
 application.
+
+GitHub can retain several runs of the same check name and application on one
+commit after reruns or pull-request metadata events. The snapshot retains every
+run and its stable identity, plus the check-run start time or status-context
+creation time used to identify the effective observation from that producer.
+An older failure from the same producer cannot override a newer success, while
+a newer failure or pending run still blocks. If repeated observations lack
+usable ordering evidence or share the latest timestamp, they all remain
+effective and the result fails closed. Check runs and legacy status contexts
+remain separate producers, matching GitHub's requirement that both kinds pass
+when they share a required name.
 
 Evidence distinguishes required success, pending, failure, and absence;
 non-required success, pending, and failure; and unknown requiredness. Required
@@ -337,8 +387,8 @@ handling are explicit non-goals.
 
 ## Exit behavior and testing
 
-- `0` means the requested capture, render, or verification completed without a
-  mechanical blocker.
+- `0` means the requested capture, render, evidence verification, or gate
+  completed without its applicable mechanical blocker.
 - `2` means invalid or unsafe local input or output handling.
 - `3` means a deterministic state, API, completeness, signature, check, or
   review-state blocker.

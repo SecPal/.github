@@ -339,6 +339,22 @@ def snapshot() -> dict[str, Any]:
     return finalize_snapshot(value)
 
 
+def merged_snapshot(*, mergeable: str | None = "UNKNOWN") -> dict[str, Any]:
+    """Return complete immutable evidence for an already-merged pull request."""
+
+    value = snapshot()
+    pull_request = value["pull_request"]
+    pull_request["state"] = "MERGED"
+    pull_request["is_merged"] = True
+    pull_request["is_draft"] = False
+    pull_request["mergeable"] = mergeable
+    pull_request["merge_state_status"] = "UNKNOWN"
+    pull_request["potential_merge_commit_oid"] = None
+    pull_request["check_commit_oid"] = HEAD
+    pull_request["check_commit_source"] = "head"
+    return finalize_snapshot(value)
+
+
 class FakeGitRunner:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -387,6 +403,234 @@ class FakeGitRunner:
 
 
 class SnapshotAndPaginationTests(unittest.TestCase):
+    def test_merged_evidence_is_verified_without_authorizing_merge(self) -> None:
+        for mergeable in ("UNKNOWN", None):
+            with self.subTest(mergeable=mergeable):
+                result = review.verify_snapshot_evidence(
+                    merged_snapshot(mergeable=mergeable),
+                    config(),
+                )
+                self.assertEqual(result["status"], "EVIDENCE_VERIFIED")
+                self.assertTrue(result["evidence_verified"])
+                self.assertEqual(result["pull_request_state"], "MERGED")
+                self.assertFalse(result["merge_authorized"])
+                self.assertEqual(result["blockers"], [])
+
+    def test_merged_evidence_remains_ineligible_for_the_open_pr_gate(self) -> None:
+        result = review.verify_snapshot_gate(merged_snapshot(), config())
+        self.assertTrue(result["evidence_verified"])
+        self.assertEqual(
+            result["blockers"],
+            [
+                {
+                    "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                    "reason": "PR is not an open non-draft merge candidate",
+                }
+            ],
+        )
+
+    def test_open_pr_gate_retains_its_existing_ready_result(self) -> None:
+        evidence = review.verify_snapshot_evidence(snapshot(), config())
+        gate = review.verify_snapshot_gate(snapshot(), config())
+        self.assertTrue(evidence["evidence_verified"])
+        self.assertEqual(evidence["status"], "EVIDENCE_VERIFIED")
+        self.assertEqual(gate["status"], "PACKAGE_2_2_CLASSIFICATION_REQUIRED")
+        self.assertEqual(gate["blockers"], [])
+
+    def test_closed_pr_evidence_is_verified_but_cannot_pass_the_open_gate(self) -> None:
+        value = snapshot()
+        value["pull_request"]["state"] = "CLOSED"
+        value["pull_request"]["mergeable"] = None
+        value["pull_request"]["merge_state_status"] = "UNKNOWN"
+        value["pull_request"]["potential_merge_commit_oid"] = None
+        value = finalize_snapshot(value)
+        evidence = review.verify_snapshot_evidence(value, config())
+        gate = review.verify_snapshot_gate(value, config())
+        self.assertTrue(evidence["evidence_verified"])
+        self.assertEqual(evidence["pull_request_state"], "CLOSED")
+        self.assertEqual(
+            gate["blockers"],
+            [
+                {
+                    "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                    "reason": "PR is not an open non-draft merge candidate",
+                }
+            ],
+        )
+
+    def test_open_pr_unknown_or_conflicting_mergeability_still_blocks_the_gate(self) -> None:
+        for mergeable in ("UNKNOWN", "CONFLICTING"):
+            with self.subTest(mergeable=mergeable):
+                value = snapshot()
+                value["pull_request"]["mergeable"] = mergeable
+                result = review.verify_snapshot_gate(finalize_snapshot(value), config())
+                self.assertTrue(result["evidence_verified"])
+                self.assertIn(
+                    {
+                        "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+                        "reason": "PR mergeability is conflicting or unknown",
+                    },
+                    result["blockers"],
+                )
+
+    def test_merged_raw_review_state_remains_visible_to_evidence_verification(self) -> None:
+        value = merged_snapshot()
+        informational = review_record("COMMENTED")
+        informational["reactions"] = [reaction("REACTION_REVIEW")]
+        historical_changes = review_record("CHANGES_REQUESTED", commit=PARENT)
+        historical_changes["id"] = "REVIEW_HISTORICAL_CHANGES"
+        historical_changes["database_id"] = 12
+        historical_changes["submitted_at"] = "2026-07-18T00:00:00Z"
+        value["reviews"] = [historical_changes, informational]
+        value["conversation_comments"] = [
+            {
+                "id": "CONVERSATION_1",
+                "database_id": 12,
+                "author": actor("human"),
+                "body": "Top-level context",
+                "url": "https://github.com/SecPal/.github/pull/1#issuecomment-12",
+                "created_at": "2026-07-19T00:00:00Z",
+                "updated_at": "2026-07-19T00:00:00Z",
+                "reactions": [reaction("REACTION_CONVERSATION")],
+            }
+        ]
+        resolved_comment = review_comment("RC_RESOLVED")
+        resolved_comment["reactions"] = [reaction("REACTION_THREAD")]
+        value["review_threads"] = [
+            thread("THREAD_RESOLVED", resolved=True, outdated=True, comments=[resolved_comment]),
+            thread(
+                "THREAD_UNRESOLVED",
+                resolved=False,
+                comments=[review_comment("RC_UNRESOLVED", login="human")],
+            ),
+        ]
+        value["pull_request"]["reactions"] = [reaction("REACTION_PR")]
+        value["pull_request"]["requested_reviewers"] = [actor("pending-reviewer")]
+        value = finalize_snapshot(value)
+
+        evidence = review.verify_snapshot_evidence(value, config())
+        raw = evidence["raw_review_state"]
+        self.assertTrue(evidence["evidence_verified"])
+        self.assertEqual(raw["reviews"], 2)
+        self.assertEqual(raw["conversation_comments"], 1)
+        self.assertEqual(raw["review_threads"], 2)
+        self.assertEqual(raw["resolved_threads"], 1)
+        self.assertEqual(raw["unresolved_threads"], 1)
+        self.assertEqual(raw["outdated_threads"], 1)
+        self.assertEqual(raw["reactions"], 4)
+        self.assertEqual(raw["requested_changes_reviews"], 1)
+        self.assertFalse(raw["requested_changes"])
+        self.assertTrue(raw["review_requested"])
+        self.assertTrue(evidence["technical_classification_required"])
+        self.assertIn(
+            "NOT_READY_FOR_MERGE",
+            [item["code"] for item in review.verify_snapshot_gate(value, config())["blockers"]],
+        )
+
+    def test_inconsistent_pr_lifecycle_states_are_rejected(self) -> None:
+        cases = (
+            ("merged_without_flag", {"state": "MERGED", "is_merged": False}),
+            ("open_with_merged_flag", {"state": "OPEN", "is_merged": True}),
+            ("closed_with_merged_flag", {"state": "CLOSED", "is_merged": True}),
+            ("merged_draft", {"state": "MERGED", "is_merged": True, "is_draft": True}),
+        )
+        for name, changes in cases:
+            with self.subTest(case=name):
+                value = merged_snapshot()
+                value["pull_request"].update(changes)
+                with self.assertRaises(review.ContractError):
+                    review.verify_snapshot_evidence(review.attach_digest(value), config())
+
+    def test_evidence_rejects_unstable_or_incomplete_snapshot_contracts(self) -> None:
+        cases = []
+        moved = merged_snapshot()
+        moved["pull_request"]["head_oid_after"] = PARENT
+        cases.append(("moved_head", moved))
+        missing_head = merged_snapshot()
+        missing_head["commits"][0]["oid"] = PARENT
+        cases.append(("missing_head_commit", finalize_snapshot(missing_head)))
+        incomplete = merged_snapshot()
+        incomplete["completeness"]["fully_paginated_connections"] = []
+        cases.append(("incomplete_pagination", review.attach_digest(incomplete)))
+        invalid_digest = merged_snapshot()
+        invalid_digest["snapshot_digest"] = "0" * 64
+        cases.append(("invalid_digest", invalid_digest))
+        for name, value in cases:
+            with self.subTest(case=name), self.assertRaises(review.ContractError):
+                review.verify_snapshot_evidence(
+                    review.attach_digest(value) if name == "moved_head" else value,
+                    config(),
+                )
+
+    def test_evidence_blocks_required_signature_failures(self) -> None:
+        cases = (
+            ("github_invalid", "github_signature", "invalid"),
+            ("local_unsigned", "local_signature", "unsigned"),
+            ("local_unknown_key", "local_signature", "unknown_key"),
+            ("local_object_unavailable", "local_signature", "object_unavailable"),
+        )
+        for name, signature_name, state in cases:
+            with self.subTest(case=name):
+                value = merged_snapshot()
+                value["commits"][0][signature_name] = signature(state)
+                result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+                self.assertFalse(result["evidence_verified"])
+                self.assertIn(
+                    "BLOCKED_INVALID_SIGNATURE",
+                    [item["code"] for item in result["blockers"]],
+                )
+                self.assertTrue(
+                    any(state in item["reason"] for item in result["blockers"]),
+                    result["blockers"],
+                )
+
+    def test_evidence_blocks_every_non_successful_required_check_outcome(self) -> None:
+        outcomes = (
+            ("pending", [check(status="IN_PROGRESS", conclusion=None)]),
+            ("failed", [check(status="COMPLETED", conclusion="FAILURE")]),
+            ("missing", []),
+        )
+        for name, raw_checks in outcomes:
+            with self.subTest(outcome=name):
+                value = merged_snapshot()
+                raw = [
+                    {
+                        key: item[key]
+                        for key in (
+                            "stable_id",
+                            "name",
+                            "application",
+                            "status",
+                            "conclusion",
+                            "details_url",
+                        )
+                    }
+                    for item in raw_checks
+                ]
+                value["checks"], value["required_check_evidence"] = review.evaluate_checks(
+                    raw,
+                    [{"context": "tests", "integration_id": 1}],
+                    config()["check_policy"],
+                )
+                result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+                self.assertFalse(result["evidence_verified"])
+                self.assertIn(
+                    "BLOCKED_FAILED_OR_PENDING_CI",
+                    [item["code"] for item in result["blockers"]],
+                )
+
+    def test_evidence_rejects_unknown_requiredness_and_incomplete_rules(self) -> None:
+        unknown = merged_snapshot()
+        unknown["checks"][0]["requiredness"] = "unknown"
+        unknown["checks"][0]["evidence_state"] = "requiredness_unknown"
+        unknown["required_check_evidence"]["determination"] = "incomplete"
+        unknown["required_check_evidence"]["unknown_reasons"] = ["unknown"]
+        incomplete_rules = merged_snapshot()
+        incomplete_rules["applicable_rules"]["evidence_complete"] = False
+        for value in (unknown, incomplete_rules):
+            with self.assertRaises(review.ContractError):
+                review.verify_snapshot_evidence(review.attach_digest(value), config())
+
     def test_01_zero_findings(self) -> None:
         result = review.verify_snapshot_gate(snapshot(), config())
         self.assertEqual(result["raw_review_state"]["unresolved_threads"], 0)
@@ -1458,6 +1702,115 @@ class SignatureAndCheckTests(unittest.TestCase):
         checks, evidence = review.evaluate_checks([], [{"context": "tests", "integration_id": 1}], config()["check_policy"])
         self.assertEqual(checks[0]["evidence_state"], "required_missing")
         self.assertEqual(evidence["missing"], ["check:1:tests"])
+
+    def test_newer_check_run_supersedes_an_older_failure_from_the_same_app(self) -> None:
+        raw = []
+        for stable_id, conclusion, started_at in (
+            ("check_run:OLD", "FAILURE", "2026-07-20T08:45:24Z"),
+            ("check_run:NEW", "SUCCESS", "2026-07-20T09:04:05Z"),
+        ):
+            raw.append(
+                {
+                    "stable_id": stable_id,
+                    "name": "tests",
+                    "application": {
+                        "id": "APP_1",
+                        "database_id": 1,
+                        "name": "Actions",
+                        "slug": "github-actions",
+                    },
+                    "status": "COMPLETED",
+                    "conclusion": conclusion,
+                    "started_at": started_at,
+                    "created_at": None,
+                    "details_url": f"https://github.com/SecPal/.github/actions/runs/{stable_id[-3:]}",
+                }
+            )
+
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        by_id = {item["stable_id"]: item for item in checks}
+        self.assertFalse(by_id["check_run:OLD"]["is_effective"])
+        self.assertTrue(by_id["check_run:NEW"]["is_effective"])
+
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+        self.assertTrue(result["evidence_verified"])
+        self.assertEqual(result["blockers"], [])
+
+    def test_latest_required_check_failure_cannot_be_hidden_by_an_older_success(self) -> None:
+        raw = []
+        for stable_id, conclusion, started_at in (
+            ("check_run:OLD", "SUCCESS", "2026-07-20T08:45:24Z"),
+            ("check_run:NEW", "FAILURE", "2026-07-20T09:04:05Z"),
+        ):
+            raw.append(
+                {
+                    "stable_id": stable_id,
+                    "name": "tests",
+                    "application": {
+                        "id": "APP_1",
+                        "database_id": 1,
+                        "name": "Actions",
+                        "slug": "github-actions",
+                    },
+                    "status": "COMPLETED",
+                    "conclusion": conclusion,
+                    "started_at": started_at,
+                    "created_at": None,
+                    "details_url": f"https://github.com/SecPal/.github/actions/runs/{stable_id[-3:]}",
+                }
+            )
+
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+        self.assertFalse(result["evidence_verified"])
+        self.assertEqual(
+            [item["reason"] for item in result["blockers"]],
+            ["tests: required_failed"],
+        )
+
+    def test_duplicate_check_runs_without_ordering_evidence_remain_fail_closed(self) -> None:
+        raw = [
+            {
+                "stable_id": f"check_run:{suffix}",
+                "name": "tests",
+                "application": {
+                    "id": "APP_1",
+                    "database_id": 1,
+                    "name": "Actions",
+                    "slug": "github-actions",
+                },
+                "status": "COMPLETED",
+                "conclusion": conclusion,
+                "details_url": None,
+            }
+            for suffix, conclusion in (("OLD", "FAILURE"), ("NEW", "SUCCESS"))
+        ]
+        checks, evidence = review.evaluate_checks(
+            raw,
+            [{"context": "tests", "integration_id": 1}],
+            config()["check_policy"],
+        )
+        self.assertTrue(all(item["is_effective"] for item in checks))
+        value = snapshot()
+        value["checks"] = checks
+        value["required_check_evidence"] = evidence
+        result = review.verify_snapshot_evidence(finalize_snapshot(value), config())
+        self.assertFalse(result["evidence_verified"])
+        self.assertIn("tests: required_failed", [item["reason"] for item in result["blockers"]])
 
     def test_generic_requirement_is_satisfied_by_the_only_present_context_kind(self) -> None:
         raw = [check() | {"requiredness": None, "evidence_state": None}]
