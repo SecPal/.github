@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-20 - Serialize Polyscope API Workspace Bootstrap
+
+**Fixed:**
+
+- serialized each API worktree's complete Preview bootstrap through a private,
+  canonical-path lock shared by native setup, background provisioning, direct
+  setup, and refresh, preventing concurrent Laravel migration plans for the
+  same physical workspace while preserving parallel setup of distinct API
+  worktrees and bounded tenant-key recovery
+
 ## 2026-07-20 - Separate Post-Merge Evidence From Merge Readiness
 
 **Fixed:**
