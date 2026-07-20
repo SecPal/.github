@@ -60,6 +60,14 @@ if len(arguments) > 3 and arguments[3] == "graphql":
         response = operation_responses.get(cursor)
     if response is None:
         fail(f"no fake GraphQL response for {operation} cursor={cursor}")
+    if operation == "PullRequestAnchor" and os.environ.get("FAKE_GH_MERGED") == "1":
+        pull_request = response["data"]["repository"]["pullRequest"]
+        pull_request["state"] = "MERGED"
+        pull_request["merged"] = True
+        pull_request["isDraft"] = False
+        pull_request["mergeable"] = "UNKNOWN"
+        pull_request["mergeStateStatus"] = "UNKNOWN"
+        pull_request["potentialMergeCommit"] = None
     print(json.dumps(response, ensure_ascii=False, separators=(",", ":")))
     raise SystemExit(0)
 

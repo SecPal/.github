@@ -43,6 +43,29 @@ cmp "$first" "$second"
   --snapshot "$first" \
   --config "$FIXTURES/config.json" >"$workspace/gate.json"
 
+"${helper[@]}" verify-evidence \
+  --snapshot "$first" \
+  --config "$FIXTURES/config.json" >"$workspace/evidence.json"
+
+merged="$workspace/merged.json"
+FAKE_GH_MERGED=1 "${helper[@]}" snapshot \
+  --repo SecPal/.github \
+  --pr 1 \
+  --config "$FIXTURES/config.json" >"$merged"
+
+"${helper[@]}" verify-evidence \
+  --snapshot "$merged" \
+  --config "$FIXTURES/config.json" >"$workspace/merged-evidence.json"
+
+if "${helper[@]}" verify-gate \
+  --snapshot "$merged" \
+  --config "$FIXTURES/config.json" >"$workspace/merged-gate.json"; then
+  echo "Merged evidence unexpectedly passed the open-PR merge gate." >&2
+  exit 1
+else
+  test "$?" -eq 3
+fi
+
 "${helper[@]}" verify-local \
   --repo SecPal/.github \
   --pr 1 \
@@ -63,18 +86,29 @@ test "$(stat -c '%a' "$json_output")" = "600"
 test "$(stat -c '%a' "$markdown")" = "600"
 cmp "$first" "$json_output"
 
-python3 - "$first" "$workspace/gate.json" "$workspace/local.json" <<'PY'
+python3 - \
+  "$first" \
+  "$workspace/gate.json" \
+  "$workspace/evidence.json" \
+  "$workspace/local.json" \
+  "$workspace/merged-evidence.json" \
+  "$workspace/merged-gate.json" <<'PY'
 import hashlib
 import json
 import sys
 
-snapshot_path, gate_path, local_path = sys.argv[1:]
+snapshot_path, gate_path, evidence_path, local_path, merged_evidence_path, merged_gate_path = sys.argv[1:]
 snapshot = json.load(open(snapshot_path, encoding="utf-8"))
 provided = snapshot.pop("snapshot_digest")
 canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 assert hashlib.sha256(canonical).hexdigest() == provided
 
 gate = json.load(open(gate_path, encoding="utf-8"))
+evidence = json.load(open(evidence_path, encoding="utf-8"))
+assert evidence["status"] == "EVIDENCE_VERIFIED"
+assert evidence["evidence_verified"] is True
+assert evidence["pull_request_state"] == "OPEN"
+assert evidence["merge_authorized"] is False
 assert gate["raw_review_state"]["reviews"] == 2
 assert gate["raw_review_state"]["conversation_comments"] == 1
 assert gate["raw_review_state"]["review_threads"] == 2
@@ -127,6 +161,22 @@ assert connections["branch_protection.revalidation"]["pages"] == 1
 local = json.load(open(local_path, encoding="utf-8"))
 assert local["blockers"] == []
 assert local["local_head"] == "a" * 40
+
+merged_evidence = json.load(open(merged_evidence_path, encoding="utf-8"))
+assert merged_evidence["status"] == "EVIDENCE_VERIFIED"
+assert merged_evidence["evidence_verified"] is True
+assert merged_evidence["pull_request_state"] == "MERGED"
+assert merged_evidence["merge_authorized"] is False
+assert merged_evidence["blockers"] == []
+
+merged_gate = json.load(open(merged_gate_path, encoding="utf-8"))
+assert merged_gate["status"] == "BLOCKED"
+assert merged_gate["evidence_verified"] is True
+assert merged_gate["blockers"] == [{
+    "code": "BLOCKED_UNSAFE_GITHUB_STATE",
+    "reason": "PR is not an open non-draft merge candidate",
+}]
+assert merged_gate["merge_authorized"] is False
 PY
 
 python3 - "$workspace/gh.log" "$workspace/git.log" <<'PY'
