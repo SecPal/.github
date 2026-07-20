@@ -46,6 +46,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   validation, re-checks the complete live thread comment set, and blocks pending
   material top-level findings, while retaining deleted source-actor evidence
   without weakening the authenticated writer identity
+- blocked unrecorded already-resolved threads, canonical-reference cycles, and
+  unresolved canonical roots from resolution; corrected and proven-existing
+  actionable findings now require commit and test proof, and the action tests
+  use one consistent `unittest` import form
 
 ---
 

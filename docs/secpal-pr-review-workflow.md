@@ -189,6 +189,10 @@ Deleted source accounts retain their accepted all-null Package 2.1 identity;
 the authenticated writer must always have a complete identity. Before any
 operation, the helper independently verifies the supplied Package 2.1 evidence
 and rejects a plan whose finite session already records a terminal blocker.
+Corrected and proven-existing actionable findings require commit and test
+evidence. Duplicate and superseded references must be acyclic, and their
+canonical finding must be safely disposed before resolution. An already-resolved
+live thread is accepted only with its recorded prior resolution identity.
 Recorded mutation identities are re-read from live state before they are trusted.
 
 ## Snapshot changes, CI, and recovery

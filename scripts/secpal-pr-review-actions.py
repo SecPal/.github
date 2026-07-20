@@ -313,12 +313,19 @@ def _validate_finding_semantics(findings: list[dict[str, Any]]) -> dict[str, dic
                 raise PlanError(f"{item['classification']} finding requires a distinct canonical finding")
         elif canonical is not None:
             raise PlanError("only duplicate or superseded findings may name a canonical finding")
-        if item["classification"] == "ALREADY_FIXED_ON_SNAPSHOT_HEAD" and (
-            item["disposition"] != "PROVEN_EXISTING_FIX"
-            or item["commit_sha"] is None
-            or not item["test_evidence"]
-        ):
-            raise PlanError("already-fixed findings require commit and test evidence")
+        if item["disposition"] in {
+            "CORRECTED_AND_VERIFIED",
+            "PROVEN_EXISTING_FIX",
+        } and (item["commit_sha"] is None or not item["test_evidence"]):
+            raise PlanError("fixed findings require commit and test evidence")
+    for identifier in by_id:
+        visited = {identifier}
+        current = identifier
+        while canonical := by_id[current]["canonical_finding_id"]:
+            if canonical in visited:
+                raise PlanError("canonical finding references contain a cycle")
+            visited.add(canonical)
+            current = canonical
     return by_id
 
 
@@ -1281,7 +1288,11 @@ def _verify_current_state(
                 "BLOCKED_INCOMPLETE_REVIEW_STATE: thread comments changed after the final snapshot"
             )
         if target.get("is_resolved") is True:
-            return "ALREADY_APPLIED", operation["target_node_id"]
+            if operation["applied_mutation_identity"] == operation["target_node_id"]:
+                return "ALREADY_APPLIED", operation["target_node_id"]
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: thread resolution state changed"
+            )
     if target.get("is_resolved") is not operation["expected_current_state"]["is_resolved"]:
         raise MutationBlocked("BLOCKED_UNSAFE_GITHUB_STATE: thread resolution state changed")
     if operation["kind"] == "REACTION":
@@ -1506,6 +1517,9 @@ def _no_late_feedback(
 
 def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict[str, Any]) -> bool:
     findings_by_thread: dict[str, list[dict[str, Any]]] = {}
+    findings_by_id = {
+        finding["logical_finding_id"]: finding for finding in plan["findings"]
+    }
     covered_top_level_source_ids: set[str] = set()
     for finding in plan["findings"]:
         thread_id = finding["parent_thread_id"]
@@ -1518,6 +1532,16 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
             return False
         else:
             covered_top_level_source_ids.update(finding["source_node_ids"])
+    for finding in plan["findings"]:
+        canonical_id = finding["canonical_finding_id"]
+        if canonical_id is None:
+            continue
+        canonical = findings_by_id.get(canonical_id)
+        if canonical is None or (
+            canonical["classification"] == "AMBIGUOUS_NEEDS_USER_DECISION"
+            or canonical["disposition"] not in RESOLVABLE_DISPOSITIONS
+        ):
+            return False
     initial_top_level_source_ids = {
         item["id"]
         for key in ("reviews", "conversation_comments")

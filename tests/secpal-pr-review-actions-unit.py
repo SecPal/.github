@@ -10,8 +10,7 @@ import importlib.util
 import json
 import sys
 import tempfile
-import unittest
-from unittest import mock
+from unittest import TestCase, main, mock
 from pathlib import Path
 from typing import Any
 
@@ -260,7 +259,7 @@ class FakeGitHub:
         return {"mutation_id": "THREAD_1", "is_resolved": True}
 
 
-class ContractTests(unittest.TestCase):
+class ContractTests(TestCase):
     def test_classification_fixture_covers_exact_taxonomy_and_cases_1_to_16(self) -> None:
         fixture = json.loads((FIXTURES / "classification-cases.json").read_text(encoding="utf-8"))
         self.assertEqual([case["number"] for case in fixture["cases"]], list(range(1, 17)))
@@ -445,6 +444,40 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(actions.PlanError, "canonical"):
             actions.validate_plan(value, evidence_snapshot(), p21.config())
 
+    def test_duplicate_and_superseded_canonical_references_must_be_acyclic(self) -> None:
+        for classification, disposition in (
+            ("DUPLICATE", "DUPLICATE_OF_CANONICAL"),
+            ("SUPERSEDED", "SUPERSEDED_BY_CANONICAL"),
+        ):
+            first = finding("finding-001", classification, disposition=disposition)
+            second = finding("finding-002", classification, disposition=disposition)
+            first["canonical_finding_id"] = "finding-002"
+            second["canonical_finding_id"] = "finding-001"
+            value = plan()
+            value["findings"] = [first, second]
+            with self.subTest(classification=classification), self.assertRaisesRegex(
+                actions.PlanError, "canonical.*cycle"
+            ):
+                actions.validate_plan(value, evidence_snapshot(), p21.config())
+
+    def test_actionable_fixed_dispositions_require_commit_and_test_proof(self) -> None:
+        for classification, disposition in (
+            ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED"),
+            ("VALID_ACTIONABLE", "PROVEN_EXISTING_FIX"),
+            ("OUTDATED_BUT_STILL_VALID", "CORRECTED_AND_VERIFIED"),
+            ("OUTDATED_BUT_STILL_VALID", "PROVEN_EXISTING_FIX"),
+        ):
+            value = plan()
+            value["findings"] = [
+                finding(classification=classification, disposition=disposition)
+            ]
+            value["findings"][0]["commit_sha"] = None
+            value["findings"][0]["test_evidence"] = []
+            with self.subTest(
+                classification=classification, disposition=disposition
+            ), self.assertRaisesRegex(actions.PlanError, "commit and test evidence"):
+                actions.validate_plan(value, evidence_snapshot(), p21.config())
+
     def test_disallowed_operation_kinds_and_capabilities_are_rejected(self) -> None:
         self.assertEqual(set(actions.ALLOWED_OPERATION_KINDS), {"REACTION", "EVIDENCE_REPLY", "THREAD_RESOLUTION"})
 
@@ -573,7 +606,7 @@ class ContractTests(unittest.TestCase):
                 actions.validate_plan(value, evidence_snapshot(), p21.config())
 
 
-class MutationTests(unittest.TestCase):
+class MutationTests(TestCase):
     def apply(self, value: dict[str, Any], operation_id: str, github: FakeGitHub, *, apply: bool = True) -> dict[str, Any]:
         return actions.execute_operation(
             value,
@@ -783,15 +816,35 @@ class MutationTests(unittest.TestCase):
             with self.subTest(precondition=key), self.assertRaises(actions.MutationBlocked):
                 actions.execute_operation(value, "resolve-001", evidence_snapshot(), p21.config(), github, apply=True, resolution_evidence=incomplete)
 
-    def test_already_resolved_thread_is_refused_idempotently(self) -> None:
+    def test_unrecorded_already_resolved_thread_is_blocked(self) -> None:
         op = operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
         value = plan(op, current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
         github = FakeGitHub()
         github.state["target"].update({"node_id": "THREAD_1", "database_id": None, "target_type": "PULL_REQUEST_REVIEW_THREAD", "body_digest": None, "is_resolved": True})
-        evidence = complete_resolution_evidence()
-        result = actions.execute_operation(value, "resolve-001", evidence_snapshot(), p21.config(), github, apply=True, resolution_evidence=evidence)
-        self.assertEqual(result["status"], "ALREADY_APPLIED")
+        with self.assertRaisesRegex(actions.MutationBlocked, "resolution state changed"):
+            actions.execute_operation(
+                value,
+                "resolve-001",
+                evidence_snapshot(),
+                p21.config(),
+                github,
+                apply=True,
+                resolution_evidence=complete_resolution_evidence(),
+            )
         self.assertNotIn(("WRITE", "THREAD_RESOLUTION"), github.calls)
+
+        value["operations"][0]["applied_mutation_identity"] = "THREAD_1"
+        value["session"]["thread_resolutions"] = 1
+        result = actions.execute_operation(
+            value,
+            "resolve-001",
+            evidence_snapshot(),
+            p21.config(),
+            github,
+            apply=True,
+            resolution_evidence=complete_resolution_evidence(),
+        )
+        self.assertEqual(result["status"], "ALREADY_APPLIED_RECORDED")
 
     def test_resolution_rechecks_the_complete_live_thread_comment_set(self) -> None:
         op = operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
@@ -992,6 +1045,41 @@ class MutationTests(unittest.TestCase):
         value["initial_snapshot_digest"] = initial["snapshot_digest"]
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
 
+    def test_resolution_requires_a_safely_disposed_canonical_finding(self) -> None:
+        initial = evidence_snapshot()
+        second_comment = p21.review_comment("RC_2", body="Canonical finding")
+        second_comment["database_id"] = 22
+        initial["review_threads"].append(
+            {
+                **p21.thread("THREAD_2", comments=[second_comment]),
+                "is_resolved": True,
+            }
+        )
+        initial = p21.finalize_snapshot(initial)
+        duplicate = finding(
+            "finding-001",
+            "DUPLICATE",
+            disposition="DUPLICATE_OF_CANONICAL",
+        )
+        duplicate["canonical_finding_id"] = "finding-002"
+        canonical = finding("finding-002", disposition="PENDING")
+        canonical.update(
+            {
+                "source_node_ids": ["RC_2"],
+                "source_database_ids": [22],
+                "parent_thread_id": "THREAD_2",
+                "commit_sha": None,
+                "test_evidence": [],
+            }
+        )
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["findings"] = [duplicate, canonical]
+        value["operations"][0]["classification"] = "DUPLICATE"
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
     def test_resolution_blocks_pending_material_top_level_findings(self) -> None:
         initial = evidence_snapshot()
         review = p21.review_record()
@@ -1066,7 +1154,7 @@ class MutationTests(unittest.TestCase):
         self.assertFalse(result["local_verified"])
 
 
-class RegistryTests(unittest.TestCase):
+class RegistryTests(TestCase):
     repositories = [
         "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts", "SecPal/android",
         "SecPal/changelog", "SecPal/GuardGuide", "SecPal/guardguide.de", "SecPal/secpal.app",
@@ -1135,7 +1223,7 @@ class RegistryTests(unittest.TestCase):
                 )
 
 
-class AuditModeTests(unittest.TestCase):
+class AuditModeTests(TestCase):
     def test_cases_80_to_90_have_no_default_writes_and_handle_untrusted_data(self) -> None:
         hostile = plan(operation())
         hostile["findings"][0]["test_evidence"] = ["`$(touch /tmp/never)` <script>\u0007"]
@@ -1167,7 +1255,7 @@ class AuditModeTests(unittest.TestCase):
             self.assertEqual(sorted(Path(directory).iterdir()), before)
 
 
-class PolicyScriptTests(unittest.TestCase):
+class PolicyScriptTests(TestCase):
     def test_policy_script_has_deterministic_tool_and_baseline_guards(self) -> None:
         policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
             encoding="utf-8"
@@ -1178,4 +1266,4 @@ class PolicyScriptTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

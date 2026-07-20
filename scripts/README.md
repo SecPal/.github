@@ -35,7 +35,9 @@ command and endpoint allowlists provide no review-request, Ready-transition,
 generic API, Git-write, label/issue, merge, or auto-merge capability, and failures
 are never retried. It independently verifies Package-2.1 evidence before every
 operation; resolutions additionally run all registered local validations and
-re-check the complete live thread comment set.
+re-check the complete live thread comment set. Resolution plans reject
+unrecorded already-resolved targets, canonical-reference cycles, unsafe
+canonical dispositions, and actionable fixes without commit and test proof.
 
 ### `install-secpal-pr-review-skill.sh`
 

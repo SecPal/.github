@@ -149,9 +149,11 @@ reviewers require independent proof. A syntactically correct suggestion that
 weakens security is rejected.
 
 Split compound comments into stable sub-items while preserving every source
-review, thread, and comment ID. A duplicate names one canonical root cause.
+review, thread, and comment ID. Duplicate and superseded references are acyclic,
+and a duplicate names one safely disposed canonical root cause.
 Recheck outdated feedback against the current head. An already-fixed finding
-requires test evidence plus a validly signed, pushed commit on the snapshot head.
+and every corrected or proven-existing actionable finding requires test evidence
+plus a validly signed, pushed commit on the snapshot head.
 A cross-repository fix blocks this invocation; do not modify a sibling repository.
 Informational summaries stay visible and non-actionable. Technical truth is a
 reasoned skill decision; the deterministic helper validates only structure,
@@ -246,7 +248,9 @@ registered focused and required local validation commands without a shell and
 compares the complete live target-thread comment set with the final snapshot.
 
 Resolution remains read-only until one individual operation is explicitly
-applied. Already-resolved or changed targets are refused idempotently.
+applied. An already-resolved target is accepted only when the plan records the
+matching prior resolution identity; every unrecorded resolved or otherwise
+changed target is blocked.
 
 ## Terminal outcomes
 
