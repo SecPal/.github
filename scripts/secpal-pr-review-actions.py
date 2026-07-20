@@ -490,6 +490,7 @@ def _snapshot_evidence_ids(
                 "target_type": target_type,
                 "database_id": item["database_id"],
                 "parent_thread_id": None,
+                "reply_to_id": None,
                 "body_digest": sha256_text(item["body"]),
                 "is_resolved": None,
                 "is_outdated": False,
@@ -503,6 +504,7 @@ def _snapshot_evidence_ids(
             "target_type": "PULL_REQUEST_REVIEW_THREAD",
             "database_id": None,
             "parent_thread_id": thread["id"],
+            "reply_to_id": None,
             "body_digest": None,
             "is_resolved": thread["is_resolved"],
             "is_outdated": thread["is_outdated"],
@@ -516,6 +518,7 @@ def _snapshot_evidence_ids(
                 "target_type": "PULL_REQUEST_REVIEW_COMMENT",
                 "database_id": item["database_id"],
                 "parent_thread_id": thread["id"],
+                "reply_to_id": item["reply_to_id"],
                 "body_digest": sha256_text(item["body"]),
                 "is_resolved": thread["is_resolved"],
                 "is_outdated": thread["is_outdated"],
@@ -564,6 +567,11 @@ def _validate_snapshot_bindings(
         elif operation["target_node_id"] not in finding["source_node_ids"]:
             raise PlanError("mutation target does not belong to its logical finding")
         snapshot_target = targets[operation["target_node_id"]]
+        if (
+            operation["kind"] == "EVIDENCE_REPLY"
+            and snapshot_target["reply_to_id"] is not None
+        ):
+            raise PlanError("inline evidence replies require a top-level review comment")
         if not _target_belongs_to_pull_request(
             snapshot_target["url"],
             plan["repository"],
@@ -805,6 +813,7 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
     }
     ... on PullRequestReviewComment {
       id databaseId body url
+      replyTo { databaseId }
       author {
         login
         ... on User { id databaseId }
@@ -833,6 +842,7 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
       comments(first:100) {
         nodes {
           id databaseId body url
+          replyTo { databaseId }
           author {
             login
             ... on User { id databaseId }
@@ -954,7 +964,10 @@ class ActionCommandRunner:
 
     def __init__(self, executable_path: str | None = None) -> None:
         if executable_path is None:
-            self.executable_path = evidence.resolve_trusted_executable("gh")
+            try:
+                self.executable_path = evidence.resolve_trusted_executable("gh")
+            except evidence.CommandPolicyError as exc:
+                raise MutationBlocked("trusted GitHub CLI is unavailable") from exc
         else:
             path = Path(executable_path)
             if not path.is_absolute() or path.name != "gh" or not path.is_file() or not os.access(path, os.X_OK):
@@ -1078,6 +1091,11 @@ class LiveGitHub:
                 "body_digest": sha256_text(target.get("body", "")) if "body" in target else None,
                 "is_resolved": thread.get("isResolved"),
                 "is_outdated": bool(thread.get("isOutdated", False)),
+                "reply_to_database_id": (
+                    target.get("replyTo", {}).get("databaseId")
+                    if isinstance(target.get("replyTo"), dict)
+                    else None
+                ),
                 "reactions": [
                     {
                         "mutation_id": item.get("id") or str(item.get("databaseId") or ""),
@@ -1092,6 +1110,11 @@ class LiveGitHub:
                         "mutation_id": item.get("id"),
                         "body": item.get("body"),
                         "actor": _actor(item.get("author")),
+                        "reply_to_database_id": (
+                            item.get("replyTo", {}).get("databaseId")
+                            if isinstance(item.get("replyTo"), dict)
+                            else None
+                        ),
                     }
                     for item in thread_comments
                     if item.get("id") != operation["target_node_id"]
@@ -1302,12 +1325,40 @@ def _verify_current_state(
             ):
                 return "ALREADY_APPLIED", item.get("mutation_id") or operation["target_node_id"]
     if operation["kind"] == "EVIDENCE_REPLY":
+        if target.get("reply_to_database_id") is not None:
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: evidence reply target is not a top-level review comment"
+            )
         for item in target.get("replies", []):
-            if item.get("body") == operation["reply_body"] and _same_actor(
-                item.get("actor", {}), viewer
+            if (
+                item.get("reply_to_database_id") == operation["target_database_id"]
+                and item.get("body") == operation["reply_body"]
+                and _same_actor(item.get("actor", {}), viewer)
             ):
                 return "ALREADY_APPLIED", item.get("mutation_id") or operation["target_node_id"]
     return None
+
+
+def _verify_retained_feedback_mutations(
+    plan: dict[str, Any],
+    snapshot: dict[str, Any],
+    github: Any,
+) -> set[str]:
+    """Verify every retained reaction or reply against its exact live target."""
+
+    verified: set[str] = set()
+    for operation in plan["operations"]:
+        identity = operation["applied_mutation_identity"]
+        if operation["kind"] not in {"REACTION", "EVIDENCE_REPLY"} or identity is None:
+            continue
+        current = github.read_current_state(plan, operation)
+        current_status = _verify_current_state(plan, operation, current, snapshot)
+        if current_status is None or current_status[1] != identity:
+            raise MutationBlocked(
+                "BLOCKED_UNSAFE_GITHUB_STATE: retained mutation identity is absent or changed"
+            )
+        verified.add(identity)
+    return verified
 
 
 def execute_operation(
@@ -1354,6 +1405,14 @@ def execute_operation(
             "mutation_identity": mutation_identity,
             "retry_performed": False,
         }
+    if not apply:
+        return {
+            "status": "VALIDATED_NO_MUTATION",
+            "operation_id": operation_id,
+            "kind": operation["kind"],
+            "mutation_identity": None,
+            "retry_performed": False,
+        }
     if operation["kind"] == "THREAD_RESOLUTION":
         required = {
             "local_verified",
@@ -1366,14 +1425,6 @@ def execute_operation(
             resolution_evidence.get(key) is True for key in required
         ):
             raise MutationBlocked("BLOCKED_UNRESOLVED_MATERIAL_FINDING: resolution evidence is incomplete")
-    if not apply:
-        return {
-            "status": "VALIDATED_NO_MUTATION",
-            "operation_id": operation_id,
-            "kind": operation["kind"],
-            "mutation_identity": None,
-            "retry_performed": False,
-        }
     method = {
         "REACTION": github.apply_reaction,
         "EVIDENCE_REPLY": github.apply_reply,
@@ -1450,7 +1501,17 @@ def _no_late_feedback(
     plan: dict[str, Any],
     initial_snapshot: dict[str, Any],
     final_snapshot: dict[str, Any],
+    verified_mutation_identities: set[str] | None = None,
 ) -> bool:
+    verified_identities = verified_mutation_identities or set()
+    recorded_feedback_identities = {
+        operation["applied_mutation_identity"]
+        for operation in plan["operations"]
+        if operation["kind"] in {"REACTION", "EVIDENCE_REPLY"}
+        and operation["applied_mutation_identity"] is not None
+    }
+    if not recorded_feedback_identities <= verified_identities:
+        return False
     if _top_level_feedback(initial_snapshot, "reviews") != _top_level_feedback(final_snapshot, "reviews"):
         return False
     if _top_level_feedback(initial_snapshot, "conversation_comments") != _top_level_feedback(final_snapshot, "conversation_comments"):
@@ -1477,7 +1538,15 @@ def _no_late_feedback(
         for operation in plan["operations"]
         if operation["kind"] == "EVIDENCE_REPLY"
         and operation["applied_mutation_identity"] is not None
+        and operation["applied_mutation_identity"] in verified_identities
     }
+    final_reply_evidence = {
+        (thread_id, comment_id, body, actor_login)
+        for thread_id, comments in final_threads.items()
+        for comment_id, body, actor_login in comments
+    }
+    if not allowed_replies <= final_reply_evidence:
+        return False
     for thread_id, initial_comments in initial_threads.items():
         final_comments = final_threads[thread_id]
         if final_comments[: len(initial_comments)] != initial_comments:
@@ -1487,14 +1556,28 @@ def _no_late_feedback(
                 return False
     initial_reactions = _reaction_feedback(initial_snapshot)
     final_reactions = _reaction_feedback(final_snapshot)
-    if initial_reactions.keys() != final_reactions.keys():
+    allowed_reply_target_ids = {item[1] for item in allowed_replies}
+    if not initial_reactions.keys() <= final_reactions.keys():
+        return False
+    if final_reactions.keys() - initial_reactions.keys() != (
+        allowed_reply_target_ids - initial_reactions.keys()
+    ):
+        return False
+    if any(
+        final_reactions[target_id]
+        for target_id in final_reactions.keys() - initial_reactions.keys()
+    ):
         return False
     allowed_reactions: dict[
         str, set[tuple[str, str, str | None, str | None, int | None]]
     ] = {}
     for operation in plan["operations"]:
         mutation_identity = operation["applied_mutation_identity"]
-        if operation["kind"] != "REACTION" or mutation_identity is None:
+        if (
+            operation["kind"] != "REACTION"
+            or mutation_identity is None
+            or mutation_identity not in verified_identities
+        ):
             continue
         actor = operation["expected_actor_identity"]
         allowed_reactions.setdefault(operation["target_node_id"], set()).add(
@@ -1508,9 +1591,12 @@ def _no_late_feedback(
         )
     for target_id, initial_items in initial_reactions.items():
         final_items = final_reactions[target_id]
+        recorded_items = allowed_reactions.get(target_id, set())
         if not initial_items <= final_items:
             return False
-        if final_items - initial_items != allowed_reactions.get(target_id, set()):
+        if not recorded_items <= final_items:
+            return False
+        if final_items - initial_items != recorded_items - initial_items:
             return False
     return True
 
@@ -1557,8 +1643,6 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
     ):
         return False
     for thread in initial_snapshot["review_threads"]:
-        if thread["is_resolved"]:
-            continue
         findings = findings_by_thread.get(thread["id"], [])
         covered_source_ids = {
             source_id
@@ -1582,6 +1666,7 @@ def build_resolution_evidence(
     configuration: dict[str, Any],
     command_runner: Any | None = None,
     validation_runner: Any | None = None,
+    verified_mutation_identities: set[str] | None = None,
 ) -> dict[str, bool]:
     empty = {
         "local_verified": False,
@@ -1624,7 +1709,12 @@ def build_resolution_evidence(
     result = {
         "local_verified": not local["blockers"],
         "final_evidence_verified": verified["evidence_verified"],
-        "no_late_feedback": _no_late_feedback(plan, initial_snapshot, final_snapshot),
+        "no_late_feedback": _no_late_feedback(
+            plan,
+            initial_snapshot,
+            final_snapshot,
+            verified_mutation_identities,
+        ),
         "all_threads_classified": _all_initial_threads_classified(plan, initial_snapshot),
         "registered_validation_verified": False,
     }
@@ -1747,20 +1837,27 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
     if not isinstance(operation, dict) or operation.get("kind") != expected_kind:
         raise PlanError(f"{arguments.command} requires an operation of kind {expected_kind}")
     resolution_evidence = None
-    if arguments.command == "resolve":
+    github = LiveGitHub()
+    if arguments.command == "resolve" and arguments.apply:
         initial_snapshot = _read_json(arguments.initial_snapshot, "initial snapshot")
+        verified_mutation_identities = _verify_retained_feedback_mutations(
+            plan,
+            snapshot,
+            github,
+        )
         resolution_evidence = build_resolution_evidence(
             plan,
             initial_snapshot,
             snapshot,
             configuration,
+            verified_mutation_identities=verified_mutation_identities,
         )
     result = execute_operation(
         plan,
         arguments.operation_id,
         snapshot,
         configuration,
-        LiveGitHub(),
+        github,
         apply=arguments.apply,
         resolution_evidence=resolution_evidence,
     )

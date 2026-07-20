@@ -7,9 +7,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
+from types import SimpleNamespace
 from unittest import TestCase, main, mock
 from pathlib import Path
 from typing import Any
@@ -220,6 +222,7 @@ class FakeGitHub:
                 "body_digest": digest("Finding"),
                 "is_resolved": False,
                 "is_outdated": False,
+                "reply_to_database_id": None,
                 "reactions": [],
                 "replies": [],
                 "thread_comments": [
@@ -666,9 +669,127 @@ class MutationTests(TestCase):
         self.assertEqual(self.apply(value, "reply-001", github)["status"], "APPLIED")
         github = FakeGitHub()
         github.state["target"]["replies"] = [
-            {"body": op["reply_body"], "actor": copy.deepcopy(github.state["viewer"])}
+            {
+                "body": op["reply_body"],
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_database_id": 21,
+            }
         ]
         self.assertEqual(self.apply(value, "reply-001", github)["status"], "ALREADY_APPLIED")
+        self.assertNotIn(("WRITE", "EVIDENCE_REPLY"), github.calls)
+
+    def test_duplicate_reply_must_match_the_exact_parent_comment(self) -> None:
+        op = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        value = plan(op)
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        github = FakeGitHub()
+        github.state["target"]["replies"] = [
+            {
+                "mutation_id": "REPLY_ON_OTHER_PARENT",
+                "body": op["reply_body"],
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_database_id": 999,
+            }
+        ]
+        self.assertEqual(self.apply(value, "reply-001", github)["status"], "APPLIED")
+        self.assertEqual(github.calls.count(("WRITE", "EVIDENCE_REPLY")), 1)
+
+    def test_retained_reply_verification_requires_the_exact_parent_comment(self) -> None:
+        op = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        op["applied_mutation_identity"] = "REPLY_EXISTING"
+        value = plan(op, current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        value["session"]["evidence_replies"] = 1
+        github = FakeGitHub()
+        github.state["target"]["replies"] = [
+            {
+                "mutation_id": "REPLY_EXISTING",
+                "body": op["reply_body"],
+                "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_database_id": 999,
+            }
+        ]
+        with self.assertRaisesRegex(actions.MutationBlocked, "retained mutation identity"):
+            actions._verify_retained_feedback_mutations(
+                value,
+                evidence_snapshot(),
+                github,
+            )
+
+        github.state["target"]["replies"][0]["reply_to_database_id"] = 21
+        self.assertEqual(
+            actions._verify_retained_feedback_mutations(
+                value,
+                evidence_snapshot(),
+                github,
+            ),
+            {"REPLY_EXISTING"},
+        )
+
+    def test_evidence_reply_rejects_a_snapshot_reply_as_its_parent(self) -> None:
+        snapshot = evidence_snapshot()
+        snapshot["review_threads"][0]["comments"][0]["reply_to_id"] = "RC_PARENT"
+        snapshot = p21.finalize_snapshot(snapshot)
+        op = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        value = plan(op)
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        with self.assertRaisesRegex(actions.PlanError, "top-level review comment"):
+            actions.validate_plan(value, snapshot, p21.config())
+
+    def test_live_evidence_reply_rejects_a_reply_target(self) -> None:
+        op = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        value = plan(op)
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        github = FakeGitHub()
+        github.state["target"]["reply_to_database_id"] = 20
+        with self.assertRaisesRegex(actions.MutationBlocked, "top-level review comment"):
+            self.apply(value, "reply-001", github)
         self.assertNotIn(("WRITE", "EVIDENCE_REPLY"), github.calls)
 
     def test_changed_head_actor_or_target_identity_is_refused(self) -> None:
@@ -786,8 +907,18 @@ class MutationTests(TestCase):
     def test_current_target_query_uses_concrete_actor_identity_fragments(self) -> None:
         query = actions.CURRENT_MUTATION_TARGET_QUERY
         self.assertNotIn("author { id databaseId login }", query)
+        self.assertIn("replyTo { databaseId }", query)
         for actor_type in ("User", "Bot", "Organization", "Mannequin"):
             self.assertIn(f"... on {actor_type} {{ id databaseId }}", query)
+
+    def test_missing_trusted_gh_is_reported_as_a_guarded_blocker(self) -> None:
+        with mock.patch.object(
+            actions.evidence,
+            "resolve_trusted_executable",
+            side_effect=actions.evidence.CommandPolicyError("gh unavailable"),
+        ):
+            with self.assertRaisesRegex(actions.MutationBlocked, "GitHub CLI"):
+                actions.ActionCommandRunner()
 
     def test_resolution_requires_complete_specific_remediation_evidence(self) -> None:
         op = operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
@@ -949,13 +1080,27 @@ class MutationTests(TestCase):
             "node_id": "ACTOR_aroviqen",
             "database_id": 7,
         }
-        self.assertTrue(actions._no_late_feedback(recorded, initial, reaction_final))
+        self.assertTrue(
+            actions._no_late_feedback(
+                recorded,
+                initial,
+                reaction_final,
+                {"REACTION_NEW"},
+            )
+        )
         unexpected = copy.deepcopy(reaction_final)
         unexpected["review_threads"][0]["comments"][0]["reactions"].append(
             p21.reaction("REACTION_LATE", "THUMBS_DOWN")
         )
         unexpected = p21.finalize_snapshot(unexpected)
-        self.assertFalse(actions._no_late_feedback(recorded, initial, unexpected))
+        self.assertFalse(
+            actions._no_late_feedback(
+                recorded,
+                initial,
+                unexpected,
+                {"REACTION_NEW"},
+            )
+        )
 
         unclassified = copy.deepcopy(value)
         unclassified["findings"] = []
@@ -968,6 +1113,133 @@ class MutationTests(TestCase):
             lambda _repository, _repository_root: True,
         )
         self.assertFalse(result["all_threads_classified"])
+
+    def test_recorded_reply_must_exist_in_the_final_snapshot(self) -> None:
+        initial = evidence_snapshot()
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["applied_mutation_identity"] = "RC_MISSING"
+        value = plan(
+            recorded_reply,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        value["session"]["evidence_replies"] = 1
+        self.assertFalse(
+            actions._no_late_feedback(value, initial, initial, {"RC_MISSING"})
+        )
+
+    def test_verified_recorded_reply_is_accepted_in_the_final_snapshot(self) -> None:
+        initial = evidence_snapshot()
+        final = copy.deepcopy(initial)
+        reply = p21.review_comment("RC_REPLY", login="aroviqen", body="Independent evidence")
+        reply["database_id"] = 22
+        reply["reply_to_id"] = "RC_1"
+        final["review_threads"][0]["comments"].append(reply)
+        final = p21.finalize_snapshot(final)
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["applied_mutation_identity"] = "RC_REPLY"
+        recorded_reply["expected_actor_identity"] = {
+            "login": "aroviqen",
+            "node_id": "ACTOR_aroviqen",
+            "database_id": 7,
+        }
+        value = plan(
+            recorded_reply,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        value["session"]["evidence_replies"] = 1
+        self.assertTrue(
+            actions._no_late_feedback(value, initial, final, {"RC_REPLY"})
+        )
+
+    def test_recorded_reaction_already_in_initial_snapshot_is_satisfied(self) -> None:
+        initial = evidence_snapshot()
+        existing = p21.reaction("REACTION_EXISTING", "THUMBS_UP")
+        existing["user"] = p21.actor("aroviqen")
+        initial["review_threads"][0]["comments"][0]["reactions"] = [existing]
+        initial = p21.finalize_snapshot(initial)
+        recorded = plan(
+            operation(),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        recorded["snapshot_digest"] = initial["snapshot_digest"]
+        recorded["initial_snapshot_digest"] = initial["snapshot_digest"]
+        recorded["operations"][0]["applied_mutation_identity"] = "REACTION_EXISTING"
+        recorded["operations"][0]["expected_actor_identity"] = {
+            "login": "aroviqen",
+            "node_id": "ACTOR_aroviqen",
+            "database_id": 7,
+        }
+        recorded["session"]["reaction_writes"] = 1
+        self.assertTrue(
+            actions._no_late_feedback(
+                recorded,
+                initial,
+                initial,
+                {"REACTION_EXISTING"},
+            )
+        )
+
+    def test_recorded_feedback_requires_live_identity_verification(self) -> None:
+        initial = evidence_snapshot()
+        final = copy.deepcopy(initial)
+        reaction = p21.reaction("REACTION_FORGED", "THUMBS_UP")
+        reaction["user"] = {
+            "login": "aroviqen",
+            "node_id": "USER_1",
+            "database_id": 7,
+            "type": "user",
+        }
+        final["review_threads"][0]["comments"][0]["reactions"] = [reaction]
+        final = p21.finalize_snapshot(final)
+        recorded = plan(
+            operation(),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        recorded["operations"][0]["applied_mutation_identity"] = "REACTION_FORGED"
+        recorded["operations"][0]["expected_actor_identity"] = {
+            "login": "aroviqen",
+            "node_id": "USER_1",
+            "database_id": 7,
+        }
+        recorded["session"]["reaction_writes"] = 1
+        self.assertFalse(actions._no_late_feedback(recorded, initial, final))
+
+        github = FakeGitHub()
+        github.state["target"]["reactions"] = [
+            {
+                "mutation_id": "REACTION_FORGED",
+                "content": "THUMBS_UP",
+                "actor": copy.deepcopy(github.state["viewer"]),
+            }
+        ]
+        self.assertEqual(
+            actions._verify_retained_feedback_mutations(recorded, final, github),
+            {"REACTION_FORGED"},
+        )
 
     def test_resolution_readiness_accepts_a_verified_descendant_remediation_head(self) -> None:
         initial = evidence_snapshot()
@@ -1043,6 +1315,14 @@ class MutationTests(TestCase):
         )
         value["snapshot_digest"] = initial["snapshot_digest"]
         value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
+    def test_resolution_requires_classification_of_resolved_initial_threads(self) -> None:
+        initial = evidence_snapshot()
+        initial["review_threads"][0]["is_resolved"] = True
+        initial = p21.finalize_snapshot(initial)
+        value = plan(current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
+        value["findings"] = []
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
 
     def test_resolution_requires_a_safely_disposed_canonical_finding(self) -> None:
@@ -1254,6 +1534,45 @@ class AuditModeTests(TestCase):
             actions.validate_plan(value, evidence_snapshot(), p21.config())
             self.assertEqual(sorted(Path(directory).iterdir()), before)
 
+    def test_resolution_audit_does_not_build_or_run_remediation_validations(self) -> None:
+        snapshot = evidence_snapshot()
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        github = FakeGitHub()
+        github.state["target"].update(
+            {
+                "node_id": "THREAD_1",
+                "database_id": None,
+                "target_type": "PULL_REQUEST_REVIEW_THREAD",
+                "body_digest": None,
+            }
+        )
+        arguments = SimpleNamespace(
+            command="resolve",
+            plan="plan.json",
+            snapshot="snapshot.json",
+            config="config.json",
+            operation_id="resolve-001",
+            repo="SecPal/.github",
+            pr=1,
+            snapshot_digest=snapshot["snapshot_digest"],
+            expected_head=p21.HEAD,
+            apply=False,
+            initial_snapshot="missing-in-audit-mode.json",
+        )
+        output = SimpleNamespace(buffer=io.BytesIO())
+        with (
+            mock.patch.object(actions, "_load_inputs", return_value=(value, snapshot, p21.config())),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+            mock.patch.object(actions, "build_resolution_evidence") as build_evidence,
+            mock.patch.object(actions.sys, "stdout", output),
+        ):
+            self.assertEqual(actions._command_mutation(arguments), 0)
+        build_evidence.assert_not_called()
+        self.assertEqual(json.loads(output.buffer.getvalue())["status"], "VALIDATED_NO_MUTATION")
+
 
 class PolicyScriptTests(TestCase):
     def test_policy_script_has_deterministic_tool_and_baseline_guards(self) -> None:
@@ -1263,6 +1582,8 @@ class PolicyScriptTests(TestCase):
         self.assertIn("command -v rg", policy)
         self.assertIn("git -C \"$REPO_ROOT\" cat-file -e", policy)
         self.assertIn(".github/workflows/secpal-pr-review.yaml", policy)
+        quality = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+        self.assertIn("sudo apt-get install --yes ripgrep", quality)
 
 
 if __name__ == "__main__":

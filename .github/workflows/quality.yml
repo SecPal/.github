@@ -38,6 +38,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install finite workflow dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+
       - name: Run guarded-action unit tests
         run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
 
