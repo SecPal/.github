@@ -22,6 +22,14 @@ if arguments[:3] != ["api", "--hostname", "github.com"]:
 
 if arguments[3] == "graphql":
     query = next((value.split("=", 1)[1] for value in arguments if value.startswith("query=")), "")
+    if "query ViewerIdentity" in query:
+        print(
+            json.dumps(
+                {"data": {"viewer": {"login": "aroviqen", "id": "USER_1", "databaseId": 7}}},
+                separators=(",", ":"),
+            )
+        )
+        raise SystemExit(0)
     if "query CurrentMutationTarget" in query:
         print(
             json.dumps(
@@ -34,6 +42,7 @@ if arguments[3] == "graphql":
                             "id": "RC_1",
                             "databaseId": 21,
                             "body": "Finding",
+                            "author": {"login": "reviewer", "id": "ACTOR_reviewer", "databaseId": 7},
                             "pullRequestReviewThread": {"id": "THREAD_1", "isResolved": False, "isOutdated": False},
                             "reactions": {"nodes": [], "pageInfo": {"hasNextPage": False}},
                         },

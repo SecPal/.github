@@ -118,16 +118,23 @@ def operation(
             "is_resolved": False if kind == "THREAD_RESOLUTION" else None,
             "is_outdated": False,
             "material_misunderstanding": kind == "EVIDENCE_REPLY",
+            "invalidity_non_obvious": kind == "EVIDENCE_REPLY",
         },
         "expected_actor_identity": {
             "login": "aroviqen",
             "node_id": "USER_1",
             "database_id": 7,
         },
+        "expected_source_actor_identity": {
+            "login": "reviewer",
+            "node_id": "ACTOR_reviewer",
+            "database_id": 7,
+        },
         "classification": classification,
         "evidence_digest": digest(f"evidence-{operation_id}"),
         "reaction": reaction,
         "reply_body": reply_body,
+        "applied_mutation_identity": None,
         "resolution_preconditions": {
             "pushed": True,
             "focused_validation_succeeded": True,
@@ -168,7 +175,7 @@ def registry_entry(repository: str) -> dict[str, Any]:
         "allowed_base_repositories": [repository],
         "reviewer_identities": p21.config()["reviewer_identities"],
         "focused_validation": [
-            {"argv": ["npm", "test"], "working_directory": ".", "purpose": "Run tests"}
+            {"argv": ["npm", "run", "test"], "working_directory": ".", "purpose": "Run tests"}
         ],
         "required_local_validation": [
             {"argv": ["npm", "run", "lint"], "working_directory": ".", "purpose": "Run lint"}
@@ -191,7 +198,8 @@ class FakeGitHub:
         self.fail = False
         self.state = {
             "head_sha": p21.HEAD,
-            "actor": {"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
+            "actor": {"login": "reviewer", "node_id": "ACTOR_reviewer", "database_id": 7},
+            "viewer": {"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
             "target": {
                 "node_id": "RC_1",
                 "database_id": 21,
@@ -279,7 +287,9 @@ class ContractTests(unittest.TestCase):
 
     def test_compound_source_items_require_stable_distinct_logical_findings(self) -> None:
         value = plan(operation())
-        value["findings"].append(finding("finding-002", "INFORMATIONAL"))
+        value["findings"].append(
+            finding("finding-002", "INFORMATIONAL", disposition="NON_ACTIONABLE")
+        )
         normalized = actions.validate_plan(value, evidence_snapshot(), p21.config())
         self.assertEqual(len(normalized["findings"]), 2)
         value["findings"][1]["logical_finding_id"] = "finding-001"
@@ -316,6 +326,28 @@ class ContractTests(unittest.TestCase):
             value["findings"][0]["classification"] = classification
             with self.subTest(classification=classification, kind=kind), self.assertRaises(actions.PlanError):
                 actions.validate_plan(value, evidence_snapshot(), p21.config())
+
+    def test_review_summary_findings_use_the_allowlisted_reactable_type(self) -> None:
+        snapshot = evidence_snapshot()
+        review = p21.review_record()
+        snapshot["reviews"] = [review]
+        snapshot = p21.finalize_snapshot(snapshot)
+        value = plan(operation())
+        value["snapshot_digest"] = snapshot["snapshot_digest"]
+        value["initial_snapshot_digest"] = snapshot["snapshot_digest"]
+        value["findings"][0]["source_node_ids"] = [review["id"]]
+        value["findings"][0]["source_database_ids"] = [review["database_id"]]
+        value["findings"][0]["parent_thread_id"] = None
+        value["operations"][0]["target_node_id"] = review["id"]
+        value["operations"][0]["target_database_id"] = review["database_id"]
+        value["operations"][0]["parent_thread_id"] = None
+        value["operations"][0]["expected_current_state"]["target_type"] = "PULL_REQUEST_REVIEW"
+        value["operations"][0]["expected_current_state"]["body_digest"] = digest(review["body"])
+        normalized = actions.validate_plan(value, snapshot, p21.config())
+        self.assertEqual(
+            normalized["operations"][0]["expected_current_state"]["target_type"],
+            "PULL_REQUEST_REVIEW",
+        )
 
     def test_fixed_or_status_replies_are_refused(self) -> None:
         for body in ("fixed", "Addressed.", f"Fixed in {p21.HEAD}", "status: complete"):
@@ -395,7 +427,7 @@ class MutationTests(unittest.TestCase):
         github = FakeGitHub()
         github.state["target"]["reactions"] = [
             {"content": "THUMBS_UP", "actor": {"login": "someone-else", "node_id": "OTHER", "database_id": 8}},
-            {"content": "THUMBS_UP", "actor": copy.deepcopy(github.state["actor"])},
+            {"content": "THUMBS_UP", "actor": copy.deepcopy(github.state["viewer"])},
         ]
         result = self.apply(plan(operation()), "reaction-001", github)
         self.assertEqual(result["status"], "ALREADY_APPLIED")
@@ -416,7 +448,7 @@ class MutationTests(unittest.TestCase):
         self.assertEqual(self.apply(value, "reply-001", github)["status"], "APPLIED")
         github = FakeGitHub()
         github.state["target"]["replies"] = [
-            {"body": op["reply_body"], "actor": copy.deepcopy(github.state["actor"])}
+            {"body": op["reply_body"], "actor": copy.deepcopy(github.state["viewer"])}
         ]
         self.assertEqual(self.apply(value, "reply-001", github)["status"], "ALREADY_APPLIED")
         self.assertNotIn(("WRITE", "EVIDENCE_REPLY"), github.calls)
@@ -425,6 +457,7 @@ class MutationTests(unittest.TestCase):
         mutations = (
             ("head_sha", "f" * 40),
             ("actor.login", "intruder"),
+            ("viewer.login", "intruder"),
             ("target.node_id", "CHANGED"),
         )
         for path, replacement in mutations:
@@ -454,6 +487,11 @@ class MutationTests(unittest.TestCase):
             },
         )
         actions._validate_action_command(query)
+        add_reaction = actions._graphql_arguments(
+            actions.ADD_REACTION_MUTATION,
+            {"subjectId": "REVIEW_1", "content": "THUMBS_UP"},
+        )
+        actions._validate_action_command(add_reaction)
         reaction = [
             "gh", "api", "--hostname", "github.com",
             "repos/SecPal/.github/pulls/comments/21/reactions",
@@ -461,10 +499,18 @@ class MutationTests(unittest.TestCase):
             "-f", "content=+1",
         ]
         actions._validate_action_command(reaction)
+        reply = [
+            "gh", "api", "--hostname", "github.com",
+            "repos/SecPal/.github/pulls/1/comments",
+            "--method", "POST", "-f", "body=@must-not-read-from-disk",
+            "-F", "in_reply_to=21",
+        ]
+        actions._validate_action_command(reply)
         for unsafe in (
             ["gh", "api", "--hostname", "github.com", "repos/SecPal/.github/issues"],
             [*reaction, "--input", "payload.json"],
             [*query, "-f", "extra=value"],
+            [*reply[:7], "-F", *reply[8:]],
         ):
             with self.subTest(arguments=unsafe), self.assertRaises(actions.MutationBlocked):
                 actions._validate_action_command(unsafe)
@@ -534,6 +580,29 @@ class MutationTests(unittest.TestCase):
         )
         self.assertFalse(result["no_late_feedback"])
 
+        reaction_final = copy.deepcopy(final)
+        recorded_reaction = p21.reaction("REACTION_NEW", "THUMBS_UP")
+        recorded_reaction["user"] = p21.actor("aroviqen")
+        reaction_final["review_threads"][0]["comments"][0]["reactions"] = [recorded_reaction]
+        reaction_final = p21.finalize_snapshot(reaction_final)
+        recorded = plan(
+            operation(),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        recorded["operations"][0]["applied_mutation_identity"] = "REACTION_NEW"
+        recorded["operations"][0]["expected_actor_identity"] = {
+            "login": "aroviqen",
+            "node_id": "ACTOR_aroviqen",
+            "database_id": 7,
+        }
+        self.assertTrue(actions._no_late_feedback(recorded, initial, reaction_final))
+        unexpected = copy.deepcopy(reaction_final)
+        unexpected["review_threads"][0]["comments"][0]["reactions"].append(
+            p21.reaction("REACTION_LATE", "THUMBS_DOWN")
+        )
+        unexpected = p21.finalize_snapshot(unexpected)
+        self.assertFalse(actions._no_late_feedback(recorded, initial, unexpected))
+
         unclassified = copy.deepcopy(value)
         unclassified["findings"] = []
         result = actions.build_resolution_evidence(
@@ -571,6 +640,16 @@ class RegistryTests(unittest.TestCase):
         destructive["repositories"][0]["focused_validation"][0]["argv"] = ["rm", "-rf", "."]
         with self.assertRaisesRegex(actions.RegistryError, "destructive"):
             actions.validate_registry(destructive)
+        for unsafe_argv in (
+            ["git", "clean", "-fdx"],
+            ["python3", "-c", "print('dynamic')"],
+            ["./../outside"],
+            ["npm", "exec", "tool"],
+        ):
+            dynamic = copy.deepcopy(registry)
+            dynamic["repositories"][0]["focused_validation"][0]["argv"] = unsafe_argv
+            with self.subTest(argv=unsafe_argv), self.assertRaises(actions.RegistryError):
+                actions.validate_registry(dynamic)
         no_gate = copy.deepcopy(registry)
         no_gate["repositories"][0]["required_local_validation"] = []
         no_gate["repositories"][0]["manual_gates"] = []

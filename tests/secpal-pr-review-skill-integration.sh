@@ -64,12 +64,15 @@ operation = {
         "is_resolved": None,
         "is_outdated": False,
         "material_misunderstanding": False,
+        "invalidity_non_obvious": False,
     },
     "expected_actor_identity": {"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
+    "expected_source_actor_identity": {"login": "reviewer", "node_id": "ACTOR_reviewer", "database_id": 7},
     "classification": "VALID_ACTIONABLE",
     "evidence_digest": "2" * 64,
     "reaction": "THUMBS_UP",
     "reply_body": None,
+    "applied_mutation_identity": None,
     "resolution_preconditions": None,
 }
 session = {
@@ -126,6 +129,20 @@ common=(
   --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 )
 fake_cli=(python3 "$FIXTURES/fake-actions-cli.py" "$ACTIONS" "$workspace/bin")
+
+"${fake_cli[@]}" inspect-actor >"$workspace/actor.json"
+python3 - "$workspace/actor.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report == {
+    "actor": {"database_id": 7, "login": "aroviqen", "node_id": "USER_1"},
+    "mutation_performed": False,
+    "status": "ACTOR_VERIFIED",
+}
+PY
+: >"$workspace/gh.log"
 
 python3 "$ACTIONS" validate-plan \
   --plan "$workspace/plan.json" \
