@@ -1185,6 +1185,220 @@ assert not (isolated_root / "polyscope.db").exists()
 assert "All tests passed" not in isolated_result.stderr
 PY
 
+# Concurrent direct API bootstrap invocations must serialize the complete
+# mutation sequence for a physical worktree and an alias to that worktree. The
+# fake migration deliberately holds the first process after it has loaded a
+# pending plan; without serialization the alias invocation records the same
+# migration first and the held process reports PostgreSQL duplicate-column
+# behavior when it resumes.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import time
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+repo_root = pathlib.Path(sys.argv[3])
+fixture = workspace / "concurrent-api-bootstrap-fixture"
+source_api = fixture / "source-api"
+physical_worktree = fixture / "clones" / "api12345" / "quiet-finch-d35c0cdc"
+alias_worktree = physical_worktree.parent / "quiet-finch"
+fake_bin = fixture / "fake-bin"
+race_state = fixture / "migration-state"
+command_log = fixture / "commands.log"
+release_first = fixture / "release-first"
+
+
+def write_valid_instruction_root(root: pathlib.Path) -> None:
+    (root / ".github").mkdir(parents=True)
+    shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
+    (root / "AGENTS.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Runtime Instructions\n\n"
+        "- Preserve existing work.\n"
+    )
+    (root / ".github" / "copilot-instructions.md").write_text(
+        "<!--\n"
+        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-License" "-Identifier: CC0-1.0\n"
+        "-->\n\n"
+        "# Test Review Profile\n\n"
+        "- Review the complete diff.\n"
+    )
+
+
+write_valid_instruction_root(source_api)
+write_valid_instruction_root(physical_worktree)
+fake_bin.mkdir(parents=True)
+race_state.mkdir()
+alias_worktree.symlink_to(physical_worktree.name)
+os.mkfifo(release_first)
+
+source_api.joinpath(".env.example").write_text(
+    "APP_ENV=local\n"
+    "APP_KEY=\n"
+    "APP_URL=http://localhost\n"
+    "FRONTEND_URL=http://localhost\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=\n"
+)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=fixture-db-password\n"
+)
+physical_worktree.joinpath(".env").write_text(
+    "APP_ENV=local\n"
+    "APP_KEY=base64:fixture-app-key\n"
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal__preview__quiet_finch\n"
+    "DB_USERNAME=secpal\n"
+    "DB_PASSWORD=fixture-db-password\n"
+    "POLYSCOPE_BASE_DB_DATABASE=secpal\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+)
+
+fake_bin.joinpath("composer").write_text(
+    """#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
+    handle.write(f'{os.environ["RACE_LABEL"]}:composer\\n')
+Path("vendor").mkdir(exist_ok=True)
+Path("vendor/autoload.php").touch()
+"""
+)
+fake_bin.joinpath("psql").write_text(
+    """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+sql = sys.argv[-1]
+with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
+    handle.write(f'{os.environ["RACE_LABEL"]}:psql:{sql}\\n')
+if "rolcreatedb" in sql:
+    print("t")
+elif "FROM pg_database" in sql:
+    print("1")
+"""
+)
+fake_bin.joinpath("php").write_text(
+    """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+label = os.environ["RACE_LABEL"]
+state = Path(os.environ["RACE_STATE"])
+command = sys.argv[1:]
+with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
+    handle.write(f"{label}:php:{' '.join(command)}\\n")
+if command[:2] != ["artisan", "migrate"]:
+    raise SystemExit(0)
+
+recorded = state / "migration-recorded"
+column = state / "column-present"
+if recorded.exists():
+    (state / f"{label}-revalidated").touch()
+    raise SystemExit(0)
+
+(state / f"{label}-pending").touch()
+if os.environ.get("RACE_HOLD") == "1":
+    with Path(os.environ["RACE_RELEASE_FIFO"]).open("rb") as release:
+        release.read(1)
+
+if column.exists():
+    print('SQLSTATE[42701]: Duplicate column: column "firearms_license_number_enc" already exists')
+    raise SystemExit(17)
+column.touch()
+recorded.touch()
+"""
+)
+for executable in ("composer", "psql", "php"):
+    fake_bin.joinpath(executable).chmod(0o755)
+
+
+def wait_for(path: pathlib.Path, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.01)
+    return path.exists()
+
+
+def start_bootstrap(target: pathlib.Path, label: str, *, hold: bool = False) -> subprocess.Popen[str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(fixture / "home"),
+            "PATH": str(fake_bin) + os.pathsep + environment["PATH"],
+            "RACE_COMMAND_LOG": str(command_log),
+            "RACE_LABEL": label,
+            "RACE_RELEASE_FIFO": str(release_first),
+            "RACE_STATE": str(race_state),
+        }
+    )
+    if hold:
+        environment["RACE_HOLD"] = "1"
+    return subprocess.Popen(
+        [
+            sys.executable,
+            str(script_path),
+            "--bootstrap-api-worktree",
+            str(target),
+            "--source-repo-path",
+            str(source_api),
+        ],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+first = start_bootstrap(physical_worktree, "physical", hold=True)
+assert wait_for(race_state / "physical-pending", 10), "first migration did not load its pending plan"
+second = start_bootstrap(alias_worktree, "alias")
+alias_loaded_concurrently = wait_for(race_state / "alias-pending", 2)
+commands_while_held = command_log.read_text()
+
+with release_first.open("wb") as release:
+    release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+second_output, _ = second.communicate(timeout=10)
+
+assert not alias_loaded_concurrently, (
+    "alias bootstrap loaded the same pending migration before the physical bootstrap finished\n"
+    f"commands while held:\n{commands_while_held}\n"
+    f"physical output:\n{first_output}\n"
+    f"alias output:\n{second_output}"
+)
+assert "alias:" not in commands_while_held, commands_while_held
+assert first.returncode == 0, first_output
+assert second.returncode == 0, second_output
+assert race_state.joinpath("alias-revalidated").is_file()
+assert race_state.joinpath("migration-recorded").is_file()
+assert race_state.joinpath("column-present").is_file()
+PY
+
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
     --db-path "$db_path" \
