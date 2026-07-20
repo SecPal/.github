@@ -32,6 +32,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   Package-2.1 helper, review-memory automation, repository instruction routing,
   and sibling repositories unchanged
 
+**Fixed:**
+
+- rejected null reactions for non-reactable findings, restored schema-valid
+  actor identity reads for live mutation targets, and allowed fully classified
+  no-actionable sessions to finish independently of merge-readiness CI
+- made the finite-policy checks fail clearly when ripgrep or the accepted
+  Package-2.1 baseline commit is unavailable and prohibited both `.yml` and
+  `.yaml` variants of an automatic review workflow, while enforcing executable
+  mode for the registered review-memory error suite
+
 ---
 
 ## 2026-07-20 - Serialize Polyscope API Workspace Bootstrap

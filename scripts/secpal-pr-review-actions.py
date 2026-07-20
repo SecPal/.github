@@ -272,14 +272,16 @@ def determine_terminal_outcome(session: dict[str, Any]) -> str:
         return "NOT_READY_FOR_MERGE"
     if not session.get("github_state_safe", False):
         return "BLOCKED_UNSAFE_GITHUB_STATE"
+    if not session.get("actionable_findings", False) and not session.get(
+        "unresolved_material_finding", False
+    ):
+        return "NO_ACTIONABLE_FINDINGS"
     if session.get("ci_state") != "SUCCESS":
         return "BLOCKED_FAILED_OR_PENDING_CI"
     if session.get("unresolved_material_finding", False):
         if session.get("remediation_cycles", 0) >= SESSION_LIMITS["remediation_cycles"]:
             return "BLOCKED_CYCLE_LIMIT_REACHED"
         return "BLOCKED_UNRESOLVED_MATERIAL_FINDING"
-    if not session.get("actionable_findings", False):
-        return "NO_ACTIONABLE_FINDINGS"
     if session.get("merge_ready_evidence", False):
         return "READY_FOR_USER_AUTHORIZED_SQUASH_MERGE"
     return "NOT_READY_FOR_MERGE"
@@ -359,7 +361,11 @@ def _validate_operation_semantics(
                 "INVALID_FALSE_OR_MISLEADING": "THUMBS_DOWN",
                 "SECURITY_WEAKENING_SUGGESTION": "THUMBS_DOWN",
             }.get(classification)
-            if operation["reaction"] != expected_reaction or operation["reply_body"] is not None:
+            if (
+                expected_reaction is None
+                or operation["reaction"] != expected_reaction
+                or operation["reply_body"] is not None
+            ):
                 raise PlanError("reaction does not match the classification policy")
             if operation["target_database_id"] is None:
                 raise PlanError("reaction target requires a database ID")
@@ -707,15 +713,36 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
   node(id:$targetNodeId) {
     __typename
     ... on IssueComment {
-      id databaseId body url author { id databaseId login }
+      id databaseId body url
+      author {
+        login
+        ... on User { id databaseId }
+        ... on Bot { id databaseId }
+        ... on Organization { id databaseId }
+        ... on Mannequin { id databaseId }
+      }
       reactions(first:100) { nodes { id databaseId content user { id databaseId login } } pageInfo { hasNextPage } }
     }
     ... on PullRequestReviewComment {
-      id databaseId body url author { id databaseId login }
+      id databaseId body url
+      author {
+        login
+        ... on User { id databaseId }
+        ... on Bot { id databaseId }
+        ... on Organization { id databaseId }
+        ... on Mannequin { id databaseId }
+      }
       reactions(first:100) { nodes { id databaseId content user { id databaseId login } } pageInfo { hasNextPage } }
     }
     ... on PullRequestReview {
-      id databaseId body url author { id databaseId login }
+      id databaseId body url
+      author {
+        login
+        ... on User { id databaseId }
+        ... on Bot { id databaseId }
+        ... on Organization { id databaseId }
+        ... on Mannequin { id databaseId }
+      }
       reactions(first:100) { nodes { id databaseId content user { id databaseId login } } pageInfo { hasNextPage } }
     }
     ... on PullRequestReviewThread { id isResolved isOutdated }
@@ -724,7 +751,16 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
     ... on PullRequestReviewThread {
       id isResolved isOutdated
       comments(first:100) {
-        nodes { id databaseId body url author { id databaseId login } }
+        nodes {
+          id databaseId body url
+          author {
+            login
+            ... on User { id databaseId }
+            ... on Bot { id databaseId }
+            ... on Organization { id databaseId }
+            ... on Mannequin { id databaseId }
+          }
+        }
         pageInfo { hasNextPage }
       }
     }

@@ -14,15 +14,20 @@ REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.jso
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
+MEMORY_ERRORS="$REPO_ROOT/tests/copilot-review-memory-errors.sh"
+P21_BASELINE="833eef2afc063ae777e7e2b64b2f252e3fe1e49e"
 
 fail() {
   printf 'policy failure: %s\n' "$1" >&2
   exit 1
 }
 
+command -v rg >/dev/null 2>&1 || fail 'ripgrep (rg) is required'
+
 for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$REGISTRY" "$PLAN_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
+test -x "$MEMORY_ERRORS" || fail 'registered review-memory error test is not executable'
 
 # Policy cases: exact finite counters, one audit, explicit checkpoint, no third
 # cycle, no polling/retry, no automatic late-feedback incorporation, and zero
@@ -65,10 +70,13 @@ grep -Fq 'secpal-pr-review-actions.py' "$SKILL" || fail 'skill does not route bo
 grep -Fq 'explicit PR-feedback remediation request' "$SKILL" || fail 'skill trigger is not narrow'
 grep -Fq 'not a reviewer' "$SKILL" || fail 'skill reviewer boundary is missing'
 
-cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show 833eef2afc063ae777e7e2b64b2f252e3fe1e49e:scripts/secpal-pr-review.py) \
+git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
+  || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"
+cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-review.py") \
   || fail 'accepted P2.1 evidence helper changed'
 
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yml" || fail 'skill must not run automatically'
+test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yaml" || fail 'skill must not run automatically'
 if rg -n '/home/secpal' "$INTEGRATION"; then
   fail 'integration test must not depend on one host account layout'
 fi

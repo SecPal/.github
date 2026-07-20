@@ -254,6 +254,22 @@ class ContractTests(unittest.TestCase):
             with self.subTest(case=case["number"]):
                 self.assertEqual(actions.determine_terminal_outcome(session), case["expected"])
 
+    def test_no_actionable_session_finishes_without_required_ci_success(self) -> None:
+        session = base_session()
+        session.update(
+            {
+                "state_captures": 1,
+                "remediation_cycles": 0,
+                "holistic_audits": 0,
+                "signed_commits": 0,
+                "fast_forward_pushes": 0,
+                "ci_state": "PENDING",
+                "actionable_findings": False,
+                "merge_ready_evidence": False,
+            }
+        )
+        self.assertEqual(actions.determine_terminal_outcome(session), "NO_ACTIONABLE_FINDINGS")
+
     def test_exact_finite_counters_are_enforced(self) -> None:
         limits = {
             "remediation_cycles": 2,
@@ -378,6 +394,13 @@ class ContractTests(unittest.TestCase):
 
     def test_disallowed_operation_kinds_and_capabilities_are_rejected(self) -> None:
         self.assertEqual(set(actions.ALLOWED_OPERATION_KINDS), {"REACTION", "EVIDENCE_REPLY", "THREAD_RESOLUTION"})
+
+        non_reactable = plan(operation(classification="INFORMATIONAL", reaction=None))
+        non_reactable["findings"][0].update(
+            {"classification": "INFORMATIONAL", "disposition": "NON_ACTIONABLE"}
+        )
+        with self.assertRaisesRegex(actions.PlanError, "reaction"):
+            actions.validate_plan(non_reactable, evidence_snapshot(), p21.config())
         prohibited = {
             "REVIEW_REQUEST", "READY_TRANSITION", "LABEL", "ISSUE", "REVIEW_SUBMISSION",
             "MERGE", "AUTO_MERGE", "COMMENT_DELETE", "REVIEW_DISMISSAL", "BRANCH_WRITE",
@@ -674,6 +697,12 @@ class MutationTests(unittest.TestCase):
             with self.subTest(arguments=unsafe), self.assertRaises(actions.MutationBlocked):
                 actions._validate_action_command(unsafe)
 
+    def test_current_target_query_uses_concrete_actor_identity_fragments(self) -> None:
+        query = actions.CURRENT_MUTATION_TARGET_QUERY
+        self.assertNotIn("author { id databaseId login }", query)
+        for actor_type in ("User", "Bot", "Organization", "Mannequin"):
+            self.assertIn(f"... on {actor_type} {{ id databaseId }}", query)
+
     def test_resolution_requires_complete_specific_remediation_evidence(self) -> None:
         op = operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
         value = plan(op, current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
@@ -928,6 +957,16 @@ class AuditModeTests(unittest.TestCase):
             before = sorted(Path(directory).iterdir())
             actions.validate_plan(value, evidence_snapshot(), p21.config())
             self.assertEqual(sorted(Path(directory).iterdir()), before)
+
+
+class PolicyScriptTests(unittest.TestCase):
+    def test_policy_script_has_deterministic_tool_and_baseline_guards(self) -> None:
+        policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("command -v rg", policy)
+        self.assertIn("git -C \"$REPO_ROOT\" cat-file -e", policy)
+        self.assertIn(".github/workflows/secpal-pr-review.yaml", policy)
 
 
 if __name__ == "__main__":
