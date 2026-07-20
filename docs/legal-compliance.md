@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -11,7 +11,9 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Update when new requirements identified
 
-**Last Updated:** 2025-10-27
+**Last Updated:** 2026-07-20
+
+**Current architecture baseline:** [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) governs Tenant, global identity, Employee, access, encryption, erasure, and BWR file-export boundaries. Architecture-specific examples in this living document must conform to that accepted baseline.
 
 ---
 
@@ -51,24 +53,13 @@ by Union or Member State law"
 2. **Personal data:** Pseudonymized after retention period
 3. **Optional data:** (marketing consent, analytics) - erasable immediately
 
-**Implementation (Crypto-Shredding):**
+**Binding implementation constraints:**
 
-```php
-use Illuminate\Support\Facades\Crypt;
-
-// Encrypt personal data with Laravel's Crypt facade
-$encryptedName = Crypt::encryptString($user->name);
-
-// On erasure request (crypto-shredding approach):
-// Delete user's encryption key to make data unreadable
-DB::table('users')->where('id', $user->id)->update([
-    'encryption_key' => null, // Delete key = data unreadable
-    'name' => null,
-    'email' => 'deleted-' . hash('sha256', $user->id) . '@deleted.local',
-]);
-
-// Guard book events remain, but personal data is unrecoverable
-```
+- Global User email uses application-encrypted `email_enc` and globally unique keyed blind index `email_idx`; no persistent plaintext email tombstone is written.
+- Global User data uses a dedicated Global Identity Key boundary, not a TenantKey or the shared Laravel application-encryption boundary.
+- Historical `ended` TenantMemberships neither block User deletion nor cascade-delete with the User. Their direct User link is nullable, or an equivalent non-blocking pseudonymous tombstone is used.
+- Employee records and legally retained evidence survive deletion of a linked global User.
+- The concrete Global Identity Key hierarchy, rotation, recovery, backup, and crypto-shredding procedure require the separate security design mandated by ADR-014 before implementation.
 
 ### Data Processing Records (Art. 30)
 
@@ -224,8 +215,8 @@ class ArchiveOldShifts extends Command {
 
 **Implementation:**
 
-- Compliance export endpoint: `POST /api/v1/employees/{employee}/bwr/export`
-- Returns ZIP with PDFs + OTS proofs + verification guide
+- The former BWR CSV/XML file-export endpoint is removed by [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) without a compatibility endpoint.
+- No replacement BWR file export is implied. BWR identifiers, status, manual-reporting dates, authority decisions, compliance checks, and an authorized manual presentation process remain subject to compliance validation.
 
 ---
 

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal Contributors
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -7,7 +7,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Accepted** (Implemented in Epic #399, PRs #434 & #397)
+**Partially Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)**
+
+**Previous status:** Accepted; implemented in [SecPal/api#399](https://github.com/SecPal/api/issues/399) through [SecPal/api#434](https://github.com/SecPal/api/pull/434) and [SecPal/frontend#397](https://github.com/SecPal/frontend/pull/397).
 
 ## Date
 
@@ -16,6 +18,8 @@ SPDX-License-Identifier: CC0-1.0
 ## Deciders
 
 @kevalyq
+
+**Supersession notice:** A simple `management_level` Employee master-data field remains permitted, and no separate LeadershipLevel model is introduced. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces permission derivation from `management_level`, rank filtering as authorization, management levels in Organizational Scopes, and leadership or reporting hierarchy as an access basis. The field must not create functional rights. The historical content below is retained for context.
 
 ## Context
 

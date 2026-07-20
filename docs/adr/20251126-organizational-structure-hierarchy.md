@@ -5,13 +5,17 @@ SPDX-License-Identifier: CC0-1.0
 
 # ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies
 
-**Status:** Partially Implemented
+**Status:** Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
+
+**Previous status:** Partially Implemented
 
 **Date:** 2025-11-26
 
 **Last Updated:** 2026-06-21 (Terminology editorial alignment)
 
 **Deciders:** @kevalyq
+
+**Supersession notice:** [ADR-014](20260720-tenant-identity-access-model-adr014.md) removes Organizational Units, the closure table, the internal organizational hierarchy, `UserInternalOrganizationalScope`, and hierarchical permission inheritance. The historical content below is retained for context.
 
 **Editorial Note:** This ADR preserves parts of the original ADR-007 proposal for historical context, along with intentionally retained German `Objekt`/`Objekte` references and technical identifiers such as `customer_user_object_accesses`. Current English repository terminology standardizes on `site` and `sites` for customer locations. See [Terminology](../brand/terminology.md).
 

@@ -1,15 +1,17 @@
 <!--
-SPDX-FileCopyrightText: 2025 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal
 SPDX-License-Identifier: CC0-1.0
 -->
 
 # ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 **Date:** 2025-12-19
 
 **Deciders:** @kevalyq
+
+**Supersession notice:** [ADR-014](20260720-tenant-identity-access-model-adr014.md) removes `users.tenant_id`, assigns Users to multiple Tenants through memberships, distinguishes `tenant_keys.id` from the functional Tenant identifier, and resolves active Tenant context from an active membership rather than directly from the User. The historical content below is retained for context.
 
 **Supersedes:** Development-mode hardcoded tenant resolution
 
