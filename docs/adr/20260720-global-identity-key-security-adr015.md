@@ -129,7 +129,7 @@ Application-layer encryption primarily protects data at rest from isolated datab
 
 Global identity data uses a dedicated envelope hierarchy and never a `TenantKey`. `APP_KEY` is not its sole or authoritative root. Encryption and blind indexing use separately generated working keys with explicit purposes and independent versions. Raw working keys are stored only as authenticated wrapped values; raw root material is never stored in the database.
 
-The first self-hosted operating model uses a 256-bit random Global Identity Root/KEK in a root-owned or service-owned file outside the web root and code checkout, mounted read-only where practical, restricted to the application identity, and backed up separately under encryption and dual-control recovery procedures. The application accesses it through a `GlobalIdentityKeyWrapper` boundary. A later implementation may replace the filesystem wrapper with a KMS/HSM-backed wrap/unwrap provider without changing ciphertext or index consumers.
+The V1 self-hosted operating model uses a versioned file-based Global Identity Root Provider. It retains one immutable 256-bit random root-key file per root ID/version outside the repository, web root, deployment, and database. The provider loads a root only by its exact recorded ID/version; it does not rely on one implicit current-key file. The application accesses it through a `GlobalIdentityKeyWrapper` boundary. A later implementation may replace the filesystem provider with a KMS/HSM-backed wrap/unwrap provider without changing ciphertext or index consumers.
 
 No custom cryptographic primitive is permitted. Implementations use a maintained, reviewed library and operating-system CSPRNG. Static nonces, unauthenticated encryption, and nonce reuse with the same key are prohibited.
 
@@ -149,7 +149,7 @@ flowchart TD
     I --> X
 ```
 
-Each key record has a stable key ID, numeric version, purpose, algorithm, lifecycle state, creation/activation timestamps, wrapped key bytes, wrapping nonce, wrapping algorithm, root/KEK version, and non-secret audit metadata. The root derives no working key by reusing raw bytes. Working keys are independently random. If derivation is later required inside an HSM, a standard KDF with distinct, fixed purpose labels and contexts must provide equivalent domain separation.
+Each key record has a stable key ID, numeric version, purpose, algorithm, lifecycle state, creation/activation timestamps, wrapped key bytes, wrapping nonce, wrapping algorithm, root/KEK ID and version, and non-secret audit metadata. The root derives no working key by reusing raw bytes. Working keys are independently random. If derivation is later required inside an HSM, a standard KDF with distinct, fixed purpose labels and contexts must provide equivalent domain separation.
 
 The minimum purpose labels are:
 
@@ -157,9 +157,42 @@ The minimum purpose labels are:
 - `secpal/global-identity/user-email-lookup/v1`;
 - distinct labels for invitation addresses, pending email changes, MFA credentials, and any future persistent index.
 
-## Email storage and encryption format
+## V1 user email schema
 
-The target user schema contains `users.email_enc` and `users.email_idx`. It contains no persistent plaintext `users.email`, no persistent normalized-email column, no fallback plaintext field, and no permanent compatibility or dual-write phase.
+The logical V1 user schema contains at least:
+
+```text
+users.email_enc
+users.email_idx
+users.email_normalization_version
+users.email_idx_key_version
+users.email_version
+```
+
+`email_enc` contains the encrypted, validated original representation after permitted boundary whitespace removal. `email_idx` contains the keyed blind index of the normalized address. `email_normalization_version` identifies the normalization algorithm, and `email_idx_key_version` identifies the blind-index key. `email_version` is a monotonically increasing business version of the active email assignment and binds reset, verification, and change operations.
+
+The schema contains no persistent plaintext email, no persistent normalized plaintext, no fallback column, no permanent dual write, and no compatibility layer.
+
+## Original and normalized email data flow
+
+V1 strictly separates the display and delivery representation from lookup identity:
+
+```text
+raw request input
+→ remove permitted boundary whitespace
+→ validate the original representation
+→ encrypt the validated original representation into email_enc
+
+validated original representation
+→ normalizeEmailV1
+→ calculate email_idx
+```
+
+`email_enc` preserves the user's valid representation, including original local-part case and original international-domain spelling. Lookup normalization never replaces the encrypted original. The original representation may be decrypted only for an explicitly authorized display, immediately before mail delivery, or for a defined security or recovery procedure.
+
+Only `normalizeEmailV1(validated_original)` is indexed. It is never persisted as plaintext.
+
+## Email encryption format
 
 `users.email_enc` is a PostgreSQL `jsonb` authenticated envelope with this logical schema:
 
@@ -167,65 +200,121 @@ The target user schema contains `users.email_enc` and `users.email_idx`. It cont
 {
   "format_version": 1,
   "algorithm": "XCHACHA20-POLY1305-IETF",
+  "key_id": "<stable identifier>",
   "key_version": 1,
   "nonce": "<base64url-no-padding>",
-  "ciphertext": "<base64url-no-padding>",
-  "authentication_tag": "<base64url-no-padding>"
+  "ciphertext_and_tag": "<base64url-no-padding>"
 }
 ```
 
-Version 1 uses libsodium XChaCha20-Poly1305-IETF with a 256-bit key, a fresh uniformly random 192-bit nonce for every encryption, and a 128-bit authentication tag. The maintained library's combined ciphertext output may be split into ciphertext and tag only for serialization and must be recombined exactly for library verification. Nonces are not secret, but reuse with the same key is forbidden. Tests and metrics detect collisions; a detected collision is a security incident and blocks the write.
+Version 1 uses the maintained libsodium XChaCha20-Poly1305-IETF implementation with a 256-bit key, a fresh uniformly random 192-bit nonce for every encryption, and the library's combined ciphertext-and-authentication-tag output. V1 does not split or recombine the tag. Directly preserving the library format reduces parsing, length, ordering, and tag-association errors.
+
+Nonces are generated by the operating-system CSPRNG. Static or deterministic nonces and reuse with the same key are prohibited. V1 does not require a global production nonce-collision registry: with random 192-bit nonces, such a registry would add disproportionate persistence, synchronization, and failure modes. The encryption API must permit an injectable test RNG; tests prove correct nonce length, freshness, and that retries never reuse an earlier nonce. An observed collision or reuse is a security incident and blocks the affected operation.
 
 The AEAD additional authenticated data is the UTF-8 encoding of a fixed, unambiguous, versioned context containing:
 
 ```text
-key_purpose = secpal/global-identity/email-encryption/v1
-model_type = user
-field = email_enc
-user_id = canonical lowercase UUID
 format_version = 1
+algorithm = XCHACHA20-POLY1305-IETF
+key_purpose = secpal/global-identity/email-encryption/v1
+key_id = envelope key identifier
+key_version = envelope key version
+model_type = user
+field_name = email_enc
+record_id = canonical lowercase UUID
 ```
 
-The implementation must define one canonical field order and length-delimited encoding, test it with fixed vectors, and never serialize language-native objects implicitly. The AAD is not stored as trusted input; it is reconstructed from the record and fixed constants. Moving ciphertext to another user, field, purpose, model, or format fails authentication.
+The implementation uses the field order above and an unambiguous length-delimited canonical encoding. It never uses implicit language-object or JSON serialization. Stable test vectors define the encoding. AAD is reconstructed from fixed constants, record context, and envelope key metadata rather than accepted as trusted stored input. Moving ciphertext to another user, record, field, model, purpose, algorithm, key ID, key version, or format fails authentication.
+
+Wrapped working keys use the same principle. Their canonical AAD contains, in fixed order, at least:
+
+```text
+wrapping_format_version
+wrapping_algorithm
+working_key_purpose
+working_key_id
+working_key_version
+root_key_id
+root_key_version
+```
+
+This AAD also uses explicit length encoding and stable test vectors.
 
 Unknown formats, algorithms, or key versions; invalid base64url; wrong nonce or tag lengths; missing fields; extra security-relevant ambiguity; incorrect AAD; and failed authentication all fail closed. No caller receives partial plaintext, and no fallback key or legacy plaintext lookup is attempted.
 
 ## Email normalization
 
-All flows use exactly one `normalizeEmailV1` implementation before indexing, uniqueness checks, comparison, or encryption. Version 1 performs these steps in order:
+V1 supports ASCII local parts and internationalized domains through IDNA. It defines case-insensitive global identity but does not accept internationalized Unicode local parts and therefore does not require SMTPUTF8.
 
-1. Accept a UTF-8 string and remove Unicode `White_Space` code points only from both ends. Interior whitespace is not altered.
-2. Normalize the complete value to Unicode NFC. Reject malformed UTF-8 or unavailable normalization support.
-3. Split at the single final `@`; require a non-empty local part and domain and reject additional unquoted structural ambiguity. Quoted local parts and comments are not accepted in version 1.
-4. Apply Unicode default case folding to the local part, then NFC again. This makes global identity lookup intentionally case-insensitive. Do not change dots, plus suffixes, or provider-specific aliases.
-5. Convert the domain with UTS #46 non-transitional IDNA processing and STD3 rules to ASCII A-label form, reject all IDNA errors, and lowercase the ASCII result. A trailing root dot is rejected rather than silently removed.
-6. Validate the normalized `local@domain` as a deliverable address under the application's maintained email-validation library, including DNS-independent syntax rules. Require local part at most 64 UTF-8 octets, each domain label at most 63 ASCII octets, domain at most 253 ASCII octets, and complete normalized address at most 254 octets.
-7. Return the normalized UTF-8 local part, one ASCII `@`, and lowercase ASCII domain. Invalid input produces a generic validation error before any lookup and is never persisted.
+All lookup, uniqueness, and normalized comparison flows use exactly one `normalizeEmailV1` implementation. Version 1 performs these steps in order:
 
-This deliberate case-insensitive local-part policy trades theoretical SMTP local-part case sensitivity for predictable global identity semantics. SecPal does not remove Gmail-style dots, strip plus suffixes, apply provider alias rules, or heuristically merge distinct addresses.
+1. Require valid UTF-8 input.
+2. Remove Unicode `White_Space` code points only at both outer boundaries.
+3. Do not alter interior whitespace; reject rather than silently repair invalid interior whitespace.
+4. Require exactly one structural ASCII `@` with non-empty local part and domain.
+5. Reject quoted local parts, comments, and obsolete RFC syntax.
+6. Require the complete local part to be ASCII.
+7. Lowercase ASCII letters in the local part with a locale-independent mapping.
+8. Preserve dots exactly.
+9. Preserve plus suffixes exactly.
+10. Apply no provider-specific alias rule or heuristic identity merge.
+11. Process the domain with UTS #46 non-transitional IDNA and STD3 rules.
+12. Reject every IDNA error.
+13. Emit the domain as lowercase ASCII A-labels.
+14. Reject a trailing root dot rather than removing it.
+15. Enforce DNS-independent syntax limits: local part at most 64 ASCII octets, every domain label at most 63 ASCII octets, domain at most 253 ASCII octets, and the complete normalized address at most 254 octets.
+16. Return a generic validation error for invalid input and neither look it up nor persist it.
 
-Normalization behavior is versioned independently from ciphertext format. A future normalization version requires collision analysis, an explicit reservation/re-index procedure, and a separate architectural decision if it changes identity equivalence.
+The output is:
+
+```text
+lowercase_ascii_local_part + "@" + lowercase_ascii_idna_domain
+```
+
+This policy provides predictable case-insensitive identity while retaining international domains. Self-hosted relays do not reliably support SMTPUTF8, and syntax validation alone cannot guarantee SMTPUTF8 delivery. An accepted address must remain usable for verification, password-reset, and security mail. A later EAI/SMTPUTF8-capable format requires a new normalization version, collision analysis, controlled re-indexing, global reservations, and an explicit architecture decision about changed identity equivalence.
+
+Normalization behavior is versioned independently from ciphertext, encryption-key, and index-key versions.
 
 ## Blind-index design
 
 For user lookup:
 
 ```text
-email_idx = HMAC-SHA-256(user_email_lookup_index_key, normalizeEmailV1(email))
+email_idx = HMAC-SHA-256(
+    user_email_lookup_index_key,
+    canonical_encode(
+        purpose,
+        normalization_version,
+        normalized_email
+    )
+)
 ```
 
 - The HMAC key is the active, independently random Global Identity Blind-Index Key for purpose `secpal/global-identity/user-email-lookup/v1`.
+- The HMAC input uses that exact purpose, the explicit normalization version, and `normalizeEmailV1(validated_original)`, in fixed order with unambiguous length encoding. It never uses implicit language-object or JSON serialization.
 - `users.email_idx` is PostgreSQL `bytea`, exactly 32 bytes. It is never hex or base64 text in the database.
-- `users.email_idx_key_version` is a non-null integer identifying the index-key version. A unique constraint covers the active `users.email_idx`; rotation metadata additionally enforces uniqueness per accepted version.
+- `users.email_normalization_version` and `users.email_idx_key_version` are non-null and independent. A unique constraint covers the active lookup representation; rotation metadata additionally enforces uniqueness for every accepted pair.
 - Comparisons use database binary equality. Any application comparison outside the database uses a maintained constant-time comparison function.
-- Exact lookup calculates candidate HMACs for the small, explicit set of accepted read versions and queries indexed binary values. It never decrypts for search and never scans or decrypts the user table.
+- Exact lookup calculates candidate HMACs for the small, explicit set of accepted lookup-version pairs and queries indexed binary values. It never decrypts for search and never scans or decrypts the user table.
 - Writes use only the designated write version, except that a time-limited cryptographic index rotation records both required version representations in the rotation structure described below. This is not a compatibility layer with plaintext or an old product model.
+
+The logical lookup identity is:
+
+```text
+normalization_version
+index_key_version
+email_idx
+```
+
+An accepted lookup version is the pair `(normalization_version, index_key_version)`. The accepted-read set and write version are explicit pairs. Users, rotation reservations, pending email changes, registrations, invitation acceptance that creates a user, global uniqueness checks, advisory-lock inputs, recovery, and restore all carry or derive the complete pair.
+
+A normalization change is not a key rotation. It changes possible identity equivalence and therefore requires collision analysis, global reservations, controlled re-indexing, and an explicit architectural decision.
 
 The index necessarily leaks equality: equal normalized emails under the same purpose and key version produce equal values. It also leaks frequency if duplicate-capable datasets use the same purpose. The unique user index suppresses duplicate row frequency but still reveals equality checks and correlations with access patterns. HMAC prevents a database-only attacker from computing guesses; it does not prevent offline dictionary attacks after the index key is compromised. Email addresses have limited entropy and are often enumerable, so index-key custody, purpose separation, rotation, breach response, and data minimization remain essential.
 
 ### Concurrency and global uniqueness
 
-Registration, invitation acceptance that creates a user, and email activation run in a database transaction. They compute candidate indexes for every accepted lookup version, acquire transaction-scoped advisory locks derived from those binary candidates in a stable order, check both active user rows and rotation reservations, and then insert or activate. Database unique constraints are the final guard. A conflict returns a neutral response and never reveals whether the winner is an existing account, pending registration, or pending email change.
+Registration, invitation acceptance that creates a user, and email activation run in a database transaction. They compute candidate indexes for every accepted `(normalization_version, index_key_version)` pair, acquire transaction-scoped advisory locks derived from the complete versioned binary candidates in a stable order, check both active user rows and reservations, and then insert or activate. Database unique constraints are the final guard. A conflict returns a neutral response and never reveals whether the winner is an existing account, pending registration, or pending email change.
 
 ## Index purpose separation
 
@@ -237,7 +326,7 @@ The user lookup index is not reused across tables. Reuse would let a database-on
 | Invitations for an existing user        | Store `user_id`; do not store another email index. Resolve the delivery address at send time.                                                                                                                                                     |
 | Invitations for a not-yet-existing user | Store authenticated ciphertext under an invitation-address purpose. If exact deduplication is required, use an invitation-specific index key/purpose; never the user index.                                                                       |
 | Pending email change                    | Store encrypted candidate address plus a purpose-specific global uniqueness reservation. The reservation may use the user lookup family only inside the controlled ownership/rotation protocol; it is not exposed as a general cross-table index. |
-| Password reset                          | Store `user_id`, token hash, expiry, and creation time. No email value or email index is stored.                                                                                                                                                  |
+| Password reset                          | Store `user_id`, `email_version`, token hash, expiry, creation time, and consumption time. No email value or email index is stored.                                                                                                               |
 | Email verification                      | Bind to `user_id` and the current email version, or to a concrete pending-change operation. No email lookup field is stored.                                                                                                                      |
 | Rate limiting                           | Use HMAC of normalized input under a short-lived rate-limit purpose key plus IP/scope as needed, or `user_id` after lookup. Never place plaintext or a reusable database index in cache keys.                                                     |
 | Security events                         | Store `user_id` when known and a non-reversible event-scoped correlation identifier when unknown. Do not store email, normalized email, or the persistent user index.                                                                             |
@@ -284,29 +373,54 @@ The preferred persistent model is:
 
 ```text
 user_id
+email_version
 token_hash
 expires_at
 created_at
+consumed_at
 ```
 
-The reset-request endpoint normalizes and indexes the submitted email, resolves `user_id`, performs equalized work for missing accounts, and returns one neutral response. It stores only a strong token hash bound to `user_id`; plaintext email is not a table key, lookup key, URL parameter, log property, or job payload. The delivery job contains a reset-operation ID or `user_id` plus an encrypted record reference. The plaintext token exists only at generation and delivery boundaries.
+The reset-request endpoint normalizes and indexes the submitted email, resolves `user_id`, performs equalized work for missing accounts, and returns one neutral response. The operation captures the user's current `email_version` and stores no email or email index. It stores only a strong token hash bound to the operation; plaintext email is not a table key, lookup key, URL parameter, log property, or job payload. The delivery job contains only the reset-operation ID, or `user_id` plus the reset-operation ID. Immediately before delivery, the worker locks or reloads the operation and user, confirms that the bound `email_version` is still active, and only then decrypts the current address. A stale job does not send to an address replaced after the reset request. The plaintext token exists only at generation and delivery boundaries.
 
-Reset consumption locks the operation, checks expiry and the maintained token-hash verifier, changes the password, consumes all outstanding reset operations, clears remember state, and revokes sessions and access tokens atomically. Replay and parallel consumption permit one winner.
+Reset consumption locks the operation, checks that its `email_version` remains current, checks expiry and the maintained token-hash verifier, changes the password, consumes all outstanding reset operations, clears the defined credentials and remember state, and revokes sessions and access tokens atomically. Email activation atomically revokes every reset operation bound to an older email version. Tokens are strongly hashed, expiring, and single-use; replay and parallel consumption permit one winner.
 
 ## Email verification
 
-Verification is bound to `user_id`, the current email version, and a single-use verification operation, or to one explicit pending email-change operation. The stored token is hashed, expires, and is consumed once. The verification URL needs an opaque operation identifier and token, not email. A signature derived from plaintext email is not the identity binding.
+Active-email verification is bound to exactly:
+
+```text
+user_id
+email_version
+verification_operation_id
+token_hash
+```
+
+Alternatively, candidate-address verification binds to one explicit pending email-change operation. The stored token is strongly hashed, expires, and is consumed once. The verification URL needs an opaque operation identifier and token, not email. A signature derived from plaintext email is not the identity binding.
 
 Verification of the active address updates only that exact email version. Verification of a pending address does not mutate the active address until the email-change activation transaction succeeds. Resend uses `user_id` and invalidates or supersedes prior operations according to policy.
 
 ## Email change
 
+The pending operation stores:
+
+```text
+operation_id
+user_id
+operation_version
+candidate_email_enc
+normalization_version
+index_key_version
+candidate_email_idx_reservation
+token_hash
+expires_at
+```
+
 1. Require recent step-up authentication using password plus MFA/passkey according to account policy.
-2. Normalize the new address, reject a no-op against the current address, calculate indexes, and reserve global uniqueness under transaction-scoped locks.
-3. Persist the candidate only as purpose-bound authenticated ciphertext in a pending operation with expiry, requester `user_id`, operation version, and hashed verification token. Never replace the active email before verification.
+2. Validate and preserve the candidate's original representation, normalize it, reject a no-op against the current address, calculate indexes for every accepted lookup-version pair, and reserve global uniqueness under transaction-scoped locks.
+3. Persist the candidate only as purpose-bound authenticated ciphertext in a pending operation with expiry, requester `user_id`, monotonically increasing operation version, explicit normalization and index-key versions, reservation, and hashed verification token. The candidate encryption purpose is separate from the active user-email purpose. Never replace the active email before verification.
 4. Send verification to the candidate address by pending-operation ID. Send a security notification to the old active address without placing either address in logs or job payloads.
-5. On token consumption, lock the user and pending reservation, recheck uniqueness across accepted index versions, and atomically write new `email_enc`, `email_idx`, and versions; mark verified; release the old index; consume competing pending operations; and record an audit event.
-6. Revoke old password-reset and email-verification operations, remember tokens, sessions, and access tokens according to the credential-revocation policy. Require fresh login unless the accepted product policy explicitly preserves the initiating session.
+5. On token consumption, lock the user and pending reservation, recheck uniqueness across accepted lookup-version pairs, and atomically write the candidate original representation to `email_enc`, activate its `email_idx` and independent versions, increment `email_version`, mark that version verified, release the old index, consume competing pending operations, and record an audit event.
+6. Atomically revoke password-reset and email-verification operations bound to the replaced email version, plus remember tokens, sessions, and access tokens according to the credential-revocation policy. Require fresh login unless the accepted product policy explicitly preserves the initiating session.
 7. Concurrent changes for one user use a monotonically increasing operation version; only the latest active operation may win. Concurrent claims by different users are serialized by the global reservation protocol.
 
 Cancellation, expiry, failure, or lost-key conditions release reservations safely and leave the old active email unchanged.
@@ -316,6 +430,21 @@ Cancellation, expiry, failure, or lost-key conditions release reservations safel
 Email is decrypted only immediately before handing a recipient address to the mail transport or rendering an authorized response that requires it. Delivery workers receive `user_id`, invitation/reset/change operation ID, or an encrypted record reference. Persistent queue payloads, failed-job tables, retry metadata, exception contexts, and monitoring events must not contain plaintext email, normalized email, decrypted model snapshots, or complete tokens.
 
 Mail delivery fails closed if the required key or ciphertext cannot be authenticated. The system records a redacted delivery failure keyed by operation ID, user ID where known, key version, and error class. It does not fall back to a plaintext column or guess another recipient.
+
+## Versioned self-hosted root provider
+
+V1 uses a versioned file-based root provider:
+
+```text
+Global Identity Root Provider
+├── root version 1
+├── root version 2
+└── retained historical versions
+```
+
+The provider manages multiple Root/KEK versions concurrently and loads a root only by its exact recorded ID and version. It has no implicit global `current key` file. It never overwrites an old root, publishes a new version atomically, supports one write-active version alongside recovery-retained historical versions, and fails closed when a requested version is unavailable. Registry metadata selects the write-active root version; renaming or replacing a root file does not. The provider interface permits a later KMS/HSM implementation without changing envelope semantics.
+
+The recommended file-based execution uses a dedicated root-key directory outside the repository, deployment, webroot, and database. It stores one immutable regular file per root version, containing exactly 32 random bytes. The operating account exclusively owns and can access the directory; group and world permissions are absent. Root files use mode `0600` or stricter. The provider rejects symlinks, non-regular files, insecure ownership or permissions, unexpected length, and missing exact versions. Provisioning creates and publishes a new file atomically without overwrite. Runtime processes receive read access only where practical; a separately authorized operational process provisions and rotates roots. Exact filenames and configuration-key names remain implementation details.
 
 ## Rotation
 
@@ -333,9 +462,9 @@ All rotations require an approved operation ID, current backups and recovery tes
 ### Blind-index-key rotation
 
 1. Create, wrap, and verify a new index-key version. Keep the old version accepted for reads.
-2. Create a time-limited cryptographic rotation structure holding `(user_id, key_version, email_idx)` with unique `(key_version, email_idx)` constraints and lifecycle state. It contains no plaintext.
+2. Keep `normalization_version` unchanged for a pure key rotation. Create a time-limited cryptographic rotation structure holding `(user_id, normalization_version, index_key_version, email_idx, rotation_state)` with unique constraints over the complete versioned lookup identity. It contains no plaintext.
 3. For each user, decrypt `email_enc`, normalize, compute old and new indexes, verify the old value, and persist the new reservation in an idempotent transaction.
-4. During rotation, lookups calculate both versions. Registrations and email changes calculate, lock, check, and reserve both versions so global uniqueness holds across old-only, new-only, and migrated rows.
+4. During rotation, accepted reads and writes use the explicit set of `(normalization_version, index_key_version)` pairs. Registrations and email changes calculate every accepted representation, acquire locks in stable order, check both user rows and reservations, and reserve every representation so global uniqueness holds across old-only, new-only, and migrated rows.
 5. After every user has a verified new reservation, atomically or in guarded batches move the new value/version into `users.email_idx`; writes continue to maintain both representations until cutover completes.
 6. Completion requires one verified new index per user, no duplicates or unresolved collisions, no old-version-only rows, successful login and concurrency tests, and a recovery checkpoint. Then stop old-version writes, remove old rotation entries, and retire the old key subject to backup retention.
 
@@ -343,11 +472,11 @@ This dual-index interval is an explicitly time-limited cryptographic rotation ph
 
 ### Root/KEK rotation
 
-1. Provision a new root version in separate custody and verify access without replacing the old root.
-2. Read each wrapped working key with its recorded old root version and rewrap the unchanged working key with fresh nonce, purpose-bound AAD, and the new root version.
-3. Store old and new wrapped envelopes transactionally or in a versioned registry so interruption never makes a key unreadable. The application selects the exact root version, not a global implicit current file.
-4. Checkpoint and resume until all working keys and retained metadata reference the new root. Validate application reads and an isolated restore.
-5. Deactivate the old root for writes, retain it under recovery controls while any database or backup references it, and destroy it only after reference and retention review. Rollback is possible while both root versions remain available.
+1. Provision and verify a new root version separately without replacing, renaming, or modifying the old root version.
+2. Open each wrapped working key with its exactly recorded root ID/version, then wrap the unchanged working key with a fresh nonce, authenticated wrapping AAD, and the new root ID/version.
+3. Store old and new wrapped envelopes transactionally or through a versioned registry so interruption never makes a key unreadable. Registry metadata, not a global implicit current file, selects the write-active root version.
+4. Checkpoint and resume until all working keys and retained metadata reference the new root. Test restore paths requiring the old root and the new root, as well as mixed in-progress registry state.
+5. Deactivate the old root for writes but retain it unchanged while active data or any retained backup references it. Destroy it only after exhaustive reference and retention review. Rollback remains possible while both root versions and their registry envelopes remain available.
 
 ### Emergency rotation
 
@@ -355,8 +484,8 @@ Suspected compromise freezes discretionary key changes, preserves evidence, iden
 
 ## Backup and recovery
 
-- Database backups include ciphertext, blind indexes, rotation state, checkpoints, key IDs, versions, purposes, algorithms, lifecycle states, and authenticated wrapped working keys.
-- Raw Global Identity Root/KEK material is backed up separately from database and object-storage backups, encrypted under an independent recovery control, stored in a different security and failure domain, and accessible only to explicitly authorized recovery roles. No real key value belongs in documentation.
+- Database backups include ciphertext, blind indexes, normalization and key versions, rotation state, checkpoints, key IDs, root IDs/versions, purposes, algorithms, lifecycle states, and authenticated wrapped working keys.
+- Every retained Global Identity Root/KEK version required by active data or a retained backup is backed up separately from database and object-storage backups, encrypted under an independent recovery control, stored in a different security and failure domain, and accessible only to explicitly authorized recovery roles. No real key value belongs in documentation.
 - Backup systems use least privilege, encryption in transit and at rest, immutable or append-protected retention where practical, access audit, and regular restore sampling.
 - Restore order is: isolate the environment; inventory database key references and rotation epoch; obtain the exact required root versions through recovery authorization; restore key-provider access; restore database and storage; verify wrapped-key and ciphertext authentication; resume or reconcile interrupted rotations; run integrity, uniqueness, login, and mail-boundary checks; then permit traffic.
 - Restoring a backup created before or during rotation requires every root, encryption, and index version it references. The restored system must not silently use only today's write key or delete historical versions.
@@ -398,20 +527,22 @@ Responses decrypt and expose email only to the data subject or an explicitly aut
 Implementation work must add positive, negative, concurrency, failure-injection, and recovery tests for at least:
 
 - raw database rows, backups/fixtures, queue payloads, logs, traces, and errors containing no plaintext or normalized email;
-- correct encryption/decryption and deterministic envelope parsing;
-- wrong encryption key, unknown version, wrong AAD, moved-record/field context, malformed envelope, and ciphertext/tag manipulation;
-- fresh nonce generation, collision detection behavior, and no nonce reuse per key;
-- trimming, Unicode NFC, Unicode case folding, invalid UTF-8, IDN/UTS #46 conversion, length boundaries, invalid addresses, and prohibited provider-specific transformations;
-- deterministic HMAC output, binary storage, constant-time application comparison, exact blind-index login, and no full-table decryption;
+- round-trip preservation of the validated original representation, including its case and international-domain spelling, and proof that lookup normalization does not replace or modify `email_enc`;
+- correct encryption/decryption and deterministic parsing of the combined libsodium `ciphertext_and_tag` envelope;
+- wrong encryption key, unknown version, wrong AAD, moved-record/field context, malformed envelope, ciphertext/tag manipulation, and manipulated algorithm, key ID, or key version;
+- fresh 192-bit nonce generation with an injectable test RNG, no reuse per key, and retry behavior that never reuses the prior nonce, without requiring a global production collision registry;
+- Unicode boundary-whitespace trimming, invalid UTF-8, rejection of Unicode local parts, ASCII local-part lowercasing, preserved dots and plus suffixes, IDNA/UTS #46 non-transitional and STD3 test vectors, rejected trailing root dots, length boundaries, invalid addresses, and prohibited provider-specific transformations;
+- independent normalization and index-key versions, accepted lookup-version pairs, deterministic HMAC output, binary storage, constant-time application comparison, exact blind-index login, and no full-table decryption;
 - global uniqueness under parallel registration and email changes, including every active index-rotation phase;
 - uniform account-enumeration responses and rate-limit keys that contain no plaintext or persistent index;
 - existing-user and new-user invitations, atomic membership/right creation, replay, expiry, wrong identity proof, and parallel acceptance;
-- reset token hashing, `user_id` binding, expiry, single use, parallel consumption, neutral missing-account behavior, and session/token revocation;
-- verification token hashing, active/pending binding, replay, expiry, supersession, and wrong-operation context;
+- reset token hashing, `user_id` and `email_version` binding, expiry, single use, parallel consumption, neutral missing-account behavior, rejection of an obsolete email version, revocation on email activation, a queued job after email change that does not send, and session/token revocation;
+- verification token hashing, `user_id` and exact active `email_version` or pending-operation binding, replay, expiry, supersession, and wrong-operation context;
 - email-change step-up, reservation, verification, activation, old-address notification, competing requests, rollback, and credential revocation;
 - passkey authentication without email lookup and MFA encryption/key-boundary migration behavior;
 - encryption-key, blind-index-key, root/KEK, and emergency rotation, including mixed versions, resumability, idempotence, failure injection, uniqueness, reference checks, and retirement blocking;
-- restore from backups before, during, and after every rotation; missing root or historical key version; corrupt metadata; and final root-loss runbook behavior;
+- the versioned file-based root provider, including ownership/permission/type/length rejection, atomic no-overwrite publication, exact-version selection, concurrent old/new root availability, and failure when a historical root version is missing;
+- restore from backups before, during, and after every rotation; missing active or historical root/key version; corrupt metadata; and final root-loss runbook behavior;
 - mail decryption only at delivery, failed delivery without plaintext leakage, and comprehensive log/error/job redaction.
 
 Cryptographic encoding, normalization, AAD, and index functions require stable test vectors. Tests must use synthetic values and keys only; fixtures must never copy operational secrets.
@@ -508,7 +639,7 @@ These choices do not reopen the binding security boundaries above:
 
 - The exact key-registry table names, state enum names, rotation-checkpoint schema, and advisory-lock key encoding.
 - The maintained PHP/libsodium abstraction and canonical length-delimited AAD encoder, including published test vectors.
-- The self-hosted root provider's exact process isolation and whether a local secret service replaces a directly mounted file in the first implementation.
+- The file-based root provider's exact directory and file names, configuration-key names, process isolation, and read-access handoff mechanics within the binding V1 provider model.
 - KMS/HSM provider interface details, availability policy, caching limits, and non-exportable-key capabilities.
 - Rotation batch size, throttling, metrics, maintenance-window policy, and retention durations for retired keys and rotation sidecars.
 - The precise invitation identity-proof policy and whether new-user invitation deduplication needs an invitation-specific persistent index.
@@ -521,10 +652,10 @@ These choices do not reopen the binding security boundaries above:
 1. Accept this ADR before implementation and create separately scoped implementation issues under the ADR-014 delivery epic.
 2. Introduce the Global Identity key-provider/wrapper interface, versioned key registry, self-hosted root custody, redacted audit events, and recovery tooling with synthetic tests.
 3. Implement `normalizeEmailV1`, AAD encoding, versioned XChaCha20-Poly1305 envelopes, HMAC-SHA-256 index calculation, fixed vectors, and fail-closed error types.
-4. Establish the clean user schema with `email_enc`, `email_idx`, index/encryption versions, constraints, and no plaintext or compatibility columns.
+4. Establish the clean user schema with `email_enc`, `email_idx`, `email_normalization_version`, `email_idx_key_version`, monotonically increasing `email_version`, encryption metadata, constraints, and no plaintext or compatibility columns.
 5. Add a single global identity repository/service for atomic create, lookup, authorized decrypt, reservation, and concurrency control; prohibit direct email queries.
 6. Convert login, rate limiting, responses, sessions, Sanctum, passkey presentation, MFA identifiers, and activity/security logging.
-7. Replace password-reset and verification persistence with `user_id`-bound opaque operations and redacted queued delivery.
+7. Replace password-reset and verification persistence with `user_id`- and `email_version`-bound opaque operations and redacted queued delivery.
 8. Implement invitation/registration and dedicated pending email-change flows with atomic membership/right creation and global reservations.
 9. Move MFA secrets and recovery data from the broad `APP_KEY` boundary to a dedicated global credential purpose while preserving fail-closed migration rules in the clean baseline.
 10. Implement and exercise encryption-key, blind-index-key, root/KEK, and emergency rotation state machines, including interrupted operations and uniqueness stress tests.
