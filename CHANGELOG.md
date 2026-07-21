@@ -35,6 +35,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   source-backed classification coverage for every unresolved-thread comment,
   enforced strict and last-moment merge-state blockers, and rejected
   secret-like batch or manual-gate evidence before persisting artifacts
+- rejected unauthenticated prior-result reuse and non-open reviewed states,
+  required typed classification coverage for top-level feedback and reactions,
+  and bound fixed-finding test evidence to the signed validation receipt
 - limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
   ignored session scratch files cannot block a push while tracked violations
   remain enforced

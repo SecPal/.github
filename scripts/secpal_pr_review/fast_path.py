@@ -26,6 +26,18 @@ SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
 )
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
+SOURCE_KINDS = frozenset(
+    {
+        "PULL_REQUEST_REACTION",
+        "REVIEW",
+        "REVIEW_REACTION",
+        "CONVERSATION_COMMENT",
+        "CONVERSATION_REACTION",
+        "THREAD_COMMENT",
+        "THREAD_COMMENT_REACTION",
+    }
+)
+THREAD_SOURCE_KINDS = frozenset({"THREAD_COMMENT", "THREAD_COMMENT_REACTION"})
 CLASSIFICATION_DISPOSITIONS = {
     "VALID_ACTIONABLE": frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}),
     "INVALID_FALSE_OR_MISLEADING": frozenset({"DISPROVEN_WITH_EVIDENCE"}),
@@ -355,10 +367,17 @@ class ReadinessState:
 
 
 @dataclass(frozen=True)
+class BatchSource:
+    kind: str
+    node_id: str
+    digest: str
+
+
+@dataclass(frozen=True)
 class BatchFinding:
     finding_id: str
-    thread_id: str
-    source_comments: tuple[tuple[str, str], ...]
+    thread_id: str | None
+    sources: tuple[BatchSource, ...]
     source_subitem_id: str | None
     classification: str
     disposition: str
@@ -380,9 +399,13 @@ def _batch_finding_dict(item: BatchFinding) -> dict[str, Any]:
     return {
         "finding_id": item.finding_id,
         "thread_id": item.thread_id,
-        "source_comments": [
-            {"comment_id": comment_id, "body_digest": body_digest}
-            for comment_id, body_digest in item.source_comments
+        "sources": [
+            {
+                "kind": source.kind,
+                "node_id": source.node_id,
+                "digest": source.digest,
+            }
+            for source in item.sources
         ],
         "source_subitem_id": item.source_subitem_id,
         "classification": item.classification,
@@ -408,7 +431,6 @@ class BatchRequest:
     reviewed_feedback_digest: str
     findings: list[BatchFinding]
     operations: list[BatchOperation]
-    prior_results: list[dict[str, Any]]
 
     @classmethod
     def from_dict(cls, value: Any) -> "BatchRequest":
@@ -416,6 +438,10 @@ class BatchRequest:
             raise SecurityBlocker("batch request must be a JSON object")
         if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
             raise SecurityBlocker("batch request contains a secret-like value")
+        if "prior_results" in value:
+            raise SecurityBlocker(
+                "caller-authored prior resolution evidence is not accepted"
+            )
         expected_keys = {
             "schema_version",
             "batch_id",
@@ -429,11 +455,10 @@ class BatchRequest:
             "reviewed_feedback_digest",
             "findings",
             "operations",
-            "prior_results",
         }
         if set(value) != expected_keys:
             raise SecurityBlocker("batch request contains unsupported capabilities or missing fields")
-        if value["schema_version"] != "1.1":
+        if value["schema_version"] != "1.2":
             raise SecurityBlocker("batch request schema version is unsupported")
         findings_value = value["findings"]
         if not isinstance(findings_value, list) or not findings_value:
@@ -443,7 +468,7 @@ class BatchRequest:
             expected_finding_keys = {
                 "finding_id",
                 "thread_id",
-                "source_comments",
+                "sources",
                 "source_subitem_id",
                 "classification",
                 "disposition",
@@ -463,27 +488,44 @@ class BatchRequest:
                 raise SecurityBlocker(
                     "batch finding classification and disposition are incompatible"
                 )
-            source_value = item["source_comments"]
+            source_value = item["sources"]
             if not isinstance(source_value, list) or not source_value:
-                raise SecurityBlocker("batch finding requires source comments")
-            source_comments: list[tuple[str, str]] = []
+                raise SecurityBlocker("batch finding requires feedback sources")
+            sources: list[BatchSource] = []
             for source in source_value:
                 if not isinstance(source, dict) or set(source) != {
-                    "comment_id",
-                    "body_digest",
+                    "kind",
+                    "node_id",
+                    "digest",
                 }:
-                    raise SecurityBlocker("batch finding source comment is malformed")
-                source_comments.append(
-                    (
-                        _require_string(source["comment_id"], "source comment identity"),
-                        _require_digest(
-                            source["body_digest"], "source comment body digest"
+                    raise SecurityBlocker("batch finding feedback source is malformed")
+                if source["kind"] not in SOURCE_KINDS:
+                    raise SecurityBlocker("batch finding feedback source kind is unsupported")
+                sources.append(
+                    BatchSource(
+                        kind=source["kind"],
+                        node_id=_require_string(
+                            source["node_id"], "feedback source identity"
+                        ),
+                        digest=_require_digest(
+                            source["digest"], "feedback source digest"
                         ),
                     )
                 )
-            source_ids = [comment_id for comment_id, _ in source_comments]
+            source_ids = [(source.kind, source.node_id) for source in sources]
             if len(source_ids) != len(set(source_ids)):
-                raise SecurityBlocker("batch finding repeats a source comment")
+                raise SecurityBlocker("batch finding repeats a feedback source")
+            thread_id = item["thread_id"]
+            if thread_id is not None:
+                thread_id = _require_string(
+                    thread_id, "finding thread identity"
+                )
+            if any(source.kind in THREAD_SOURCE_KINDS for source in sources) != (
+                thread_id is not None
+            ):
+                raise SecurityBlocker(
+                    "thread feedback sources and finding thread identity are inconsistent"
+                )
             source_subitem_id = item["source_subitem_id"]
             if source_subitem_id is not None:
                 source_subitem_id = _require_string(
@@ -503,6 +545,12 @@ class BatchRequest:
                 raise SecurityBlocker(
                     "fixed batch findings require test evidence and a commit"
                 )
+            if disposition not in FIXED_DISPOSITIONS and (
+                test_evidence_digest is not None or commit_sha is not None
+            ):
+                raise SecurityBlocker(
+                    "non-fixed batch findings cannot carry fix-only evidence"
+                )
             canonical_finding_id = item["canonical_finding_id"]
             if canonical_finding_id is not None:
                 canonical_finding_id = _require_string(
@@ -511,8 +559,8 @@ class BatchRequest:
             findings.append(
                 BatchFinding(
                     finding_id=_require_string(item["finding_id"], "finding identity"),
-                    thread_id=_require_string(item["thread_id"], "finding thread identity"),
-                    source_comments=tuple(source_comments),
+                    thread_id=thread_id,
+                    sources=tuple(sources),
                     source_subitem_id=source_subitem_id,
                     classification=classification,
                     disposition=disposition,
@@ -599,29 +647,15 @@ class BatchRequest:
                         "batch operation does not bind a finding from its thread"
                     )
                 linked_findings.append(finding_id)
+        threaded_finding_ids = {
+            finding.finding_id for finding in findings if finding.thread_id is not None
+        }
         if len(linked_findings) != len(set(linked_findings)) or set(
             linked_findings
-        ) != set(findings_by_id):
+        ) != threaded_finding_ids:
             raise SecurityBlocker(
-                "every classified finding must belong to exactly one batch operation"
+                "every threaded finding must belong to exactly one batch operation"
             )
-        prior_results = value["prior_results"]
-        if not isinstance(prior_results, list):
-            raise SecurityBlocker("prior operation evidence must be a list")
-        for result in prior_results:
-            if not isinstance(result, dict) or set(result) != {
-                "operation_id",
-                "thread_id",
-                "authorization_digest",
-                "mutation_identity",
-                "status",
-            }:
-                raise SecurityBlocker("prior operation evidence is malformed")
-            for key in ("operation_id", "thread_id", "mutation_identity"):
-                _require_string(result[key], f"prior result {key}")
-            _require_digest(result["authorization_digest"], "prior authorization digest")
-            if result["status"] != "APPLIED":
-                raise SecurityBlocker("prior operation evidence status is not authoritative")
         pull_request_number = value["pull_request_number"]
         if not isinstance(pull_request_number, int) or isinstance(
             pull_request_number, bool
@@ -631,7 +665,7 @@ class BatchRequest:
         if not REPOSITORY.fullmatch(repository):
             raise SecurityBlocker("batch repository identity is invalid")
         return cls(
-            schema_version="1.1",
+            schema_version="1.2",
             batch_id=_require_string(value["batch_id"], "batch identity"),
             repository=repository,
             pull_request_number=pull_request_number,
@@ -647,7 +681,6 @@ class BatchRequest:
             ),
             findings=findings,
             operations=operations,
-            prior_results=copy.deepcopy(prior_results),
         )
 
     @property
@@ -699,7 +732,6 @@ class BatchRequest:
                 }
                 for item in self.operations
             ],
-            "prior_results": copy.deepcopy(self.prior_results),
         }
 
 
@@ -923,6 +955,67 @@ def verify_commit_signatures(
     return verified
 
 
+def _classified_feedback_sources(
+    reviewed_state: StableFeedbackState,
+) -> dict[tuple[str, str], tuple[str, str | None]]:
+    expected: dict[tuple[str, str], tuple[str, str | None]] = {}
+
+    def add(kind: str, node_id: str, source_digest: str, thread_id: str | None) -> None:
+        key = (kind, node_id)
+        if key in expected:
+            raise SecurityBlocker("stable feedback repeats a classification source")
+        expected[key] = (source_digest, thread_id)
+
+    for reaction in reviewed_state.feedback["pull_request_reactions"]:
+        add(
+            "PULL_REQUEST_REACTION",
+            reaction["mutation_id"],
+            digest_json(reaction),
+            None,
+        )
+    for review in reviewed_state.feedback["reviews"]:
+        add("REVIEW", review["node_id"], review["body_digest"], None)
+        for reaction in review["reactions"]:
+            add(
+                "REVIEW_REACTION",
+                reaction["mutation_id"],
+                digest_json(reaction),
+                None,
+            )
+    for comment in reviewed_state.feedback["conversation_comments"]:
+        add(
+            "CONVERSATION_COMMENT",
+            comment["node_id"],
+            comment["body_digest"],
+            None,
+        )
+        for reaction in comment["reactions"]:
+            add(
+                "CONVERSATION_REACTION",
+                reaction["mutation_id"],
+                digest_json(reaction),
+                None,
+            )
+    for thread in reviewed_state.feedback["threads"]:
+        if thread["is_resolved"] is True:
+            continue
+        for comment in thread["comments"]:
+            add(
+                "THREAD_COMMENT",
+                comment["node_id"],
+                comment["body_digest"],
+                thread["node_id"],
+            )
+            for reaction in comment["reactions"]:
+                add(
+                    "THREAD_COMMENT_REACTION",
+                    reaction["mutation_id"],
+                    digest_json(reaction),
+                    thread["node_id"],
+                )
+    return expected
+
+
 def _verify_classified_findings(
     request: BatchRequest,
     reviewed_state: StableFeedbackState,
@@ -932,7 +1025,8 @@ def _verify_classified_findings(
     maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None
     if not isinstance(maximum_items, int) or maximum_items < 1:
         raise SecurityBlocker("batch item limit is missing")
-    if len(request.findings) + len(request.operations) > maximum_items:
+    source_count = sum(len(finding.sources) for finding in request.findings)
+    if len(request.findings) + len(request.operations) + source_count > maximum_items:
         raise SecurityBlocker("classified batch exceeds the registered item limit")
     unresolved_threads = {
         item["node_id"]: item
@@ -944,40 +1038,35 @@ def _verify_classified_findings(
         raise SecurityBlocker(
             "batch operations must cover every unresolved reviewed thread"
         )
-    findings_by_thread: dict[str, list[BatchFinding]] = {}
+    expected_sources = _classified_feedback_sources(reviewed_state)
+    classified_sources: dict[tuple[str, str], list[str | None]] = {}
     for finding in request.findings:
-        if finding.thread_id not in unresolved_threads:
+        if finding.thread_id is not None and finding.thread_id not in unresolved_threads:
             raise SecurityBlocker(
                 "classified finding does not belong to an unresolved reviewed thread"
             )
-        findings_by_thread.setdefault(finding.thread_id, []).append(finding)
-
-    for thread_id, thread in unresolved_threads.items():
-        expected_comments = {
-            item["node_id"]: item["body_digest"] for item in thread["comments"]
-        }
-        classified_comments: dict[str, list[str | None]] = {}
-        for finding in findings_by_thread.get(thread_id, []):
-            for comment_id, body_digest in finding.source_comments:
-                if expected_comments.get(comment_id) != body_digest:
-                    raise SecurityBlocker(
-                        "classified finding source does not match reviewed feedback"
-                    )
-                classified_comments.setdefault(comment_id, []).append(
-                    finding.source_subitem_id
-                )
-        if set(classified_comments) != set(expected_comments):
-            raise SecurityBlocker(
-                "classified findings do not cover every comment in an unresolved thread"
-            )
-        for subitem_ids in classified_comments.values():
-            if len(subitem_ids) > 1 and (
-                any(item is None for item in subitem_ids)
-                or len(subitem_ids) != len(set(subitem_ids))
-            ):
+        for source in finding.sources:
+            key = (source.kind, source.node_id)
+            expected = expected_sources.get(key)
+            if expected != (source.digest, finding.thread_id):
                 raise SecurityBlocker(
-                    "compound source findings require unique sub-item identities"
+                    "classified finding source does not match reviewed feedback"
                 )
+            classified_sources.setdefault(key, []).append(
+                finding.source_subitem_id
+            )
+    if set(classified_sources) != set(expected_sources):
+        raise SecurityBlocker(
+            "classified finding coverage is incomplete for stable feedback"
+        )
+    for subitem_ids in classified_sources.values():
+        if len(subitem_ids) > 1 and (
+            any(item is None for item in subitem_ids)
+            or len(subitem_ids) != len(set(subitem_ids))
+        ):
+            raise SecurityBlocker(
+                "compound source findings require unique sub-item identities"
+            )
 
 
 def _verify_finding_commits(
@@ -1001,6 +1090,23 @@ def _verify_finding_commits(
         ):
             raise SecurityBlocker(
                 "fixed batch finding commit is not present in the reviewed PR"
+            )
+
+
+def _verify_finding_test_evidence(
+    request: BatchRequest,
+    attestation: dict[str, Any],
+) -> None:
+    receipt_digest = attestation.get("validation_receipt_digest")
+    if not isinstance(receipt_digest, str) or not DIGEST.fullmatch(receipt_digest):
+        raise SecurityBlocker("validation receipt evidence is missing")
+    for finding in request.findings:
+        if (
+            finding.disposition in FIXED_DISPOSITIONS
+            and finding.test_evidence_digest != receipt_digest
+        ):
+            raise SecurityBlocker(
+                "fixed finding test evidence does not bind the validation receipt"
             )
 
 
@@ -1139,30 +1245,10 @@ def run_recoverable_local_step(action: Callable[[], T], correct: Callable[[], No
         return action()
 
 
-def _authorized_prior_results(
-    request: BatchRequest,
-) -> dict[str, dict[str, Any]]:
-    operations = {item.operation_id: item for item in request.operations}
-    authorized: dict[str, dict[str, Any]] = {}
-    for result in request.prior_results:
-        operation = operations.get(result["operation_id"])
-        if (
-            operation is None
-            or result["thread_id"] != operation.thread_id
-            or result["mutation_identity"] != operation.thread_id
-            or result["authorization_digest"] != request.authorization_digest
-            or operation.thread_id in authorized
-        ):
-            raise SecurityBlocker("prior resolution evidence does not belong to this authorized batch")
-        authorized[operation.thread_id] = result
-    return authorized
-
-
 def _compare_feedback(
     request: BatchRequest,
     reviewed: StableFeedbackState,
     current: StableFeedbackState,
-    authorized: dict[str, dict[str, Any]],
 ) -> None:
     if (
         current.repository != request.repository
@@ -1180,8 +1266,7 @@ def _compare_feedback(
     normalized = copy.deepcopy(current.feedback)
     reviewed_threads = {item["node_id"]: item for item in reviewed.feedback["threads"]}
     for thread in normalized["threads"]:
-        thread_id = thread["node_id"]
-        expected = reviewed_threads.get(thread_id)
+        expected = reviewed_threads.get(thread["node_id"])
         if (
             request.expected_head_sha != reviewed.head_sha
             and expected is not None
@@ -1189,13 +1274,6 @@ def _compare_feedback(
             and thread["is_outdated"] is True
         ):
             thread["is_outdated"] = False
-        if (
-            thread_id in authorized
-            and expected is not None
-            and expected["is_resolved"] is False
-            and thread["is_resolved"] is True
-        ):
-            thread["is_resolved"] = False
     if digest_json(normalized) != reviewed.feedback_digest:
         raise SecurityBlocker("stable feedback changed after review")
 
@@ -1206,10 +1284,8 @@ def _base_report(request: BatchRequest) -> dict[str, Any]:
         "batch_id": request.batch_id,
         "authorization_digest": request.authorization_digest,
         "applied": [],
-        "already_resolved": [],
         "blocked": [],
         "failed": [],
-        "operation_evidence": copy.deepcopy(request.prior_results),
         "write_retry_performed": False,
         "complete_validation_reruns": 0,
     }
@@ -1231,6 +1307,8 @@ def execute_resolution_batch(
         raise SecurityBlocker(
             "batch request does not bind the supplied reviewed feedback identity"
         )
+    if reviewed_state.pr_state != "OPEN":
+        raise SecurityBlocker("reviewed pull request state is not open")
     if request.reviewed_state_digest != reviewed_state.state_digest or request.reviewed_feedback_digest != reviewed_state.feedback_digest:
         raise SecurityBlocker("batch request does not bind the supplied reviewed feedback")
     if (
@@ -1260,6 +1338,7 @@ def execute_resolution_batch(
         commit_tree_sha=readiness.head_tree_sha,
         commit_validation_receipt_digest=readiness.validation_receipt_digest,
     )
+    _verify_finding_test_evidence(request, attestation)
     check_evidence = _read_with_one_retry(
         lambda: gateway.read_required_checks(request, registry)
     )
@@ -1272,20 +1351,15 @@ def execute_resolution_batch(
     )
     _verify_strict_merge_state(readiness, check_evidence)
     current = _read_with_one_retry(lambda: gateway.read_stable_feedback(request))
-    authorized = _authorized_prior_results(request)
-    _compare_feedback(request, reviewed_state, current, authorized)
+    _compare_feedback(request, reviewed_state, current)
 
     current_threads = {item["node_id"]: item for item in current.feedback["threads"]}
     for operation in request.operations:
         thread = current_threads.get(operation.thread_id)
         if thread is None:
             raise SecurityBlocker(f"requested thread is missing: {operation.thread_id}")
-        if thread["is_resolved"] and operation.thread_id not in authorized:
+        if thread["is_resolved"]:
             raise SecurityBlocker(f"requested thread was resolved outside this batch: {operation.thread_id}")
-        if not thread["is_resolved"] and operation.thread_id in authorized:
-            raise SecurityBlocker(
-                f"prior resolution was reopened after this batch: {operation.thread_id}"
-            )
 
     report = _base_report(request)
     for index, operation in enumerate(request.operations):
@@ -1353,28 +1427,11 @@ def execute_resolution_batch(
                     and expected_thread["is_outdated"] is False
                 ):
                     comparable_thread["is_outdated"] = False
-                if (
-                    operation.thread_id in authorized
-                    and comparable_thread["is_resolved"] is True
-                    and expected_thread["is_resolved"] is False
-                ):
-                    comparable_thread["is_resolved"] = False
                 blocker = (
                     None
                     if comparable_thread == expected_thread
                     else "last-moment mutation target feedback changed"
                 )
-        if (
-            blocker is None
-            and operation.thread_id in authorized
-            and target.get("is_resolved") is not True
-        ):
-            blocker = "prior resolution was reopened after this batch"
-        if blocker is None and target.get("is_resolved") is True and operation.thread_id in authorized:
-            report["already_resolved"].append(
-                {"operation_id": operation.operation_id, "thread_id": operation.thread_id}
-            )
-            continue
         if blocker is None and target.get("is_resolved") is not False:
             blocker = "last-moment mutation target state changed"
         if blocker is not None:
@@ -1427,16 +1484,8 @@ def execute_resolution_batch(
             return report
         applied = {"operation_id": operation.operation_id, "thread_id": operation.thread_id}
         report["applied"].append(applied)
-        report["operation_evidence"].append(
-            {
-                **applied,
-                "authorization_digest": request.authorization_digest,
-                "mutation_identity": operation.thread_id,
-                "status": "APPLIED",
-            }
-        )
 
-    report["status"] = "BATCH_APPLIED" if report["applied"] else "BATCH_ALREADY_APPLIED"
+    report["status"] = "BATCH_APPLIED"
     return report
 
 

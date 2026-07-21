@@ -17,11 +17,10 @@
     "reviewed_state_digest",
     "reviewed_feedback_digest",
     "findings",
-    "operations",
-    "prior_results"
+    "operations"
   ],
   "properties": {
-    "schema_version": { "const": "1.1" },
+    "schema_version": { "const": "1.2" },
     "batch_id": { "$ref": "#/$defs/identity" },
     "repository": {
       "type": "string",
@@ -43,10 +42,6 @@
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/operation" }
-    },
-    "prior_results": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/prior_result" }
     }
   },
   "$defs": {
@@ -79,7 +74,7 @@
       "required": [
         "finding_id",
         "thread_id",
-        "source_comments",
+        "sources",
         "source_subitem_id",
         "classification",
         "disposition",
@@ -90,19 +85,14 @@
       ],
       "properties": {
         "finding_id": { "$ref": "#/$defs/identity" },
-        "thread_id": { "$ref": "#/$defs/identity" },
-        "source_comments": {
+        "thread_id": {
+          "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }]
+        },
+        "sources": {
           "type": "array",
           "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["comment_id", "body_digest"],
-            "properties": {
-              "comment_id": { "$ref": "#/$defs/identity" },
-              "body_digest": { "$ref": "#/$defs/digest" }
-            }
-          }
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/source" }
         },
         "source_subitem_id": {
           "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }]
@@ -142,6 +132,49 @@
         "canonical_finding_id": {
           "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }]
         }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "enum": ["CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "test_evidence_digest": { "$ref": "#/$defs/digest" },
+              "commit_sha": { "$ref": "#/$defs/oid" }
+            }
+          },
+          "else": {
+            "properties": {
+              "test_evidence_digest": { "type": "null" },
+              "commit_sha": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "node_id", "digest"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "PULL_REQUEST_REACTION",
+            "REVIEW",
+            "REVIEW_REACTION",
+            "CONVERSATION_COMMENT",
+            "CONVERSATION_REACTION",
+            "THREAD_COMMENT",
+            "THREAD_COMMENT_REACTION"
+          ]
+        },
+        "node_id": { "$ref": "#/$defs/identity" },
+        "digest": { "$ref": "#/$defs/digest" }
       }
     },
     "operation": {
@@ -158,24 +191,6 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/identity" }
         }
-      }
-    },
-    "prior_result": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "operation_id",
-        "thread_id",
-        "authorization_digest",
-        "mutation_identity",
-        "status"
-      ],
-      "properties": {
-        "operation_id": { "$ref": "#/$defs/identity" },
-        "thread_id": { "$ref": "#/$defs/identity" },
-        "authorization_digest": { "$ref": "#/$defs/digest" },
-        "mutation_identity": { "$ref": "#/$defs/identity" },
-        "status": { "const": "APPLIED" }
       }
     }
   }

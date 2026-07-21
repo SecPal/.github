@@ -59,9 +59,11 @@ as argument arrays in the target repository, without a shell.
    once with `resolve-batch --capture-reviewed-state`; do not create a Package
    2.1 or Package 2.2 snapshot in normal mode.
 2. Split compound comments into stable logical findings and classify every item
-   from source, tests, and repository context. Bind each finding's thread,
-   source-comment identity/body digest, classification, disposition, and
-   evidence digest in the batch. Never infer truth from reviewer identity,
+   from source, tests, and repository context. Bind each finding's typed source
+   identity/digest, optional unresolved thread, classification, disposition,
+   and evidence digest in the batch. Cover top-level reviews, conversation
+   comments and their reactions, pull-request reactions, and unresolved-thread
+   comments and their reactions. Never infer truth from reviewer identity,
    keywords, or CI.
 3. Reproduce every valid finding, add a failing test first, make the smallest
    coherent corrections, and use focused validation while editing.
@@ -101,15 +103,14 @@ detected. Green CI alone never establishes technical truth or merge readiness.
 Validate fast-path batch inputs against
 `references/fast-path-batch.schema.json`. One batch may contain only
 `THREAD_RESOLUTION` operations and must bind repository, PR, expected head,
-reviewed base branch/SHA, authenticated actor, reviewed-state and feedback digests, eligible
-classified findings and any prior results from the same authorization digest.
-Every unresolved reviewed thread and every comment in it must be covered; each
-resolution names exactly its findings, and classification/disposition pairs
-must follow policy. A
+reviewed base branch/SHA, authenticated actor, reviewed-state and feedback digests, and eligible
+classified findings. The reviewed state must originate from an open PR. Every
+top-level review/comment and its reactions, pull-request reaction, unresolved
+reviewed thread, and comment/reaction in it must be covered; each resolution names exactly its threaded
+findings, and classification/disposition pairs must follow policy. A
 partial failure stops later writes, reports every applied/failed/blocked target,
-and never retries a write. A manual rerun recognizes an already-resolved thread
-only with matching prior operation evidence; a previously recorded resolution
-that is now reopened blocks instead of being applied again.
+and never retries a write. Applied-target report entries are audit output, not
+reusable authorization. A manual rerun with an already-resolved or otherwise changed thread fails closed.
 
 The stable-feedback projection contains review identities, body digests,
 thread/comment identities and state, reactions, actors, repository, PR, head,

@@ -3958,13 +3958,149 @@ def fast_attestation(reviewed: Any, *, head_sha: str = p21.HEAD) -> dict[str, An
     )
 
 
-def fast_request(reviewed: Any, thread_count: int = 2) -> Any:
+def fast_request(
+    reviewed: Any,
+    thread_count: int = 2,
+    *,
+    cover_top_level: bool = True,
+    cover_reactions: bool = True,
+) -> Any:
     reviewed_threads = {
         item["node_id"]: item for item in reviewed.feedback["threads"]
     }
+    receipt_digest = fast_attestation(reviewed)["validation_receipt_digest"]
+    findings: list[dict[str, Any]] = []
+    operation_finding_ids: dict[str, list[str]] = {}
+
+    def add_finding(
+        finding_id: str,
+        thread_id: str | None,
+        sources: list[dict[str, str]],
+        *,
+        classification: str = "INFORMATIONAL",
+        disposition: str = "NON_ACTIONABLE",
+    ) -> None:
+        fixed = disposition in fast_path.FIXED_DISPOSITIONS
+        findings.append(
+            {
+                "finding_id": finding_id,
+                "thread_id": thread_id,
+                "sources": sources,
+                "source_subitem_id": None,
+                "classification": classification,
+                "disposition": disposition,
+                "evidence_digest": digest(f"finding evidence {finding_id}"),
+                "test_evidence_digest": receipt_digest if fixed else None,
+                "commit_sha": p21.HEAD if fixed else None,
+                "canonical_finding_id": None,
+            }
+        )
+        if thread_id is not None:
+            operation_finding_ids.setdefault(thread_id, []).append(finding_id)
+
+    for index in range(1, thread_count + 1):
+        thread_id = f"THREAD_{index}"
+        thread = reviewed_threads[thread_id]
+        add_finding(
+            f"finding-{index}",
+            thread_id,
+            [
+                {
+                    "kind": "THREAD_COMMENT",
+                    "node_id": item["node_id"],
+                    "digest": item["body_digest"],
+                }
+                for item in thread["comments"]
+            ],
+            classification="VALID_ACTIONABLE",
+            disposition="CORRECTED_AND_VERIFIED",
+        )
+        if cover_reactions:
+            for comment_index, comment in enumerate(thread["comments"], 1):
+                for reaction_index, reaction in enumerate(comment["reactions"], 1):
+                    add_finding(
+                        f"finding-{index}-comment-{comment_index}-reaction-{reaction_index}",
+                        thread_id,
+                        [
+                            {
+                                "kind": "THREAD_COMMENT_REACTION",
+                                "node_id": reaction["mutation_id"],
+                                "digest": fast_path.digest_json(reaction),
+                            }
+                        ],
+                    )
+
+    if cover_top_level:
+        for index, reaction in enumerate(
+            reviewed.feedback["pull_request_reactions"], 1
+        ):
+            add_finding(
+                f"finding-pr-reaction-{index}",
+                None,
+                [
+                    {
+                        "kind": "PULL_REQUEST_REACTION",
+                        "node_id": reaction["mutation_id"],
+                        "digest": fast_path.digest_json(reaction),
+                    }
+                ],
+            )
+        for index, review in enumerate(reviewed.feedback["reviews"], 1):
+            add_finding(
+                f"finding-review-{index}",
+                None,
+                [
+                    {
+                        "kind": "REVIEW",
+                        "node_id": review["node_id"],
+                        "digest": review["body_digest"],
+                    }
+                ],
+            )
+            if cover_reactions:
+                for reaction_index, reaction in enumerate(review["reactions"], 1):
+                    add_finding(
+                        f"finding-review-{index}-reaction-{reaction_index}",
+                        None,
+                        [
+                            {
+                                "kind": "REVIEW_REACTION",
+                                "node_id": reaction["mutation_id"],
+                                "digest": fast_path.digest_json(reaction),
+                            }
+                        ],
+                    )
+        for index, comment in enumerate(
+            reviewed.feedback["conversation_comments"], 1
+        ):
+            add_finding(
+                f"finding-conversation-{index}",
+                None,
+                [
+                    {
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": comment["node_id"],
+                        "digest": comment["body_digest"],
+                    }
+                ],
+            )
+            if cover_reactions:
+                for reaction_index, reaction in enumerate(comment["reactions"], 1):
+                    add_finding(
+                        f"finding-conversation-{index}-reaction-{reaction_index}",
+                        None,
+                        [
+                            {
+                                "kind": "CONVERSATION_REACTION",
+                                "node_id": reaction["mutation_id"],
+                                "digest": fast_path.digest_json(reaction),
+                            }
+                        ],
+                    )
+
     return fast_path.BatchRequest.from_dict(
         {
-            "schema_version": "1.1",
+            "schema_version": "1.2",
             "batch_id": "batch-001",
             "repository": "SecPal/.github",
             "pull_request_number": 1,
@@ -3978,37 +4114,16 @@ def fast_request(reviewed: Any, thread_count: int = 2) -> Any:
             },
             "reviewed_state_digest": reviewed.state_digest,
             "reviewed_feedback_digest": reviewed.feedback_digest,
-            "findings": [
-                {
-                    "finding_id": f"finding-{index}",
-                    "thread_id": f"THREAD_{index}",
-                    "source_comments": [
-                        {
-                            "comment_id": item["node_id"],
-                            "body_digest": item["body_digest"],
-                        }
-                        for item in reviewed_threads[f"THREAD_{index}"]["comments"]
-                    ],
-                    "source_subitem_id": None,
-                    "classification": "VALID_ACTIONABLE",
-                    "disposition": "CORRECTED_AND_VERIFIED",
-                    "evidence_digest": digest(f"finding evidence {index}"),
-                    "test_evidence_digest": digest(f"test evidence {index}"),
-                    "commit_sha": p21.HEAD,
-                    "canonical_finding_id": None,
-                }
-                for index in range(1, thread_count + 1)
-            ],
+            "findings": findings,
             "operations": [
                 {
                     "operation_id": f"resolve-{index}",
                     "kind": "THREAD_RESOLUTION",
                     "thread_id": f"THREAD_{index}",
-                    "finding_ids": [f"finding-{index}"],
+                    "finding_ids": operation_finding_ids[f"THREAD_{index}"],
                 }
                 for index in range(1, thread_count + 1)
-            ],
-            "prior_results": [],
+            ]
         }
     )
 
@@ -4218,7 +4333,7 @@ class FastPathTests(TestCase):
     def test_batch_finding_source_must_match_reviewed_comment(self) -> None:
         reviewed = fast_feedback()
         payload = fast_request(reviewed).to_dict()
-        payload["findings"][0]["source_comments"][0]["body_digest"] = digest(
+        payload["findings"][0]["sources"][0]["digest"] = digest(
             "forged source"
         )
         request = fast_path.BatchRequest.from_dict(payload)
@@ -4277,6 +4392,213 @@ class FastPathTests(TestCase):
             )
         self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
 
+    def test_caller_authored_prior_results_are_rejected(self) -> None:
+        request = fast_request(fast_feedback(1), 1)
+        payload = request.to_dict()
+        payload["prior_results"] = [
+            {
+                "operation_id": "resolve-1",
+                "thread_id": "THREAD_1",
+                "authorization_digest": request.authorization_digest,
+                "mutation_identity": "THREAD_1",
+                "status": "APPLIED",
+            }
+        ]
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_non_open_reviewed_state_blocks_before_live_reads(self) -> None:
+        reviewed = fast_feedback(1)
+        reviewed.pr_state = "CLOSED"
+        reviewed.refresh_digests()
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "reviewed.*open"):
+            self.execute(reviewed, gateway, 1)
+        self.assertEqual(gateway.calls, [])
+
+    def test_unclassified_top_level_feedback_blocks_before_live_reads(self) -> None:
+        for label, add_feedback in (
+            (
+                "review",
+                lambda state: state.feedback["reviews"].append(
+                    {
+                        "node_id": "REVIEW_TOP_LEVEL",
+                        "body_digest": digest("material review body"),
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "ACTOR_1",
+                            "database_id": 7,
+                        },
+                        "state": "COMMENTED",
+                        "commit_oid": p21.HEAD,
+                        "reactions": [],
+                    }
+                ),
+            ),
+            (
+                "conversation comment",
+                lambda state: state.feedback["conversation_comments"].append(
+                    {
+                        "node_id": "COMMENT_TOP_LEVEL",
+                        "body_digest": digest("material conversation comment"),
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "ACTOR_1",
+                            "database_id": 7,
+                        },
+                        "updated_at": "2026-07-21T00:00:00Z",
+                        "reactions": [],
+                    }
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                reviewed = fast_feedback(1)
+                add_feedback(reviewed)
+                reviewed.refresh_digests()
+                request = fast_request(reviewed, 1, cover_top_level=False)
+                gateway = FakeFastGateway(reviewed)
+                with self.assertRaisesRegex(fast_path.SecurityBlocker, "coverage"):
+                    fast_path.execute_resolution_batch(
+                        request,
+                        fast_attestation(reviewed),
+                        reviewed,
+                        fast_registry(),
+                        gateway,
+                    )
+                self.assertEqual(gateway.calls, [])
+
+    def test_unclassified_reactions_block_before_live_reads(self) -> None:
+        for label, add_reaction in (
+            (
+                "pull request",
+                lambda state, reaction: state.feedback[
+                    "pull_request_reactions"
+                ].append(reaction),
+            ),
+            (
+                "thread comment",
+                lambda state, reaction: state.feedback["threads"][0]["comments"][
+                    0
+                ]["reactions"].append(reaction),
+            ),
+        ):
+            with self.subTest(label=label):
+                reviewed = fast_feedback(1)
+                reaction = {
+                    "mutation_id": f"REACTION_{label.replace(' ', '_')}",
+                    "content": "THUMBS_UP",
+                    "actor": {
+                        "login": "reviewer",
+                        "node_id": "ACTOR_1",
+                        "database_id": 7,
+                    },
+                }
+                add_reaction(reviewed, reaction)
+                reviewed.refresh_digests()
+                request = fast_request(
+                    reviewed,
+                    1,
+                    cover_top_level=False,
+                    cover_reactions=False,
+                )
+                gateway = FakeFastGateway(reviewed)
+                with self.assertRaisesRegex(fast_path.SecurityBlocker, "coverage"):
+                    fast_path.execute_resolution_batch(
+                        request,
+                        fast_attestation(reviewed),
+                        reviewed,
+                        fast_registry(),
+                        gateway,
+                    )
+                self.assertEqual(gateway.calls, [])
+
+    def test_complete_feedback_source_taxonomy_is_classified(self) -> None:
+        reviewed = fast_feedback(1)
+
+        def reaction(identity: str) -> dict[str, Any]:
+            return {
+                "mutation_id": identity,
+                "content": "THUMBS_UP",
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+            }
+
+        reviewed.feedback["pull_request_reactions"].append(reaction("REACTION_PR"))
+        reviewed.feedback["reviews"].append(
+            {
+                "node_id": "REVIEW_TOP_LEVEL",
+                "body_digest": digest("review body"),
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+                "state": "COMMENTED",
+                "commit_oid": p21.HEAD,
+                "reactions": [reaction("REACTION_REVIEW")],
+            }
+        )
+        reviewed.feedback["conversation_comments"].append(
+            {
+                "node_id": "COMMENT_TOP_LEVEL",
+                "body_digest": digest("conversation body"),
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+                "updated_at": "2026-07-21T00:00:00Z",
+                "reactions": [reaction("REACTION_CONVERSATION")],
+            }
+        )
+        reviewed.feedback["threads"][0]["comments"][0]["reactions"].append(
+            reaction("REACTION_THREAD")
+        )
+        reviewed.refresh_digests()
+        request = fast_request(reviewed, 1)
+        observed_kinds = {
+            source.kind
+            for finding in request.findings
+            for source in finding.sources
+        }
+        self.assertEqual(observed_kinds, fast_path.SOURCE_KINDS)
+        result = fast_path.execute_resolution_batch(
+            request,
+            fast_attestation(reviewed),
+            reviewed,
+            fast_registry(),
+            FakeFastGateway(reviewed),
+        )
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+
+    def test_fixed_finding_test_evidence_binds_validation_receipt(self) -> None:
+        reviewed = fast_feedback(1)
+        payload = fast_request(reviewed, 1).to_dict()
+        payload["findings"][0]["test_evidence_digest"] = "f" * 64
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "test evidence"):
+            fast_path.execute_resolution_batch(
+                fast_path.BatchRequest.from_dict(payload),
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+        )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_non_fixed_finding_rejects_fix_only_evidence(self) -> None:
+        payload = fast_request(fast_feedback(1), 1).to_dict()
+        payload["findings"][0].update(
+            classification="INFORMATIONAL",
+            disposition="NON_ACTIONABLE",
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "non-fixed"):
+            fast_path.BatchRequest.from_dict(payload)
+
     def test_fast_policy_tables_match_the_legacy_resolution_invariants(self) -> None:
         self.assertEqual(fast_path.MERGE_STATE_POLICY, p21.review.MERGE_STATE_POLICY)
         self.assertEqual(
@@ -4289,6 +4611,15 @@ class FastPathTests(TestCase):
                 actions.DISPOSITION_POLICY[classification]
                 & actions.RESOLVABLE_DISPOSITIONS,
             )
+
+    def test_fast_batch_schema_matches_runtime_security_policy(self) -> None:
+        schema = json.loads(actions.FAST_BATCH_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["schema_version"]["const"], "1.2")
+        self.assertNotIn("prior_results", schema["properties"])
+        self.assertEqual(
+            set(schema["$defs"]["source"]["properties"]["kind"]["enum"]),
+            fast_path.SOURCE_KINDS,
+        )
 
     def test_actions_uses_the_canonical_fast_path_module(self) -> None:
         self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
@@ -4357,7 +4688,8 @@ class FastPathTests(TestCase):
         payload = fast_request(reviewed).to_dict()
         payload["expected_head_sha"] = remediation_head
         for finding_value in payload["findings"]:
-            finding_value["commit_sha"] = remediation_head
+            if finding_value["disposition"] in fast_path.FIXED_DISPOSITIONS:
+                finding_value["commit_sha"] = remediation_head
         gateway = FakeFastGateway(current, reviewed)
         gateway.commits.append(
             {
@@ -5442,51 +5774,17 @@ class FastPathTests(TestCase):
             [item["thread_id"] for item in result["applied"]],
             ["THREAD_1", "THREAD_2", "THREAD_3", "THREAD_4"],
         )
-        self.assertEqual(result["already_resolved"], [])
         self.assertEqual(result["blocked"], [])
         self.assertEqual(result["failed"], [])
 
-    def test_idempotent_rerun_requires_same_batch_operation_evidence(self) -> None:
+    def test_applied_report_cannot_be_reused_as_authorization(self) -> None:
         reviewed = fast_feedback()
         request = fast_request(reviewed)
         first = self.execute(reviewed, FakeFastGateway(reviewed))
-        current = copy.deepcopy(reviewed)
-        for thread in current.feedback["threads"]:
-            thread["is_resolved"] = True
-        current.refresh_digests()
-        unauthorized = FakeFastGateway(current, reviewed)
-        with self.assertRaises(fast_path.SecurityBlocker):
-            self.execute(reviewed, unauthorized)
-        self.assertFalse(any(kind == "WRITE" for kind, _ in unauthorized.calls))
         repeated_payload = request.to_dict()
-        repeated_payload["prior_results"] = first["operation_evidence"]
-        repeated = fast_path.execute_resolution_batch(
-            fast_path.BatchRequest.from_dict(repeated_payload),
-            fast_attestation(reviewed),
-            reviewed,
-            fast_registry(),
-            FakeFastGateway(current, reviewed),
-        )
-        self.assertEqual(repeated["status"], "BATCH_ALREADY_APPLIED")
-        self.assertEqual(len(repeated["already_resolved"]), 2)
-        self.assertEqual(repeated["applied"], [])
-
-    def test_idempotent_rerun_blocks_a_reopened_prior_resolution(self) -> None:
-        reviewed = fast_feedback(1)
-        request = fast_request(reviewed, 1)
-        first = self.execute(reviewed, FakeFastGateway(reviewed), 1)
-        repeated_payload = request.to_dict()
-        repeated_payload["prior_results"] = first["operation_evidence"]
-        reopened = FakeFastGateway(reviewed)
-        with self.assertRaisesRegex(fast_path.SecurityBlocker, "reopened"):
-            fast_path.execute_resolution_batch(
-                fast_path.BatchRequest.from_dict(repeated_payload),
-                fast_attestation(reviewed),
-                reviewed,
-                fast_registry(),
-                reopened,
-            )
-        self.assertFalse(any(kind == "WRITE" for kind, _ in reopened.calls))
+        repeated_payload["prior_results"] = first["applied"]
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior"):
+            fast_path.BatchRequest.from_dict(repeated_payload)
 
     def test_batch_surface_cannot_gain_user_controlled_capabilities(self) -> None:
         self.assertEqual(fast_path.SUPPORTED_BATCH_CAPABILITIES, frozenset({"THREAD_RESOLUTION"}))
@@ -5553,22 +5851,13 @@ class FastPathTests(TestCase):
             fast_path.atomic_write_json(output, {"status": "ok"})
             self.assertEqual(json.loads(output.read_text()), {"status": "ok"})
 
-    def test_batch_report_falls_back_with_operation_evidence_after_output_failure(self) -> None:
+    def test_batch_report_falls_back_with_applied_targets_after_output_failure(self) -> None:
         report = {
             "status": "BATCH_APPLIED",
             "batch_id": "batch-001",
             "applied": [{"operation_id": "resolve-1", "thread_id": "THREAD_1"}],
             "failed": [],
             "blocked": [],
-            "operation_evidence": [
-                {
-                    "operation_id": "resolve-1",
-                    "thread_id": "THREAD_1",
-                    "authorization_digest": "a" * 64,
-                    "mutation_identity": "THREAD_1",
-                    "status": "APPLIED",
-                }
-            ],
         }
         error_output = SimpleNamespace(buffer=io.BytesIO())
         with (
@@ -5579,7 +5868,7 @@ class FastPathTests(TestCase):
         fallback = json.loads(error_output.buffer.getvalue())
         self.assertEqual(fallback["status"], "BLOCKED_REPORT_PERSISTENCE_FAILED")
         self.assertEqual(fallback["applied"], report["applied"])
-        self.assertEqual(fallback["operation_evidence"], report["operation_evidence"])
+        self.assertEqual(fallback["applied"], report["applied"])
 
 
 class PolicyScriptTests(TestCase):

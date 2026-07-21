@@ -112,10 +112,12 @@ change from false to true; no other feedback delta is normalized.
 
 `RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH` verifies repository, PR, expected/local/
 remote heads, clean worktree, attestation, Required Checks, stable feedback, and
-all requested thread eligibility once. The batch includes classified findings
-whose source-comment identities and body digests match the reviewed projection;
-its operations cover every unresolved reviewed thread and name all findings for
-their thread. It then performs one bounded last-moment target check and one
+all requested thread eligibility once. The reviewed projection must have been
+captured while the PR was open. The batch includes classified findings whose
+typed source identities and digests cover top-level review/comment bodies and
+their reactions, pull-request reactions, and unresolved-thread comments and
+their reactions; its operations cover every
+unresolved reviewed thread and name all findings for their thread. It then performs one bounded last-moment target check and one
 write per thread. The target check compares identity, head, open PR/base and
 merge state, resolved/outdated thread state, comments, and reactions with the
 reviewed projection.
@@ -234,22 +236,21 @@ when they contain the same secret-like patterns prohibited in forensic plans.
 A batch input validates against `fast-path-batch.schema.json`. It binds one
 repository, PR, expected head, reviewed base branch/SHA, actor, reviewed digests, authorization digest,
 classified findings, and a unique ordered set of eligible `THREAD_RESOLUTION`
-operations. Each finding binds its thread, exact source-comment identity/body
-digest, optional compound-source sub-item identity, classification,
+operations. Each finding binds typed stable-feedback source identities/digests,
+an optional unresolved thread, optional compound-source sub-item identity, classification,
 classification-compatible disposition, and evidence digest. Fixed findings
-also bind test-evidence and PR-commit digests. Operations name their findings
-instead of trusting a free-standing disposition. Every unresolved reviewed
-thread and every comment in it has classification coverage before the first
-live read. Preflight
+also bind the signed validation-receipt digest as test evidence and a PR-commit
+digest. Operations name their threaded findings instead of trusting a
+free-standing disposition. Every top-level review/comment and its reactions,
+pull-request reaction, unresolved reviewed thread, and comment/reaction in it has classification coverage
+before the first live read. Preflight
 and every logical read may retry once only for an unambiguous transient read
 failure. Writes never retry. A partial failure records all applied operations,
 the exact failed operation, and all later blocked operations, then stops.
-An idempotent manual rerun may treat a resolved thread as already applied only
-when supplied prior-result evidence has the same authorization digest,
-operation/thread identity, and returned mutation identity. If that recorded
-resolution is reopened, the rerun blocks instead of resolving it again. Any
-external resolution or other stable-feedback delta blocks before the first
-write.
+Caller-supplied prior-result evidence is rejected because a post-mutation local
+report has no signed trust root. Applied/failed/blocked target entries remain in
+reports for audit and manual recovery only; an external resolution or other
+stable-feedback delta blocks before the first write.
 An explicit report output is initialized before the first write. If final
 persistence fails after a mutation, the helper stops and emits the complete
 in-memory applied/failed/blocked evidence to standard error for manual recovery.

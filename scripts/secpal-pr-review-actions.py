@@ -4366,7 +4366,6 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
                 "applied": [],
                 "failed": [],
                 "blocked": [],
-                "operation_evidence": copy.deepcopy(request.prior_results),
             },
         )
     report = fast_path.execute_resolution_batch(
@@ -4374,7 +4373,7 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     )
     if not _write_batch_report(arguments.output, report):
         return 3
-    return 0 if report["status"] in {"BATCH_APPLIED", "BATCH_ALREADY_APPLIED"} else 3
+    return 0 if report["status"] == "BATCH_APPLIED" else 3
 
 
 def main(argv: list[str] | None = None) -> int:
