@@ -268,6 +268,7 @@ class FakeGitHub:
                             "node_id": "ACTOR_reviewer",
                             "database_id": 7,
                         },
+                        "reply_to_id": None,
                         "reactions": [],
                     }
                 ],
@@ -989,6 +990,43 @@ class ContractTests(TestCase):
             with self.subTest(kind=name), self.assertRaisesRegex(actions.PlanError, "counter"):
                 actions.validate_plan(value, evidence_snapshot(), repository_config())
 
+    def test_resolution_push_precondition_matches_remediation_history(self) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            classification="INFORMATIONAL",
+            reaction=None,
+        )
+        resolution["resolution_preconditions"]["pushed"] = False
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["cycle_number"] = 0
+        value["session"].update(
+            remediation_cycles=0,
+            signed_commits=0,
+            fast_forward_pushes=0,
+        )
+        value["findings"][0].update(
+            classification="INFORMATIONAL",
+            disposition="NON_ACTIONABLE",
+            commit_sha=None,
+            test_evidence=[],
+        )
+
+        self.assertEqual(
+            actions.validate_plan(value, evidence_snapshot(), repository_config()),
+            value,
+        )
+
+        false_push_claim = copy.deepcopy(value)
+        false_push_claim["operations"][0]["resolution_preconditions"]["pushed"] = True
+        with self.assertRaisesRegex(actions.PlanError, "pushed precondition"):
+            actions.validate_plan(
+                false_push_claim, evidence_snapshot(), repository_config()
+            )
+
     def test_recorded_mutation_identity_belongs_to_only_one_operation(self) -> None:
         recorded_reaction = operation()
         recorded_reaction["applied_mutation_identity"] = "MUTATION_SHARED"
@@ -1022,14 +1060,20 @@ class ContractTests(TestCase):
 
 class MutationTests(TestCase):
     def apply(self, value: dict[str, Any], operation_id: str, github: FakeGitHub, *, apply: bool = True) -> dict[str, Any]:
+        snapshot = evidence_snapshot()
         return actions.execute_operation(
             value,
             operation_id,
-            evidence_snapshot(),
+            snapshot,
             repository_config(),
             github,
             apply=apply,
             resolution_evidence=None,
+            current_feedback={
+                "feedback": actions._snapshot_review_feedback(snapshot, value)
+            }
+            if apply
+            else None,
         )
 
     def test_mutation_fixture_covers_cases_39_to_60(self) -> None:
@@ -1208,6 +1252,7 @@ class MutationTests(TestCase):
                 "node_id": "REPLY_EXISTING",
                 "body_digest": digest(op["reply_body"]),
                 "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_id": "RC_1",
                 "reactions": [],
             }
         )
@@ -1280,6 +1325,7 @@ class MutationTests(TestCase):
                 "node_id": "REPLY_EXISTING",
                 "body_digest": digest(op["reply_body"]),
                 "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_id": "RC_1",
                 "reactions": [],
             }
         )
@@ -1343,6 +1389,7 @@ class MutationTests(TestCase):
                 "node_id": "REPLY_RECORDED",
                 "body_digest": digest("Independent evidence"),
                 "actor": copy.deepcopy(github.state["viewer"]),
+                "reply_to_id": "RC_1",
                 "reactions": [],
             },
         ]
@@ -2123,6 +2170,94 @@ class MutationTests(TestCase):
         with self.assertRaisesRegex(actions.MutationBlocked, "reactions"):
             actions._validate_feedback_limits(feedback, limits)
 
+    def test_pending_policy_write_reserves_feedback_capacity(self) -> None:
+        limits = {
+            "maximum_items": 10000,
+            "maximum_threads": 500,
+            "maximum_comments": 200,
+            "maximum_reactions": 50,
+        }
+        comments = [
+            {
+                "node_id": f"RC_{index}",
+                "body_digest": digest(f"comment {index}"),
+                "actor": {},
+                "reply_to_id": None,
+                "reactions": [],
+            }
+            for index in range(100)
+        ]
+        feedback = {
+            "pull_request_reactions": [],
+            "reviews": [],
+            "conversation_comments": [],
+            "threads": [{"node_id": "THREAD_1", "comments": comments[:99]}],
+        }
+        actions._validate_feedback_limits(
+            feedback, limits, pending_operation_kind="EVIDENCE_REPLY"
+        )
+        feedback["threads"][0]["comments"] = comments
+        with self.assertRaisesRegex(actions.MutationBlocked, "comments"):
+            actions._validate_feedback_limits(
+                feedback, limits, pending_operation_kind="EVIDENCE_REPLY"
+            )
+
+        feedback["threads"][0]["comments"] = [
+            {
+                **comments[0],
+                "reactions": [{} for _index in range(24)],
+            }
+        ]
+        actions._validate_feedback_limits(
+            feedback, limits, pending_operation_kind="REACTION"
+        )
+        feedback["threads"][0]["comments"][0]["reactions"].append({})
+        with self.assertRaisesRegex(actions.MutationBlocked, "reactions"):
+            actions._validate_feedback_limits(
+                feedback, limits, pending_operation_kind="REACTION"
+            )
+
+    def test_policy_write_blocks_before_mutation_at_effective_capacity(self) -> None:
+        snapshot = evidence_snapshot()
+        reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        value = plan(reply)
+        value["findings"][0].update(
+            classification="INVALID_FALSE_OR_MISLEADING",
+            disposition="DISPROVEN_WITH_EVIDENCE",
+        )
+        feedback = actions._snapshot_review_feedback(snapshot, value)
+        feedback["threads"][0]["comments"].extend(
+            {
+                "node_id": f"RC_EXTRA_{index}",
+                "body_digest": digest(f"comment {index}"),
+                "actor": {},
+                "reply_to_id": None,
+                "reactions": [],
+            }
+            for index in range(99)
+        )
+        github = FakeGitHub()
+
+        with self.assertRaisesRegex(actions.MutationBlocked, "comments"):
+            actions.execute_operation(
+                value,
+                "reply-001",
+                snapshot,
+                repository_config(),
+                github,
+                apply=True,
+                resolution_evidence=None,
+                current_feedback={"feedback": feedback},
+            )
+
+        self.assertNotIn(("WRITE", "EVIDENCE_REPLY"), github.calls)
+
     def test_missing_trusted_gh_is_reported_as_a_guarded_blocker(self) -> None:
         with mock.patch.object(
             actions.evidence,
@@ -2219,6 +2354,8 @@ class MutationTests(TestCase):
                     "node_id": "ACTOR_reviewer",
                     "database_id": 7,
                 },
+                "reply_to_id": None,
+                "reactions": [],
             }
         )
         with self.assertRaisesRegex(actions.MutationBlocked, "thread feedback changed"):
@@ -2279,6 +2416,7 @@ class MutationTests(TestCase):
                         "node_id": "ACTOR_reviewer",
                         "database_id": 7,
                     },
+                    "reply_to_id": None,
                     "reactions": [],
                 }
             )
@@ -2452,6 +2590,10 @@ class MutationTests(TestCase):
         )
         github.read_current_feedback.assert_called_once_with(value)
         execute.assert_called_once()
+        self.assertIs(
+            execute.call_args.kwargs["current_feedback"],
+            github.read_current_feedback.return_value,
+        )
 
     def test_resolution_blocks_on_pr_wide_feedback_before_readiness_validation(self) -> None:
         resolution = operation(
@@ -2814,6 +2956,7 @@ class MutationTests(TestCase):
                 "node_id": "REPLY_EXISTING",
                 "body_digest": digest(reply_operation["reply_body"]),
                 "actor": viewer,
+                "reply_to_id": "RC_1",
                 "reactions": [],
             }
         )
@@ -2828,11 +2971,36 @@ class MutationTests(TestCase):
             reply_operation,
         )
 
+        wrong_parent_feedback = actions._snapshot_review_feedback(
+            snapshot, reply_plan
+        )
+        wrong_parent_feedback["threads"][0]["comments"].append(
+            {
+                "node_id": "REPLY_OTHER_PARENT",
+                "body_digest": digest(reply_operation["reply_body"]),
+                "actor": viewer,
+                "reply_to_id": "RC_OTHER",
+                "reactions": [],
+            }
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"):
+            actions._verify_current_feedback(
+                reply_plan,
+                snapshot,
+                {
+                    "head_sha": p21.HEAD,
+                    "pr_state": "OPEN",
+                    "feedback": wrong_parent_feedback,
+                },
+                reply_operation,
+            )
+
         reply_feedback["threads"][0]["comments"].append(
             {
                 "node_id": "REPLY_LATE",
                 "body_digest": digest("Late feedback"),
                 "actor": copy.deepcopy(snapshot["review_threads"][0]["comments"][0]["author"]),
+                "reply_to_id": "RC_1",
                 "reactions": [],
             }
         )

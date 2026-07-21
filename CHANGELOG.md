@@ -62,6 +62,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   by admitting only structurally verified recorded policy writes, while keeping
   finding coverage exact to the immutable initial snapshot and rejecting reused
   mutation identities
+- bound the resolution push precondition to actual remediation history, reserved
+  effective feedback capacity before pending reactions and replies, and matched
+  idempotent reply deltas to their exact parent comment
 
 ---
 

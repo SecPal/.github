@@ -164,6 +164,23 @@ REQUIRED_RESOLUTION_EVIDENCE = frozenset(
         "registered_validation_verified",
     }
 )
+ALWAYS_REQUIRED_RESOLUTION_PRECONDITIONS = frozenset(
+    {
+        "focused_validation_succeeded",
+        "complete_validation_succeeded",
+        "required_ci_succeeded",
+        "valid_signatures",
+        "heads_match",
+        "worktree_clean",
+        "no_late_feedback",
+        "all_thread_findings_disposed",
+    }
+)
+PENDING_FEEDBACK_GROWTH = {
+    "REACTION": {"reactions": 1, "items": 1},
+    "EVIDENCE_REPLY": {"comments": 1, "items": 1},
+    "THREAD_RESOLUTION": {},
+}
 REPLY_CLASSIFICATIONS = {
     "INVALID_FALSE_OR_MISLEADING",
     "OUTSIDE_PR_SCOPE",
@@ -529,8 +546,16 @@ def _validate_operation_semantics(
             ):
                 raise PlanError("thread resolution is not eligible under the classification policy")
             preconditions = operation["resolution_preconditions"]
-            if not isinstance(preconditions, dict) or not all(preconditions.values()):
-                raise PlanError("thread resolution requires every remediation precondition")
+            if not isinstance(preconditions, dict) or any(
+                preconditions.get(key) is not True
+                for key in ALWAYS_REQUIRED_RESOLUTION_PRECONDITIONS
+            ):
+                raise PlanError("thread resolution requires every invariant precondition")
+            push_performed = plan["session"]["fast_forward_pushes"] > 0
+            if preconditions.get("pushed") is not push_performed:
+                raise PlanError(
+                    "resolution pushed precondition must match remediation history"
+                )
             if thread_id in resolved_threads:
                 raise PlanError("only one resolution operation is allowed per eligible thread")
             resolved_threads.add(thread_id)
@@ -1195,6 +1220,7 @@ query CurrentReviewFeedback(
           comments(first:100) {
             nodes {
               id databaseId body
+              replyTo { id }
               author {
                 login
                 ... on User { id databaseId }
@@ -1508,7 +1534,10 @@ def _live_reactions(connection: Any, label: str) -> list[dict[str, Any]]:
 
 
 def _validate_feedback_limits(
-    feedback: dict[str, Any], limits: dict[str, Any]
+    feedback: dict[str, Any],
+    limits: dict[str, Any],
+    *,
+    pending_operation_kind: str | None = None,
 ) -> None:
     thread_comments = [
         comment
@@ -1533,6 +1562,15 @@ def _validate_feedback_limits(
             + reaction_count
         ),
     }
+    growth = (
+        {}
+        if pending_operation_kind is None
+        else PENDING_FEEDBACK_GROWTH.get(pending_operation_kind)
+    )
+    if growth is None:
+        raise MutationBlocked("pending feedback operation kind is unsupported")
+    for label, amount in growth.items():
+        counts[label] += amount
     for label, limit_key, divisor in (
         ("threads", "maximum_threads", 1),
         ("comments", "maximum_comments", 2),
@@ -1686,6 +1724,11 @@ class LiveGitHub:
                             "node_id": item.get("id"),
                             "body_digest": sha256_text(item.get("body", "")),
                             "actor": _actor(item.get("author")),
+                            "reply_to_id": (
+                                item.get("replyTo", {}).get("id")
+                                if isinstance(item.get("replyTo"), dict)
+                                else None
+                            ),
                             "reactions": _live_reactions(
                                 item.get("reactions"),
                                 f"thread comment {item.get('id')} reactions",
@@ -2080,6 +2123,11 @@ class LiveGitHub:
                         "node_id": item.get("id"),
                         "body_digest": sha256_text(item.get("body", "")),
                         "actor": _actor(item.get("author")),
+                        "reply_to_id": (
+                            item.get("replyTo", {}).get("id")
+                            if isinstance(item.get("replyTo"), dict)
+                            else None
+                        ),
                         "reactions": _live_reactions(
                             item.get("reactions"),
                             f"thread comment {item.get('id')} reactions",
@@ -2259,6 +2307,7 @@ def _snapshot_thread_comments(snapshot: dict[str, Any], thread_id: str) -> list[
                 key: comment["author"].get(key)
                 for key in ("login", "node_id", "database_id")
             },
+            "reply_to_id": comment["reply_to_id"],
             "reactions": _snapshot_reactions(comment),
         }
         for comment in thread["comments"]
@@ -2363,6 +2412,7 @@ def _snapshot_review_feedback(
                         "node_id": mutation_id,
                         "body_digest": sha256_text(operation["reply_body"]),
                         "actor": operation["expected_actor_identity"],
+                        "reply_to_id": operation["target_node_id"],
                         "reactions": [],
                     }
                 )
@@ -2441,6 +2491,7 @@ def _verify_current_feedback(
                     for item in actual_thread["comments"]
                     if item["node_id"] not in expected_ids
                     and item.get("body_digest") == sha256_text(operation["reply_body"])
+                    and item.get("reply_to_id") == operation["target_node_id"]
                     and _same_actor(
                         item.get("actor", {}), operation["expected_actor_identity"]
                     )
@@ -2570,6 +2621,7 @@ def _verify_current_state(
                     "node_id": matching_reply.get("mutation_id"),
                     "body_digest": sha256_text(operation["reply_body"]),
                     "actor": viewer,
+                    "reply_to_id": operation["target_node_id"],
                     "reactions": [],
                 }
             )
@@ -2655,6 +2707,7 @@ def execute_operation(
     *,
     apply: bool,
     resolution_evidence: dict[str, bool] | None,
+    current_feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validated = validate_plan(plan, snapshot, configuration)
     operation = next(
@@ -2696,6 +2749,24 @@ def execute_operation(
             "mutation_identity": None,
             "retry_performed": False,
         }
+    if operation["kind"] in {"REACTION", "EVIDENCE_REPLY"}:
+        if not isinstance(current_feedback, dict) or not isinstance(
+            current_feedback.get("feedback"), dict
+        ):
+            raise MutationBlocked(
+                "BLOCKED_INCOMPLETE_REVIEW_STATE: current feedback capacity is unavailable"
+            )
+        try:
+            limits = select_repository(load_registry(), validated["repository"])
+        except RegistryError as exc:
+            raise MutationBlocked(
+                "current feedback has no validated repository limits"
+            ) from exc
+        _validate_feedback_limits(
+            current_feedback["feedback"],
+            limits,
+            pending_operation_kind=operation["kind"],
+        )
     if operation["kind"] == "THREAD_RESOLUTION":
         if not isinstance(resolution_evidence, dict) or not all(
             resolution_evidence.get(key) is True
@@ -3187,6 +3258,7 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
         github,
         apply=arguments.apply,
         resolution_evidence=resolution_evidence,
+        current_feedback=current_feedback if arguments.apply else None,
     )
     sys.stdout.buffer.write(canonical_json_bytes(result))
     return 0

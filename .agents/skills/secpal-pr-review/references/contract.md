@@ -179,11 +179,14 @@ Before a reaction, read the complete bounded target-reaction set, treat the exac
 intended writer reaction as already applied, and block every other delta from
 the snapshot. Never remove another actor's reaction. Before a reply, search the
 complete bounded thread, treat the exact intended evidence reply as already
-applied, and block every other delta. Never post “fixed,” “addressed,” commit-SHA
-status, or progress messages. Before every write, re-read PR-wide feedback and
-block every delta except an exact intended or individually recorded policy
-write. Before resolution, also re-read the target thread and refuse a resolved
-or changed target.
+applied only when its parent comment, body, and writer all match, and block every
+other delta. Never post “fixed,” “addressed,” commit-SHA status, or progress
+messages. Before every write, re-read PR-wide feedback and block every delta
+except an exact intended or individually recorded policy write. A pending
+reaction or reply must also fit within the effective post-write feedback caps;
+an exact already-applied write consumes no additional reservation. Before
+resolution, also re-read the target thread and refuse a resolved or changed
+target.
 
 ## Mutation-plan and action-helper contract
 
@@ -302,7 +305,10 @@ nested connection, so accepted evidence remains structurally re-readable.
 Resolution remains read-only until one individual operation is explicitly
 applied. An already-resolved target is accepted only when the plan records the
 matching prior resolution identity; every unrecorded resolved or otherwise
-changed target is blocked.
+changed target is blocked. The resolution plan's `pushed` precondition is true
+exactly when the finite session records a fast-forward remediation push. A
+no-remediation resolution therefore records `pushed: false` while retaining all
+other readiness evidence.
 
 ## Terminal outcomes
 

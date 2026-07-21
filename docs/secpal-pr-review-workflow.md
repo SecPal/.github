@@ -207,6 +207,11 @@ Finding sources must exactly equal the initial snapshot's evidence sources.
 Final snapshot coverage admits only recorded reaction and reply identities whose
 target, payload, parent thread, and authenticated writer exactly match their
 operation; those policy writes do not become new findings.
+Pending reactions and replies reserve one item from the effective live feedback
+capacity before writing, while exact idempotent matches reserve nothing. Inline
+reply deltas must also retain the exact parent-comment node ID. A resolution
+without a remediation cycle truthfully records `pushed: false`; the helper binds
+that value to the session's actual fast-forward-push count.
 
 ## Snapshot changes, CI, and recovery
 

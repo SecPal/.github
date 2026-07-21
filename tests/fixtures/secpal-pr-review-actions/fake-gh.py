@@ -104,6 +104,7 @@ if arguments[3] == "graphql":
                                                     {
                                                         "id": "RC_1",
                                                         "body": "Finding",
+                                                        "replyTo": None,
                                                         "author": {
                                                             "login": "reviewer",
                                                             "id": "ACTOR_reviewer",
