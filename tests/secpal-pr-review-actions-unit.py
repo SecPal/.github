@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import importlib.util
 import io
 import json
@@ -19,7 +20,6 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTIONS_HELPER = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
-FAST_PATH_HELPER = REPO_ROOT / "scripts/secpal_pr_review/fast_path.py"
 P21_TESTS = REPO_ROOT / "tests/secpal-pr-review-unit.py"
 FIXTURES = REPO_ROOT / "tests/fixtures/secpal-pr-review-actions"
 
@@ -35,7 +35,7 @@ def load_module(name: str, path: Path) -> Any:
 
 
 actions = load_module("secpal_pr_review_actions", ACTIONS_HELPER)
-fast_path = load_module("secpal_pr_review.fast_path", FAST_PATH_HELPER)
+fast_path = actions.fast_path
 p21 = load_module("secpal_pr_review_p21_tests", P21_TESTS)
 
 
@@ -4069,6 +4069,220 @@ class FastPathTests(TestCase):
         self.assertNotIn(("READ", "package-2.1-snapshot"), gateway.calls)
         self.assertNotIn(("READ", "package-2.2-snapshot"), gateway.calls)
 
+    def test_actions_uses_the_canonical_fast_path_module(self) -> None:
+        self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
+        self.assertIs(
+            actions.fast_path,
+            importlib.import_module("secpal_pr_review.fast_path"),
+        )
+
+    def test_fast_path_loader_rejects_a_preloaded_module_from_another_path(self) -> None:
+        with mock.patch.dict(
+            actions.sys.modules,
+            {
+                "secpal_pr_review.fast_path": SimpleNamespace(
+                    __file__="/tmp/untrusted-fast-path.py"
+                )
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected path"):
+                actions._load_fast_path_helper()
+
+    def test_batch_request_identity_must_match_reviewed_feedback(self) -> None:
+        reviewed = fast_feedback()
+        mismatches = {
+            "repository": "SecPal/api",
+            "pull_request_number": 2,
+            "expected_head_sha": "f" * 40,
+        }
+        for field, value in mismatches.items():
+            with self.subTest(field=field):
+                payload = fast_request(reviewed).to_dict()
+                payload[field] = value
+                request = fast_path.BatchRequest.from_dict(payload)
+                gateway = FakeFastGateway(reviewed)
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "reviewed feedback identity",
+                ):
+                    fast_path.execute_resolution_batch(
+                        request,
+                        fast_attestation(reviewed),
+                        reviewed,
+                        fast_registry(),
+                        gateway,
+                    )
+                self.assertEqual(gateway.calls, [])
+
+    def test_attestation_receipt_requires_matching_reviewed_identity(self) -> None:
+        arguments = SimpleNamespace(
+            expected_head=p21.HEAD,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=False,
+            receipt=None,
+            output="receipt.json",
+        )
+        entry = {
+            "repository": "SecPal/.github",
+            "focused_validation": [],
+            "required_local_validation": [],
+        }
+        mismatches = {
+            "repository": fast_path.StableFeedbackState.from_payload(
+                {**fast_feedback().to_dict(), "repository": "SecPal/api"}
+            ),
+            "head": fast_feedback(head_sha="e" * 40),
+        }
+        for field, reviewed in mismatches.items():
+            with (
+                self.subTest(field=field),
+                mock.patch.object(
+                    actions,
+                    "_attestation_local_state",
+                    return_value=(p21.HEAD, ""),
+                ),
+                mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+                mock.patch.object(actions, "load_registry", return_value={}),
+                mock.patch.object(actions, "select_repository", return_value=entry),
+                mock.patch.object(actions, "_staged_tree", return_value="a" * 40),
+                mock.patch.object(actions, "_run_registered_validations", return_value=True),
+                mock.patch.object(actions, "_write_fast_report"),
+            ):
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "reviewed feedback (repository|head)",
+                ):
+                    actions._command_attest_validation(arguments)
+
+    def test_bound_commit_requires_receipt_for_reviewed_head(self) -> None:
+        reviewed = fast_feedback()
+        receipt_head = "e" * 40
+        final_head = "d" * 40
+        tree = "a" * 40
+        entry = {
+            "repository": "SecPal/.github",
+            "focused_validation": [],
+            "required_local_validation": [],
+        }
+        binding = actions._fast_registry_binding(entry)
+        receipt = actions._validation_receipt(
+            repository="SecPal/.github",
+            head_sha=receipt_head,
+            tree_sha=tree,
+            binding=binding,
+            reviewed=reviewed,
+        )
+        arguments = SimpleNamespace(
+            expected_head=final_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=True,
+            receipt="receipt.json",
+            output="attestation.json",
+        )
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            outputs = {
+                ("rev-parse", "HEAD^"): receipt_head,
+                ("rev-parse", "HEAD^{tree}"): tree,
+                ("cat-file", "commit", final_head): (
+                    "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+                    " signature\n -----END SSH SIGNATURE-----\n\nmessage\n"
+                ),
+                ("verify-commit", "--raw", final_head): "",
+            }
+            return SimpleNamespace(
+                returncode=0,
+                stdout=outputs[tuple(command)],
+                stderr=(
+                    'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
+                    if command[:2] == ["verify-commit", "--raw"]
+                    else ""
+                ),
+            )
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(final_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(actions, "_read_json", return_value=receipt),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_write_fast_report"),
+        ):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "receipt head does not match reviewed feedback head",
+            ):
+                actions._command_attest_validation(arguments)
+
+    def test_missing_upstream_is_a_recoverable_local_error(self) -> None:
+        pull_request = {
+            "number": 1,
+            "headRepository": {"nameWithOwner": "SecPal/.github"},
+            "headRefName": "feature",
+            "headRefOid": p21.HEAD,
+            "baseRefName": "main",
+            "baseRefOid": p21.BASE,
+            "state": "OPEN",
+            "mergeable": "MERGEABLE",
+            "commits": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+        github = SimpleNamespace(
+            runner=SimpleNamespace(
+                run=mock.Mock(
+                    return_value={
+                        "data": {
+                            "viewer": {
+                                "login": "aroviqen",
+                                "id": "USER_1",
+                                "databaseId": 7,
+                            },
+                            "repository": {
+                                "nameWithOwner": "SecPal/.github",
+                                "pullRequest": pull_request,
+                            },
+                        }
+                    }
+                )
+            )
+        )
+        gateway = actions.FastPathGateway(REPO_ROOT, github=github)
+
+        def git_result(command: list[str], *, allow_failure: bool = False) -> Any:
+            del allow_failure
+            values = {
+                ("rev-parse", "HEAD"): (0, p21.HEAD),
+                ("rev-parse", "@{upstream}"): (128, ""),
+                ("branch", "--show-current"): (0, "feature"),
+                ("status", "--porcelain=v2", "--untracked-files=all"): (0, ""),
+                ("remote", "get-url", "origin"): (0, "https://github.com/SecPal/.github.git"),
+            }
+            returncode, stdout = values[tuple(command)]
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="no upstream")
+
+        gateway._git = mock.Mock(side_effect=git_result)
+        with self.assertRaisesRegex(
+            fast_path.RecoverableLocalError,
+            "configured upstream",
+        ):
+            gateway.read_preflight(fast_request(fast_feedback()))
+
     def test_stable_feedback_ignores_same_head_required_check_transitions(self) -> None:
         successful = fast_feedback()
         payload = successful.to_dict()
@@ -4325,6 +4539,13 @@ class FastPathTests(TestCase):
 
 
 class PolicyScriptTests(TestCase):
+    def test_reuse_precommit_hook_provisions_the_pinned_tool(self) -> None:
+        pre_commit = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        reuse_hook = pre_commit.split("  # Code formatting", 1)[0]
+        self.assertIn("language: python", reuse_hook)
+        self.assertIn("additional_dependencies: [reuse==5.0.2]", reuse_hook)
+        self.assertNotIn("language: system", reuse_hook)
+
     def test_policy_script_has_deterministic_tool_and_baseline_guards(self) -> None:
         policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
             encoding="utf-8"

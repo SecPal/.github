@@ -60,8 +60,18 @@ evidence = _load_evidence_helper()
 
 
 def _load_fast_path_helper() -> Any:
+    module_name = "secpal_pr_review.fast_path"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != FAST_PATH_HELPER.resolve()
+        ):
+            raise RuntimeError("Canonical fast-path module has an unexpected path")
+        return loaded
     spec = importlib.util.spec_from_file_location(
-        "secpal_pr_review_fast_path_shared", FAST_PATH_HELPER
+        module_name, FAST_PATH_HELPER
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load fast-path helper: {FAST_PATH_HELPER}")
@@ -2425,7 +2435,12 @@ class FastPathGateway:
             raise fast_path.SecurityBlocker("GitHub repository or PR identity mismatch")
 
         local_head = self._git(["rev-parse", "HEAD"]).stdout.strip()
-        upstream_head = self._git(["rev-parse", "@{upstream}"]).stdout.strip()
+        upstream = self._git(["rev-parse", "@{upstream}"], allow_failure=True)
+        upstream_head = upstream.stdout.strip()
+        if upstream.returncode != 0 or not OID_PATTERN.fullmatch(upstream_head):
+            raise fast_path.RecoverableLocalError(
+                "current branch has no valid configured upstream"
+            )
         branch = self._git(["branch", "--show-current"]).stdout.strip()
         status = self._git(
             ["status", "--porcelain=v2", "--untracked-files=all"]
@@ -3831,6 +3846,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             f"local head mismatch: expected {arguments.expected_head}, observed {head}"
         )
     reviewed = _load_fast_state(arguments.reviewed_state)
+    if reviewed.repository != arguments.repo:
+        raise fast_path.SecurityBlocker(
+            "reviewed feedback repository does not match --repo"
+        )
+    if not arguments.bind_commit and reviewed.head_sha != arguments.expected_head:
+        raise fast_path.SecurityBlocker(
+            "reviewed feedback head does not match --expected-head"
+        )
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
@@ -3842,6 +3865,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "worktree is not clean while binding the validated commit"
             )
         receipt = _read_json(arguments.receipt, "validation receipt")
+        if reviewed.head_sha != receipt.get("head_sha"):
+            raise fast_path.SecurityBlocker(
+                "receipt head does not match reviewed feedback head"
+            )
         receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
         expected_receipt = _validation_receipt(
             repository=arguments.repo,

@@ -95,6 +95,13 @@ EOF
   LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null
 )
 
+# Git invokes a pre-push hook with the remote name and location as arguments.
+(
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" \
+    bash scripts/preflight.sh origin https://github.com/SecPal/.github.git >/dev/null
+)
+
 if ! grep -Eq '(^|[[:space:]])markdownlint-cli($|[[:space:]])|(^|[[:space:]])markdownlint($|[[:space:]])' "$log_file"; then
   echo "Expected preflight to invoke markdownlint" >&2
   cat "$log_file" >&2

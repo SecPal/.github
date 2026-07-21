@@ -688,6 +688,14 @@ def execute_resolution_batch(
 ) -> dict[str, Any]:
     """Preflight once, compare feedback once, then resolve sequentially without retries."""
 
+    if (
+        request.repository != reviewed_state.repository
+        or request.pull_request_number != reviewed_state.pull_request_number
+        or request.expected_head_sha != reviewed_state.head_sha
+    ):
+        raise SecurityBlocker(
+            "batch request does not bind the supplied reviewed feedback identity"
+        )
     if request.reviewed_state_digest != reviewed_state.state_digest or request.reviewed_feedback_digest != reviewed_state.feedback_digest:
         raise SecurityBlocker("batch request does not bind the supplied reviewed feedback")
     readiness = _read_with_one_retry(lambda: gateway.read_preflight(request))
@@ -832,9 +840,11 @@ def atomic_write_json(path: Path, value: Any) -> None:
         try:
             os.close(descriptor)
         except OSError:
+            # fdopen may already have closed the descriptor while propagating the failure.
             pass
         try:
             os.unlink(temporary_name)
         except OSError:
+            # Preserve the original write failure when best-effort cleanup also fails.
             pass
         raise

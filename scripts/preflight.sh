@@ -32,7 +32,7 @@ if [ "${1:-}" = "--reuse-tracked-only" ] && [ "$#" -eq 1 ]; then
   run_reuse_tracked
   exit $?
 fi
-if [ "$#" -ne 0 ]; then
+if [ "$#" -ne 0 ] && [ "$#" -ne 2 ]; then
   echo "Unsupported preflight argument" >&2
   exit 2
 fi
