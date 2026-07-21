@@ -220,7 +220,7 @@ VALIDATOR_TOOLCHAIN_ROOT="$(cd -- "$(dirname -- "$SOURCE_SCRIPT")/.." && pwd)"
 VALIDATOR_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/package-lock.json"
 VALIDATOR_INSTALLED_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.package-lock.json"
 VALIDATOR_MARKDOWNLINT="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint"
-VALIDATOR_YAML_MODULE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml/index.js"
+VALIDATOR_YAML_PACKAGE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
 
 for _validator_tool in bash basename dirname find grep head node python3 wc; do
     if ! PATH="$SERVICE_PATH" command -v "$_validator_tool" >/dev/null 2>&1; then
@@ -229,10 +229,20 @@ for _validator_tool in bash basename dirname find grep head node python3 wc; do
     fi
 done
 
+validator_yaml_available() {
+    PATH="$SERVICE_PATH" node - "$VALIDATOR_YAML_PACKAGE" <<'JS' >/dev/null 2>&1
+try {
+    require.resolve(process.argv[2]);
+} catch (_error) {
+    process.exit(1);
+}
+JS
+}
+
 if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     || ! -f "$VALIDATOR_INSTALLED_PACKAGE_LOCK" \
-    || ! -x "$VALIDATOR_MARKDOWNLINT" \
-    || ! -f "$VALIDATOR_YAML_MODULE" ]]; then
+    || ! -x "$VALIDATOR_MARKDOWNLINT" ]] \
+    || ! validator_yaml_available; then
     echo "Error: rollout validator toolchain is incomplete; install the source bundle's committed npm dependencies before installing the rollout." >&2
     exit 1
 fi

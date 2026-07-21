@@ -12,7 +12,7 @@
 
 import fs from "fs";
 import path from "path";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 /** @type {readonly [method: string, pathTemplate: string][]} */
 const REQUIRED_OPERATIONS = [

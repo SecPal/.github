@@ -108,7 +108,7 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.package-lock.json" \
-        "$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml/index.js"; do
+        "$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml/package.json"; do
         if [[ ! -f "$runtime_file" ]]; then
             echo "Error: canonical Polyscope runtime source is missing: $runtime_file" >&2
             exit 1

@@ -216,7 +216,8 @@ test_markdown_lint() {
 test_instruction_frontmatter() {
     local file
     local -a files=()
-    local yaml_module="$SCRIPT_DIR/../node_modules/js-yaml"
+    local yaml_package="$SCRIPT_DIR/../node_modules/js-yaml"
+    local yaml_module
 
     while IFS= read -r -d '' file; do
         files+=("$file")
@@ -228,7 +229,15 @@ test_instruction_frontmatter() {
         return
     fi
 
-    if ! command -v node >/dev/null 2>&1 || [ ! -f "$yaml_module/index.js" ]; then
+    if ! command -v node >/dev/null 2>&1 \
+        || ! yaml_module="$(node - "$yaml_package" <<'JS'
+try {
+    process.stdout.write(require.resolve(process.argv[2]));
+} catch (_error) {
+    process.exit(1);
+}
+JS
+        )"; then
         print_result "instruction overlays include valid frontmatter" "FAIL" \
             "repository-pinned js-yaml is unavailable; install the committed lockfile dependencies"
         return
