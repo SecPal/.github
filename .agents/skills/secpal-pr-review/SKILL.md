@@ -67,16 +67,21 @@ as argument arrays in the target repository, without a shell.
    integrity, lifecycle, rollout, and avoidable complexity. Fix material
    in-scope defects before the complete validation.
 5. Stage the finished tree and run complete registered local validation exactly
-   once through `attest-validation`. Preserve its deterministic staged-tree,
-   parent-head, registry, command-set, result, and reviewed-feedback receipt.
+   once through `attest-validation`, supplying explicit satisfied evidence for
+   every registered manual gate. Preserve its deterministic staged-tree,
+   parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
+   receipt.
 6. Create one signed commit containing exactly that staged tree, use
-   `attest-validation --bind-commit` to bind the receipt to the signed commit
-   without rerunning validation, recheck the remote head, and push once.
+   the receipt digest as its single `SecPal-Validation-Receipt` trailer, and use
+   `attest-validation --bind-commit` to verify that signed binding without
+   rerunning validation. Recheck the remote head and push once.
 7. Read applicable rules and Required Checks once as one bounded logical read.
    Pending, failed, missing, or unknown required results block; never poll.
 8. Perform one lightweight stable-feedback freshness read. A same-head CI
-   transition is irrelevant to this comparison; any unexpected head, comment,
-   reaction, or thread-state change blocks before the first write.
+   transition is irrelevant to this comparison. The single attested remediation
+   head may cause GitHub's derived `isOutdated` state to change from false to
+   true; every other unexpected head, comment, reaction, or thread-state change
+   blocks before the first write.
 9. Resolve all eligible threads through one schema-bound `resolve-batch
 --apply`. Verify readiness, attestation, checks, and stable feedback once;
    between writes retain one bounded target check that verifies identity, head,
@@ -98,14 +103,15 @@ reviewed base branch/SHA, authenticated actor, reviewed-state and feedback diges
 dispositions, and any prior results from the same authorization digest. A
 partial failure stops later writes, reports every applied/failed/blocked target,
 and never retries a write. A manual rerun recognizes an already-resolved thread
-only with matching prior operation evidence.
+only with matching prior operation evidence; a previously recorded resolution
+that is now reopened blocks instead of being applied again.
 
 The stable-feedback projection contains review identities, body digests,
 thread/comment identities and state, reactions, actors, repository, PR, head,
 and the reviewed base branch/SHA. It contains no Required Check results.
-Volatile readiness separately contains heads, current base, Required Checks,
-mergeability, worktree, signatures, and
-the validation-attestation identity.
+Volatile readiness separately contains heads, the registered default/base
+repository boundary, Required Checks, mergeability, worktree, signatures, the
+signed validation-receipt trailer, and the validation-attestation identity.
 
 The following immutable mutation-plan rules remain available only for explicit
 forensic/audit mode.

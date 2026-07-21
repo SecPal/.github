@@ -20,6 +20,7 @@ from typing import Any, Callable, TypeVar
 OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 IDENTITY = re.compile(r"^[^\x00-\x20\x7f]+$")
+EVIDENCE_TEXT = re.compile(r"^[^\x00-\x1f\x7f]+$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
 ELIGIBLE_DISPOSITIONS = frozenset({
@@ -303,8 +304,12 @@ class ReadinessState:
     head_sha: str
     base_ref: str
     base_sha: str
+    base_repository: str
     local_head_sha: str
     remote_head_sha: str
+    head_parent_sha: str
+    head_tree_sha: str
+    validation_receipt_digest: str | None
     worktree_clean: bool
     pull_request_open: bool
     mergeability: str
@@ -480,6 +485,70 @@ class BatchRequest:
         }
 
 
+def validate_manual_gate_evidence(
+    value: Any,
+    registered_gates: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(registered_gates, list) or any(
+        not isinstance(gate, str) or not gate for gate in registered_gates
+    ):
+        raise SecurityBlocker("registered manual gates are malformed")
+    if not isinstance(value, list) or len(value) != len(registered_gates):
+        raise SecurityBlocker("manual-gate evidence is incomplete")
+    normalized: list[dict[str, Any]] = []
+    for index, gate in enumerate(registered_gates):
+        item = value[index]
+        if not isinstance(item, dict) or set(item) != {
+            "gate",
+            "satisfied",
+            "evidence",
+        }:
+            raise SecurityBlocker("manual-gate evidence shape is invalid")
+        evidence_text = item.get("evidence")
+        if (
+            item.get("gate") != gate
+            or item.get("satisfied") is not True
+            or not isinstance(evidence_text, str)
+            or not EVIDENCE_TEXT.fullmatch(evidence_text)
+        ):
+            raise SecurityBlocker("manual-gate evidence is not satisfied")
+        normalized.append(
+            {"gate": gate, "satisfied": True, "evidence": evidence_text}
+        )
+    return normalized
+
+
+def create_validation_receipt(
+    *,
+    repository: str,
+    head_sha: str,
+    validated_tree_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    successful_result: bool,
+    reviewed_state: StableFeedbackState,
+    manual_gate_evidence: Any,
+) -> dict[str, Any]:
+    gates = registry.get("manual_gates") if isinstance(registry, dict) else None
+    normalized_gates = validate_manual_gate_evidence(manual_gate_evidence, gates)
+    fields = {
+        "schema_version": "1.0",
+        "kind": "VALIDATION_RECEIPT",
+        "repository": _require_string(repository, "receipt repository"),
+        "head_sha": _require_oid(head_sha, "receipt head"),
+        "validated_tree_sha": _require_oid(
+            validated_tree_sha, "validated tree"
+        ),
+        "registry_digest": digest_json(registry),
+        "command_set_digest": digest_json(command_set),
+        "successful_result": successful_result is True,
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "manual_gate_evidence": normalized_gates,
+    }
+    return {**fields, "receipt_digest": digest_json(fields)}
+
+
 def create_validation_attestation(
     *,
     repository: str,
@@ -488,7 +557,22 @@ def create_validation_attestation(
     command_set: list[dict[str, Any]],
     successful_result: bool,
     reviewed_state: StableFeedbackState,
+    validation_receipt: Any,
 ) -> dict[str, Any]:
+    if not isinstance(validation_receipt, dict):
+        raise SecurityBlocker("validation receipt is missing")
+    expected_receipt = create_validation_receipt(
+        repository=repository,
+        head_sha=reviewed_state.head_sha,
+        validated_tree_sha=validation_receipt.get("validated_tree_sha"),
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed_state,
+        manual_gate_evidence=validation_receipt.get("manual_gate_evidence"),
+    )
+    if validation_receipt != expected_receipt:
+        raise SecurityBlocker("validation receipt is invalid or stale")
     fields = {
         "schema_version": "1.0",
         "repository": _require_string(repository, "attestation repository"),
@@ -499,6 +583,11 @@ def create_validation_attestation(
         "reviewed_head_sha": reviewed_state.head_sha,
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "validated_tree_sha": validation_receipt["validated_tree_sha"],
+        "validation_receipt_digest": validation_receipt["receipt_digest"],
+        "manual_gate_evidence": copy.deepcopy(
+            validation_receipt["manual_gate_evidence"]
+        ),
     }
     return {**fields, "attestation_digest": digest_json(fields)}
 
@@ -511,7 +600,34 @@ def verify_validation_attestation(
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
     reviewed_state: StableFeedbackState,
+    commit_parent_sha: str,
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
 ) -> None:
+    if (
+        _require_oid(commit_parent_sha, "validated commit parent")
+        != reviewed_state.head_sha
+    ):
+        raise SecurityBlocker("validated commit parent does not match reviewed head")
+    if not isinstance(attestation, dict):
+        raise SecurityBlocker("validation attestation is missing")
+    receipt = create_validation_receipt(
+        repository=repository,
+        head_sha=reviewed_state.head_sha,
+        validated_tree_sha=commit_tree_sha,
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed_state,
+        manual_gate_evidence=attestation.get("manual_gate_evidence"),
+    )
+    if (
+        commit_validation_receipt_digest != receipt["receipt_digest"]
+        or attestation.get("validation_receipt_digest") != receipt["receipt_digest"]
+    ):
+        raise SecurityBlocker(
+            "signed commit does not bind the validation receipt"
+        )
     expected = create_validation_attestation(
         repository=repository,
         head_sha=head_sha,
@@ -519,6 +635,7 @@ def verify_validation_attestation(
         command_set=command_set,
         successful_result=True,
         reviewed_state=reviewed_state,
+        validation_receipt=receipt,
     )
     if not isinstance(attestation, dict) or attestation != expected:
         raise SecurityBlocker("validation attestation binding is invalid or stale")
@@ -589,7 +706,7 @@ def verify_commit_signatures(
 def _verify_readiness(
     request: BatchRequest,
     readiness: ReadinessState,
-    signature_policy: dict[str, Any] | None = None,
+    registry: dict[str, Any],
 ) -> None:
     if readiness.repository != request.repository or readiness.pull_request_number != request.pull_request_number:
         raise SecurityBlocker("repository or pull request identity mismatch")
@@ -611,11 +728,22 @@ def _verify_readiness(
         raise SecurityBlocker("pull request base branch changed after review")
     if _require_oid(readiness.base_sha, "base SHA") != request.expected_base_sha:
         raise SecurityBlocker("pull request base SHA changed after review")
+    default_branch = registry.get("default_branch")
+    allowed_base_repositories = registry.get("allowed_base_repositories")
+    if not isinstance(default_branch, str) or not default_branch:
+        raise SecurityBlocker("registered default branch is missing")
+    if request.expected_base_ref != default_branch:
+        raise SecurityBlocker("pull request does not target the registered default branch")
+    if (
+        not isinstance(allowed_base_repositories, list)
+        or readiness.base_repository not in allowed_base_repositories
+    ):
+        raise SecurityBlocker("pull request base repository is outside the registered boundary")
     if readiness.mergeability in {"CONFLICTING", "UNKNOWN", ""}:
         raise SecurityBlocker(f"pull request mergeability is {readiness.mergeability or 'missing'}")
     if _actor(readiness.actor, "current writer") != request.expected_actor:
         raise SecurityBlocker("authenticated actor identity mismatch")
-    verify_commit_signatures(readiness.commits, signature_policy)
+    verify_commit_signatures(readiness.commits, registry.get("signature_policy"))
 
 
 def _verify_required_checks(
@@ -735,6 +863,13 @@ def _compare_feedback(
         thread_id = thread["node_id"]
         expected = reviewed_threads.get(thread_id)
         if (
+            request.expected_head_sha != reviewed.head_sha
+            and expected is not None
+            and expected["is_outdated"] is False
+            and thread["is_outdated"] is True
+        ):
+            thread["is_outdated"] = False
+        if (
             thread_id in authorized
             and expected is not None
             and expected["is_resolved"] is False
@@ -783,10 +918,12 @@ def execute_resolution_batch(
         or request.expected_base_sha != reviewed_state.base_sha
     ):
         raise SecurityBlocker("batch request does not bind the reviewed base")
-    signature_policy = registry.get("signature_policy") if isinstance(registry, dict) else None
+    default_branch = registry.get("default_branch") if isinstance(registry, dict) else None
+    if request.expected_base_ref != default_branch:
+        raise SecurityBlocker("reviewed pull request does not target the registered default branch")
     check_policy = registry.get("check_policy") if isinstance(registry, dict) else None
     readiness = _read_with_one_retry(lambda: gateway.read_preflight(request))
-    _verify_readiness(request, readiness, signature_policy)
+    _verify_readiness(request, readiness, registry)
     command_set = registry.get("validation") if isinstance(registry, dict) else None
     if not isinstance(command_set, list):
         raise SecurityBlocker("validation registry command set is missing")
@@ -797,6 +934,9 @@ def execute_resolution_batch(
         registry=registry,
         command_set=command_set,
         reviewed_state=reviewed_state,
+        commit_parent_sha=readiness.head_parent_sha,
+        commit_tree_sha=readiness.head_tree_sha,
+        commit_validation_receipt_digest=readiness.validation_receipt_digest,
     )
     check_evidence = _read_with_one_retry(
         lambda: gateway.read_required_checks(request, registry)
@@ -819,6 +959,10 @@ def execute_resolution_batch(
             raise SecurityBlocker(f"requested thread is missing: {operation.thread_id}")
         if thread["is_resolved"] and operation.thread_id not in authorized:
             raise SecurityBlocker(f"requested thread was resolved outside this batch: {operation.thread_id}")
+        if not thread["is_resolved"] and operation.thread_id in authorized:
+            raise SecurityBlocker(
+                f"prior resolution was reopened after this batch: {operation.thread_id}"
+            )
 
     report = _base_report(request)
     for index, operation in enumerate(request.operations):
@@ -869,6 +1013,12 @@ def execute_resolution_batch(
             else:
                 comparable_thread = copy.deepcopy(normalized_thread)
                 if (
+                    request.expected_head_sha != reviewed_state.head_sha
+                    and comparable_thread["is_outdated"] is True
+                    and expected_thread["is_outdated"] is False
+                ):
+                    comparable_thread["is_outdated"] = False
+                if (
                     operation.thread_id in authorized
                     and comparable_thread["is_resolved"] is True
                     and expected_thread["is_resolved"] is False
@@ -879,6 +1029,12 @@ def execute_resolution_batch(
                     if comparable_thread == expected_thread
                     else "last-moment mutation target feedback changed"
                 )
+        if (
+            blocker is None
+            and operation.thread_id in authorized
+            and target.get("is_resolved") is not True
+        ):
+            blocker = "prior resolution was reopened after this batch"
         if blocker is None and target.get("is_resolved") is True and operation.thread_id in authorized:
             report["already_resolved"].append(
                 {"operation_id": operation.operation_id, "thread_id": operation.thread_id}

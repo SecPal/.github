@@ -27,6 +27,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   SSH/OpenPGP formats, compare last-moment PR/base/thread feedback, preserve
   valid empty required-check configurations, and retain batch evidence through
   report-output failures
+- bound the registered default/base-repository policy, explicit manual-gate
+  evidence, validated tree, and deterministic receipt digest to one signed
+  commit trailer; rejected reopened prior resolutions and allowed only GitHub's
+  derived false-to-true outdated transition after the attested remediation push
 - limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
   ignored session scratch files cannot block a push while tracked violations
   remain enforced

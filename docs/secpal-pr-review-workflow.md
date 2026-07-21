@@ -59,7 +59,8 @@ The workflow has six narrow parts:
 2. [the finite contract](../.agents/skills/secpal-pr-review/references/contract.md),
    which defines states, counters, mutation policy, and terminal outcomes;
 3. `scripts/secpal_pr_review/fast_path.py`, which defines the stable-feedback,
-   volatile-readiness, validation-attestation, and batch-resolution contracts;
+   volatile-readiness, signed validation-receipt/attestation, and
+   batch-resolution contracts;
 4. `scripts/secpal-pr-review-actions.py`, the compatible command entry point for
    stable capture, validation attestation, batch resolution, and legacy actions;
 5. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
@@ -170,11 +171,15 @@ python3 scripts/secpal-pr-review-actions.py attest-validation \
   --repo SecPal/api \
   --expected-head PARENT_HEAD \
   --reviewed-state SESSION/reviewed-feedback.json \
+  --manual-gate-evidence SESSION/manual-gates.json \
   --repo-root /path/to/SecPal/api \
   --output SESSION/validation-receipt.json
 
-# Create and locally verify the one signed commit here, then bind without
-# rerunning the complete validation command set.
+# Create the one signed commit with the receipt's `receipt_digest` as its single
+# `SecPal-Validation-Receipt` trailer, then bind without rerunning validation.
+git commit -S -m "fix: remediate reviewed findings" \
+  -m "SecPal-Validation-Receipt: RECEIPT_DIGEST"
+
 python3 scripts/secpal-pr-review-actions.py attest-validation \
   --repo SecPal/api \
   --expected-head HEAD \
@@ -195,16 +200,20 @@ python3 scripts/secpal-pr-review-actions.py resolve-batch \
   --apply
 ```
 
-The capture reads one canonical projection containing feedback identities,
+`manual-gates.json` is an ordered JSON array with exactly one
+`{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object
+per registered gate. The capture reads one canonical projection containing feedback identities,
 digests, states, reactions, actors, the current head, and the reviewed base
 branch/SHA. It excludes Required
-Checks. The complete run produces a staged-tree receipt. After the signed
-commit, the same command binds that receipt to the commit only when its sole
-parent and tree match exactly; this does not rerun validation. The final
-attestation binds the repository, finished head, registry digest, command-set
-digest, successful result, and reviewed-feedback digests. The batch verifies
-local/remote/PR heads, the unchanged base, clean worktree, actor,
-registry-permitted SSH/OpenPGP signatures, the attestation, applicable
+Checks. The complete run produces a staged-tree receipt that includes the
+manual-gate evidence. After the signed commit, the same command binds that
+receipt only when the commit's sole parent, tree, signature, and receipt trailer
+match exactly; this does not rerun validation. The final attestation binds the
+repository, finished head, registry digest, command-set digest, successful
+result, validated tree, signed receipt, manual gates, and reviewed-feedback
+digests. The batch reconstructs the receipt from the signed commit, verifies
+local/remote/PR heads, the registered default/base-repository boundary, clean
+worktree, actor, registry-permitted SSH/OpenPGP signatures, applicable
 rules/Required Checks, and current stable feedback once. Each target check also
 compares the open PR/base state and bounded thread comments and reactions
 already returned by the target query. Thirty resolutions therefore use one attestation verification,
@@ -293,10 +302,13 @@ bounded PR-wide feedback and exact target-thread reads before resolving.
 
 The normal path compares one post-push stable-feedback projection with the
 reviewed feedback, allowing only same-batch prior resolutions proven by matching
-operation evidence. Required Checks are evaluated separately immediately before
-that comparison, so a same-head CI transition never changes stable equality.
-Any unexpected head, comment, reaction, or thread-state change blocks before
-the first write.
+operation evidence. A recorded prior resolution that has since been reopened is
+never applied again. Required Checks are evaluated separately immediately
+before that comparison, so a same-head CI transition never changes stable
+equality. The single attested head transition may deterministically change
+GitHub's derived `isOutdated` state from false to true; every unexpected head,
+comment, reaction, resolution, or other thread-state change blocks before the
+first write.
 
 In explicit forensic mode, the initial snapshot never changes. The one post-cycle-1 capture and one final
 capture are comparisons, not extensions. A signed remediation commit may advance

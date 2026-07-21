@@ -89,12 +89,14 @@ integrity, lifecycle, rollout, user control, and avoidable complexity.
 `COMPLETE_VALIDATION_OF_STAGED_TREE_ONCE` runs the registered complete command
 set once and returns a deterministic receipt binding repository, parent head,
 staged-tree SHA, registry digest, command-set digest, successful result, and
-reviewed-feedback digests. Time is informational only and cannot determine
-validity.
+reviewed-feedback digests plus explicit satisfied evidence for every registered
+manual gate. Time is informational only and cannot determine validity.
 
 `SIGNED_COMMIT_AND_BIND_VALIDATION_ATTESTATION` creates one cryptographically
-signed commit and proves that its sole parent and tree exactly match the receipt.
-It then returns the final head-bound attestation without rerunning validation.
+signed commit with the receipt digest as its single
+`SecPal-Validation-Receipt` trailer and proves that its sole parent, tree, and
+signed trailer exactly match the receipt. It then returns the final head-bound
+attestation without rerunning validation.
 `NORMAL_PUSH` proves the remote branch still has the expected predecessor and
 makes one ordinary push. Neither state amends, rebases, force-pushes, bypasses
 hooks, or uses administrator authority.
@@ -104,7 +106,9 @@ requirements and evaluates volatile Required Checks independently as one bounded
 logical read. Missing, pending, failed, skipped, or unknown required results
 block. It never polls. `READ_STABLE_FEEDBACK_FRESHNESS_ONCE` compares one current canonical
 stable projection with the reviewed feedback. CI-only transitions on the same
-head do not affect this comparison.
+head do not affect this comparison. When the expected head is the single
+attested remediation descendant, GitHub's derived thread `isOutdated` value may
+change from false to true; no other feedback delta is normalized.
 
 `RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH` verifies repository, PR, expected/local/
 remote heads, clean worktree, attestation, Required Checks, stable feedback, and
@@ -200,20 +204,25 @@ validation attestation can authorize the expected reviewed-head-to-remediation-
 head transition; the state digest includes the head and base. It contains no
 Required Check, mergeability, worktree, signature, or validation result.
 
-Volatile readiness separately contains the current PR head, base branch and SHA,
-local and remote heads, clean-worktree result, Required Checks, mergeability,
-authenticated actor, signature classifications, and validation-attestation
-identity. Required Checks are read and evaluated once immediately before the
-freshness comparison and batch.
+Volatile readiness separately contains the current PR head, registered default
+branch and allowed base repository, base SHA, local and remote heads,
+clean-worktree result, Required Checks, mergeability, authenticated actor,
+signature classifications, signed validation-receipt trailer, and
+validation-attestation identity. Required Checks are read and evaluated once
+immediately before the freshness comparison and batch.
 
 A validation receipt is produced by the single complete run and binds its staged
-tree. After the signed commit, that receipt may be bound once to the commit only
-when its parent and tree match exactly. The final validation attestation contains
-at least `repository`, `head_sha`,
-`registry_digest`, `command_set_digest`, and `successful_result`. It also binds
-the reviewed state and feedback digests. Canonical JSON and SHA-256 make it
-deterministic; timestamps do not participate. Any bound-value change invalidates
-the attestation. It contains no environment dump, command output, credential, or
+tree and normalized satisfied evidence for every registered manual gate. After
+the signed commit, that receipt may be bound once only when the commit's parent,
+tree, and single `SecPal-Validation-Receipt` trailer match exactly. The final
+validation attestation contains at least `repository`, `head_sha`,
+`registry_digest`, `command_set_digest`, `successful_result`, validated tree,
+receipt digest, and manual-gate evidence. It also binds the reviewed state and
+feedback digests. The batch independently reconstructs the receipt from the
+live signed commit and rejects a caller-authored attestation file that lacks the
+matching signed trailer. Canonical JSON and SHA-256 make it deterministic;
+timestamps do not participate. Any bound-value change invalidates the
+attestation. It contains no environment dump, command output, credential, or
 secret.
 
 A batch input validates against `fast-path-batch.schema.json`. It binds one
@@ -224,8 +233,10 @@ failure. Writes never retry. A partial failure records all applied operations,
 the exact failed operation, and all later blocked operations, then stops.
 An idempotent manual rerun may treat a resolved thread as already applied only
 when supplied prior-result evidence has the same authorization digest,
-operation/thread identity, and returned mutation identity. Any external
-resolution or other stable-feedback delta blocks before the first write.
+operation/thread identity, and returned mutation identity. If that recorded
+resolution is reopened, the rerun blocks instead of resolving it again. Any
+external resolution or other stable-feedback delta blocks before the first
+write.
 An explicit report output is initialized before the first write. If final
 persistence fails after a mutation, the helper stops and emits the complete
 in-memory applied/failed/blocked evidence to standard error for manual recovery.

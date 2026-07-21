@@ -31,13 +31,13 @@ for argument in "$@"; do
       echo "Ignored scratch file reached a repository gate: $argument" >&2
       exit 8
       ;;
-    tracked-bad.md)
+    docs/tracked-bad.md)
       tracked_bad=1
       ;;
   esac
 done
 if [ "$markdownlint_call" -eq 1 ] && [ "$tracked_bad" -eq 1 ]; then
-  echo "Tracked Markdown violation reached markdownlint: tracked-bad.md" >&2
+  echo "Tracked Markdown violation reached markdownlint: docs/tracked-bad.md" >&2
   exit 9
 fi
 exit 0
@@ -74,6 +74,11 @@ cat >"$workspace/README.md" <<'EOF'
 # Test Workspace
 EOF
 
+mkdir -p "$workspace/docs"
+cat >"$workspace/docs/guide.md" <<'EOF'
+# Nested Test Guide
+EOF
+
 cat >"$workspace/.gitignore" <<'EOF'
 .context/
 EOF
@@ -87,7 +92,7 @@ EOF
   git init --quiet
   git config user.name 'SecPal Test'
   git config user.email 'test@secpal.dev'
-  git add .gitignore README.md
+  git add .gitignore README.md docs/guide.md
   git commit --quiet -m 'test: seed preflight workspace'
   git checkout --quiet -b test-branch
   git update-ref refs/remotes/origin/main HEAD
@@ -114,12 +119,12 @@ if grep -Fq '**/' "$log_file" || grep -Fq '.context/pr-body.md' "$log_file"; the
   exit 1
 fi
 
-cat >"$workspace/tracked-bad.md" <<'EOF'
+cat >"$workspace/docs/tracked-bad.md" <<'EOF'
 #Skipped heading levels are a tracked violation
 EOF
 (
   cd "$workspace"
-  git add tracked-bad.md
+  git add docs/tracked-bad.md
   set +e
   LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null 2>&1
   tracked_status=$?
@@ -130,8 +135,11 @@ EOF
   fi
 )
 
-if ! grep -Eq 'markdownlint.*(^|[[:space:]])README\.md($|[[:space:]])' "$log_file" || grep -Eq '(^|[[:space:]])\.git/' "$log_file"; then
-  echo "Expected preflight markdownlint to receive the explicit tracked Markdown path only" >&2
+if ! grep -Eq 'markdownlint.*(^|[[:space:]])README\.md($|[[:space:]])' "$log_file" \
+  || ! grep -Eq 'markdownlint.*(^|[[:space:]])docs/guide\.md($|[[:space:]])' "$log_file" \
+  || ! grep -Eq 'markdownlint.*(^|[[:space:]])docs/tracked-bad\.md($|[[:space:]])' "$log_file" \
+  || grep -Eq '(^|[[:space:]])\.git/' "$log_file"; then
+  echo "Expected preflight markdownlint to receive root and nested tracked Markdown paths only" >&2
   cat "$log_file" >&2
   exit 1
 fi

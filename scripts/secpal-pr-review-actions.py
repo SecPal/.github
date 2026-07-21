@@ -306,11 +306,16 @@ def _target_belongs_to_pull_request(url: Any, repository: str, number: int) -> b
     )
 
 
-def _read_json(path: str, label: str) -> dict[str, Any]:
+def _read_json_value(path: str, label: str) -> Any:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PlanError(f"Cannot load {label}: {evidence.redact_diagnostic(str(exc))}") from exc
+    return value
+
+
+def _read_json(path: str, label: str) -> dict[str, Any]:
+    value = _read_json_value(path, label)
     if not isinstance(value, dict):
         raise PlanError(f"{label} must be a JSON object")
     return value
@@ -1160,6 +1165,7 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
       headRefName
       baseRefName
       baseRefOid
+      baseRepository { nameWithOwner }
       mergeable
       headRepository { nameWithOwner }
       commits(first:100) {
@@ -2502,8 +2508,22 @@ class FastPathGateway:
             head_sha=pull_request.get("headRefOid"),
             base_ref=pull_request.get("baseRefName"),
             base_sha=pull_request.get("baseRefOid"),
+            base_repository=(
+                pull_request.get("baseRepository", {}).get("nameWithOwner")
+                if isinstance(pull_request.get("baseRepository"), dict)
+                else None
+            ),
             local_head_sha=local_head,
             remote_head_sha=upstream_head,
+            head_parent_sha=_validated_commit_parent(
+                self.repository_root, local_head
+            ),
+            head_tree_sha=_run_attestation_git(
+                self.repository_root, ["rev-parse", "HEAD^{tree}"]
+            ).stdout.strip(),
+            validation_receipt_digest=_commit_validation_receipt_digest(
+                self.repository_root, local_head
+            ),
             worktree_clean=not status.strip(),
             pull_request_open=pull_request.get("state") == "OPEN",
             mergeability=str(pull_request.get("mergeable") or "UNKNOWN"),
@@ -3811,6 +3831,7 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--output", required=True)
     attestation_parser.add_argument("--bind-commit", action="store_true")
     attestation_parser.add_argument("--receipt")
+    attestation_parser.add_argument("--manual-gate-evidence")
     batch_parser = subparsers.add_parser("resolve-batch")
     batch_parser.add_argument("--repo", required=True)
     batch_parser.add_argument("--pr", required=True, type=_positive_integer)
@@ -3926,6 +3947,11 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
 def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "repository": entry["repository"],
+        "default_branch": entry["default_branch"],
+        "allowed_base_repositories": copy.deepcopy(
+            entry["allowed_base_repositories"]
+        ),
+        "manual_gates": copy.deepcopy(entry["manual_gates"]),
         "signature_policy": copy.deepcopy(entry["signature_policy"]),
         "check_policy": copy.deepcopy(entry["check_policy"]),
         "limits": {
@@ -3941,6 +3967,22 @@ def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
 def _load_fast_state(path: str) -> Any:
     return fast_path.StableFeedbackState.from_payload(
         _read_json(path, "stable reviewed feedback")
+    )
+
+
+def _load_fast_manual_gate_evidence(
+    path: str | None,
+    binding: dict[str, Any],
+) -> list[dict[str, Any]]:
+    gates = binding.get("manual_gates")
+    if not path:
+        if gates:
+            raise fast_path.RecoverableLocalError(
+                "registered manual gates require --manual-gate-evidence"
+            )
+        return []
+    return fast_path.validate_manual_gate_evidence(
+        _read_json_value(path, "manual-gate evidence"), gates
     )
 
 
@@ -4017,6 +4059,33 @@ def _validated_commit_parent(repository_root: Path, head: str) -> str:
     return identities[1]
 
 
+def _commit_validation_receipt_digest(
+    repository_root: Path,
+    head: str,
+) -> str | None:
+    result = _run_attestation_git(
+        repository_root,
+        [
+            "show",
+            "-s",
+            "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)",
+            head,
+        ],
+    )
+    values = [
+        value.strip()
+        for value in result.stdout.rstrip("\n").split("\x00")
+        if value.strip()
+    ]
+    if not values:
+        return None
+    if len(values) != 1 or not re.fullmatch(r"[0-9a-f]{64}", values[0]):
+        raise fast_path.SecurityBlocker(
+            "signed commit validation-receipt trailer is malformed"
+        )
+    return values[0]
+
+
 def _attestation_local_state(repository_root: Path, repository: str) -> tuple[str, str]:
     head = _run_attestation_git(repository_root, ["rev-parse", "HEAD"]).stdout.strip()
     status = _run_attestation_git(
@@ -4056,20 +4125,18 @@ def _validation_receipt(
     tree_sha: str,
     binding: dict[str, Any],
     reviewed: Any,
+    manual_gate_evidence: Any,
 ) -> dict[str, Any]:
-    fields = {
-        "schema_version": "1.0",
-        "kind": "VALIDATION_RECEIPT",
-        "repository": repository,
-        "head_sha": head_sha,
-        "validated_tree_sha": tree_sha,
-        "registry_digest": fast_path.digest_json(binding),
-        "command_set_digest": fast_path.digest_json(binding["validation"]),
-        "successful_result": True,
-        "reviewed_state_digest": reviewed.state_digest,
-        "reviewed_feedback_digest": reviewed.feedback_digest,
-    }
-    return {**fields, "receipt_digest": fast_path.digest_json(fields)}
+    return fast_path.create_validation_receipt(
+        repository=repository,
+        head_sha=head_sha,
+        validated_tree_sha=tree_sha,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=reviewed,
+        manual_gate_evidence=manual_gate_evidence,
+    )
 
 
 def _command_attest_validation(arguments: argparse.Namespace) -> int:
@@ -4101,6 +4168,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "worktree is not clean while binding the validated commit"
             )
         receipt = _read_json(arguments.receipt, "validation receipt")
+        if not isinstance(receipt, dict):
+            raise fast_path.SecurityBlocker("validation receipt is malformed")
         if reviewed.head_sha != receipt.get("head_sha"):
             raise fast_path.SecurityBlocker(
                 "receipt head does not match reviewed feedback head"
@@ -4112,6 +4181,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             tree_sha=receipt.get("validated_tree_sha"),
             binding=binding,
             reviewed=reviewed,
+            manual_gate_evidence=receipt.get("manual_gate_evidence"),
         )
         if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
@@ -4120,6 +4190,22 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         if parent != receipt["head_sha"] or tree != receipt["validated_tree_sha"]:
             raise fast_path.SecurityBlocker(
                 "signed commit does not contain exactly the validated staged tree"
+            )
+        if (
+            _commit_validation_receipt_digest(repository_root, head)
+            != receipt["receipt_digest"]
+        ):
+            raise fast_path.SecurityBlocker(
+                "signed commit does not bind the validation receipt"
+            )
+        supplied_manual_evidence = getattr(
+            arguments, "manual_gate_evidence", None
+        )
+        if supplied_manual_evidence and _load_fast_manual_gate_evidence(
+            supplied_manual_evidence, binding
+        ) != receipt["manual_gate_evidence"]:
+            raise fast_path.SecurityBlocker(
+                "manual-gate evidence differs from the validated receipt"
             )
         commit_object = _run_attestation_git(
             repository_root, ["cat-file", "commit", head], allow_failure=True
@@ -4157,6 +4243,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             command_set=binding["validation"],
             successful_result=True,
             reviewed_state=reviewed,
+            validation_receipt=receipt,
         )
         _write_fast_report(arguments.output, attestation)
         return 0
@@ -4164,6 +4251,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.RecoverableLocalError(
             "--receipt is valid only with --bind-commit"
         )
+    manual_gate_evidence = _load_fast_manual_gate_evidence(
+        getattr(arguments, "manual_gate_evidence", None), binding
+    )
     tree = _staged_tree(repository_root, status)
     if not _run_registered_validations(entry, repository_root):
         raise fast_path.SecurityBlocker("complete registered validation failed")
@@ -4179,6 +4269,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         tree_sha=tree,
         binding=binding,
         reviewed=reviewed,
+        manual_gate_evidence=manual_gate_evidence,
     )
     _write_fast_report(arguments.output, receipt)
     return 0
