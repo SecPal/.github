@@ -342,7 +342,7 @@ isolated_yaml_repo="$isolated_yaml_root/repository"
 mkdir -p "$isolated_yaml_root/scripts" "$isolated_yaml_bin"
 cp "$VALIDATOR" "$isolated_yaml_validator"
 copy_valid_repo "$valid_repo" "$isolated_yaml_repo"
-for required_tool in dirname grep head find python3 wc node; do
+for required_tool in bash dirname grep head find python3 wc node; do
     ln -s "$(command -v "$required_tool")" "$isolated_yaml_bin/$required_tool"
 done
 
@@ -390,7 +390,7 @@ isolated_repo="$isolated_root/repository"
 mkdir -p "$isolated_root/scripts" "$isolated_bin"
 cp "$VALIDATOR" "$isolated_validator"
 copy_valid_repo "$valid_repo" "$isolated_repo"
-for required_tool in dirname grep head find python3 wc; do
+for required_tool in bash dirname grep head find python3 wc; do
     ln -s "$(command -v "$required_tool")" "$isolated_bin/$required_tool"
 done
 

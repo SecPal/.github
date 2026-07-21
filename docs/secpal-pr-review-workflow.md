@@ -42,9 +42,13 @@ The production registry explicitly supports:
 - `SecPal/secpal.app`
 
 Repository-local `AGENTS.md` and focused instructions remain authoritative.
-Commands in the central registry are argument arrays, never shell strings.
-Environment-dependent, migration, native-toolchain, live-service, and deployment
-validation is represented by explicit manual gates instead of guessed commands.
+Commands in the central registry are argument arrays, never shell strings. Bare
+executables are limited to the exact direct tools and command forms used by the
+production registry; repository-relative, checked-in scripts remain explicit.
+Shells, executable-dispatch wrappers, and inline interpreter code therefore
+cannot be substituted. Environment-dependent, migration, native-toolchain,
+live-service, and deployment validation is represented by explicit manual gates
+instead of guessed commands.
 
 ## Architecture
 
@@ -69,6 +73,12 @@ policy, and capture limits. The workflow-only validation fields never change the
 Package-2.1 schema. The action helper reloads the production registry for every
 plan validation and rejects unregistered repositories or caller-supplied policy
 drift.
+
+Live target reads retain both node and database IDs for reply parents, so an
+idempotent reply cannot be attributed to a different comment with only a
+coincidentally matching body and writer. The post-merge installer compares the
+absolute canonical link text directly and does not depend on GNU-specific
+`readlink` options.
 
 ## Finite execution
 

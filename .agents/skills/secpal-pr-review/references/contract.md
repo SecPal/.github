@@ -199,6 +199,10 @@ writer identity, expected immutable source actor identity, classification,
 evidence digest, operation payload, returned mutation identity when already
 applied, and any resolution preconditions.
 
+Current target reads retain the exact node and database IDs of every reply
+parent. Reply idempotency must match that node identity in addition to the body
+and authenticated writer; database-ID-only or body-only attribution is invalid.
+
 Each mutation target must be one of its logical finding's immutable source items,
 or that finding's exact parent thread for a resolution. Its database ID, parent
 thread, source actor, body digest, resolved state, and outdated state must match
@@ -246,6 +250,9 @@ is no generic API passthrough. The helper uses argument arrays, an exact endpoin
 and GraphQL-document allowlist, a pinned host, no shell, no Git write, no retry,
 no polling, and no sleep. It reads target state first, verifies actor, target,
 head, and idempotency, applies at most once, and reports the returned identity.
+Registered local validation uses direct argument arrays and rejects shells,
+executable-dispatch wrappers, and inline interpreter code by permitting only the
+required direct tools, checked-in scripts, and approved project-script forms.
 Later-state plans retain identities for earlier authorized writes and increment
 the corresponding consumed counter exactly once. Before each new write, the
 helper re-reads every earlier retained reaction, reply, and thread resolution

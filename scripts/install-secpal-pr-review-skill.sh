@@ -72,7 +72,7 @@ target="$canonical_target_root/secpal-pr-review"
 
 if [[ -L "$target" ]]; then
   existing="$(readlink "$target")"
-  if [[ "$existing" == "$canonical_source" && "$(readlink -f "$target")" == "$canonical_source" ]]; then
+  if [[ "$existing" == "$canonical_source" ]]; then
     printf '%s -> %s\n' "$target" "$canonical_source"
     exit 0
   fi
@@ -87,7 +87,7 @@ elif [[ -e "$target" ]]; then
 fi
 
 ln -s -- "$canonical_source" "$target"
-[[ -L "$target" && "$(readlink "$target")" == "$canonical_source" && "$(readlink -f "$target")" == "$canonical_source" ]] || {
+[[ -L "$target" && "$(readlink "$target")" == "$canonical_source" ]] || {
   printf 'Skill installation verification failed: %s\n' "$target" >&2
   exit 1
 }

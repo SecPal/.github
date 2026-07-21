@@ -1857,7 +1857,7 @@ class MutationTests(TestCase):
     def test_current_target_query_uses_concrete_actor_identity_fragments(self) -> None:
         query = actions.CURRENT_MUTATION_TARGET_QUERY
         self.assertNotIn("author { id databaseId login }", query)
-        self.assertIn("replyTo { databaseId }", query)
+        self.assertIn("replyTo { id databaseId }", query)
         self.assertRegex(
             query,
             r"(?s)comments\(first:100\).*reactions\(first:100\).*pageInfo \{ hasNextPage \}",
@@ -3661,10 +3661,25 @@ class RegistryTests(TestCase):
         with self.assertRaisesRegex(actions.RegistryError, "destructive"):
             actions.validate_registry(destructive)
         for unsafe_argv in (
+            ["busybox", "sh", "-c", "printf unsafe"],
+            ["cmd.exe", "/c", "echo unsafe"],
+            ["composer", "exec", "tool"],
+            ["dash", "-c", "printf unsafe"],
             ["git", "clean", "-fdx"],
+            ["env", "bash", "-c", "printf unsafe"],
+            ["find", ".", "-exec", "bash", ";"],
             ["python3", "-c", "print('dynamic')"],
+            ["sudo", "bash"],
+            ["systemd-run", "bash"],
+            ["timeout", "10", "bash"],
+            ["toybox", "sh", "-c", "printf unsafe"],
+            ["unshare", "bash"],
             ["./../outside"],
             ["npm", "exec", "tool"],
+            ["node", "--eval", "process.exit()"],
+            ["python3", "-m", "pip", "install", "tool"],
+            ["reuse", "download", "LICENSE"],
+            ["xargs", "bash"],
         ):
             dynamic = copy.deepcopy(registry)
             dynamic["repositories"][0]["focused_validation"][0]["argv"] = unsafe_argv

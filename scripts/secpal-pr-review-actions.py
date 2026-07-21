@@ -196,8 +196,10 @@ SECRET_VALUE = re.compile(
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SAFE_COMMAND_NAME = re.compile(r"^(?:[A-Za-z0-9_.+-]+|\./[A-Za-z0-9_./+-]+)$")
+SAFE_PACKAGE_SCRIPT_NAME = re.compile(r"^[A-Za-z0-9_.:+-]+$")
 DESTRUCTIVE_COMMANDS = {"rm", "rmdir", "shred", "mkfs", "dd", "sudo", "git-clean"}
-SHELL_EXECUTABLES = {"sh", "bash", "zsh", "fish", "pwsh", "powershell", "cmd"}
+DIRECT_VALIDATION_EXECUTABLES = {"composer", "node", "npm", "python3", "reuse"}
+COMPOSER_VALIDATION_SCRIPTS = {"analyse", "ci:check", "test"}
 DISPOSITION_POLICY = {
     "VALID_ACTIONABLE": {"PENDING", "CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"},
     "INVALID_FALSE_OR_MISLEADING": {"DISPROVEN_WITH_EVIDENCE"},
@@ -930,22 +932,34 @@ def _validate_command(command: dict[str, Any]) -> None:
         not SAFE_COMMAND_NAME.fullmatch(argv[0])
         or executable_path.is_absolute()
         or ".." in executable_path.parts
-        or executable in SHELL_EXECUTABLES
-        or executable in {"git", "gh", "npx"}
     ):
-        raise RegistryError("validation command must not use a shell or dynamic executable")
+        raise RegistryError("validation command executable must stay repository-relative")
     if executable in DESTRUCTIVE_COMMANDS or any(
         item in {"--force", "--delete", "--hard", "deploy", "migrate:fresh"}
         or item.startswith(("deploy:", "publish:"))
         for item in argv[1:]
     ):
         raise RegistryError("destructive validation command is prohibited")
-    if (executable in {"python", "python3"} and "-c" in argv[1:]) or (
-        executable in {"node", "ruby", "perl"} and "-e" in argv[1:]
+    if not argv[0].startswith("./") and executable not in DIRECT_VALIDATION_EXECUTABLES:
+        raise RegistryError("validation command must use a trusted direct executable")
+    if executable == "python3" and not (
+        len(argv) >= 4 and argv[1:3] == ["-m", "unittest"]
     ):
-        raise RegistryError("dynamic validation code is prohibited")
-    if executable == "npm" and (len(argv) < 3 or argv[1] != "run"):
-        raise RegistryError("registry npm commands must name a checked-in package script")
+        raise RegistryError("registry python commands must invoke unittest")
+    if executable == "node" and argv != ["node", "--test"]:
+        raise RegistryError("registry node commands must invoke the checked-in test suite")
+    if executable == "npm" and not (
+        len(argv) == 3
+        and argv[1] == "run"
+        and SAFE_PACKAGE_SCRIPT_NAME.fullmatch(argv[2])
+    ):
+        raise RegistryError("registry npm commands must name one checked-in package script")
+    if executable == "composer" and not (
+        len(argv) == 2 and argv[1] in COMPOSER_VALIDATION_SCRIPTS
+    ):
+        raise RegistryError("registry composer commands must name one approved project script")
+    if executable == "reuse" and argv != ["reuse", "lint"]:
+        raise RegistryError("registry reuse commands must invoke lint")
     working_directory = command.get("working_directory")
     if not isinstance(working_directory, str) or not working_directory or Path(working_directory).is_absolute() or ".." in Path(working_directory).parts:
         raise RegistryError("validation working directory must stay repository-relative")
@@ -1120,7 +1134,7 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
     }
     ... on PullRequestReviewComment {
       id databaseId body url
-      replyTo { databaseId }
+      replyTo { id databaseId }
       author {
         login
         ... on User { id databaseId }
@@ -1149,7 +1163,7 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
       comments(first:100) {
         nodes {
           id databaseId body url
-          replyTo { databaseId }
+          replyTo { id databaseId }
           author {
             login
             ... on User { id databaseId }

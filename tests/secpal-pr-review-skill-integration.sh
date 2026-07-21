@@ -226,6 +226,23 @@ significant_root="$workspace/shell significant [skills] \$literal"
 HOME="$workspace/home" bash "$INSTALLER" --target-root "$significant_root" >"$workspace/significant.txt"
 test "$(readlink "$significant_root/secpal-pr-review")" = "$REPO_ROOT/.agents/skills/secpal-pr-review"
 
+portable_bin="$workspace/portable-bin"
+portable_root="$workspace/portable-home/.agents/skills"
+real_readlink="$(command -v readlink)"
+mkdir -p "$portable_bin"
+cat >"$portable_bin/readlink" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1-}" == -f ]]; then
+  exit 64
+fi
+exec "$real_readlink" "\$@"
+EOF
+chmod +x "$portable_bin/readlink"
+PATH="$portable_bin:$PATH" HOME="$workspace/portable-home" \
+  bash "$INSTALLER" --target-root "$portable_root" >"$workspace/portable.txt"
+test "$(readlink "$portable_root/secpal-pr-review")" = \
+  "$REPO_ROOT/.agents/skills/secpal-pr-review"
+
 if HOME="$workspace/home" bash "$INSTALLER" --target-root "$target_root" --source "$workspace/missing" 2>"$workspace/missing-source.txt"; then
   echo 'missing source unexpectedly accepted' >&2
   exit 1

@@ -67,6 +67,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   idempotent reply deltas to their exact parent comment
 - bind resolution readiness to the exact initial-to-final remediation commit
   chain and repeat feedback and target reads after the live required-check gate
+- bound reply idempotency to the exact parent node, made skill installation
+  independent of GNU `readlink`, preserved hermetic governance validation under
+  interpreter shims, and limited registry validation to the required direct
+  tools, checked-in scripts, and approved project-script forms
 
 ---
 
