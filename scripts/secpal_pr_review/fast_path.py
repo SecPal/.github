@@ -691,7 +691,6 @@ def execute_resolution_batch(
     if (
         request.repository != reviewed_state.repository
         or request.pull_request_number != reviewed_state.pull_request_number
-        or request.expected_head_sha != reviewed_state.head_sha
     ):
         raise SecurityBlocker(
             "batch request does not bind the supplied reviewed feedback identity"

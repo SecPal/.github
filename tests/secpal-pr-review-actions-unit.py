@@ -4093,7 +4093,6 @@ class FastPathTests(TestCase):
         mismatches = {
             "repository": "SecPal/api",
             "pull_request_number": 2,
-            "expected_head_sha": "f" * 40,
         }
         for field, value in mismatches.items():
             with self.subTest(field=field):
@@ -4113,6 +4112,23 @@ class FastPathTests(TestCase):
                         gateway,
                     )
                 self.assertEqual(gateway.calls, [])
+
+    def test_batch_allows_the_attested_remediation_head_transition(self) -> None:
+        reviewed = fast_feedback()
+        remediation_head = "f" * 40
+        current_payload = reviewed.to_dict()
+        current_payload["head_sha"] = remediation_head
+        current = fast_path.StableFeedbackState.from_payload(current_payload)
+        payload = fast_request(reviewed).to_dict()
+        payload["expected_head_sha"] = remediation_head
+        result = fast_path.execute_resolution_batch(
+            fast_path.BatchRequest.from_dict(payload),
+            fast_attestation(reviewed, head_sha=remediation_head),
+            reviewed,
+            fast_registry(),
+            FakeFastGateway(current),
+        )
+        self.assertEqual(result["status"], "BATCH_APPLIED")
 
     def test_attestation_receipt_requires_matching_reviewed_identity(self) -> None:
         arguments = SimpleNamespace(
