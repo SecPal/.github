@@ -141,3 +141,28 @@ if ! grep -Fxq 'validate-ai-instructions' "$test_log" || ! grep -Fxq 'validate-c
   cat "$test_log" >&2
   exit 1
 fi
+
+cat >"$workspace/bin/cp" <<'EOF'
+#!/usr/bin/env bash
+exit 23
+EOF
+chmod +x "$workspace/bin/cp"
+
+reuse_tmp="$workspace/reuse-tmp"
+mkdir -p "$reuse_tmp"
+set +e
+(
+  cd "$workspace"
+  TMPDIR="$reuse_tmp" PATH="$workspace/bin:$PATH" \
+    bash scripts/preflight.sh --reuse-tracked-only >/dev/null 2>&1
+)
+copy_failure_status=$?
+set -e
+if [ "$copy_failure_status" -eq 0 ]; then
+  echo "Expected a tracked-file copy failure to fail REUSE validation" >&2
+  exit 1
+fi
+if find "$reuse_tmp" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+  echo "Expected REUSE temporary workspaces to be removed after copy failure" >&2
+  exit 1
+fi

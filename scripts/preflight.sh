@@ -7,9 +7,10 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
-run_reuse_tracked() {
+run_reuse_tracked() (
   local reuse_workspace file target_dir
-  reuse_workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-reuse.XXXXXX")"
+  reuse_workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-reuse.XXXXXX")" || return 1
+  trap 'rm -rf -- "$reuse_workspace"' EXIT
   while IFS= read -r -d '' file; do
     if [ ! -e "$file" ] && [ ! -L "$file" ]; then
       continue
@@ -18,15 +19,12 @@ run_reuse_tracked() {
     case "$file" in
       */*) target_dir="$reuse_workspace/${file%/*}" ;;
     esac
-    mkdir -p "$target_dir"
-    cp -P "./$file" "$reuse_workspace/$file"
+    mkdir -p "$target_dir" || return 1
+    cp -P "./$file" "$reuse_workspace/$file" || return 1
   done < <(git ls-files -z)
-  if ! (cd "$reuse_workspace" && reuse lint); then
-    rm -rf "$reuse_workspace"
-    return 1
-  fi
-  rm -rf "$reuse_workspace"
-}
+  cd "$reuse_workspace" || return 1
+  reuse lint
+)
 
 if [ "${1:-}" = "--reuse-tracked-only" ] && [ "$#" -eq 1 ]; then
   run_reuse_tracked

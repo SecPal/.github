@@ -1168,11 +1168,10 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
               isValid
               state
               signer {
+                __typename
+                id
+                databaseId
                 login
-                ... on User { id databaseId }
-                ... on Bot { id databaseId }
-                ... on Organization { id databaseId }
-                ... on Mannequin { id databaseId }
               }
             }
           }

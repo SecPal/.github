@@ -4299,6 +4299,14 @@ class FastPathTests(TestCase):
         ):
             gateway.read_preflight(fast_request(fast_feedback()))
 
+    def test_fast_preflight_queries_the_signature_signer_as_a_user(self) -> None:
+        signer_selection = actions.FAST_PATH_PREFLIGHT_QUERY.split("signer {", 1)[1]
+        signer_selection = signer_selection.split("}", 1)[0]
+        self.assertIn("id", signer_selection)
+        self.assertIn("databaseId", signer_selection)
+        self.assertIn("login", signer_selection)
+        self.assertNotIn("... on", signer_selection)
+
     def test_stable_feedback_ignores_same_head_required_check_transitions(self) -> None:
         successful = fast_feedback()
         payload = successful.to_dict()
