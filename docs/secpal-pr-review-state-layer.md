@@ -13,7 +13,7 @@ rendering.
 
 Package 2.1 does not classify technical findings, remediate code, resolve
 threads, authorize a merge, or make the finite workflow operational. The
-`secpal-pr-review` Codex skill, its finite orchestration, and its installation
+`secpal-pr-review` skill, its finite orchestration, and its installation
 belong to Package 2.2 and post-merge acceptance.
 
 ## Authority and schemas

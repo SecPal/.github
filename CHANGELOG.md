@@ -9,6 +9,71 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-20 - Add Finite PR Feedback Remediation Workflow
+
+**Added:**
+
+- added an explicitly invoked central review-remediation skill with a finite two-cycle,
+  three-capture state contract, independent finding classification, one holistic
+  audit, and an explicit user merge-authorization checkpoint
+- added a deterministic mutation-plan schema and separate guarded helper whose
+  exact allowlist permits only one anchor-bound reaction, inline evidence reply,
+  or eligible thread resolution per invocation, with idempotency reads and no
+  retries, review requests, Ready transitions, generic API access, Git writes,
+  or merge authority
+- added a production registry for all nine governance-managed repositories with
+  argument-array validation and explicit manual gates, plus an idempotent direct
+  skill-link installer whose real user-level rollout remains post-merge
+- added offline unit, policy, fake-GitHub, fake-Git, and temporary-HOME coverage
+  to read-only bounded CI, with exact registry enforcement, relational immutable
+  snapshot bindings, cumulative mutation-counter checks, complete initial-thread
+  classification, verified remediation-head ancestry, live mutation-identity
+  checks, and host-independent installation fixtures, while leaving the accepted
+  Package-2.1 helper, review-memory automation, repository instruction routing,
+  and sibling repositories unchanged
+
+**Fixed:**
+
+- rejected null reactions for non-reactable findings, restored schema-valid
+  actor identity reads for live mutation targets, and allowed fully classified
+  no-actionable sessions to finish independently of merge-readiness CI
+- made the finite-policy checks fail clearly when ripgrep or the accepted
+  Package-2.1 baseline commit is unavailable and prohibited both `.yml` and
+  `.yaml` variants of an automatic review workflow, while enforcing executable
+  mode for the registered review-memory error suite
+- made every guarded operation verify accepted Package-2.1 evidence and stop on
+  recorded terminal blockers; resolution now re-runs registered local
+  validation, re-checks complete paginated feedback plus live rules and required
+  checks, and blocks pending material top-level findings, while retaining deleted
+  source-actor evidence without weakening the authenticated writer identity
+- required complete source classification before policy writes, added stable
+  sub-item anchors for compound feedback, rejected partial mutation responses,
+  and kept registry reviewer configuration provider-neutral
+- stabilized paginated live feedback with two complete bounded projections and
+  applied the same stability check to rules and check contexts, while
+  revalidating the current base and effective check target before resolution
+- bound each policy operation to its finding evidence and made live required
+  checks the last read gate before a resolution write
+- blocked unrecorded already-resolved threads, canonical-reference cycles, and
+  unresolved canonical roots from resolution; corrected and proven-existing
+  actionable findings now require commit and test proof, and the action tests
+  use one consistent `unittest` import form
+- kept final-snapshot coverage complete after authorized reactions and replies
+  by admitting only structurally verified recorded policy writes, while keeping
+  finding coverage exact to the immutable initial snapshot and rejecting reused
+  mutation identities
+- bound the resolution push precondition to actual remediation history, reserved
+  effective feedback capacity before pending reactions and replies, and matched
+  idempotent reply deltas to their exact parent comment
+- bind resolution readiness to the exact initial-to-final remediation commit
+  chain and repeat feedback and target reads after the live required-check gate
+- bound reply idempotency to the exact parent node, made skill installation
+  independent of GNU `readlink`, preserved hermetic governance validation under
+  interpreter shims, and limited registry validation to the required direct
+  tools, checked-in scripts, and approved project-script forms
+
+---
+
 ## 2026-07-20 - Serialize Polyscope API Workspace Bootstrap
 
 **Fixed:**

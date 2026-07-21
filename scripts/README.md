@@ -23,6 +23,43 @@ See [Deterministic PR State and Evidence Layer](../docs/secpal-pr-review-state-l
 for schemas, bounded pagination, signature and required-check semantics, safe
 outputs, commands, and Package 2.1 non-goals.
 
+### `secpal-pr-review-actions.py`
+
+Validates deterministic Package-2.2 mutation plans and applies at most one
+explicitly selected, anchor-bound reaction, inline evidence reply, or eligible
+thread resolution. The helper performs one current-target idempotency read even
+in audit mode; a write additionally requires `--apply`. Every plan must match the
+checked-in repository registry and binds its finding, target, immutable target
+state, counters, and recorded mutation identities before a write. Its exact
+command and endpoint allowlists provide no review-request, Ready-transition,
+generic API, Git-write, label/issue, merge, or auto-merge capability, and failures
+are never retried. It independently verifies Package-2.1 evidence before every
+operation; resolutions additionally run all registered local validations and
+re-check the complete live thread comment set, applicable required-check rules,
+current base, effective check target, and required-check outcomes, then repeat
+the PR-wide feedback and exact target reads. Reply targets include their exact
+parent node identity. Registry validation permits only the required direct
+tools, checked-in scripts, and approved project-script forms before any command
+runs. PR-wide feedback must match across two complete bounded projections.
+Resolution plans reject
+unrecorded already-resolved targets, canonical-reference cycles, unsafe
+canonical dispositions, actionable fixes without commit and test proof, and
+operations whose evidence does not match their logical finding. Their initial
+and final heads must also encode exactly one new linear commit per recorded
+signed push, or no commit movement for a no-push session.
+
+### `install-secpal-pr-review-skill.sh`
+
+After Package 2.2 is merged, installs the repository-owned skill as a direct
+canonical link under `$HOME/.agents/skills/`. The installer is idempotent,
+refuses non-symlink targets and unexpected links, and requires `--repair` before
+replacing a wrong link. It compares canonical absolute link text without
+GNU-specific `readlink` options and never modifies unrelated user configuration.
+
+See [Finite SecPal PR review workflow](../docs/secpal-pr-review-workflow.md) for
+explicit invocation, state limits, classification, guarded action ordering,
+registry decisions, recovery, and post-merge rollout prerequisites.
+
 ## Validation Scripts
 
 ### `check-domains.sh`
