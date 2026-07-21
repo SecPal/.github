@@ -382,52 +382,88 @@ Delivery status, attempt, and lease fields may change according to the lifecycle
 
 ### Shared delivery lifecycle and state
 
-Every token operation follows this lifecycle:
+Every token operation first follows this creation lifecycle:
 
 1. Generate a cryptographically random bearer token.
 2. Store its non-decryptable verifier as `token_hash`.
 3. Store the exact same plaintext token as purpose-bound, authenticated `delivery_token_enc`.
 4. Commit the operation, hash, encrypted delivery secret, and initial delivery state atomically; if any part fails, persist none of them.
 5. Queue only the operation ID. Never serialize the token, recipient, delivery envelope, or a full model snapshot.
-6. The worker loads and locks the operation in a short transaction.
-7. It confirms that the operation is active, unexpired, unconsumed, not revoked, not cancelled or superseded, and that its bound user and optional `email_version` remain current. It then atomically claims one delivery attempt, increments `delivery_attempt_count`, and records an expiring non-secret attempt lease before releasing the row lock. Only one live attempt may send.
-8. The claimed worker authenticates and decrypts `delivery_token_enc`; failure is fail-closed and sends nothing.
-9. It decrypts or resolves the authorized recipient and token into short-lived protected memory, performs the final atomic fence validation defined below, and only then renders and invokes the transport. Plaintext may exist only for that validation/render/transport sequence.
-10. After confirmed successful handoff to the mail transport, the worker atomically sets `delivery_state = delivered`, sets `delivered_at`, clears the attempt lease, and deletes or irreversibly clears `delivery_token_enc`. It retains `token_hash` for later verification.
-11. Before confirmed handoff, a retryable failure preserves only the encrypted secret, clears or expires the attempt lease, and records an allowlisted error class. Retry and exception metadata contain no plaintext.
-12. Expiry, revocation, consumption, cancellation, or supersession sets a terminal operation/delivery state, deletes `delivery_token_enc`, and prevents every further send.
-13. Token verification uses only `token_hash`; successful or failed delivery never changes that rule.
+
+Token verification always uses only `token_hash`; delivery never changes that rule. Expiry, revocation, consumption, cancellation, or supersession terminalizes the operation, invalidates the verifier, and deletes `delivery_token_enc` according to the point-of-no-return rules below.
 
 The logical delivery status contains at least:
 
 ```text
 delivery_state
-delivered_at
-delivery_attempt_count
-last_delivery_error_class
 delivery_attempt_id
 delivery_fence_version
 lease_expires_at
+transport_idempotency_key
+dispatch_committed_at
+delivered_at
+delivery_attempt_count
+last_delivery_error_class
 ```
 
-`delivery_state` distinguishes pending, in-progress, retryable, delivered, and terminally cancelled delivery. `delivery_attempt_id` is a unique random identifier for one claim, `delivery_fence_version` increases monotonically whenever a claim is created, replaced, expired, or invalidated, and `lease_expires_at` bounds the claim. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content. A deterministic operation-scoped transport idempotency key is used where the mail transport supports it. If the process crashes after external acceptance but before the success transaction, a retry may duplicate the same mail but cannot create a second token or credential; reconciliation must still clear the encrypted delivery secret once acceptance is established.
+The state machine semantically distinguishes `pending`, `claimed`, `dispatch_committed`, `delivered`, `retryable_failed`, `delivery_unknown`, and `terminal`; exact enum names are implementation details. `delivery_attempt_id` is a unique random identifier for one claim. `delivery_fence_version` increases monotonically whenever a claim is created, replaced, expired, or invalidated. `lease_expires_at` bounds the claim. `transport_idempotency_key` is derived deterministically from the operation and attempt through an unambiguous, domain-separated encoding and remains stable for that attempt. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content.
 
-Delivery claims and invalidating lifecycle transitions use the same operation/user lock order and fencing state. A reset, verification, email-change, or invitation transition that commits before the final fence increments the fence version, invalidates any claim, terminalizes the operation as applicable, and prevents transport. Once a worker has passed the final fence and holds the transport lock, a competing invalidation waits because the authorized transport side effect has already begun. No worker may send under a claim invalidated by an already committed email-version change, revocation, consumption, cancellation, or supersession.
+No database transaction or row lock may remain open during template rendering that has external dependencies, an SMTP or mail-provider API call, transport-status lookup, or any other external I/O. Database state cannot atomically commit with an external mail system, and a transport can accept a message even when the client observes a timeout or crashes. Holding a lock across that boundary would block lifecycle transitions, consume database connections, increase deadlock and availability risk, and still would not eliminate ambiguous or duplicate external handoffs.
 
-### Final worker fence validation
+### Phase 1: Claim
 
-After authenticating and decrypting the required ciphertexts but immediately before rendering or invoking the mail transport, the worker reacquires the operation lock and atomically verifies:
+In one short database transaction, the worker locks the operation and verifies that it remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded, and that its bound user and optional `email_version` remain current. It creates a new unique `delivery_attempt_id`, increments `delivery_fence_version` and `delivery_attempt_count`, records a bounded lease, derives and persists the operation- and attempt-bound `transport_idempotency_key`, and changes the state to `claimed`. It then commits and releases every row lock. Only one current, unexpired claim may proceed.
+
+### Phase 2: Preparation
+
+Outside any database transaction, the claimed worker authenticates and decrypts `delivery_token_enc`, authenticates and decrypts or resolves the authorized recipient, applies transport canonicalization, and renders the message. Rendering that uses templates, storage, localization services, or any other external dependency also occurs without a database transaction or row lock. Plaintext token, complete URL, recipient, and rendered sensitive content remain only in the smallest practical memory scope and are discarded on every failure.
+
+A preparation failure invokes no transport. A short status transaction verifies the current attempt and fence, then records an allowlisted retryable or terminal outcome, clears the lease as applicable, and retains `delivery_token_enc` only when policy permits a controlled retry. Authentication, recipient, or key failures remain fail-closed.
+
+### Phase 3: Final fence and dispatch commitment
+
+Immediately before external transport, the worker opens a new short transaction, reacquires the operation row lock, and atomically verifies:
 
 - its `delivery_attempt_id` is still the current attempt;
 - `lease_expires_at` has not passed;
 - `delivery_fence_version` equals the version captured by the worker;
+- `delivery_state` is still `claimed`;
 - the operation remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded;
 - no terminal lifecycle transition has committed;
 - the bound `email_version`, when present, is still the user's current version.
 
-The final fence transaction retains the operation lock through the bounded render and immediate mail-transport handoff, so an invalidating transition cannot commit between validation and the side effect. On successful handoff it records delivery and deletes the delivery secret before releasing the lock; on a pre-handoff transport failure it records the allowlisted retry state before release. Implementations must enforce a strict transport timeout so the security serialization does not create an unbounded lock.
+If every check succeeds, the same transaction sets:
 
-If any final check fails, the worker does not render or call the transport, discards any decrypted recipient and token immediately, applies the operation's current terminal or retry lifecycle to the delivery secret, records a redacted audit event, and cannot reuse the claim automatically. An expired, replaced, or stale worker can never send later.
+```text
+delivery_state = dispatch_committed
+dispatch_committed_at = now
+```
+
+The transaction must commit and release every row lock before the worker invokes the transport. A failed final fence creates no dispatch commitment, invokes no transport, discards prepared plaintext, applies the current lifecycle to the delivery secret in a short transaction where needed, emits only redacted audit metadata, and never automatically reuses the stale claim.
+
+`dispatch_committed` is the point of no return: the application has durably authorized this exact attempt to cross the external boundary, but cannot transactionally control whether the provider accepts, rejects, duplicates, delays, or loses the message. A worker may call the transport only after observing its committed `dispatch_committed` state and matching attempt and fence. An expired, replaced, or stale worker cannot dispatch later.
+
+### Phase 4: External transport
+
+The worker calls SMTP or the mail-provider API without an open database transaction or row lock. It supplies the stored `transport_idempotency_key` whenever the provider supports idempotency. Only the recipient, rendered message, and other immediately required values cross the transport boundary; logs, exception contexts, failed-job payloads, and transport metadata contain no plaintext token, complete URL, recipient address, or decrypted delivery ciphertext.
+
+Provider idempotency reduces duplicate acceptance but does not redefine token validity or make the database and provider atomic. The application retains any provider message identifier needed for redacted reconciliation when available; it must not embed a token, recipient, or complete URL.
+
+### Lifecycle invalidation around the point of no return
+
+Before `dispatch_committed`, a revocation, consumption, expiry, cancellation, supersession, or bound-email-version change increments or otherwise invalidates the fence, prevents the dispatch commitment, terminalizes the operation as applicable, invalidates `token_hash`, and deletes `delivery_token_enc`. This guarantees that no later transport call is authorized for that claim.
+
+After `dispatch_committed`, the physical message may already be in transit and cannot be guaranteed to be recalled or prevented. A lifecycle invalidation must nevertheless immediately invalidate `token_hash`, terminalize the operation, delete any remaining `delivery_token_enc`, prevent token consumption, and write a redacted audit event. A message that arrives after invalidation therefore contains an unusable link. The ADR makes no claim that post-commit invalidation prevents physical delivery.
+
+### Transport result and reconciliation
+
+After confirmed provider acceptance, a short transaction verifies the current attempt and that no terminal lifecycle transition has superseded it, sets `delivery_state = delivered` and `delivered_at`, deletes `delivery_token_enc`, clears the lease and temporary claim fields, and records a redacted success event. A late result never reactivates or overwrites a terminal operation; it is recorded only as a redacted provider outcome. `token_hash` remains only for the operation's permitted consumption lifecycle.
+
+After a confirmed failure before provider acceptance, a short transaction verifies the current attempt and that no terminal lifecycle transition has superseded it, then sets `delivery_state = retryable_failed` or a terminal state according to the allowlisted error class. It clears the lease and retains the delivery secret only when a controlled retry is allowed. A late failure cannot reopen a terminal operation. Retry metadata contains no sensitive plaintext.
+
+A client timeout, process crash after possible provider acceptance, network interruption without an authoritative response, or any other ambiguous handoff sets or reconciles the attempt to `delivery_unknown`. The system must not automatically resend with a new attempt ID or token. It queries provider state by the same idempotency key or provider message ID where possible. It may repeat the same attempt with the same idempotency key only when the provider explicitly guarantees idempotent repetition. Without authoritative evidence, it performs no blind resend; it may terminalize the operation, and any required new business delivery uses a new operation and new random token.
+
+A reconciler processes expired `claimed` states, hanging `dispatch_committed` states, `delivery_unknown`, provider status available through idempotency keys or message IDs, and terminal operations that retain ciphertext. It can mark an evidenced outcome delivered, retryable, unknown, or terminal and clean residual ciphertext. It cannot reconstruct a token or create a replacement operation unless the explicit business workflow authorizes that new operation.
 
 ## Login flow
 
@@ -628,7 +664,7 @@ Assume already exfiltrated plaintext cannot be recovered by rotation. Record inc
 - Restore order is: isolate the environment; inventory database key references and rotation epoch; obtain the exact required root versions through recovery authorization; restore key-provider access; restore database and storage; verify wrapped-key and ciphertext authentication; resume or reconcile interrupted rotations; run integrity, uniqueness, login, and mail-boundary checks; then permit traffic.
 - Restoring a backup created before or during rotation requires every root, encryption, and index version it references. The restored system must not silently use only today's write key or delete historical versions.
 - Every Delivery-Secret Working Key version remains recoverable through the end of each referencing operation and relevant backup retention. Expired, revoked, consumed, cancelled, superseded, or delivered operations have no recoverable delivery secret after lifecycle cleanup.
-- Restore keeps all restored token-delivery operations quarantined until it reconciles them with a separately retained, append-protected terminal-operation journal newer than the database backup. That journal contains only operation IDs, terminal state, key ID/version, incident reference where applicable, and timestamps, never tokens, addresses, or ciphertext. Delivered or otherwise terminal operations are tombstoned and have any restored delivery secret deleted.
+- Restore keeps all restored token-delivery operations quarantined until it reconciles them with a separately retained, append-protected terminal-operation journal newer than the database backup. That journal contains only operation IDs, terminal state, key ID/version, incident reference where applicable, and timestamps, never tokens, addresses, or ciphertext. Delivered or otherwise terminal operations are tombstoned and have any restored delivery secret deleted. Restored `dispatch_committed`, `delivery_unknown`, and other attempts without an authoritative outcome remain quarantined and are never automatically resent.
 
 The journal provides a verifiable completeness boundary containing at least:
 
@@ -638,7 +674,7 @@ journal_sequence
 journal_checkpoint
 ```
 
-The restore process authenticates the checkpoint and proves uninterrupted sequence continuity from the restored `backup_epoch` through that checkpoint. Absence of a terminal entry is meaningful only inside that proven complete interval. Missing, discontinuous, stale, or unverifiable journal data fails closed: operations of unknown state are not delivered, and no backed-up token is sent. An authorized recovery process may terminalize an uncertain operation and create a new operation with a new random token when the business action is still required. Delivery resumes only for an operation proven active in both the restored database and the verified journal interval.
+The restore process authenticates the checkpoint and proves uninterrupted sequence continuity from the restored `backup_epoch` through that checkpoint. Absence of a terminal entry is meaningful only inside that proven complete interval. Missing, discontinuous, stale, or unverifiable journal data fails closed: operations of unknown state are not delivered, and no backed-up token is sent. Provider and journal reconciliation may classify a quarantined attempt as delivered, terminal, or still unknown; a non-provable outcome remains fail-closed. An authorized recovery process may terminalize an uncertain operation and create a new operation with a new random token when the business action is still required. Delivery resumes only for an operation proven active in both the restored database and the verified journal interval.
 
 - Recovery exercises occur on a defined schedule and after material key, provider, backup, or deployment changes. They prove old- and new-rotation restores, document measured recovery time, and destroy exercise plaintext and temporary key access afterward.
 - If active root access is temporarily unavailable, global identity reads, writes, authentication by email, and mail delivery fail closed. Operations may restore an authorized root backup; they may not create a replacement key for existing ciphertext.
@@ -659,13 +695,15 @@ Loss of the final recoverable Global Identity Root Key can make encrypted global
 | Restore missing a required key version               | Keep the restored service isolated and unavailable until the authorized version is recovered.                                                |
 | Delivery-secret or recipient decryption failure      | Do not send; fail the claimed attempt closed, retain encrypted retry material only when lifecycle permits, and emit a redacted event.        |
 | Invalid or terminal delivery state                   | Do not decrypt or send; delete residual delivery secrets for terminal operations and audit only allowlisted state metadata.                  |
+| Final fence failure                                  | Create no dispatch commitment and invoke no transport; discard prepared plaintext and invalidate the stale claim.                            |
+| Ambiguous external transport result                  | Set `delivery_unknown`; reconcile by idempotency key or provider message ID and never perform a blind automatic resend.                      |
 | Delivery-Secret-Key unavailable                      | Fail delivery closed; if exact recovery is impossible, terminalize and reissue required affected operations with new tokens.                 |
 | Delivery-Secret-Key suspected compromised            | Revoke every affected active or still-valid delivered operation; never merely re-encrypt or reuse the existing token.                        |
 | Historical backup contains affected delivery secrets | Keep it quarantined; reconcile and revoke affected operations before any service or delivery resumes.                                        |
 
 ## Audit and redaction
 
-Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, transport handoff, retry, terminal delivery cleanup, Delivery-Secret-Key loss/compromise inventories, security revocation, and replacement-operation incident links. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt count, fence version, timestamps, and allowlisted result/error class.
+Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, dispatch commitments, provider outcomes, `delivery_unknown` reconciliation, retry, terminal delivery cleanup, Delivery-Secret-Key loss/compromise inventories, security revocation, and replacement-operation incident links. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt ID, attempt count, fence version, idempotency-key identifier or digest where needed, timestamps, and allowlisted result/error class.
 
 Never log, persist outside the protected operation field, or attach plaintext email, normalized email, ciphertext plaintext, raw root or working keys, wrapped-key plaintext, blind-index values, plaintext bearer tokens, complete delivery URLs, `delivery_token_enc`, full reset/verification/invitation/access tokens, MFA secrets, recovery codes, session payloads, or decrypted recipient values. Queue and failed-job payloads, exception context, validation context, traces, APM attributes, activity properties, mail events, audits, and API output follow the same rule.
 
@@ -673,7 +711,7 @@ Known-user security events use `user_id`. Unknown-input events use a separately 
 
 ## Privacy and data minimization
 
-Encryption does not anonymize global identity data. Ciphertext, keyed indexes, user IDs, key metadata, and access logs remain personal or linkable data where applicable. Access is limited by purpose and role; retention is defined for active identities, pending operations, tokens, logs, rotation artifacts, and backups. Delivery secrets are deleted immediately after confirmed transport handoff or any terminal lifecycle transition. Expired invitations, resets, verification operations, email reservations, terminal-operation journal entries, and rotation sidecars are deleted when their security, anti-replay, and recovery obligations end.
+Encryption does not anonymize global identity data. Ciphertext, keyed indexes, user IDs, key metadata, and access logs remain personal or linkable data where applicable. Access is limited by purpose and role; retention is defined for active identities, pending operations, tokens, logs, rotation artifacts, and backups. Delivery secrets are deleted immediately after confirmed transport acceptance or any terminal lifecycle transition; ambiguous dispatches retain encrypted material only while reconciliation policy requires it. Expired invitations, resets, verification operations, email reservations, terminal-operation journal entries, and rotation sidecars are deleted when their security, anti-replay, and recovery obligations end.
 
 Responses decrypt and expose email only to the data subject or an explicitly authorized administrative purpose. Analytics and security monitoring use aggregate counts or scoped pseudonymous identifiers. Cross-table correlation is minimized through separate index purposes and by preferring `user_id` references.
 
@@ -702,10 +740,16 @@ Implementation work must add positive, negative, concurrency, failure-injection,
 - a worker producing a valid operation-bound link from only an operation ID while queue and failed-job payloads contain no token;
 - database and backup inspection finding no plaintext bearer token, and proof that `token_hash` cannot produce a delivery link or plaintext token;
 - wrong operation ID, operation type, user, email version, invitation, tenant, or relocated ciphertext failing delivery-secret AAD authentication;
-- successful transport handoff clearing `delivery_token_enc` while retaining `token_hash`, and a pre-handoff retryable failure retaining only the encrypted secret;
+- no SMTP, provider API, provider-status request, externally dependent rendering, or other external I/O running inside an open database transaction or while a row lock is held;
+- revocation before `dispatch_committed` invalidating the fence and preventing transport, while revocation afterward immediately invalidates `token_hash` so a subsequently arriving message contains an unusable link;
+- final-fence failure creating no dispatch commitment, and transport occurring only after the `dispatch_committed` state is durably committed;
+- confirmed transport acceptance clearing `delivery_token_enc` while retaining `token_hash`, and a confirmed pre-acceptance failure retaining the encrypted secret only for an allowed retry;
+- a timeout, network interruption, or crash after possible provider acceptance entering `delivery_unknown` without a blind automatic resend;
+- provider idempotency preventing duplicate acceptance where supported, including reuse of the same idempotency key only for an explicitly idempotent repetition;
+- crash recovery reconciling hanging `dispatch_committed` and `delivery_unknown` attempts by idempotency key or provider message ID;
 - expired, consumed, revoked, cancelled, or superseded operations sending nothing, including stale reset/verification `email_version` bindings;
 - invitation and pending-email-change delivery tokens authenticating only for the correct operation, with recipient and token ciphertexts remaining purpose-separated;
-- restore never resending a delivered or terminal operation and retaining exact historical delivery-key versions only while referenced;
+- restore never resending a delivered, terminal, `dispatch_committed`, `delivery_unknown`, or otherwise ambiguous operation and retaining exact historical delivery-key versions only while referenced;
 - transport using the deterministic ASCII A-label domain while preserving the stored original representation and original validated ASCII local part;
 - Delivery-Secret-Key compromise revoking every active operation that references the affected version;
 - an already delivered but still-valid token becoming unacceptable after compromise of its former delivery-key version;
@@ -713,8 +757,8 @@ Implementation work must add positive, negative, concurrency, failure-injection,
 - every replacement operation using a newly random token, new verifier, new envelope, and incident reference;
 - unrecoverable Delivery-Secret-Key loss failing delivery closed and permitting only controlled new-operation creation;
 - AAD-bound operation fields rejecting mutation unless the old operation is terminalized and replaced;
-- workers with expired leases or stale `delivery_fence_version` values never rendering or sending;
-- revocation, consumption, expiry, cancellation, supersession, or email-version change between claim and final fence preventing transport;
+- workers with stale attempt IDs, expired leases, or stale `delivery_fence_version` values never reaching dispatch commitment or transport;
+- revocation, consumption, expiry, cancellation, supersession, or email-version change between claim and dispatch commitment preventing transport;
 - incomplete or unverifiable terminal-journal continuity preventing every restored delivery;
 - a verified `journal_checkpoint` tombstoning terminal operations and preventing replay from an older backup;
 - final-fence failure discarding decrypted plaintext, emitting only redacted audit metadata, and never automatically reusing the claim;
