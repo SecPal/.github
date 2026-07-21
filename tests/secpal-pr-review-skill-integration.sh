@@ -14,10 +14,7 @@ trap 'rm -rf "$workspace"' EXIT
 
 mkdir -p \
   "$workspace/bin" \
-  "$workspace/home/.codex" \
   "$workspace/sibling-style/repository"
-global_agents="$workspace/home/.codex/AGENTS.md"
-ln -s "$workspace/global-agents-source" "$global_agents"
 cp "$FIXTURES/fake-gh.py" "$workspace/bin/gh"
 chmod 0700 "$workspace/bin/gh"
 export FAKE_ACTION_GH_LOG="$workspace/gh.log"
@@ -44,10 +41,12 @@ snapshot = p21.snapshot()
 snapshot["review_threads"] = [p21.thread()]
 snapshot = p21.finalize_snapshot(snapshot)
 config = p21.config()
+config["reviewer_identities"] = []
 finding = {
     "logical_finding_id": "finding-001",
     "source_node_ids": ["RC_1"],
     "source_database_ids": [21],
+    "source_subitem_id": None,
     "parent_thread_id": "THREAD_1",
     "classification": "VALID_ACTIONABLE",
     "canonical_finding_id": None,
@@ -74,7 +73,7 @@ operation = {
     "expected_actor_identity": {"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
     "expected_source_actor_identity": {"login": "reviewer", "node_id": "ACTOR_reviewer", "database_id": 7},
     "classification": "VALID_ACTIONABLE",
-    "evidence_digest": "2" * 64,
+    "evidence_digest": finding["evidence_digest"],
     "reaction": "THUMBS_UP",
     "reply_body": None,
     "applied_mutation_identity": None,
@@ -181,18 +180,18 @@ import json
 import sys
 
 calls = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-assert len(calls) == 4, calls
+assert len(calls) == 5, calls
 assert "query CurrentMutationTarget" in next(value.split("=", 1)[1] for value in calls[0] if value.startswith("query="))
 assert "query CurrentReviewFeedback" in next(value.split("=", 1)[1] for value in calls[1] if value.startswith("query="))
-assert "query CurrentMutationTarget" in next(value.split("=", 1)[1] for value in calls[2] if value.startswith("query="))
-assert calls[3][calls[3].index("--method") + 1] == "POST"
-assert calls[3][3] == "repos/SecPal/.github/pulls/comments/21/reactions"
+assert "query CurrentReviewFeedback" in next(value.split("=", 1)[1] for value in calls[2] if value.startswith("query="))
+assert "query CurrentMutationTarget" in next(value.split("=", 1)[1] for value in calls[3] if value.startswith("query="))
+assert calls[4][calls[4].index("--method") + 1] == "POST"
+assert calls[4][3] == "repos/SecPal/.github/pulls/comments/21/reactions"
 PY
 
 # Installer fixtures 70-79: clean install, idempotency, correct link, wrong-link
 # refusal/repair, non-link refusal, parent creation, missing source, direct link,
-# unchanged global AGENTS, and sibling-style user discovery.
-global_agents_before="$(readlink "$global_agents")"
+# sibling-style user discovery and isolated user configuration.
 target_root="$workspace/home/.agents/skills"
 HOME="$workspace/home" bash "$INSTALLER" --target-root "$target_root" >"$workspace/install-1.txt"
 link="$target_root/secpal-pr-review"
@@ -236,6 +235,5 @@ fi
   cd "$workspace/sibling-style/repository"
   test -f "$workspace/new-home/.agents/skills/secpal-pr-review/SKILL.md"
 )
-test "$(readlink "$global_agents")" = "$global_agents_before"
 
 printf '✓ finite secpal-pr-review skill integration checks passed\n'

@@ -26,7 +26,7 @@
     { "number": 11, "name": "unresolved human thread", "classifications": ["VALID_ACTIONABLE"] },
     {
       "number": 12,
-      "name": "Copilot and Codex findings together",
+      "name": "findings from multiple reviewers",
       "classifications": ["VALID_ACTIONABLE", "INVALID_FALSE_OR_MISLEADING"]
     },
     { "number": 13, "name": "conflicting reviewers", "classifications": ["CONFLICTING_REVIEWERS"] },

@@ -23,8 +23,8 @@ Require all of the following before starting:
 
 Do not use this skill for generic code review, creating a PR, requesting any
 review, debugging CI without completed feedback, ordinary implementation,
-Draft-to-Ready transitions, or merge-only requests. Never request Copilot,
-Codex, or human review. Never mark a PR Ready, merge, enable auto-merge, amend a
+Draft-to-Ready transitions, or merge-only requests. Never request another
+review. Never mark a PR Ready, merge, enable auto-merge, amend a
 reviewed commit, force-push, bypass hooks, or use administrator privileges.
 
 Read [references/contract.md](references/contract.md) completely before acting.

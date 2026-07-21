@@ -13,7 +13,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Added:**
 
-- added an explicitly invoked central Codex skill with a finite two-cycle,
+- added an explicitly invoked central review-remediation skill with a finite two-cycle,
   three-capture state contract, independent finding classification, one holistic
   audit, and an explicit user merge-authorization checkpoint
 - added a deterministic mutation-plan schema and separate guarded helper whose
@@ -43,9 +43,17 @@ Log of notable changes to SecPal organization defaults (newest first).
   mode for the registered review-memory error suite
 - made every guarded operation verify accepted Package-2.1 evidence and stop on
   recorded terminal blockers; resolution now re-runs registered local
-  validation, re-checks the complete live thread comment set, and blocks pending
-  material top-level findings, while retaining deleted source-actor evidence
-  without weakening the authenticated writer identity
+  validation, re-checks complete paginated feedback plus live rules and required
+  checks, and blocks pending material top-level findings, while retaining deleted
+  source-actor evidence without weakening the authenticated writer identity
+- required complete source classification before policy writes, added stable
+  sub-item anchors for compound feedback, rejected partial mutation responses,
+  and kept registry reviewer configuration provider-neutral
+- stabilized paginated live feedback with two complete bounded projections and
+  applied the same stability check to rules and check contexts, while
+  revalidating the current base and effective check target before resolution
+- bound each policy operation to its finding evidence and made live required
+  checks the last read gate before a resolution write
 - blocked unrecorded already-resolved threads, canonical-reference cycles, and
   unresolved canonical roots from resolution; corrected and proven-existing
   actionable findings now require commit and test proof, and the action tests

@@ -35,16 +35,19 @@ command and endpoint allowlists provide no review-request, Ready-transition,
 generic API, Git-write, label/issue, merge, or auto-merge capability, and failures
 are never retried. It independently verifies Package-2.1 evidence before every
 operation; resolutions additionally run all registered local validations and
-re-check the complete live thread comment set. Resolution plans reject
+re-check the complete live thread comment set, applicable required-check rules,
+current base, effective check target, and required-check outcomes. PR-wide
+feedback must also match across two complete bounded projections. Resolution plans reject
 unrecorded already-resolved targets, canonical-reference cycles, unsafe
-canonical dispositions, and actionable fixes without commit and test proof.
+canonical dispositions, actionable fixes without commit and test proof, and
+operations whose evidence does not match their logical finding.
 
 ### `install-secpal-pr-review-skill.sh`
 
 After Package 2.2 is merged, installs the repository-owned skill as a direct
 canonical link under `$HOME/.agents/skills/`. The installer is idempotent,
 refuses non-symlink targets and unexpected links, and requires `--repair` before
-replacing a wrong link. It never modifies `$HOME/.codex/AGENTS.md`.
+replacing a wrong link. It never modifies unrelated user configuration.
 
 See [Finite SecPal PR review workflow](../docs/secpal-pr-review-workflow.md) for
 explicit invocation, state limits, classification, guarded action ordering,

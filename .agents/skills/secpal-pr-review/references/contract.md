@@ -148,8 +148,8 @@ Outdated does not mean invalid; resolved does not mean fixed. Conflicting
 reviewers require independent proof. A syntactically correct suggestion that
 weakens security is rejected.
 
-Split compound comments into stable sub-items while preserving every source
-review, thread, and comment ID. Duplicate and superseded references are acyclic,
+Split compound comments into non-empty stable sub-items while preserving every
+source review, thread, and comment ID. Duplicate and superseded references are acyclic,
 and a duplicate names one safely disposed canonical root cause.
 Recheck outdated feedback against the current head. An already-fixed finding
 and every corrected or proven-existing actionable finding requires test evidence
@@ -210,12 +210,16 @@ requires its own safely disposed finding before resolution.
 Reactions nested under reviews, conversation comments, and inline review
 comments are likewise independent classification sources and require their own
 safely disposed findings.
-Every stable source item occurs in exactly one logical finding. A reaction is
-never folded into its parent comment's classification, and conflicting or
-duplicate classifications for one source ID are rejected.
+Every immutable source item is covered before any policy write. An unsplit
+source occurs in exactly one logical finding; a compound source may occur in
+multiple findings only when each uses a unique non-empty `source_subitem_id`.
+A reaction is never folded into its parent comment's classification, and
+duplicate source/sub-item anchors are rejected.
 
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
+Every operation repeats the exact classification and evidence digest of its
+named logical finding; evidence from another finding cannot authorize it.
 The session state is one exact state-machine value. Every pending operation is
 bound to its matching mutation phase, and terminal or unrelated phases cannot
 enter mutation preflight. Mutation-capable phases also require their exact
@@ -241,6 +245,11 @@ helper re-reads every earlier retained reaction, reply, and thread resolution
 identity from live state before trusting it. It then compares one bounded,
 canonical PR-wide feedback projection before every new write; every other new
 or changed comment, review, thread state, reply, or reaction is late feedback.
+Each live feedback check captures two complete cursor-paginated projections
+within one shared API-call budget and requires canonical equality. During each
+projection, pull-request anchors, pull-request reactions, and every connection
+that already completed are also re-compared on later pages. A change to any
+earlier page therefore fails closed.
 
 ## Remediation-resolution readiness
 
@@ -273,6 +282,14 @@ resolutions, and separately compares the complete live target-thread comment
 set with that snapshot. Top-level review, conversation-comment, and thread
 connections are cursor-paginated within the registered API and item caps; a
 missing, repeated, or non-advancing cursor fails closed.
+After local validation, the final feedback comparison, and the exact target
+read, the helper uses its last pre-write gate to re-read applicable rulesets,
+branch-protection required checks, the current base identity/OID,
+test-merge/head check target, and every required-check outcome within the same
+registered caps. Rules and check contexts each require two equal complete
+projections, including all paginated pages. Any rule drift, target drift,
+partial response, missing check, or non-successful required outcome blocks the
+resolution write.
 The aggregate registry budgets of 200 recorded comments and 50 recorded
 reactions include Package 2.1's mandatory second observation. Their effective
 live limits of 100 comments and 25 reactions stay within every unpaginated
@@ -313,5 +330,5 @@ anchors; it never resumes by appending state. The terminal report must distingui
 what changed, what remains untrusted, and which user decision is required.
 
 At `WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION`, stop. Only the user decides
-whether Copilot Review, Codex Review, another review round, or a squash merge is
-requested. The skill and helper contain no capability to do those things.
+whether another review round or a squash merge is requested. The skill and
+helper contain no capability to do those things.

@@ -14,7 +14,7 @@ REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.jso
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
-MEMORY_ERRORS="$REPO_ROOT/tests/copilot-review-memory-errors.sh"
+GOVERNANCE_SUITE="$REPO_ROOT/tests/review-governance-suite.sh"
 P21_BASELINE="833eef2afc063ae777e7e2b64b2f252e3fe1e49e"
 
 fail() {
@@ -25,7 +25,7 @@ fail() {
 for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$REGISTRY" "$PLAN_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
-test -x "$MEMORY_ERRORS" || fail 'registered review-memory error test is not executable'
+test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executable'
 
 # Policy cases: exact finite counters, one audit, explicit checkpoint, no third
 # cycle, no polling/retry, no automatic late-feedback incorporation, and zero
@@ -84,10 +84,22 @@ grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill policy tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill integration tests are not enforced in CI'
-test "$(git -C "$REPO_ROOT" diff --name-only 833eef2afc063ae777e7e2b64b2f252e3fe1e49e -- .github/workflows/copilot-review-memory.yml scripts/copilot-review-tool.sh docs/copilot-review-automation.md | wc -l)" -eq 0 \
-  || fail 'review-memory files changed'
-test "$(git -C "$REPO_ROOT" diff --name-only 833eef2afc063ae777e7e2b64b2f252e3fe1e49e -- AGENTS.md templates/polyscope-codex-AGENTS.md | wc -l)" -eq 0 \
-  || fail 'global AGENTS routing source changed'
+grep -Fq './tests/review-governance-suite.sh' "$REGISTRY" \
+  || fail 'repository governance suite is not registered'
+
+protected_paths=(
+  "$REPO_ROOT"/.github/workflows/*-review-memory.yml
+  "$REPO_ROOT"/scripts/*-review-tool.sh
+  "$REPO_ROOT"/docs/*-review-automation.md
+  "$REPO_ROOT"/AGENTS.md
+  "$REPO_ROOT"/templates/*-AGENTS.md
+)
+relative_paths=()
+for path in "${protected_paths[@]}"; do
+  relative_paths+=("${path#"$REPO_ROOT"/}")
+done
+test "$(git -C "$REPO_ROOT" diff --name-only "$P21_BASELINE" -- "${relative_paths[@]}" | wc -l)" -eq 0 \
+  || fail 'existing review governance or instruction routing changed'
 
 python3 - "$PLAN_SCHEMA" "$REGISTRY" <<'PY'
 import json

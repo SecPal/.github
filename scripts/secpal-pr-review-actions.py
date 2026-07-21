@@ -20,6 +20,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -170,7 +171,7 @@ REPLY_CLASSIFICATIONS = {
     "SECURITY_WEAKENING_SUGGESTION",
 }
 STATUS_REPLY = re.compile(
-    r"(?is)^\s*(?:fixed|addressed|resolved|done)(?:\s+in\s+[0-9a-f]{7,64})?[.!\s]*$|^\s*status\s*:.*$"
+    r"(?is)^\s*(?:fixed|addressed|resolved|done)\b.*$|^\s*status\s*:.*$"
 )
 SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
@@ -231,7 +232,7 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def canonical_json_bytes(value: dict[str, Any]) -> bytes:
+def canonical_json_bytes(value: Any) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
@@ -325,7 +326,7 @@ def validate_session_state(session: dict[str, Any]) -> None:
 
 
 def determine_terminal_outcome(session: dict[str, Any]) -> str:
-    """Return the finite contract outcome; technical classification remains agent-reasoned."""
+    """Return the finite contract outcome; classification follows technical evidence."""
 
     if session.get("remediation_cycles", 0) > SESSION_LIMITS["remediation_cycles"]:
         return "BLOCKED_CYCLE_LIMIT_REACHED"
@@ -368,20 +369,32 @@ def determine_terminal_outcome(session: dict[str, Any]) -> str:
 
 def _validate_finding_semantics(findings: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
-    classified_source_ids: set[str] = set()
+    classified_source_anchors: set[tuple[str, str | None]] = set()
+    source_subitems: dict[str, list[str | None]] = {}
     for item in findings:
         identifier = item["logical_finding_id"]
         if identifier in by_id:
             raise PlanError(f"duplicate logical finding ID: {identifier}")
         by_id[identifier] = item
         source_ids = item["source_node_ids"]
-        if len(source_ids) != 1 or source_ids[0] in classified_source_ids:
-            raise PlanError("each source item requires exactly one independent classification")
-        classified_source_ids.add(source_ids[0])
+        if len(source_ids) != 1:
+            raise PlanError("each finding must classify exactly one source item")
+        source_id = source_ids[0]
+        source_subitem_id = item["source_subitem_id"]
+        source_anchor = (source_id, source_subitem_id)
+        if source_anchor in classified_source_anchors:
+            raise PlanError("each source sub-item requires exactly one independent classification")
+        classified_source_anchors.add(source_anchor)
+        source_subitems.setdefault(source_id, []).append(source_subitem_id)
         if item["classification"] not in CLASSIFICATIONS:
             raise PlanError(f"unsupported classification: {item['classification']}")
         if item["disposition"] not in DISPOSITION_POLICY[item["classification"]]:
             raise PlanError("logical finding disposition is invalid for its classification")
+    if any(
+        len(subitems) > 1 and any(subitem is None for subitem in subitems)
+        for subitems in source_subitems.values()
+    ):
+        raise PlanError("compound source classifications require a stable sub-item ID")
     for identifier, item in by_id.items():
         canonical = item["canonical_finding_id"]
         if item["classification"] in {"DUPLICATE", "SUPERSEDED"}:
@@ -440,6 +453,8 @@ def _validate_operation_semantics(
         classification = operation["classification"]
         if classification != finding["classification"]:
             raise PlanError("operation classification differs from its logical finding")
+        if operation["evidence_digest"] != finding["evidence_digest"]:
+            raise PlanError("operation evidence differs from its logical finding")
         if kind == "REACTION":
             if finding_id in reacted_findings:
                 raise PlanError("only one intended reaction is allowed per initial logical finding")
@@ -735,6 +750,15 @@ def _validate_snapshot_bindings(
             for key in ("login", "node_id", "database_id")
         ):
             raise PlanError("expected source actor identity differs from the bound snapshot")
+    classified_source_ids = {
+        source_id
+        for finding in findings.values()
+        for source_id in finding["source_node_ids"]
+    }
+    if classified_source_ids != node_ids:
+        raise PlanError(
+            "classification coverage must include every immutable snapshot source"
+        )
     if plan["session"]["reaction_writes"] > len(findings):
         raise PlanError("reaction writes exceed initial logical finding count")
     if plan["session"]["thread_resolutions"] > len(thread_ids):
@@ -1136,6 +1160,43 @@ query ViewerIdentity {
   viewer { id databaseId login }
 }
 """
+CURRENT_REQUIRED_CHECKS_QUERY = r"""
+query CurrentRequiredChecks($owner:String!, $name:String!, $number:Int!, $oid:GitObjectID!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      id headRefOid state baseRefName baseRefOid
+      baseRepository { id nameWithOwner }
+      potentialMergeCommit { oid }
+    }
+    object(oid:$oid) {
+      ... on Commit {
+        statusCheckRollup {
+          contexts(first:100, after:$after) {
+            nodes {
+              __typename
+              ... on CheckRun {
+                id name status conclusion startedAt detailsUrl
+                checkSuite { app { id databaseId name slug } }
+              }
+              ... on StatusContext {
+                id context state createdAt targetUrl
+                creator {
+                  __typename login url
+                  ... on User { id databaseId }
+                  ... on Bot { id databaseId }
+                  ... on Organization { id databaseId }
+                  ... on Mannequin { id databaseId }
+                }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 def _graphql_arguments(query: str, variables: dict[str, Any]) -> list[str]:
@@ -1159,6 +1220,7 @@ def _validate_action_command(arguments: list[str]) -> None:
             ADD_REACTION_MUTATION,
             RESOLVE_REVIEW_THREAD_MUTATION,
             VIEWER_IDENTITY_QUERY,
+            CURRENT_REQUIRED_CHECKS_QUERY,
         }:
             raise MutationBlocked("GraphQL document is not exactly allowlisted")
         variable_arguments = arguments[7:]
@@ -1190,6 +1252,14 @@ def _validate_action_command(arguments: list[str]) -> None:
                 "commentsCursor": "-f",
                 "threadsCursor": "-f",
             }
+        elif query == CURRENT_REQUIRED_CHECKS_QUERY:
+            expected_variables = {
+                "owner": "-f",
+                "name": "-f",
+                "number": "-F",
+                "oid": "-f",
+            }
+            optional_variables = {"after": "-f"}
         else:
             expected_variables = {
                 "owner": "-f",
@@ -1200,7 +1270,11 @@ def _validate_action_command(arguments: list[str]) -> None:
             }
         allowed_variables = {
             **expected_variables,
-            **(optional_variables if query == CURRENT_REVIEW_FEEDBACK_QUERY else {}),
+            **(
+                optional_variables
+                if query in {CURRENT_REVIEW_FEEDBACK_QUERY, CURRENT_REQUIRED_CHECKS_QUERY}
+                else {}
+            ),
         }
         if (
             not set(expected_variables) <= set(variables) <= set(allowed_variables)
@@ -1212,10 +1286,23 @@ def _validate_action_command(arguments: list[str]) -> None:
         ):
             raise MutationBlocked("GraphQL variables do not match the allowlisted document")
         return
+    endpoint = arguments[4] if len(arguments) > 4 else ""
+    repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    encoded_ref = r"[A-Za-z0-9._~%+-]+"
+    rules_endpoint = re.fullmatch(
+        rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page=100&page=[1-9][0-9]*",
+        endpoint,
+    )
+    protection_endpoint = re.fullmatch(
+        rf"repos/{repository}/branches/{encoded_ref}/protection/required_status_checks",
+        endpoint,
+    )
+    if len(arguments) == 7 and arguments[5:7] == ["--method", "GET"]:
+        if not rules_endpoint and not protection_endpoint:
+            raise MutationBlocked("REST read endpoint is not exactly allowlisted")
+        return
     if len(arguments) != 11 or arguments[5:7] != ["--method", "POST"]:
         raise MutationBlocked("REST mutation must use the exact POST command shape")
-    endpoint = arguments[4]
-    repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     reaction_endpoint = re.fullmatch(
         rf"repos/{repository}/(?:issues/comments|pulls/comments)/[1-9][0-9]*/reactions",
         endpoint,
@@ -1255,7 +1342,7 @@ class ActionCommandRunner:
                 raise MutationBlocked("invalid explicit gh executable")
             self.executable_path = str(path.resolve())
 
-    def run(self, arguments: list[str]) -> dict[str, Any]:
+    def run(self, arguments: list[str]) -> Any:
         _validate_action_command(arguments)
         try:
             completed = subprocess.run(
@@ -1277,8 +1364,10 @@ class ActionCommandRunner:
             value = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             raise MutationFailure("GitHub returned malformed JSON") from exc
-        if not isinstance(value, dict):
-            raise MutationFailure("GitHub returned a non-object response")
+        if not isinstance(value, (dict, list)):
+            raise MutationFailure("GitHub returned a non-container response")
+        if isinstance(value, dict) and value.get("errors"):
+            raise MutationFailure("GitHub returned a partial or failed response")
         return value
 
 
@@ -1397,11 +1486,26 @@ class LiveGitHub:
         return actor
 
     def read_current_feedback(self, plan: dict[str, Any]) -> dict[str, Any]:
-        owner, name = plan["repository"].split("/", 1)
         try:
             limits = select_repository(load_registry(), plan["repository"])
         except RegistryError as exc:
             raise MutationBlocked("current feedback has no validated repository limits") from exc
+        budget = {"calls": 0}
+        first = self._read_current_feedback_once(plan, limits, budget)
+        second = self._read_current_feedback_once(plan, limits, budget)
+        if first != second:
+            raise MutationBlocked(
+                "pull-request feedback changed between bounded reads"
+            )
+        return second
+
+    def _read_current_feedback_once(
+        self,
+        plan: dict[str, Any],
+        limits: dict[str, Any],
+        budget: dict[str, int],
+    ) -> dict[str, Any]:
+        owner, name = plan["repository"].split("/", 1)
         base_variables = {
             "owner": owner,
             "name": name,
@@ -1422,7 +1526,6 @@ class LiveGitHub:
         active = set(connections)
         pull_request: dict[str, Any] | None = None
         initial_pull_request: dict[str, Any] | None = None
-        call_count = 0
         cursor_variables = {
             "reviews": "reviewsCursor",
             "comments": "commentsCursor",
@@ -1437,12 +1540,12 @@ class LiveGitHub:
                         for key, cursor in cursors.items()
                     }
                 )
-                if call_count >= limits["maximum_api_calls"]:
+                if budget["calls"] >= limits["maximum_api_calls"]:
                     raise MutationBlocked("current feedback pagination exceeds the API-call limit")
                 payload = self.runner.run(
                     _graphql_arguments(CURRENT_REVIEW_FEEDBACK_QUERY, variables)
                 )
-                call_count += 1
+                budget["calls"] += 1
                 pull_request = payload["data"]["repository"]["pullRequest"]
                 if not isinstance(pull_request, dict):
                     raise MutationBlocked("current pull-request feedback is unavailable")
@@ -1452,8 +1555,17 @@ class LiveGitHub:
                     pull_request.get("id") != initial_pull_request.get("id")
                     or pull_request.get("headRefOid") != initial_pull_request.get("headRefOid")
                     or pull_request.get("state") != initial_pull_request.get("state")
+                    or pull_request.get("reactions")
+                    != initial_pull_request.get("reactions")
+                    or any(
+                        pull_request.get(key) != initial_pull_request.get(key)
+                        for key in connections
+                        if key not in active
+                    )
                 ):
-                    raise MutationBlocked("pull-request identity changed during bounded pagination")
+                    raise MutationBlocked(
+                        "pull-request feedback changed during bounded pagination"
+                    )
                 next_active: set[str] = set()
                 next_cursors: dict[str, str] = {}
                 for key in active:
@@ -1560,6 +1672,234 @@ class LiveGitHub:
         }
         _validate_feedback_limits(result["feedback"], limits)
         return result
+
+    def verify_current_required_checks(
+        self,
+        plan: dict[str, Any],
+        snapshot: dict[str, Any],
+        configuration: dict[str, Any],
+    ) -> None:
+        """Re-read mutable required-check policy and outcomes immediately before resolution."""
+
+        owner, name = plan["repository"].split("/", 1)
+        try:
+            limits = select_repository(load_registry(), plan["repository"])
+        except RegistryError as exc:
+            raise MutationBlocked(
+                "current required-check read has no validated repository limits"
+            ) from exc
+        policy = configuration["check_policy"]
+        budget = {"calls": 0, "items": 0}
+
+        def run(arguments: list[str]) -> Any:
+            if budget["calls"] >= limits["maximum_api_calls"]:
+                raise MutationBlocked("current required-check read exceeds the API-call limit")
+            try:
+                value = self.runner.run(arguments)
+            except ActionCommandFailure as exc:
+                raise MutationFailure(str(exc)) from exc
+            budget["calls"] += 1
+            return value
+
+        def add_items(count: int) -> None:
+            budget["items"] += count
+            if budget["items"] > limits["maximum_items"]:
+                raise MutationBlocked("current required-check read exceeds the item limit")
+
+        def read_checks(commit_oid: str) -> list[dict[str, Any]]:
+            raw_checks: list[dict[str, Any]] = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            while True:
+                variables: dict[str, Any] = {
+                    "owner": owner,
+                    "name": name,
+                    "number": plan["pull_request_number"],
+                    "oid": commit_oid,
+                }
+                if cursor is not None:
+                    variables["after"] = cursor
+                payload = run(_graphql_arguments(CURRENT_REQUIRED_CHECKS_QUERY, variables))
+                try:
+                    repository = payload["data"]["repository"]
+                    pull_request = repository["pullRequest"]
+                    commit_object = repository["object"]
+                except (KeyError, TypeError) as exc:
+                    raise MutationFailure("GitHub returned incomplete required-check evidence") from exc
+                if not isinstance(pull_request, dict) or not isinstance(commit_object, dict):
+                    raise MutationBlocked("current required-check target is unavailable")
+                potential_merge = pull_request.get("potentialMergeCommit")
+                potential_merge_oid = (
+                    potential_merge.get("oid")
+                    if isinstance(potential_merge, dict)
+                    else None
+                )
+                snapshot_pr = snapshot["pull_request"]
+                base_repository = pull_request.get("baseRepository")
+                if (
+                    pull_request.get("id") != snapshot_pr["id"]
+                    or pull_request.get("headRefOid") != plan["expected_head_sha"]
+                    or pull_request.get("state") != "OPEN"
+                    or pull_request.get("baseRefName") != snapshot_pr["base_ref"]
+                    or pull_request.get("baseRefOid") != snapshot_pr["base_oid"]
+                    or not isinstance(base_repository, dict)
+                    or base_repository.get("id")
+                    != snapshot_pr["base_repository"]["id"]
+                    or base_repository.get("nameWithOwner")
+                    != snapshot_pr["base_repository"]["name_with_owner"]
+                    or potential_merge_oid != snapshot_pr["potential_merge_commit_oid"]
+                ):
+                    raise MutationBlocked("required-check target changed after the final snapshot")
+                rollup = commit_object.get("statusCheckRollup")
+                if rollup is None:
+                    return []
+                if not isinstance(rollup, dict):
+                    raise MutationFailure("GitHub returned malformed required-check evidence")
+                nodes, next_cursor = _page_nodes(
+                    rollup.get("contexts"), "required checks"
+                )
+                add_items(len(nodes))
+                raw_checks.extend(nodes)
+                if next_cursor is None:
+                    break
+                if next_cursor in seen_cursors:
+                    raise MutationBlocked("current required-check pagination did not advance")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            try:
+                normalized = [evidence._normalize_check(item) for item in raw_checks]
+            except evidence.BlockedError as exc:
+                raise MutationBlocked(
+                    f"current required-check evidence is incomplete: {exc.message}"
+                ) from exc
+            stable_ids = [item["stable_id"] for item in normalized]
+            if len(stable_ids) != len(set(stable_ids)):
+                raise MutationBlocked("current required-check evidence contains duplicate identities")
+            return sorted(normalized, key=lambda item: item["stable_id"])
+
+        def read_stable_checks(commit_oid: str) -> list[dict[str, Any]]:
+            first = read_checks(commit_oid)
+            second = read_checks(commit_oid)
+            if first != second:
+                raise MutationBlocked(
+                    "required checks changed between bounded reads"
+                )
+            return second
+
+        snapshot_pr = snapshot["pull_request"]
+        encoded_ref = quote(snapshot_pr["base_ref"], safe="")
+        def read_rulesets() -> list[dict[str, Any]]:
+            if not policy["require_ruleset_evidence"]:
+                return []
+            result: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                endpoint = (
+                    f"repos/{owner}/{name}/rules/branches/{encoded_ref}"
+                    f"?per_page=100&page={page}"
+                )
+                response = run(
+                    ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
+                )
+                if not isinstance(response, list) or any(
+                    not isinstance(item, dict) for item in response
+                ):
+                    raise MutationFailure("GitHub returned malformed applicable rules")
+                add_items(len(response))
+                result.extend(response)
+                if len(response) < 100:
+                    return result
+                page += 1
+
+        def read_branch_protection() -> dict[str, Any]:
+            if not policy["require_branch_protection_evidence"]:
+                return {}
+            endpoint = (
+                f"repos/{owner}/{name}/branches/{encoded_ref}"
+                "/protection/required_status_checks"
+            )
+            response = run(
+                ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
+            )
+            if not isinstance(response, dict):
+                raise MutationFailure("GitHub returned malformed branch protection")
+            add_items(1)
+            return response
+
+        def normalize_rules(
+            rulesets: list[dict[str, Any]],
+            branch_protection: dict[str, Any],
+        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+            try:
+                required_specs = evidence.require_rule_evidence(
+                    rulesets if policy["require_ruleset_evidence"] else None,
+                    branch_protection
+                    if policy["require_branch_protection_evidence"]
+                    else None,
+                    policy,
+                )
+                current_rules = evidence._normalize_applicable_rules(
+                    rulesets, branch_protection
+                )
+            except evidence.BlockedError as exc:
+                raise MutationBlocked(
+                    f"current required-check rules are incomplete: {exc.message}"
+                ) from exc
+            return current_rules, required_specs
+
+        first_rules = normalize_rules(read_rulesets(), read_branch_protection())
+        second_rules = normalize_rules(read_rulesets(), read_branch_protection())
+        if first_rules != second_rules:
+            raise MutationBlocked("required-check rules changed between bounded reads")
+        current_rules, required_specs = second_rules
+        if current_rules != snapshot["applicable_rules"]:
+            raise MutationBlocked("required-check rules changed after the final snapshot")
+
+        potential_merge_oid = snapshot_pr["potential_merge_commit_oid"]
+        if potential_merge_oid is not None:
+            merge_checks = read_stable_checks(potential_merge_oid)
+        else:
+            merge_checks = []
+        check_commit_oid, check_source = evidence.select_effective_check_target(
+            snapshot_pr["head_oid_after"], potential_merge_oid, merge_checks
+        )
+        if (
+            check_source != snapshot_pr["check_commit_source"]
+            or check_commit_oid != snapshot_pr["check_commit_oid"]
+        ):
+            raise MutationBlocked("required-check target changed after the final snapshot")
+        if check_source == "test_merge":
+            raw_checks = merge_checks
+        else:
+            raw_checks = read_stable_checks(snapshot_pr["head_oid_after"])
+
+        sources = sorted(
+            source
+            for source, required in (
+                ("rulesets", policy["require_ruleset_evidence"]),
+                ("branch_protection", policy["require_branch_protection_evidence"]),
+            )
+            if required
+        )
+        evaluated, check_evidence = evidence.evaluate_checks(
+            raw_checks, required_specs, policy, sources
+        )
+        required_results = [
+            item
+            for item in evaluated
+            if item["requiredness"] == "required" and item.get("is_effective", True)
+        ]
+        if (
+            check_evidence["determination"] != "complete"
+            or check_evidence["required"]
+            != snapshot["required_check_evidence"]["required"]
+            or check_evidence["missing"]
+            or any(
+                item["evidence_state"] != "required_successful"
+                for item in required_results
+            )
+        ):
+            raise MutationBlocked("required check is no longer successful")
 
     def read_current_state(self, plan: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
@@ -1694,7 +2034,9 @@ class LiveGitHub:
             except (ActionCommandFailure, KeyError, MutationBlocked, TypeError) as exc:
                 raise MutationFailure(str(exc)) from exc
             if (
-                subject.get("id") != operation["target_node_id"]
+                not isinstance(reaction, dict)
+                or not isinstance(subject, dict)
+                or subject.get("id") != operation["target_node_id"]
                 or reaction.get("content") != operation["reaction"]
                 or not _same_actor(_actor(reaction.get("user")), operation["expected_actor_identity"])
             ):
@@ -1717,7 +2059,7 @@ class LiveGitHub:
             )
         except (ActionCommandFailure, MutationBlocked) as exc:
             raise MutationFailure(str(exc)) from exc
-        if value.get("content") != content:
+        if not isinstance(value, dict) or value.get("content") != content:
             raise MutationFailure("GitHub reaction response content changed")
         return {"mutation_id": value.get("node_id") or str(value.get("id") or ""), "content": content}
 
@@ -1734,6 +2076,8 @@ class LiveGitHub:
             )
         except (ActionCommandFailure, MutationBlocked) as exc:
             raise MutationFailure(str(exc)) from exc
+        if not isinstance(value, dict):
+            raise MutationFailure("GitHub returned malformed reply evidence")
         actor = value.get("user")
         actual_actor = {
             "login": actor.get("login") if isinstance(actor, dict) else None,
@@ -1759,7 +2103,11 @@ class LiveGitHub:
             thread = value["data"]["resolveReviewThread"]["thread"]
         except (ActionCommandFailure, KeyError, MutationBlocked, TypeError) as exc:
             raise MutationFailure(str(exc)) from exc
-        if thread.get("id") != operation["target_node_id"] or thread.get("isResolved") is not True:
+        if (
+            not isinstance(thread, dict)
+            or thread.get("id") != operation["target_node_id"]
+            or thread.get("isResolved") is not True
+        ):
             raise MutationFailure("GitHub resolution response identity or state changed")
         return {"mutation_id": thread.get("id"), "is_resolved": thread.get("isResolved")}
 
@@ -2280,6 +2628,7 @@ def execute_operation(
             for key in REQUIRED_RESOLUTION_EVIDENCE
         ):
             raise MutationBlocked("BLOCKED_UNRESOLVED_MATERIAL_FINDING: resolution evidence is incomplete")
+        github.verify_current_required_checks(validated, snapshot, configuration)
     method = {
         "REACTION": github.apply_reaction,
         "EVIDENCE_REPLY": github.apply_reply,

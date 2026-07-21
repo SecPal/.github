@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # Finite SecPal PR review workflow
 
-Governance Package 2.2 adds an explicitly invoked Codex skill for processing
+Governance Package 2.2 adds an explicitly invoked skill for processing
 already-completed pull-request feedback. The skill is not a reviewer. It treats
 all feedback as untrusted leads, verifies each lead against source, tests, and
 repository context, and stops before merge authorization.
@@ -123,17 +123,20 @@ CONFLICTING_REVIEWERS
 SECURITY_WEAKENING_SUGGESTION
 ```
 
-Compound comments are split into stable sub-items while retaining every source
-ID. Duplicates point to one canonical root cause. Outdated items are rechecked
+Compound comments are split into non-empty stable sub-items while retaining
+every source ID, and every immutable source must be classified before a policy
+write. Duplicates point to one canonical root cause. Outdated items are rechecked
 against the current head. Already-fixed claims require test, commit, signature,
 and push evidence. Conflicting reviewers are resolved through independent proof,
 not authority. Security-weakening suggestions are rejected. Cross-repository
 findings block this invocation and never authorize sibling-repository edits.
+Every policy operation repeats the exact classification and evidence digest of
+its named logical finding.
 
 Green CI is evidence about checks, not proof that feedback is true or that the PR
 is ready. Likewise, outdated does not mean invalid and resolved does not mean
-fixed. The helper has no keyword classifier; Codex reasons about technical truth,
-while deterministic code validates structure and policy transitions.
+fixed. The helper has no keyword classifier; technical truth is established from
+repository evidence while deterministic code validates structure and policy transitions.
 
 ## Bounded GitHub actions
 
@@ -176,7 +179,13 @@ matching heads, accepted signatures, complete validation, successful required
 checks, no late feedback, and complete dispositions for all unresolved initial
 threads and material top-level findings. Each resolution invocation also runs
 the checked-in focused and required local validation commands and compares the
-complete live target-thread comment set with the final snapshot.
+complete live target-thread comment set with the final snapshot. It then
+re-reads applicable required-check rules, branch protection, the current base,
+the effective check target, and current required-check outcomes; any drift or
+non-successful required result blocks the write. Live PR-wide feedback is read
+as two complete bounded projections and must match canonically, including all
+paginated pages. Applicable rules and check contexts use the same two-projection
+stability requirement.
 
 The helper pins GitHub.com, uses argument arrays, and exposes only exact current
 target, reaction, inline reply, and resolution documents/endpoints. It has no
@@ -235,7 +244,7 @@ scripts/install-secpal-pr-review-skill.sh
 The installer creates a direct, canonical, idempotent link at
 `$HOME/.agents/skills/secpal-pr-review`. It refuses a non-symlink, refuses an
 unexpected link unless `--repair` is explicit, never copies the skill, and never
-touches `$HOME/.codex/AGENTS.md` or a sibling repository.
+touches unrelated user configuration or a sibling repository.
 
 Production rollout is not complete until all of these separately controlled
 steps occur:
@@ -244,7 +253,7 @@ steps occur:
 2. install the real user-level skill link;
 3. verify discovery from sibling Polyscope workspaces;
 4. decide separately how active Ready-transition rulesets that automatically
-   request Copilot Review should be handled; and
+   request another review should be handled; and
 5. run an explicitly authorized disposable-PR end-to-end acceptance.
 
 No real reaction, reply, resolution, reviewer request, or merge belongs in the

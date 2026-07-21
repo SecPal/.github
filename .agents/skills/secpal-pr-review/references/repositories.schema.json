@@ -45,7 +45,11 @@
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[^/]+/[^/]+$" }
         },
-        "reviewer_identities": { "type": "array", "items": { "type": "object" } },
+        "reviewer_identities": {
+          "type": "array",
+          "maxItems": 0,
+          "items": { "type": "object" }
+        },
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "signature_policy": { "type": "object" },

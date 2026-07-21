@@ -6,24 +6,7 @@
       "repository": "SecPal/.github",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/.github"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
@@ -53,24 +36,9 @@
           "purpose": "Run accepted Package-2.1 fake-GitHub integration tests"
         },
         {
-          "argv": ["./tests/validate-ai-instructions.sh"],
+          "argv": ["./tests/review-governance-suite.sh"],
           "working_directory": ".",
-          "purpose": "Validate AI instructions"
-        },
-        {
-          "argv": ["./tests/validate-copilot-instructions.sh"],
-          "working_directory": ".",
-          "purpose": "Validate Copilot instructions"
-        },
-        {
-          "argv": ["./tests/copilot-review-memory.sh"],
-          "working_directory": ".",
-          "purpose": "Run review-memory success fixtures sequentially"
-        },
-        {
-          "argv": ["./tests/copilot-review-memory-errors.sh"],
-          "working_directory": ".",
-          "purpose": "Run review-memory error fixtures sequentially"
+          "purpose": "Run instruction and review-memory governance fixtures"
         },
         {
           "argv": ["./tests/reusable-workflow-policy.sh"],
@@ -124,24 +92,7 @@
       "repository": "SecPal/api",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/api"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [],
       "required_local_validation": [
         {
@@ -191,24 +142,7 @@
       "repository": "SecPal/frontend",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/frontend"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["npm", "run", "test:migration-boundary"],
@@ -279,24 +213,7 @@
       "repository": "SecPal/contracts",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/contracts"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["node", "--test"],
@@ -346,24 +263,7 @@
       "repository": "SecPal/android",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/android"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["npm", "run", "test"],
@@ -434,24 +334,7 @@
       "repository": "SecPal/changelog",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/changelog"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["npm", "run", "csp:test"],
@@ -501,24 +384,7 @@
       "repository": "SecPal/GuardGuide",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/GuardGuide"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["npm", "run", "test:frontend"],
@@ -574,24 +440,7 @@
       "repository": "SecPal/guardguide.de",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/guardguide.de"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["npm", "run", "test"],
@@ -659,24 +508,7 @@
       "repository": "SecPal/secpal.app",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/secpal.app"],
-      "reviewer_identities": [
-        {
-          "canonical_identity": "copilot",
-          "kind": "bot",
-          "graphql_aliases": ["copilot-pull-request-reviewer"],
-          "rest_event_aliases": ["copilot-pull-request-reviewer[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        },
-        {
-          "canonical_identity": "codex",
-          "kind": "bot",
-          "graphql_aliases": ["chatgpt-codex-connector"],
-          "rest_event_aliases": ["chatgpt-codex-connector[bot]"],
-          "node_ids": [],
-          "database_ids": []
-        }
-      ],
+      "reviewer_identities": [],
       "focused_validation": [
         {
           "argv": ["npm", "run", "test"],
