@@ -220,8 +220,10 @@ rules/Required Checks, strict-base/merge-state policy, and current stable
 feedback once. Capture and freshness use the same explicitly selected registry
 entry as attestation and checks. Schema version 1.2 requires the reviewed state
 to originate from an open PR and a classified finding record for every
-top-level review/comment and its reactions, pull-request reaction, and
-comment/reaction in every unresolved thread. Those records bind typed source IDs/digests,
+top-level review/comment and its reactions, stable pull-request reaction, and
+comment/reaction in every unresolved thread. PR-level `EYES` activity markers
+are excluded before canonicalization; nested and all other reactions remain
+stable feedback. Those records bind typed source IDs/digests,
 classification-compatible dispositions, evidence digests, and fixed-finding
 test proof to the signed validation receipt; each resolution names its threaded
 finding IDs instead of carrying an unverified disposition. Caller-authored

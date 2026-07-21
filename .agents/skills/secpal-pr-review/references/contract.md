@@ -115,7 +115,7 @@ remote heads, clean worktree, attestation, Required Checks, stable feedback, and
 all requested thread eligibility once. The reviewed projection must have been
 captured while the PR was open. The batch includes classified findings whose
 typed source identities and digests cover top-level review/comment bodies and
-their reactions, pull-request reactions, and unresolved-thread comments and
+their reactions, stable pull-request reactions, and unresolved-thread comments and
 their reactions; its operations cover every
 unresolved reviewed thread and name all findings for their thread. It then performs one bounded last-moment target check and one
 write per thread. The target check compares identity, head, open PR/base and
@@ -204,7 +204,9 @@ check before each write.
 Stable feedback is one canonical representation containing repository and PR
 identity, the bound reviewed head and base branch/SHA, review IDs, top-level comment IDs and body
 digests, review-thread and comment IDs and body digests, resolved/outdated state,
-reactions, and source actors. Its feedback digest excludes the head solely so a
+stable reactions, and source actors. PR-level `EYES` reactions are transient
+activity markers and are excluded before canonicalization; nested `EYES`
+reactions and every other reaction remain stable feedback. Its feedback digest excludes the head solely so a
 validation attestation can authorize the expected reviewed-head-to-remediation-
 head transition; the state digest includes the head and base. It contains no
 Required Check, mergeability, worktree, signature, or validation result.
@@ -242,7 +244,7 @@ classification-compatible disposition, and evidence digest. Fixed findings
 also bind the signed validation-receipt digest as test evidence and a PR-commit
 digest. Operations name their threaded findings instead of trusting a
 free-standing disposition. Every top-level review/comment and its reactions,
-pull-request reaction, unresolved reviewed thread, and comment/reaction in it has classification coverage
+stable pull-request reaction, unresolved reviewed thread, and comment/reaction in it has classification coverage
 before the first live read. Preflight
 and every logical read may retry once only for an unambiguous transient read
 failure. Writes never retry. A partial failure records all applied operations,

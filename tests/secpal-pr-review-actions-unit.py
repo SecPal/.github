@@ -4510,8 +4510,43 @@ class FastPathTests(TestCase):
                         reviewed,
                         fast_registry(),
                         gateway,
-                    )
+                )
                 self.assertEqual(gateway.calls, [])
+
+    def test_pr_eyes_reaction_rotation_is_not_stable_feedback(self) -> None:
+        payload = fast_feedback(1).to_dict()
+
+        def eyes(identity: str) -> dict[str, Any]:
+            return {
+                "mutation_id": identity,
+                "content": "EYES",
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+            }
+
+        payload["pull_request_reactions"] = [eyes("REACTION_PR_1")]
+        first = fast_path.StableFeedbackState.from_payload(payload)
+        payload["pull_request_reactions"] = [eyes("REACTION_PR_2")]
+        payload["reviews"][0]["reactions"] = [eyes("REACTION_REVIEW")]
+        second = fast_path.StableFeedbackState.from_payload(payload)
+
+        self.assertEqual(first.feedback["pull_request_reactions"], [])
+        self.assertEqual(second.feedback["pull_request_reactions"], [])
+        self.assertEqual(
+            second.feedback["reviews"][0]["reactions"][0]["mutation_id"],
+            "REACTION_REVIEW",
+        )
+        payload["reviews"][0]["reactions"] = []
+        second_without_nested_reaction = fast_path.StableFeedbackState.from_payload(
+            payload
+        )
+        self.assertEqual(
+            first.feedback_digest,
+            second_without_nested_reaction.feedback_digest,
+        )
 
     def test_complete_feedback_source_taxonomy_is_classified(self) -> None:
         reviewed = fast_feedback(1)

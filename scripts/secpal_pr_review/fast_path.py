@@ -26,6 +26,7 @@ SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
 )
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
+TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
 SOURCE_KINDS = frozenset(
     {
         "PULL_REQUEST_REACTION",
@@ -171,9 +172,13 @@ def _reactions(value: Any, label: str) -> list[dict[str, Any]]:
 
 def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
     source = payload.get("feedback") if isinstance(payload.get("feedback"), dict) else payload
-    pull_request_reactions = _reactions(
-        source.get("pull_request_reactions", []), "pull request"
-    )
+    pull_request_reactions = [
+        reaction
+        for reaction in _reactions(
+            source.get("pull_request_reactions", []), "pull request"
+        )
+        if reaction["content"] not in TRANSIENT_PULL_REQUEST_REACTION_CONTENTS
+    ]
     reviews_value = source.get("reviews", [])
     comments_value = source.get("conversation_comments", [])
     threads_value = source.get("threads", [])

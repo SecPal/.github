@@ -62,9 +62,10 @@ as argument arrays in the target repository, without a shell.
    from source, tests, and repository context. Bind each finding's typed source
    identity/digest, optional unresolved thread, classification, disposition,
    and evidence digest in the batch. Cover top-level reviews, conversation
-   comments and their reactions, pull-request reactions, and unresolved-thread
-   comments and their reactions. Never infer truth from reviewer identity,
-   keywords, or CI.
+   comments and their reactions, stable pull-request reactions, and unresolved-
+   thread comments and their reactions. PR-level `EYES` activity markers are
+   volatile workflow state rather than review feedback. Never infer truth from
+   reviewer identity, keywords, or CI.
 3. Reproduce every valid finding, add a failing test first, make the smallest
    coherent corrections, and use focused validation while editing.
 4. Perform the one holistic audit across correctness, security, privacy, data
@@ -105,16 +106,18 @@ Validate fast-path batch inputs against
 `THREAD_RESOLUTION` operations and must bind repository, PR, expected head,
 reviewed base branch/SHA, authenticated actor, reviewed-state and feedback digests, and eligible
 classified findings. The reviewed state must originate from an open PR. Every
-top-level review/comment and its reactions, pull-request reaction, unresolved
-reviewed thread, and comment/reaction in it must be covered; each resolution names exactly its threaded
+top-level review/comment and its reactions, stable pull-request reaction, unresolved
+reviewed thread, and comment/reaction in it must be covered; PR-level `EYES`
+activity markers are excluded before digesting. Each resolution names exactly its threaded
 findings, and classification/disposition pairs must follow policy. A
 partial failure stops later writes, reports every applied/failed/blocked target,
 and never retries a write. Applied-target report entries are audit output, not
 reusable authorization. A manual rerun with an already-resolved or otherwise changed thread fails closed.
 
 The stable-feedback projection contains review identities, body digests,
-thread/comment identities and state, reactions, actors, repository, PR, head,
-and the reviewed base branch/SHA. It contains no Required Check results.
+thread/comment identities and state, stable reactions, actors, repository, PR,
+head, and the reviewed base branch/SHA. It excludes PR-level `EYES` activity
+markers and contains no Required Check results.
 Volatile readiness separately contains heads, the registered default/base
 repository boundary, Required Checks, mergeability and merge-state policy,
 worktree, signatures, the signed validation-receipt trailer, and the

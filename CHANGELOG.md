@@ -38,6 +38,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - rejected unauthenticated prior-result reuse and non-open reviewed states,
   required typed classification coverage for top-level feedback and reactions,
   and bound fixed-finding test evidence to the signed validation receipt
+- removed resolution deadlocks by allowing an independently checked blocked
+  merge gate during conversation resolution and excluding volatile PR-level
+  `EYES` activity markers from stable-feedback digests
 - limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
   ignored session scratch files cannot block a push while tracked violations
   remain enforced
