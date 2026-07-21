@@ -26,8 +26,8 @@ SecPal/api PR #123. Do not request another review or merge.
 Do not invoke it for generic review, PR creation, review requests, CI-only
 debugging, ordinary implementation, or a merge-only request. Entry requires a
 clean current topic branch, configured upstream, matching local/remote/PR heads,
-an open PR, a fully explained commit set, valid accepted signatures, and one
-complete immutable snapshot.
+an open PR, a fully explained commit set, source-appropriate signature evidence,
+and one canonical stable-feedback read.
 
 The production registry explicitly supports:
 
@@ -52,19 +52,20 @@ instead of guessed commands.
 
 ## Architecture
 
-The workflow has five narrow parts:
+The workflow has six narrow parts:
 
 1. [the central skill](../.agents/skills/secpal-pr-review/SKILL.md), which performs
    reasoned technical classification;
 2. [the finite contract](../.agents/skills/secpal-pr-review/references/contract.md),
    which defines states, counters, mutation policy, and terminal outcomes;
-3. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only capture and
-   evidence verifier;
-4. `scripts/secpal-pr-review-actions.py`, which validates deterministic plans
-   and permits only one guarded reaction, inline evidence reply, or thread
-   resolution per command; and
-5. the workflow-only repository registry and mutation-plan schemas under the
-   skill's `references/` directory.
+3. `scripts/secpal_pr_review/fast_path.py`, which defines the stable-feedback,
+   volatile-readiness, validation-attestation, and batch-resolution contracts;
+4. `scripts/secpal-pr-review-actions.py`, the compatible command entry point for
+   stable capture, validation attestation, batch resolution, and legacy actions;
+5. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
+   verifier used only by explicitly selected forensic/audit snapshot mode; and
+6. the workflow-only repository registry, mutation-plan schema, and fast-path
+   batch schema under the skill's `references/` directory.
 
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default
@@ -82,36 +83,36 @@ absolute canonical link text directly and does not depend on GNU-specific
 
 ## Finite execution
 
-The exact forward spine is:
+The default forward spine is:
 
 ```text
 INITIALIZE
-  → VERIFY_LOCAL_AND_PR_STATE
-  → CAPTURE_ONE_IMMUTABLE_SNAPSHOT
-  → CLASSIFY_ALL_SNAPSHOT_ITEMS
-  → APPLY_JUSTIFIED_REACTIONS_AND_EXCEPTION_REPLIES
-  → REMEDIATION_CYCLE_1
-  → LOCAL_VALIDATE_SIGN_COMMIT_FAST_FORWARD_PUSH
+  → READ_STABLE_FEEDBACK_ONCE
+  → CLASSIFY_AND_FIX_ALL_CURRENT_FINDINGS
+  → FOCUSED_VALIDATION_WHILE_EDITING
   → HOLISTIC_AUDIT
-  → POST_CYCLE_1_SINGLE_GITHUB_READ
-  → OPTIONAL_REMEDIATION_CYCLE_2
-  → LOCAL_VALIDATE_SIGN_COMMIT_FAST_FORWARD_PUSH
-  → FINAL_SINGLE_GITHUB_READ
-  → RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE
+  → COMPLETE_VALIDATION_OF_STAGED_TREE_ONCE
+  → SIGNED_COMMIT_AND_BIND_VALIDATION_ATTESTATION
+  → NORMAL_PUSH
+  → READ_REQUIRED_CHECKS_ONCE
+  → READ_STABLE_FEEDBACK_FRESHNESS_ONCE
+  → RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH
   → WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION
   → TERMINAL
 ```
 
-One invocation is limited to two remediation cycles, three logical GitHub state
-captures, one holistic audit, two signed remediation commits, and two ordinary
-fast-forward pushes. It allows at most one intended reaction per initial logical
-finding, one resolution per eligible initial thread, and one evidence reply per
-qualifying invalid finding with ten replies total.
+One normal invocation uses zero full snapshots, two stable-feedback reads, one
+Required Check read before resolution, one complete local validation, one
+holistic audit, one signed remediation commit, and one ordinary push. The second
+stable read is a lightweight freshness comparison, not a volatile readiness
+snapshot. Package-2.1/2.2 snapshots remain available only in explicit forensic
+mode.
 
-There is no polling, sleep-and-retry, recursive loop, automatic rerun after push,
-automatic late-feedback incorporation, third cycle, review request, Ready
-transition, merge, or auto-merge. Any failed read, write, validation, signature
-check, or push terminates the invocation.
+There is no polling, sleep-and-retry, recursive review loop, automatic late-
+feedback incorporation, review request, Ready transition, merge, or auto-merge.
+A correctable local error is repaired in the same invocation, and a read-only
+failure may receive one bounded retry. Writes never retry; an unknown write
+result stops with its exact operation identity.
 
 ## Classification and technical truth
 
@@ -156,11 +157,62 @@ findings may receive 👎, and all other reaction decisions are conservative.
 Evidence replies exist only for a non-obvious material misunderstanding. The
 workflow never posts fixed/addressed/SHA/progress messages.
 
-Every plan binds the exact repository, PR, immutable digest, and expected head.
-Each operation names one source finding, target node/database/thread identity,
-expected target state, expected authenticated writer, expected immutable source
-actor, classification, evidence digest, payload, and any returned identity for
-an already-applied operation. Only these commands exist:
+The normal path captures only stable feedback, creates one reusable validation
+attestation, and applies one ordered batch:
+
+```bash
+python3 scripts/secpal-pr-review-actions.py resolve-batch \
+  --repo SecPal/api \
+  --pr 123 \
+  --capture-reviewed-state SESSION/reviewed-feedback.json
+
+python3 scripts/secpal-pr-review-actions.py attest-validation \
+  --repo SecPal/api \
+  --expected-head PARENT_HEAD \
+  --reviewed-state SESSION/reviewed-feedback.json \
+  --repo-root /path/to/SecPal/api \
+  --output SESSION/validation-receipt.json
+
+# Create and locally verify the one signed commit here, then bind without
+# rerunning the complete validation command set.
+python3 scripts/secpal-pr-review-actions.py attest-validation \
+  --repo SecPal/api \
+  --expected-head HEAD \
+  --reviewed-state SESSION/reviewed-feedback.json \
+  --repo-root /path/to/SecPal/api \
+  --receipt SESSION/validation-receipt.json \
+  --bind-commit \
+  --output SESSION/validation-attestation.json
+
+python3 scripts/secpal-pr-review-actions.py resolve-batch \
+  --repo SecPal/api \
+  --pr 123 \
+  --request SESSION/resolution-batch.json \
+  --reviewed-state SESSION/reviewed-feedback.json \
+  --attestation SESSION/validation-attestation.json \
+  --repo-root /path/to/SecPal/api \
+  --apply
+```
+
+The capture reads one canonical projection containing feedback identities,
+digests, states, reactions, actors, and the current head. It excludes Required
+Checks. The complete run produces a staged-tree receipt. After the signed
+commit, the same command binds that receipt to the commit only when its sole
+parent and tree match exactly; this does not rerun validation. The final
+attestation binds the repository, finished head, registry digest, command-set
+digest, successful result, and reviewed-feedback digests. The batch
+verifies local/remote/PR heads, clean worktree, actor, source-appropriate commit
+signatures, the attestation, Required Checks, and current stable feedback once.
+Thirty resolutions therefore use one attestation verification, one Required
+Check read, one freshness read, thirty minimum target checks, thirty writes, and
+zero complete-validation or full-feedback reruns between writes.
+
+Every legacy forensic plan binds the exact repository, PR, immutable digest,
+and expected head. Each operation names one source finding, target node/database/
+thread identity, expected target state, expected authenticated writer, expected
+immutable source actor, classification, evidence digest, payload, and any
+returned identity for an already-applied operation. Its compatibility commands
+remain:
 
 ```bash
 python3 scripts/secpal-pr-review-actions.py inspect-actor
@@ -181,7 +233,9 @@ python3 scripts/secpal-pr-review-actions.py react \
   --expected-head HEAD
 ```
 
-The second example is audit mode: it performs one bounded current-target read
+The `validate-plan` example is forensic audit mode. The `react`, `reply`, and
+individual `resolve` commands remain compatible for explicitly selected
+forensic processing; they are not the normal remediation path. Audit mode performs one bounded current-target read
 and zero writes. An individually authorized operation additionally requires
 `--apply`. `reply` has the same anchors. `resolve` also requires
 `--initial-snapshot` and refuses the write until final evidence proves clean and
@@ -228,9 +282,16 @@ lists. Remediation readiness requires one new linear commit per recorded signed
 push. After the live required-check verification, the helper repeats the
 bounded PR-wide feedback and exact target-thread reads before resolving.
 
-## Snapshot changes, CI, and recovery
+## Fast-path freshness, forensic snapshots, CI, and recovery
 
-The initial snapshot never changes. The one post-cycle-1 capture and one final
+The normal path compares one post-push stable-feedback projection with the
+reviewed feedback, allowing only same-batch prior resolutions proven by matching
+operation evidence. Required Checks are evaluated separately immediately before
+that comparison, so a same-head CI transition never changes stable equality.
+Any unexpected head, comment, reaction, or thread-state change blocks before
+the first write.
+
+In explicit forensic mode, the initial snapshot never changes. The one post-cycle-1 capture and one final
 capture are comparisons, not extensions. A signed remediation commit may advance
 the final head only as a verified descendant that retains every initial commit;
 any other head movement or new/edited review feedback ends the invocation and

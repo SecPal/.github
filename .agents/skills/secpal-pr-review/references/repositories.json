@@ -51,7 +51,7 @@
           "purpose": "Lint Markdown"
         },
         {
-          "argv": ["reuse", "lint"],
+          "argv": ["./scripts/preflight.sh", "--reuse-tracked-only"],
           "working_directory": ".",
           "purpose": "Validate REUSE metadata"
         }

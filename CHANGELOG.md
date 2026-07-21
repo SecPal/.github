@@ -9,6 +9,25 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-21 - Add Fast PR Feedback Remediation Path
+
+**Changed:**
+
+- made canonical stable feedback independent from volatile Required Checks and
+  added one staged-tree validation receipt that is bound to the exact signed
+  remediation commit without rerunning complete validation
+- added one guarded batch-resolution path that verifies readiness, Required
+  Checks, attestation, and full feedback once, then performs only minimum target
+  checks between ordered writes with fail-closed partial-result reporting
+- selected local SSH verification for user commits and GitHub verification
+  metadata for GitHub-generated commits, treating a missing local GitHub GPG key
+  as unknown rather than invalid
+- limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
+  ignored session scratch files cannot block a push while tracked violations
+  remain enforced
+
+---
+
 ## 2026-07-20 - Add Finite PR Feedback Remediation Workflow
 
 **Added:**

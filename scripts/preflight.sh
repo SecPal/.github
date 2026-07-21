@@ -7,6 +7,36 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
+run_reuse_tracked() {
+  local reuse_workspace file target_dir
+  reuse_workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-reuse.XXXXXX")"
+  while IFS= read -r -d '' file; do
+    if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+      continue
+    fi
+    target_dir="$reuse_workspace"
+    case "$file" in
+      */*) target_dir="$reuse_workspace/${file%/*}" ;;
+    esac
+    mkdir -p "$target_dir"
+    cp -P "./$file" "$reuse_workspace/$file"
+  done < <(git ls-files -z)
+  if ! (cd "$reuse_workspace" && reuse lint); then
+    rm -rf "$reuse_workspace"
+    return 1
+  fi
+  rm -rf "$reuse_workspace"
+}
+
+if [ "${1:-}" = "--reuse-tracked-only" ] && [ "$#" -eq 1 ]; then
+  run_reuse_tracked
+  exit $?
+fi
+if [ "$#" -ne 0 ]; then
+  echo "Unsupported preflight argument" >&2
+  exit 2
+fi
+
 # Check if pushing from a protected branch
 # NOTE: Keep this list in sync with .pre-commit-config.yaml (no-commit-to-branch hook)
 CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
@@ -48,12 +78,15 @@ git fetch origin "$BASE" 2>/dev/null || true
 # 0) Formatting & Compliance
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
-  npx --yes prettier@3.5.3 --check '**/*.{md,yml,yaml,json,ts,tsx,js,jsx}' || FORMAT_EXIT=1
+  git ls-files -z -- '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' '*.js' '*.jsx' \
+    | xargs -0 npx --yes prettier@3.5.3 --check -- || FORMAT_EXIT=1
   if [ -x ./node_modules/.bin/markdownlint ]; then
-    ./node_modules/.bin/markdownlint --config .markdownlint.json --dot '**/*.md' --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git || FORMAT_EXIT=1
+    git ls-files -z -- '*.md' \
+      | xargs -0 ./node_modules/.bin/markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
   else
     echo "ℹ️  markdownlint not found in node_modules — run 'npm ci' first for reproducible linting." >&2
-    npx --yes --package markdownlint-cli@0.49.0 markdownlint --config .markdownlint.json --dot '**/*.md' --ignore node_modules --ignore vendor --ignore storage --ignore build --ignore .git || FORMAT_EXIT=1
+    git ls-files -z -- '*.md' \
+      | xargs -0 npx --yes --package markdownlint-cli@0.49.0 markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
   fi
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.
@@ -68,7 +101,7 @@ if [ -d .github/workflows ]; then
   fi
 fi
 if command -v reuse >/dev/null 2>&1; then
-  reuse lint || FORMAT_EXIT=1
+  run_reuse_tracked || FORMAT_EXIT=1
 fi
 if [ "$FORMAT_EXIT" -ne 0 ]; then
   echo "Formatting/compliance checks failed. Fix issues above." >&2
