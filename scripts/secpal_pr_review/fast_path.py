@@ -941,6 +941,12 @@ def verify_commit_signatures(
                 and local.get("format") in accepted
             ):
                 raise SecurityBlocker(f"invalid or unsigned user-authored commit: {oid}")
+            if policy.get("require_github_verified") is True and not (
+                github.get("verified") is True and github.get("reason") == "valid"
+            ):
+                raise SecurityBlocker(
+                    f"GitHub verification rejected user-authored commit: {oid}"
+                )
             signature_format = local["format"]
             verified.append(
                 {

@@ -20,8 +20,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   Checks, attestation, and full feedback once, then performs bounded target
   feedback checks between ordered writes with fail-closed partial-result reporting
 - selected configured local SSH/OpenPGP verification for user commits and
-  GitHub verification metadata for GitHub-generated commits, treating a missing
-  local GitHub GPG key as unknown rather than invalid
+  required GitHub verification metadata for both configured user commits and
+  GitHub-generated commits, treating a missing local GitHub GPG key as unknown
+  rather than invalid
 - hardened the fast path to bind the reviewed base, enumerate required checks
   from live rules, enforce a sole-parent remediation commit, honor configured
   SSH/OpenPGP formats, compare last-moment PR/base/thread feedback, preserve

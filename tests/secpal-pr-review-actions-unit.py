@@ -5823,6 +5823,40 @@ class FastPathTests(TestCase):
         with self.assertRaises(fast_path.SecurityBlocker):
             fast_path.verify_commit_signatures([github_invalid])
 
+    def test_user_commit_honors_required_github_verification(self) -> None:
+        commit = {
+            "oid": "1" * 40,
+            "source": "USER",
+            "local_signature": {
+                "verified": True,
+                "state": "valid",
+                "format": "ssh",
+            },
+            "github_verification": {
+                "verified": False,
+                "reason": "unknown_key",
+            },
+        }
+        policy = {
+            "require_github_verified": True,
+            "require_local_verified": True,
+            "accepted_formats": ["ssh", "openpgp"],
+        }
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "GitHub verification rejected user-authored commit",
+        ):
+            fast_path.verify_commit_signatures([commit], policy)
+
+        commit["github_verification"] = {"verified": True, "reason": "valid"}
+        self.assertEqual(
+            fast_path.verify_commit_signatures([commit], policy)[0][
+                "classification"
+            ],
+            "LOCAL_SSH_VERIFIED",
+        )
+
     def test_successful_batch_reports_every_thread_category(self) -> None:
         reviewed = fast_feedback(4)
         result = self.execute(reviewed, FakeFastGateway(reviewed), 4)

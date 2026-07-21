@@ -258,11 +258,12 @@ persistence fails after a mutation, the helper stops and emits the complete
 in-memory applied/failed/blocked evidence to standard error for manual recovery.
 
 User-authored commits are verified locally and must satisfy the configured SSH
-or OpenPGP signing policy. GitHub-generated web, squash, and merge commits use GitHub
-verification metadata and require `verified = true` with `reason = valid`.
-Missing local GitHub GPG key material is `UNKNOWN_LOCAL_KEY`, not an invalid
-signature, and does not require key import. Each commit is classified once per
-invocation.
+or OpenPGP signing policy. When `require_github_verified` is enabled, they must
+also have GitHub verification metadata with `verified = true` and
+`reason = valid`. GitHub-generated web, squash, and merge commits use that
+GitHub verification metadata. Missing local GitHub GPG key material is
+`UNKNOWN_LOCAL_KEY`, not an invalid signature, and does not require key import.
+Each commit is classified once per invocation.
 
 ## Forensic mutation-plan and action-helper contract
 
@@ -415,7 +416,7 @@ after detection.
 | `BLOCKED_UNCLEAN_WORKTREE`                | Worktree is not clean at entry or a required cleanliness check                                                                              | None when found at entry; otherwise prior policy writes                    | Exact status paths without changing them                                                | Yes after the user restores/accepts state                                     |
 | `BLOCKED_HEAD_MOVED`                      | Local, remote, or PR head differs from the expected anchor at any check                                                                     | None before feedback capture; otherwise prior policy writes                | Expected and observed OIDs and detection state                                          | Yes                                                                           |
 | `BLOCKED_UNEXPLAINED_COMMIT`              | Exact PR commit set contains a commit not explained by the reviewed session                                                                 | None                                                                       | Commit OIDs and why provenance is unexplained                                           | Yes after user decision                                                       |
-| `BLOCKED_INVALID_SIGNATURE`               | A user commit lacks a locally valid configured SSH/OpenPGP signature, or a GitHub-generated commit lacks valid GitHub verification metadata | No correction/push/resolution; prior policy writes possible if found later | Commit source and selected verification evidence                                        | Yes after new signed history is user-authorized; never amend reviewed commits |
+| `BLOCKED_INVALID_SIGNATURE`               | A user commit lacks required local SSH/OpenPGP or GitHub verification, or GitHub-generated commits lack valid GitHub verification metadata. | No correction/push/resolution; prior policy writes possible if found later | Commit source and selected verification evidence                                        | Yes after new signed history is user-authorized; never amend reviewed commits |
 | `BLOCKED_INCOMPLETE_REVIEW_STATE`         | Snapshot/check/rule pagination or evidence is incomplete, digest mismatches, or late feedback appears                                       | Prior policy writes only                                                   | Completeness blocker, digest/head anchors, and late item IDs when applicable            | Yes                                                                           |
 | `BLOCKED_FAILED_OR_PENDING_CI`            | Any required check is failed, pending, missing, skipped contrary to policy, or unknown                                                      | Prior policy writes; no resolution                                         | Exact required-check evidence                                                           | Yes; no polling in this invocation                                            |
 | `BLOCKED_UNRESOLVED_MATERIAL_FINDING`     | A material finding remains valid, ambiguous, conflicting, or lacks safe disposition                                                         | Prior policy writes; no resolution of affected thread                      | Finding IDs, proof gap, and cycle count                                                 | Yes after user direction or new evidence                                      |

@@ -26,8 +26,9 @@ SecPal/api PR #123. Do not request another review or merge.
 Do not invoke it for generic review, PR creation, review requests, CI-only
 debugging, ordinary implementation, or a merge-only request. Entry requires a
 clean current topic branch, configured upstream, matching local/remote/PR heads,
-an open PR, a fully explained commit set, source-appropriate signature evidence,
-and one canonical stable-feedback read.
+an open PR, a fully explained commit set, source-appropriate signature evidence
+including GitHub verification for user commits when configured, and one
+canonical stable-feedback read.
 
 The production registry explicitly supports:
 

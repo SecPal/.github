@@ -19,7 +19,8 @@ Require all of the following before starting:
 - matching local, remote, and PR head OIDs;
 - an open pull request, an understood base, and an exact explained commit set;
 - locally verified SSH or OpenPGP signatures for user-authored commits, as
-  permitted by the repository registry;
+  permitted by the repository registry, plus valid GitHub verification metadata
+  when the registry requires it;
 - GitHub `verified: true`, `reason: valid` metadata for GitHub-generated
   commits; and
 - one canonical stable-feedback read containing no Required Check results.
