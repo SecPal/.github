@@ -4088,6 +4088,20 @@ class FastPathTests(TestCase):
             with self.assertRaisesRegex(RuntimeError, "unexpected path"):
                 actions._load_fast_path_helper()
 
+    def test_fast_path_loader_removes_a_partially_initialized_module(self) -> None:
+        module_name = "secpal_pr_review.fast_path"
+        partial_module = SimpleNamespace(__file__=str(actions.FAST_PATH_HELPER))
+        loader = SimpleNamespace(exec_module=mock.Mock(side_effect=SyntaxError("broken")))
+        spec = SimpleNamespace(name=module_name, loader=loader)
+        with (
+            mock.patch.dict(actions.sys.modules, {module_name: None}),
+            mock.patch.object(actions.importlib.util, "spec_from_file_location", return_value=spec),
+            mock.patch.object(actions.importlib.util, "module_from_spec", return_value=partial_module),
+        ):
+            with self.assertRaisesRegex(SyntaxError, "broken"):
+                actions._load_fast_path_helper()
+            self.assertIsNone(actions.sys.modules.get(module_name))
+
     def test_batch_request_identity_must_match_reviewed_feedback(self) -> None:
         reviewed = fast_feedback()
         mismatches = {
@@ -4129,6 +4143,17 @@ class FastPathTests(TestCase):
             FakeFastGateway(current),
         )
         self.assertEqual(result["status"], "BATCH_APPLIED")
+
+    def test_batch_schema_accepts_graphql_ids_with_padding(self) -> None:
+        payload = fast_request(fast_feedback(), 1).to_dict()
+        payload["expected_actor"]["node_id"] = "U_kgDOD9_SfQ=="
+        actions._validate_schema(
+            payload,
+            actions.FAST_BATCH_SCHEMA_PATH,
+            "fast batch",
+            actions.PlanError,
+        )
+        fast_path.BatchRequest.from_dict(payload)
 
     def test_attestation_receipt_requires_matching_reviewed_identity(self) -> None:
         arguments = SimpleNamespace(
@@ -4299,6 +4324,73 @@ class FastPathTests(TestCase):
         ):
             gateway.read_preflight(fast_request(fast_feedback()))
 
+    def test_required_checks_use_the_allowlisted_graphql_read(self) -> None:
+        runner = SimpleNamespace(
+            run=mock.Mock(
+                return_value={
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "headRefOid": p21.HEAD,
+                                "commits": {
+                                    "nodes": [
+                                        {
+                                            "commit": {
+                                                "oid": p21.HEAD,
+                                                "statusCheckRollup": {
+                                                    "contexts": {
+                                                        "nodes": [
+                                                            {
+                                                                "__typename": "CheckRun",
+                                                                "name": "tests",
+                                                                "status": "COMPLETED",
+                                                                "conclusion": "SUCCESS",
+                                                                "isRequired": True,
+                                                            },
+                                                            {
+                                                                "__typename": "StatusContext",
+                                                                "context": "legacy",
+                                                                "state": "SUCCESS",
+                                                                "isRequired": True,
+                                                            },
+                                                            {
+                                                                "__typename": "CheckRun",
+                                                                "name": "optional",
+                                                                "status": "COMPLETED",
+                                                                "conclusion": "SUCCESS",
+                                                                "isRequired": False,
+                                                            },
+                                                        ],
+                                                        "pageInfo": {
+                                                            "hasNextPage": False,
+                                                            "endCursor": None,
+                                                        },
+                                                    }
+                                                },
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        gateway = actions.FastPathGateway(
+            REPO_ROOT,
+            github=SimpleNamespace(runner=runner),
+        )
+        self.assertEqual(
+            gateway.read_required_checks(fast_request(fast_feedback())),
+            [
+                {"name": "tests", "status": "SUCCESS", "required": True},
+                {"name": "legacy", "status": "SUCCESS", "required": True},
+            ],
+        )
+        runner.run.assert_called_once()
+        actions._validate_action_command(runner.run.call_args.args[0])
+
     def test_fast_preflight_queries_the_signature_signer_as_a_user(self) -> None:
         signer_selection = actions.FAST_PATH_PREFLIGHT_QUERY.split("signer {", 1)[1]
         signer_selection = signer_selection.split("}", 1)[0]
@@ -4411,6 +4503,18 @@ class FastPathTests(TestCase):
         gateway.fail_feedback_reads = 1
         self.assertEqual(self.execute(reviewed, gateway)["status"], "BATCH_APPLIED")
         self.assertEqual(gateway.calls.count(("READ", "stable-feedback")), 2)
+
+    def test_exhausted_transient_read_has_performed_exactly_one_retry(self) -> None:
+        attempts = 0
+
+        def fail() -> None:
+            nonlocal attempts
+            attempts += 1
+            raise fast_path.TransientReadFailure("still unavailable")
+
+        with self.assertRaises(fast_path.TransientReadFailure):
+            fast_path._read_with_one_retry(fail)
+        self.assertEqual(attempts, 2)
 
     def test_mutation_failure_and_unknown_result_are_never_retried(self) -> None:
         for attribute, expected_status in (

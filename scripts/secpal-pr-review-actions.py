@@ -77,7 +77,12 @@ def _load_fast_path_helper() -> Any:
         raise RuntimeError(f"Cannot load fast-path helper: {FAST_PATH_HELPER}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get(spec.name) is module:
+            sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
@@ -1184,6 +1189,43 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
 """
 
 
+FAST_PATH_REQUIRED_CHECKS_QUERY = r"""
+query FastPathRequiredChecks($owner:String!, $name:String!, $number:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      headRefOid
+      commits(last:1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              contexts(first:100, after:$after) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    name
+                    status
+                    conclusion
+                    isRequired(pullRequestNumber:$number)
+                  }
+                  ... on StatusContext {
+                    context
+                    state
+                    isRequired(pullRequestNumber:$number)
+                  }
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
 CURRENT_MUTATION_TARGET_QUERY = r"""
 query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $targetNodeId:ID!, $threadNodeId:ID!) {
   viewer { id databaseId login }
@@ -1407,6 +1449,7 @@ def _validate_action_command(arguments: list[str]) -> None:
             VIEWER_IDENTITY_QUERY,
             CURRENT_REQUIRED_CHECKS_QUERY,
             FAST_PATH_PREFLIGHT_QUERY,
+            FAST_PATH_REQUIRED_CHECKS_QUERY,
         }:
             raise MutationBlocked("GraphQL document is not exactly allowlisted")
         variable_arguments = arguments[7:]
@@ -1450,6 +1493,13 @@ def _validate_action_command(arguments: list[str]) -> None:
                 "oid": "-f",
             }
             optional_variables = {"after": "-f"}
+        elif query == FAST_PATH_REQUIRED_CHECKS_QUERY:
+            expected_variables = {
+                "owner": "-f",
+                "name": "-f",
+                "number": "-F",
+            }
+            optional_variables = {"after": "-f"}
         else:
             expected_variables = {
                 "owner": "-f",
@@ -1462,7 +1512,12 @@ def _validate_action_command(arguments: list[str]) -> None:
             **expected_variables,
             **(
                 optional_variables
-                if query in {CURRENT_REVIEW_FEEDBACK_QUERY, CURRENT_REQUIRED_CHECKS_QUERY}
+                if query
+                in {
+                    CURRENT_REVIEW_FEEDBACK_QUERY,
+                    CURRENT_REQUIRED_CHECKS_QUERY,
+                    FAST_PATH_REQUIRED_CHECKS_QUERY,
+                }
                 else {}
             ),
         }
@@ -2490,56 +2545,90 @@ class FastPathGateway:
         )
 
     def read_required_checks(self, request: Any) -> list[dict[str, Any]]:
-        arguments = [
-            self.github.runner.executable_path,
-            "pr",
-            "checks",
-            str(request.pull_request_number),
-            "--repo",
-            request.repository,
-            "--required",
-            "--json",
-            "name,state,bucket,link",
-        ]
-        try:
-            completed = subprocess.run(
-                arguments,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=evidence.command_environment("gh"),
-                timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise fast_path.TransientReadFailure("required-check read failed") from exc
-        if completed.returncode not in {0, 1, 8}:
-            raise fast_path.TransientReadFailure(
-                evidence.redact_diagnostic(completed.stderr or "required-check read failed")
-            )
-        try:
-            checks = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise fast_path.TransientReadFailure(
-                "required-check read returned malformed JSON"
-            ) from exc
-        if not isinstance(checks, list):
-            raise fast_path.TransientReadFailure("required-check read is incomplete")
-        return [
-            {
-                "name": item.get("name"),
-                "status": (
-                    "SUCCESS"
-                    if item.get("bucket") == "pass"
-                    else str(item.get("state") or item.get("bucket") or "UNKNOWN").upper()
-                ),
-                "required": True,
+        owner, name = request.repository.split("/", 1)
+        checks: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            variables: dict[str, Any] = {
+                "owner": owner,
+                "name": name,
+                "number": request.pull_request_number,
             }
-            for item in checks
-            if isinstance(item, dict)
-        ]
+            if cursor is not None:
+                variables["after"] = cursor
+            try:
+                payload = self.github.runner.run(
+                    _graphql_arguments(FAST_PATH_REQUIRED_CHECKS_QUERY, variables)
+                )
+                pull_request = payload["data"]["repository"]["pullRequest"]
+                commit_nodes = pull_request["commits"]["nodes"]
+            except (ActionCommandFailure, MutationFailure, KeyError, TypeError) as exc:
+                raise fast_path.TransientReadFailure(
+                    "required-check read returned incomplete evidence"
+                ) from exc
+            if pull_request.get("headRefOid") != request.expected_head_sha:
+                raise fast_path.SecurityBlocker(
+                    "required-check target head does not match the batch head"
+                )
+            if not isinstance(commit_nodes, list) or len(commit_nodes) != 1:
+                raise fast_path.TransientReadFailure(
+                    "required-check commit evidence is incomplete"
+                )
+            commit = commit_nodes[0].get("commit")
+            if not isinstance(commit, dict) or commit.get("oid") != request.expected_head_sha:
+                raise fast_path.SecurityBlocker(
+                    "required-check commit does not match the batch head"
+                )
+            rollup = commit.get("statusCheckRollup")
+            if rollup is None:
+                return []
+            if not isinstance(rollup, dict):
+                raise fast_path.TransientReadFailure(
+                    "required-check rollup evidence is incomplete"
+                )
+            try:
+                nodes, next_cursor = _page_nodes(
+                    rollup.get("contexts"), "fast-path required checks"
+                )
+            except MutationBlocked as exc:
+                raise fast_path.SecurityBlocker(str(exc)) from exc
+            for item in nodes:
+                typename = item.get("__typename")
+                required = item.get("isRequired")
+                if typename not in {"CheckRun", "StatusContext"} or not isinstance(
+                    required, bool
+                ):
+                    raise fast_path.TransientReadFailure(
+                        "required-check context evidence is incomplete"
+                    )
+                if not required:
+                    continue
+                if typename == "CheckRun":
+                    check_name = item.get("name")
+                    check_status = (
+                        item.get("conclusion")
+                        if item.get("status") == "COMPLETED"
+                        else item.get("status")
+                    )
+                else:
+                    check_name = item.get("context")
+                    check_status = item.get("state")
+                checks.append(
+                    {
+                        "name": check_name,
+                        "status": str(check_status or "UNKNOWN").upper(),
+                        "required": True,
+                    }
+                )
+            if next_cursor is None:
+                return checks
+            if next_cursor in seen_cursors:
+                raise fast_path.SecurityBlocker(
+                    "required-check pagination did not advance"
+                )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
 
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         try:
