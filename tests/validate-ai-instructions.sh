@@ -333,6 +333,36 @@ no_overlays_output="$workspace/no-overlays.output"
 assert_passes "$no_overlays_repo" "$no_overlays_output"
 grep -qF 'Skipped (no focused instruction files present)' "$no_overlays_output"
 
+# The pinned js-yaml 5 package exposes its CommonJS entry point through
+# package.json instead of a root index.js. Exercise that installed layout in an
+# isolated validator toolchain so the validator must use Node's package
+# resolution rather than assume a package entry-point filename.
+installed_yaml_root="$workspace/js-yaml-5-toolchain"
+installed_yaml_validator="$installed_yaml_root/scripts/validate-ai-instructions.sh"
+installed_yaml_repo="$installed_yaml_root/repository"
+mkdir -p "$installed_yaml_root/scripts" "$installed_yaml_root/node_modules"
+cp "$VALIDATOR" "$installed_yaml_validator"
+cp -R "$REPO_ROOT/node_modules/js-yaml" "$installed_yaml_root/node_modules/js-yaml"
+cp -R "$REPO_ROOT/node_modules/argparse" "$installed_yaml_root/node_modules/argparse"
+copy_valid_repo "$valid_repo" "$installed_yaml_repo"
+
+if [ -e "$installed_yaml_root/node_modules/js-yaml/index.js" ]; then
+    echo "js-yaml 5 regression fixture must not contain a root index.js" >&2
+    exit 1
+fi
+
+installed_yaml_output="$workspace/js-yaml-5-toolchain.output"
+if ! (
+    cd "$installed_yaml_repo"
+    PATH="$REPO_ROOT/node_modules/.bin:$PATH" \
+        REPO_TYPE=org bash "$installed_yaml_validator"
+) >"$installed_yaml_output" 2>&1; then
+    sed -n '1,240p' "$installed_yaml_output" >&2
+    echo "validator must load the installed js-yaml 5 package layout" >&2
+    exit 1
+fi
+grep -qF 'instruction overlays include valid frontmatter' "$installed_yaml_output"
+
 # Focused frontmatter must fail closed when the repository-pinned YAML parser
 # is unavailable, even if Markdownlint itself is available globally.
 isolated_yaml_root="$workspace/no-frontmatter-yaml-toolchain"

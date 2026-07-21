@@ -6341,6 +6341,8 @@ mkdir -p "$missing_toolchain_source_dir" \
 cp "$PYTHON_SCRIPT" "$missing_toolchain_source_script"
 cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
     "$missing_toolchain_source_dir/validate-ai-instructions.sh"
+cp "$REPO_ROOT/scripts/verify-js-yaml-package.cjs" \
+    "$missing_toolchain_source_dir/verify-js-yaml-package.cjs"
 cp "$REPO_ROOT/scripts/polyscope_nginx.py" \
     "$missing_toolchain_source_dir/polyscope_nginx.py"
 cp "$REPO_ROOT/scripts/secpal-polyscope-nginx-apply.py" \

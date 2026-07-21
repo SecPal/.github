@@ -209,6 +209,11 @@ if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
     echo "Error: canonical instruction validator is missing or not executable next to the rollout source: $VALIDATOR_SOURCE" >&2
     exit 1
 fi
+VALIDATOR_YAML_CHECK="$(dirname -- "$SOURCE_SCRIPT")/verify-js-yaml-package.cjs"
+if [[ ! -f "$VALIDATOR_YAML_CHECK" ]]; then
+    echo "Error: canonical js-yaml verifier is missing next to the rollout source: $VALIDATOR_YAML_CHECK" >&2
+    exit 1
+fi
 NGINX_LIBRARY_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/polyscope_nginx.py"
 NGINX_HELPER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal-polyscope-nginx-apply.py"
 if [[ ! -f "$NGINX_LIBRARY_SOURCE" || ! -x "$NGINX_HELPER_SOURCE" ]]; then
@@ -220,7 +225,7 @@ VALIDATOR_TOOLCHAIN_ROOT="$(cd -- "$(dirname -- "$SOURCE_SCRIPT")/.." && pwd)"
 VALIDATOR_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/package-lock.json"
 VALIDATOR_INSTALLED_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.package-lock.json"
 VALIDATOR_MARKDOWNLINT="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint"
-VALIDATOR_YAML_MODULE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml/index.js"
+VALIDATOR_YAML_PACKAGE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
 
 for _validator_tool in bash basename dirname find grep head node python3 wc; do
     if ! PATH="$SERVICE_PATH" command -v "$_validator_tool" >/dev/null 2>&1; then
@@ -229,10 +234,15 @@ for _validator_tool in bash basename dirname find grep head node python3 wc; do
     fi
 done
 
+validator_yaml_usable() {
+    PATH="$SERVICE_PATH" node \
+        "$VALIDATOR_YAML_CHECK" "$VALIDATOR_YAML_PACKAGE" >/dev/null 2>&1
+}
+
 if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     || ! -f "$VALIDATOR_INSTALLED_PACKAGE_LOCK" \
-    || ! -x "$VALIDATOR_MARKDOWNLINT" \
-    || ! -f "$VALIDATOR_YAML_MODULE" ]]; then
+    || ! -x "$VALIDATOR_MARKDOWNLINT" ]] \
+    || ! validator_yaml_usable; then
     echo "Error: rollout validator toolchain is incomplete; install the source bundle's committed npm dependencies before installing the rollout." >&2
     exit 1
 fi
