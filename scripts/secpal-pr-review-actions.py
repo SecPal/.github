@@ -225,9 +225,7 @@ REPLY_CLASSIFICATIONS = {
 STATUS_REPLY = re.compile(
     r"(?is)^\s*(?:fixed|addressed|resolved|done)\b.*$|^\s*status\s*:.*$"
 )
-SECRET_VALUE = re.compile(
-    r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
-)
+SECRET_VALUE = fast_path.SECRET_VALUE
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SAFE_COMMAND_NAME = re.compile(r"^(?:[A-Za-z0-9_.+-]+|\./[A-Za-z0-9_./+-]+)$")
@@ -1167,6 +1165,7 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
       baseRefOid
       baseRepository { nameWithOwner }
       mergeable
+      mergeStateStatus
       headRepository { nameWithOwner }
       commits(first:100) {
         nodes {
@@ -1200,7 +1199,7 @@ query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $target
   viewer { id databaseId login }
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      id headRefOid baseRefName baseRefOid state
+      id headRefOid baseRefName baseRefOid state mergeable mergeStateStatus
     }
   }
   node(id:$targetNodeId) {
@@ -2205,6 +2204,10 @@ class LiveGitHub:
             "pr_state": pull_request.get("state"),
             "base_ref": pull_request.get("baseRefName"),
             "base_sha": pull_request.get("baseRefOid"),
+            "mergeability": str(pull_request.get("mergeable") or "UNKNOWN"),
+            "merge_state_status": str(
+                pull_request.get("mergeStateStatus") or "UNKNOWN"
+            ),
             "actor": _actor(target_author),
             "viewer": _actor(data.get("viewer")),
             "target": {
@@ -2358,11 +2361,20 @@ class FastPathGateway:
     def __init__(
         self,
         repository_root: Path,
+        registry_entry: dict[str, Any],
         github: LiveGitHub | None = None,
     ) -> None:
         self.repository_root = repository_root.resolve(strict=True)
         if not self.repository_root.is_dir():
             raise fast_path.RecoverableLocalError("repository root is not a directory")
+        if (
+            not isinstance(registry_entry, dict)
+            or not isinstance(registry_entry.get("repository"), str)
+        ):
+            raise fast_path.SecurityBlocker(
+                "selected feedback registry entry is malformed"
+            )
+        self.registry_entry = copy.deepcopy(registry_entry)
         self.github = github or LiveGitHub()
         try:
             self.git_executable = evidence.resolve_trusted_executable("git")
@@ -2527,6 +2539,9 @@ class FastPathGateway:
             worktree_clean=not status.strip(),
             pull_request_open=pull_request.get("state") == "OPEN",
             mergeability=str(pull_request.get("mergeable") or "UNKNOWN"),
+            merge_state_status=str(
+                pull_request.get("mergeStateStatus") or "UNKNOWN"
+            ),
             actor=viewer,
             commits=commits,
         )
@@ -2747,17 +2762,39 @@ class FastPathGateway:
         )
         checks = merge_checks if check_source == "test_merge" else head_checks
         evidence._mark_effective_checks(checks)
+        ruleset_strict = policy.get("require_ruleset_evidence") is True and any(
+            item.get("type") == "required_status_checks"
+            and isinstance(item.get("parameters"), dict)
+            and item["parameters"].get("strict_required_status_checks_policy")
+            is True
+            and bool(item["parameters"].get("required_status_checks"))
+            for item in rulesets
+        )
+        branch_protection_strict = (
+            policy.get("require_branch_protection_evidence") is True
+            and branch_protection.get("strict") is True
+            and bool(
+                branch_protection.get("contexts")
+                or branch_protection.get("checks")
+            )
+        )
         return {
             "checks": checks,
             "required_specs": required_specs,
+            "strict_base_required": (
+                ruleset_strict or branch_protection_strict
+            ),
         }
 
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         try:
-            limits = select_repository(load_registry(), repository)
+            if self.registry_entry.get("repository") != repository:
+                raise fast_path.SecurityBlocker(
+                    "selected feedback registry repository does not match the request"
+                )
             result = self.github._read_current_feedback_once(
                 {"repository": repository, "pull_request_number": pull_request_number},
-                limits,
+                self.registry_entry,
                 {"calls": 0},
             )
         except (ActionCommandFailure, MutationFailure) as exc:
@@ -2799,6 +2836,8 @@ class FastPathGateway:
             "pr_state": value["pr_state"],
             "base_ref": value["base_ref"],
             "base_sha": value["base_sha"],
+            "mergeability": value["mergeability"],
+            "merge_state_status": value["merge_state_status"],
             "is_resolved": value["target"]["is_resolved"],
             "thread": {
                 "node_id": value["target"]["parent_thread_id"],
@@ -4277,7 +4316,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
 
 def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     repository_root = Path(arguments.repo_root).resolve(strict=True)
-    gateway = FastPathGateway(repository_root)
+    registry = load_registry(arguments.registry)
+    entry = select_repository(registry, arguments.repo)
+    binding = _fast_registry_binding(entry)
+    gateway = FastPathGateway(repository_root, entry)
     if arguments.capture_reviewed_state:
         if any(
             (
@@ -4314,9 +4356,6 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker("explicit repository or PR anchor mismatch")
     reviewed = _load_fast_state(arguments.reviewed_state)
     attestation = _read_json(arguments.attestation, "validation attestation")
-    registry = load_registry(arguments.registry)
-    entry = select_repository(registry, arguments.repo)
-    binding = _fast_registry_binding(entry)
     if arguments.output:
         _write_fast_report(
             arguments.output,

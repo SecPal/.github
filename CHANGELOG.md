@@ -31,6 +31,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   evidence, validated tree, and deterministic receipt digest to one signed
   commit trailer; rejected reopened prior resolutions and allowed only GitHub's
   derived false-to-true outdated transition after the attested remediation push
+- bound capture and freshness to the explicitly selected registry, required
+  source-backed classification coverage for every unresolved-thread comment,
+  enforced strict and last-moment merge-state blockers, and rejected
+  secret-like batch or manual-gate evidence before persisting artifacts
 - limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
   ignored session scratch files cannot block a push while tracked violations
   remain enforced

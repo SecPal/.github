@@ -202,7 +202,9 @@ python3 scripts/secpal-pr-review-actions.py resolve-batch \
 
 `manual-gates.json` is an ordered JSON array with exactly one
 `{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object
-per registered gate. The capture reads one canonical projection containing feedback identities,
+per registered gate. Evidence containing a token prefix, bearer authorization,
+or private-key marker is rejected rather than copied into the receipt. The
+capture reads one canonical projection containing feedback identities,
 digests, states, reactions, actors, the current head, and the reviewed base
 branch/SHA. It excludes Required
 Checks. The complete run produces a staged-tree receipt that includes the
@@ -214,8 +216,14 @@ result, validated tree, signed receipt, manual gates, and reviewed-feedback
 digests. The batch reconstructs the receipt from the signed commit, verifies
 local/remote/PR heads, the registered default/base-repository boundary, clean
 worktree, actor, registry-permitted SSH/OpenPGP signatures, applicable
-rules/Required Checks, and current stable feedback once. Each target check also
-compares the open PR/base state and bounded thread comments and reactions
+rules/Required Checks, strict-base/merge-state policy, and current stable
+feedback once. Capture and freshness use the same explicitly selected registry
+entry as attestation and checks. Schema version 1.1 requires a classified
+finding record for every comment in every unresolved thread. Those records bind
+source IDs/body digests, classification-compatible dispositions, evidence
+digests, and fixed-finding test/commit proof; each resolution names its finding
+IDs instead of carrying an unverified disposition. Each target check also
+compares the open PR/base/merge state and bounded thread comments and reactions
 already returned by the target query. Thirty resolutions therefore use one attestation verification,
 one logical rule/Required Check read, one freshness read, thirty target checks,
 thirty writes, and zero complete-validation or full-feedback reruns between

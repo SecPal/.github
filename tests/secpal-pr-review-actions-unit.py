@@ -3959,9 +3959,12 @@ def fast_attestation(reviewed: Any, *, head_sha: str = p21.HEAD) -> dict[str, An
 
 
 def fast_request(reviewed: Any, thread_count: int = 2) -> Any:
+    reviewed_threads = {
+        item["node_id"]: item for item in reviewed.feedback["threads"]
+    }
     return fast_path.BatchRequest.from_dict(
         {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "batch_id": "batch-001",
             "repository": "SecPal/.github",
             "pull_request_number": 1,
@@ -3975,12 +3978,33 @@ def fast_request(reviewed: Any, thread_count: int = 2) -> Any:
             },
             "reviewed_state_digest": reviewed.state_digest,
             "reviewed_feedback_digest": reviewed.feedback_digest,
+            "findings": [
+                {
+                    "finding_id": f"finding-{index}",
+                    "thread_id": f"THREAD_{index}",
+                    "source_comments": [
+                        {
+                            "comment_id": item["node_id"],
+                            "body_digest": item["body_digest"],
+                        }
+                        for item in reviewed_threads[f"THREAD_{index}"]["comments"]
+                    ],
+                    "source_subitem_id": None,
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "evidence_digest": digest(f"finding evidence {index}"),
+                    "test_evidence_digest": digest(f"test evidence {index}"),
+                    "commit_sha": p21.HEAD,
+                    "canonical_finding_id": None,
+                }
+                for index in range(1, thread_count + 1)
+            ],
             "operations": [
                 {
                     "operation_id": f"resolve-{index}",
                     "kind": "THREAD_RESOLUTION",
                     "thread_id": f"THREAD_{index}",
-                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": [f"finding-{index}"],
                 }
                 for index in range(1, thread_count + 1)
             ],
@@ -4023,6 +4047,8 @@ class FakeFastGateway:
         self.target_pr_state = "OPEN"
         self.target_base_ref = current_feedback.base_ref
         self.target_base_sha = current_feedback.base_sha
+        self.target_mergeability = "MERGEABLE"
+        self.target_merge_state_status = "CLEAN"
 
     def read_preflight(self, request: Any) -> Any:
         self.calls.append(("READ", "preflight"))
@@ -4051,6 +4077,7 @@ class FakeFastGateway:
             worktree_clean=True,
             pull_request_open=True,
             mergeability="MERGEABLE",
+            merge_state_status="CLEAN",
             actor={"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
             commits=copy.deepcopy(self.commits),
         )
@@ -4062,6 +4089,7 @@ class FakeFastGateway:
         return {
             "checks": copy.deepcopy(self.checks),
             "required_specs": copy.deepcopy(self.required_specs),
+            "strict_base_required": False,
         }
 
     def read_stable_feedback(self, _request: Any) -> Any:
@@ -4086,6 +4114,8 @@ class FakeFastGateway:
             "pr_state": self.target_pr_state,
             "base_ref": self.target_base_ref,
             "base_sha": self.target_base_sha,
+            "mergeability": self.target_mergeability,
+            "merge_state_status": self.target_merge_state_status,
             "is_resolved": thread["is_resolved"],
             "thread": copy.deepcopy(thread),
         }
@@ -4136,6 +4166,129 @@ class FastPathTests(TestCase):
         self.assertEqual(self.execute(reviewed, gateway)["status"], "BATCH_APPLIED")
         self.assertNotIn(("READ", "package-2.1-snapshot"), gateway.calls)
         self.assertNotIn(("READ", "package-2.2-snapshot"), gateway.calls)
+
+    def test_legacy_batch_without_classified_findings_is_rejected(self) -> None:
+        reviewed = fast_feedback(1)
+        payload = fast_request(reviewed, 1).to_dict()
+        payload["schema_version"] = "1.0"
+        payload.pop("findings", None)
+        payload["operations"] = [
+            {
+                "operation_id": "resolve-1",
+                "kind": "THREAD_RESOLUTION",
+                "thread_id": "THREAD_1",
+                "disposition": "NON_ACTIONABLE",
+            }
+        ]
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_batch_rejects_secret_like_identifiers(self) -> None:
+        payload = fast_request(fast_feedback()).to_dict()
+        payload["batch_id"] = "github_pat_example"
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "secret"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_batch_rejects_incompatible_classification_and_disposition(self) -> None:
+        payload = fast_request(fast_feedback()).to_dict()
+        payload["findings"][0].update(
+            classification="INFORMATIONAL",
+            disposition="CORRECTED_AND_VERIFIED",
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "incompatible"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_batch_requires_finding_coverage_for_every_unresolved_thread(self) -> None:
+        reviewed = fast_feedback()
+        payload = fast_request(reviewed).to_dict()
+        payload["findings"] = payload["findings"][:1]
+        payload["operations"] = payload["operations"][:1]
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "every unresolved"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_batch_finding_source_must_match_reviewed_comment(self) -> None:
+        reviewed = fast_feedback()
+        payload = fast_request(reviewed).to_dict()
+        payload["findings"][0]["source_comments"][0]["body_digest"] = digest(
+            "forged source"
+        )
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "source"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_batch_finding_and_operation_counts_honor_registry_item_limit(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        registry["limits"]["maximum_items"] = 3
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "item limit"):
+            fast_path.execute_resolution_batch(
+                fast_request(reviewed),
+                fast_attestation(reviewed),
+                reviewed,
+                registry,
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_corrected_finding_must_bind_the_remediation_head(self) -> None:
+        reviewed = fast_feedback()
+        alternate_commit = "f" * 40
+        payload = fast_request(reviewed).to_dict()
+        payload["findings"][0]["commit_sha"] = alternate_commit
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        gateway.commits.append(
+            {
+                "oid": alternate_commit,
+                "source": "USER",
+                "local_signature": {
+                    "verified": True,
+                    "state": "valid",
+                    "format": "ssh",
+                },
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "remediation head"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_fast_policy_tables_match_the_legacy_resolution_invariants(self) -> None:
+        self.assertEqual(fast_path.MERGE_STATE_POLICY, p21.review.MERGE_STATE_POLICY)
+        self.assertEqual(
+            set(fast_path.CLASSIFICATION_DISPOSITIONS),
+            actions.RESOLVABLE_CLASSIFICATIONS,
+        )
+        for classification, dispositions in fast_path.CLASSIFICATION_DISPOSITIONS.items():
+            self.assertEqual(
+                dispositions,
+                actions.DISPOSITION_POLICY[classification]
+                & actions.RESOLVABLE_DISPOSITIONS,
+            )
 
     def test_actions_uses_the_canonical_fast_path_module(self) -> None:
         self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
@@ -4203,12 +4356,27 @@ class FastPathTests(TestCase):
         current = fast_path.StableFeedbackState.from_payload(current_payload)
         payload = fast_request(reviewed).to_dict()
         payload["expected_head_sha"] = remediation_head
+        for finding_value in payload["findings"]:
+            finding_value["commit_sha"] = remediation_head
+        gateway = FakeFastGateway(current, reviewed)
+        gateway.commits.append(
+            {
+                "oid": remediation_head,
+                "source": "USER",
+                "local_signature": {
+                    "verified": True,
+                    "state": "valid",
+                    "format": "ssh",
+                },
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        )
         result = fast_path.execute_resolution_batch(
             fast_path.BatchRequest.from_dict(payload),
             fast_attestation(reviewed, head_sha=remediation_head),
             reviewed,
             fast_registry(),
-            FakeFastGateway(current, reviewed),
+            gateway,
         )
         self.assertEqual(result["status"], "BATCH_APPLIED")
 
@@ -4221,12 +4389,26 @@ class FastPathTests(TestCase):
         current = fast_path.StableFeedbackState.from_payload(current_payload)
         payload = fast_request(reviewed, 1).to_dict()
         payload["expected_head_sha"] = remediation_head
+        payload["findings"][0]["commit_sha"] = remediation_head
+        gateway = FakeFastGateway(current, reviewed)
+        gateway.commits.append(
+            {
+                "oid": remediation_head,
+                "source": "USER",
+                "local_signature": {
+                    "verified": True,
+                    "state": "valid",
+                    "format": "ssh",
+                },
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        )
         result = fast_path.execute_resolution_batch(
             fast_path.BatchRequest.from_dict(payload),
             fast_attestation(reviewed, head_sha=remediation_head),
             reviewed,
             fast_registry(),
-            FakeFastGateway(current, reviewed),
+            gateway,
         )
         self.assertEqual(result["status"], "BATCH_APPLIED")
 
@@ -4355,6 +4537,18 @@ class FastPathTests(TestCase):
                         "gate": binding["manual_gates"][0],
                         "satisfied": False,
                         "evidence": "not run",
+                    }
+                ],
+                binding["manual_gates"],
+            )
+
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "secret"):
+            fast_path.validate_manual_gate_evidence(
+                [
+                    {
+                        "gate": binding["manual_gates"][0],
+                        "satisfied": True,
+                        "evidence": "Authorization: Bearer example-token",
                     }
                 ],
                 binding["manual_gates"],
@@ -4735,7 +4929,11 @@ class FastPathTests(TestCase):
                 )
             )
         )
-        gateway = actions.FastPathGateway(REPO_ROOT, github=github)
+        gateway = actions.FastPathGateway(
+            REPO_ROOT,
+            registry_entry("SecPal/.github"),
+            github=github,
+        )
 
         def git_result(command: list[str], *, allow_failure: bool = False) -> Any:
             del allow_failure
@@ -4755,6 +4953,34 @@ class FastPathTests(TestCase):
             "configured upstream",
         ):
             gateway.read_preflight(fast_request(fast_feedback()))
+
+    def test_stable_feedback_uses_the_selected_registry_entry(self) -> None:
+        selected = registry_entry("SecPal/.github")
+        selected["maximum_comments"] = 1
+        payload = fast_feedback(1).to_dict()
+        for key in (
+            "schema_version",
+            "repository",
+            "pull_request_number",
+            "state_digest",
+            "feedback_digest",
+        ):
+            payload.pop(key)
+        read_feedback = mock.Mock(return_value=payload)
+        github = SimpleNamespace(_read_current_feedback_once=read_feedback)
+        with mock.patch.object(
+            actions,
+            "load_registry",
+            side_effect=AssertionError("default registry must not be reloaded"),
+        ):
+            gateway = actions.FastPathGateway(
+                REPO_ROOT,
+                selected,
+                github=github,
+            )
+            state = gateway.capture_stable_feedback("SecPal/.github", 1)
+        self.assertEqual(state.feedback_digest, fast_feedback(1).feedback_digest)
+        self.assertEqual(read_feedback.call_args.args[1], selected)
 
     def test_required_checks_use_the_allowlisted_graphql_read(self) -> None:
         check_payload = {
@@ -4836,6 +5062,7 @@ class FastPathTests(TestCase):
         runner = SimpleNamespace(run=mock.Mock(side_effect=run))
         gateway = actions.FastPathGateway(
             REPO_ROOT,
+            registry_entry("SecPal/.github"),
             github=SimpleNamespace(runner=runner),
         )
         result = gateway.read_required_checks(
@@ -4941,6 +5168,52 @@ class FastPathTests(TestCase):
                 fast_registry(),
                 gateway,
             )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_behind_merge_state_with_strict_checks_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        original_preflight = gateway.read_preflight
+        original_checks = gateway.read_required_checks
+
+        def behind(request_value: Any) -> Any:
+            readiness = original_preflight(request_value)
+            readiness.merge_state_status = "BEHIND"
+            return readiness
+
+        def strict_checks(
+            request_value: Any, registry_value: dict[str, Any]
+        ) -> dict[str, Any]:
+            result = original_checks(request_value, registry_value)
+            result["strict_base_required"] = True
+            return result
+
+        gateway.read_preflight = behind
+        gateway.read_required_checks = strict_checks
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "behind"):
+            self.execute(reviewed, gateway)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_unknown_mergeability_enum_blocks_preflight_and_target(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        original_preflight = gateway.read_preflight
+
+        def unexpected_mergeability(request_value: Any) -> Any:
+            readiness = original_preflight(request_value)
+            readiness.mergeability = "FUTURE_STATE"
+            return readiness
+
+        gateway.read_preflight = unexpected_mergeability
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "mergeability"):
+            self.execute(reviewed, gateway, 1)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+        gateway = FakeFastGateway(reviewed)
+        gateway.target_mergeability = "FUTURE_STATE"
+        result = self.execute(reviewed, gateway, 1)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+        self.assertRegex(result["failed"][0]["error"], "mergeability")
         self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
 
     def test_feedback_changes_block_before_first_write(self) -> None:
@@ -5117,6 +5390,15 @@ class FastPathTests(TestCase):
                 result = self.execute(reviewed, gateway, 1)
                 self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
                 self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_last_moment_merge_state_change_blocks_the_write(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        gateway.target_merge_state_status = "BLOCKED"
+        result = self.execute(reviewed, gateway, 1)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+        self.assertRegex(result["failed"][0]["error"], "merge state")
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
 
     def test_signature_sources_are_selected_once_per_commit(self) -> None:
         user_valid = {

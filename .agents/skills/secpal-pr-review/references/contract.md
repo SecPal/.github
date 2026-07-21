@@ -76,8 +76,8 @@ session storage, initializes counters, and performs no GitHub write.
 
 `READ_STABLE_FEEDBACK_ONCE` captures repository/PR/head/base identity, reviews,
 top-level comments, threads, thread comments, body digests, resolved/outdated
-state, reactions, and actors. It excludes Required Check results and all other
-volatile readiness values.
+state, reactions, and actors under the explicitly selected registry entry. It
+excludes Required Check results and all other volatile readiness values.
 
 `CLASSIFY_AND_FIX_ALL_CURRENT_FINDINGS` independently proves each classification,
 adds failing regression coverage for valid findings, and implements the smallest
@@ -112,10 +112,13 @@ change from false to true; no other feedback delta is normalized.
 
 `RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH` verifies repository, PR, expected/local/
 remote heads, clean worktree, attestation, Required Checks, stable feedback, and
-all requested thread eligibility once. It then performs one bounded last-moment
-target check and one write per thread. The target check compares identity, head,
-open PR/base state, resolved/outdated thread state, comments, and reactions with
-the reviewed projection.
+all requested thread eligibility once. The batch includes classified findings
+whose source-comment identities and body digests match the reviewed projection;
+its operations cover every unresolved reviewed thread and name all findings for
+their thread. It then performs one bounded last-moment target check and one
+write per thread. The target check compares identity, head, open PR/base and
+merge state, resolved/outdated thread state, comments, and reactions with the
+reviewed projection.
 It never reruns complete validation or rereads complete PR feedback between writes.
 
 `WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION` reports evidence and stops. The
@@ -206,10 +209,12 @@ Required Check, mergeability, worktree, signature, or validation result.
 
 Volatile readiness separately contains the current PR head, registered default
 branch and allowed base repository, base SHA, local and remote heads,
-clean-worktree result, Required Checks, mergeability, authenticated actor,
-signature classifications, signed validation-receipt trailer, and
-validation-attestation identity. Required Checks are read and evaluated once
-immediately before the freshness comparison and batch.
+clean-worktree result, Required Checks, mergeability, GitHub merge-state status,
+strict-base policy, authenticated actor, signature classifications, signed
+validation-receipt trailer, and validation-attestation identity. Required
+Checks are read and evaluated once immediately before the freshness comparison
+and batch. Stable capture, freshness, checks, and target reads use the same
+explicitly selected registry entry; none reloads the default registry.
 
 A validation receipt is produced by the single complete run and binds its staged
 tree and normalized satisfied evidence for every registered manual gate. After
@@ -223,11 +228,19 @@ live signed commit and rejects a caller-authored attestation file that lacks the
 matching signed trailer. Canonical JSON and SHA-256 make it deterministic;
 timestamps do not participate. Any bound-value change invalidates the
 attestation. It contains no environment dump, command output, credential, or
-secret.
+secret. Manual-gate evidence and every user-controlled batch string are rejected
+when they contain the same secret-like patterns prohibited in forensic plans.
 
 A batch input validates against `fast-path-batch.schema.json`. It binds one
 repository, PR, expected head, reviewed base branch/SHA, actor, reviewed digests, authorization digest,
-and a unique ordered set of eligible `THREAD_RESOLUTION` operations. Preflight
+classified findings, and a unique ordered set of eligible `THREAD_RESOLUTION`
+operations. Each finding binds its thread, exact source-comment identity/body
+digest, optional compound-source sub-item identity, classification,
+classification-compatible disposition, and evidence digest. Fixed findings
+also bind test-evidence and PR-commit digests. Operations name their findings
+instead of trusting a free-standing disposition. Every unresolved reviewed
+thread and every comment in it has classification coverage before the first
+live read. Preflight
 and every logical read may retry once only for an unambiguous transient read
 failure. Writes never retry. A partial failure records all applied operations,
 the exact failed operation, and all later blocked operations, then stops.

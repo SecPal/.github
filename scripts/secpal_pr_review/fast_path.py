@@ -22,12 +22,34 @@ DIGEST = re.compile(r"^[0-9a-f]{64}$")
 IDENTITY = re.compile(r"^[^\x00-\x20\x7f]+$")
 EVIDENCE_TEXT = re.compile(r"^[^\x00-\x1f\x7f]+$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SECRET_VALUE = re.compile(
+    r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
+)
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
-ELIGIBLE_DISPOSITIONS = frozenset({
-    "CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX", "DISPROVEN_WITH_EVIDENCE",
-    "NON_ACTIONABLE", "DUPLICATE_OF_CANONICAL", "OBSOLETE_ON_CURRENT_HEAD",
-    "SUPERSEDED_BY_CANONICAL", "REJECTED_SECURITY_WEAKENING",
-})
+CLASSIFICATION_DISPOSITIONS = {
+    "VALID_ACTIONABLE": frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}),
+    "INVALID_FALSE_OR_MISLEADING": frozenset({"DISPROVEN_WITH_EVIDENCE"}),
+    "INFORMATIONAL": frozenset({"NON_ACTIONABLE"}),
+    "DUPLICATE": frozenset({"DUPLICATE_OF_CANONICAL"}),
+    "OUTDATED_BUT_STILL_VALID": frozenset(
+        {"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}
+    ),
+    "OUTDATED_AND_OBSOLETE": frozenset({"OBSOLETE_ON_CURRENT_HEAD"}),
+    "ALREADY_FIXED_ON_SNAPSHOT_HEAD": frozenset({"PROVEN_EXISTING_FIX"}),
+    "SUPERSEDED": frozenset({"SUPERSEDED_BY_CANONICAL"}),
+    "SECURITY_WEAKENING_SUGGESTION": frozenset({"REJECTED_SECURITY_WEAKENING"}),
+}
+FIXED_DISPOSITIONS = frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"})
+MERGE_STATE_POLICY = {
+    "DIRTY": "block",
+    "UNKNOWN": "block",
+    "BLOCKED": "block",
+    "BEHIND": "strict_base",
+    "DRAFT": "block",
+    "UNSTABLE": "required_checks",
+    "HAS_HOOKS": "allow",
+    "CLEAN": "allow",
+}
 
 
 class SecurityBlocker(RuntimeError):
@@ -58,6 +80,20 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def digest_json(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _all_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            item
+            for key, nested in value.items()
+            for item in (*_all_strings(key), *_all_strings(nested))
+        ]
+    if isinstance(value, list):
+        return [item for nested in value for item in _all_strings(nested)]
+    return []
 
 
 def _require_string(value: Any, label: str) -> str:
@@ -313,8 +349,23 @@ class ReadinessState:
     worktree_clean: bool
     pull_request_open: bool
     mergeability: str
+    merge_state_status: str
     actor: dict[str, Any]
     commits: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class BatchFinding:
+    finding_id: str
+    thread_id: str
+    source_comments: tuple[tuple[str, str], ...]
+    source_subitem_id: str | None
+    classification: str
+    disposition: str
+    evidence_digest: str
+    test_evidence_digest: str | None
+    commit_sha: str | None
+    canonical_finding_id: str | None
 
 
 @dataclass(frozen=True)
@@ -322,7 +373,25 @@ class BatchOperation:
     operation_id: str
     kind: str
     thread_id: str
-    disposition: str
+    finding_ids: tuple[str, ...]
+
+
+def _batch_finding_dict(item: BatchFinding) -> dict[str, Any]:
+    return {
+        "finding_id": item.finding_id,
+        "thread_id": item.thread_id,
+        "source_comments": [
+            {"comment_id": comment_id, "body_digest": body_digest}
+            for comment_id, body_digest in item.source_comments
+        ],
+        "source_subitem_id": item.source_subitem_id,
+        "classification": item.classification,
+        "disposition": item.disposition,
+        "evidence_digest": item.evidence_digest,
+        "test_evidence_digest": item.test_evidence_digest,
+        "commit_sha": item.commit_sha,
+        "canonical_finding_id": item.canonical_finding_id,
+    }
 
 
 @dataclass
@@ -337,6 +406,7 @@ class BatchRequest:
     expected_actor: dict[str, Any]
     reviewed_state_digest: str
     reviewed_feedback_digest: str
+    findings: list[BatchFinding]
     operations: list[BatchOperation]
     prior_results: list[dict[str, Any]]
 
@@ -344,6 +414,8 @@ class BatchRequest:
     def from_dict(cls, value: Any) -> "BatchRequest":
         if not isinstance(value, dict):
             raise SecurityBlocker("batch request must be a JSON object")
+        if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
+            raise SecurityBlocker("batch request contains a secret-like value")
         expected_keys = {
             "schema_version",
             "batch_id",
@@ -355,13 +427,131 @@ class BatchRequest:
             "expected_actor",
             "reviewed_state_digest",
             "reviewed_feedback_digest",
+            "findings",
             "operations",
             "prior_results",
         }
         if set(value) != expected_keys:
             raise SecurityBlocker("batch request contains unsupported capabilities or missing fields")
-        if value["schema_version"] != "1.0":
+        if value["schema_version"] != "1.1":
             raise SecurityBlocker("batch request schema version is unsupported")
+        findings_value = value["findings"]
+        if not isinstance(findings_value, list) or not findings_value:
+            raise SecurityBlocker("batch request requires classified findings")
+        findings: list[BatchFinding] = []
+        for item in findings_value:
+            expected_finding_keys = {
+                "finding_id",
+                "thread_id",
+                "source_comments",
+                "source_subitem_id",
+                "classification",
+                "disposition",
+                "evidence_digest",
+                "test_evidence_digest",
+                "commit_sha",
+                "canonical_finding_id",
+            }
+            if not isinstance(item, dict) or set(item) != expected_finding_keys:
+                raise SecurityBlocker("batch finding shape is invalid")
+            classification = item["classification"]
+            disposition = item["disposition"]
+            if (
+                classification not in CLASSIFICATION_DISPOSITIONS
+                or disposition not in CLASSIFICATION_DISPOSITIONS[classification]
+            ):
+                raise SecurityBlocker(
+                    "batch finding classification and disposition are incompatible"
+                )
+            source_value = item["source_comments"]
+            if not isinstance(source_value, list) or not source_value:
+                raise SecurityBlocker("batch finding requires source comments")
+            source_comments: list[tuple[str, str]] = []
+            for source in source_value:
+                if not isinstance(source, dict) or set(source) != {
+                    "comment_id",
+                    "body_digest",
+                }:
+                    raise SecurityBlocker("batch finding source comment is malformed")
+                source_comments.append(
+                    (
+                        _require_string(source["comment_id"], "source comment identity"),
+                        _require_digest(
+                            source["body_digest"], "source comment body digest"
+                        ),
+                    )
+                )
+            source_ids = [comment_id for comment_id, _ in source_comments]
+            if len(source_ids) != len(set(source_ids)):
+                raise SecurityBlocker("batch finding repeats a source comment")
+            source_subitem_id = item["source_subitem_id"]
+            if source_subitem_id is not None:
+                source_subitem_id = _require_string(
+                    source_subitem_id, "source sub-item identity"
+                )
+            test_evidence_digest = item["test_evidence_digest"]
+            commit_sha = item["commit_sha"]
+            if test_evidence_digest is not None:
+                test_evidence_digest = _require_digest(
+                    test_evidence_digest, "test evidence digest"
+                )
+            if commit_sha is not None:
+                commit_sha = _require_oid(commit_sha, "finding commit")
+            if disposition in FIXED_DISPOSITIONS and (
+                test_evidence_digest is None or commit_sha is None
+            ):
+                raise SecurityBlocker(
+                    "fixed batch findings require test evidence and a commit"
+                )
+            canonical_finding_id = item["canonical_finding_id"]
+            if canonical_finding_id is not None:
+                canonical_finding_id = _require_string(
+                    canonical_finding_id, "canonical finding identity"
+                )
+            findings.append(
+                BatchFinding(
+                    finding_id=_require_string(item["finding_id"], "finding identity"),
+                    thread_id=_require_string(item["thread_id"], "finding thread identity"),
+                    source_comments=tuple(source_comments),
+                    source_subitem_id=source_subitem_id,
+                    classification=classification,
+                    disposition=disposition,
+                    evidence_digest=_require_digest(
+                        item["evidence_digest"], "finding evidence digest"
+                    ),
+                    test_evidence_digest=test_evidence_digest,
+                    commit_sha=commit_sha,
+                    canonical_finding_id=canonical_finding_id,
+                )
+            )
+        finding_ids = [item.finding_id for item in findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise SecurityBlocker("batch finding identities must be unique")
+        findings_by_id = {item.finding_id: item for item in findings}
+        for finding in findings:
+            canonical = finding.canonical_finding_id
+            if finding.classification in {"DUPLICATE", "SUPERSEDED"}:
+                if (
+                    canonical is None
+                    or canonical == finding.finding_id
+                    or canonical not in findings_by_id
+                ):
+                    raise SecurityBlocker(
+                        "duplicate or superseded finding lacks a canonical finding"
+                    )
+            elif canonical is not None:
+                raise SecurityBlocker(
+                    "only duplicate or superseded findings may name a canonical finding"
+                )
+        for finding in findings:
+            visited = {finding.finding_id}
+            current = finding
+            while current.canonical_finding_id is not None:
+                canonical_id = current.canonical_finding_id
+                if canonical_id in visited:
+                    raise SecurityBlocker("canonical batch findings contain a cycle")
+                visited.add(canonical_id)
+                current = findings_by_id[canonical_id]
         operations_value = value["operations"]
         if not isinstance(operations_value, list) or not operations_value:
             raise SecurityBlocker("batch request requires at least one operation")
@@ -371,25 +561,50 @@ class BatchRequest:
                 "operation_id",
                 "kind",
                 "thread_id",
-                "disposition",
+                "finding_ids",
             }:
                 raise SecurityBlocker("batch operation shape is invalid")
             if item["kind"] not in SUPPORTED_BATCH_CAPABILITIES:
                 raise SecurityBlocker(f"unsupported batch capability: {item['kind']}")
-            if item["disposition"] not in ELIGIBLE_DISPOSITIONS:
-                raise SecurityBlocker("thread disposition is not eligible for resolution")
+            operation_finding_ids = item["finding_ids"]
+            if (
+                not isinstance(operation_finding_ids, list)
+                or not operation_finding_ids
+            ):
+                raise SecurityBlocker("batch operation requires classified findings")
+            normalized_finding_ids = tuple(
+                _require_string(finding_id, "operation finding identity")
+                for finding_id in operation_finding_ids
+            )
+            if len(normalized_finding_ids) != len(set(normalized_finding_ids)):
+                raise SecurityBlocker("batch operation repeats a classified finding")
             operations.append(
                 BatchOperation(
                     operation_id=_require_string(item["operation_id"], "operation identity"),
                     kind=item["kind"],
                     thread_id=_require_string(item["thread_id"], "thread identity"),
-                    disposition=item["disposition"],
+                    finding_ids=normalized_finding_ids,
                 )
             )
         operation_ids = [item.operation_id for item in operations]
         thread_ids = [item.thread_id for item in operations]
         if len(operation_ids) != len(set(operation_ids)) or len(thread_ids) != len(set(thread_ids)):
             raise SecurityBlocker("batch operation and thread identities must be unique")
+        linked_findings: list[str] = []
+        for operation in operations:
+            for finding_id in operation.finding_ids:
+                finding = findings_by_id.get(finding_id)
+                if finding is None or finding.thread_id != operation.thread_id:
+                    raise SecurityBlocker(
+                        "batch operation does not bind a finding from its thread"
+                    )
+                linked_findings.append(finding_id)
+        if len(linked_findings) != len(set(linked_findings)) or set(
+            linked_findings
+        ) != set(findings_by_id):
+            raise SecurityBlocker(
+                "every classified finding must belong to exactly one batch operation"
+            )
         prior_results = value["prior_results"]
         if not isinstance(prior_results, list):
             raise SecurityBlocker("prior operation evidence must be a list")
@@ -416,7 +631,7 @@ class BatchRequest:
         if not REPOSITORY.fullmatch(repository):
             raise SecurityBlocker("batch repository identity is invalid")
         return cls(
-            schema_version="1.0",
+            schema_version="1.1",
             batch_id=_require_string(value["batch_id"], "batch identity"),
             repository=repository,
             pull_request_number=pull_request_number,
@@ -430,6 +645,7 @@ class BatchRequest:
             reviewed_feedback_digest=_require_digest(
                 value["reviewed_feedback_digest"], "reviewed feedback digest"
             ),
+            findings=findings,
             operations=operations,
             prior_results=copy.deepcopy(prior_results),
         )
@@ -448,12 +664,13 @@ class BatchRequest:
                 "expected_actor": self.expected_actor,
                 "reviewed_state_digest": self.reviewed_state_digest,
                 "reviewed_feedback_digest": self.reviewed_feedback_digest,
+                "findings": [_batch_finding_dict(item) for item in self.findings],
                 "operations": [
                     {
                         "operation_id": item.operation_id,
                         "kind": item.kind,
                         "thread_id": item.thread_id,
-                        "disposition": item.disposition,
+                        "finding_ids": list(item.finding_ids),
                     }
                     for item in self.operations
                 ],
@@ -472,12 +689,13 @@ class BatchRequest:
             "expected_actor": copy.deepcopy(self.expected_actor),
             "reviewed_state_digest": self.reviewed_state_digest,
             "reviewed_feedback_digest": self.reviewed_feedback_digest,
+            "findings": [_batch_finding_dict(item) for item in self.findings],
             "operations": [
                 {
                     "operation_id": item.operation_id,
                     "kind": item.kind,
                     "thread_id": item.thread_id,
-                    "disposition": item.disposition,
+                    "finding_ids": list(item.finding_ids),
                 }
                 for item in self.operations
             ],
@@ -512,6 +730,8 @@ def validate_manual_gate_evidence(
             or not EVIDENCE_TEXT.fullmatch(evidence_text)
         ):
             raise SecurityBlocker("manual-gate evidence is not satisfied")
+        if SECRET_VALUE.search(evidence_text):
+            raise SecurityBlocker("manual-gate evidence contains a secret-like value")
         normalized.append(
             {"gate": gate, "satisfied": True, "evidence": evidence_text}
         )
@@ -703,6 +923,87 @@ def verify_commit_signatures(
     return verified
 
 
+def _verify_classified_findings(
+    request: BatchRequest,
+    reviewed_state: StableFeedbackState,
+    registry: dict[str, Any],
+) -> None:
+    limits = registry.get("limits") if isinstance(registry, dict) else None
+    maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None
+    if not isinstance(maximum_items, int) or maximum_items < 1:
+        raise SecurityBlocker("batch item limit is missing")
+    if len(request.findings) + len(request.operations) > maximum_items:
+        raise SecurityBlocker("classified batch exceeds the registered item limit")
+    unresolved_threads = {
+        item["node_id"]: item
+        for item in reviewed_state.feedback["threads"]
+        if item["is_resolved"] is False
+    }
+    operation_threads = {item.thread_id for item in request.operations}
+    if operation_threads != set(unresolved_threads):
+        raise SecurityBlocker(
+            "batch operations must cover every unresolved reviewed thread"
+        )
+    findings_by_thread: dict[str, list[BatchFinding]] = {}
+    for finding in request.findings:
+        if finding.thread_id not in unresolved_threads:
+            raise SecurityBlocker(
+                "classified finding does not belong to an unresolved reviewed thread"
+            )
+        findings_by_thread.setdefault(finding.thread_id, []).append(finding)
+
+    for thread_id, thread in unresolved_threads.items():
+        expected_comments = {
+            item["node_id"]: item["body_digest"] for item in thread["comments"]
+        }
+        classified_comments: dict[str, list[str | None]] = {}
+        for finding in findings_by_thread.get(thread_id, []):
+            for comment_id, body_digest in finding.source_comments:
+                if expected_comments.get(comment_id) != body_digest:
+                    raise SecurityBlocker(
+                        "classified finding source does not match reviewed feedback"
+                    )
+                classified_comments.setdefault(comment_id, []).append(
+                    finding.source_subitem_id
+                )
+        if set(classified_comments) != set(expected_comments):
+            raise SecurityBlocker(
+                "classified findings do not cover every comment in an unresolved thread"
+            )
+        for subitem_ids in classified_comments.values():
+            if len(subitem_ids) > 1 and (
+                any(item is None for item in subitem_ids)
+                or len(subitem_ids) != len(set(subitem_ids))
+            ):
+                raise SecurityBlocker(
+                    "compound source findings require unique sub-item identities"
+                )
+
+
+def _verify_finding_commits(
+    request: BatchRequest,
+    readiness: ReadinessState,
+) -> None:
+    commit_oids = {
+        item.get("oid") for item in readiness.commits if isinstance(item, dict)
+    }
+    for finding in request.findings:
+        if (
+            finding.disposition == "CORRECTED_AND_VERIFIED"
+            and finding.commit_sha != request.expected_head_sha
+        ):
+            raise SecurityBlocker(
+                "corrected batch finding does not bind the remediation head"
+            )
+        if (
+            finding.disposition in FIXED_DISPOSITIONS
+            and finding.commit_sha not in commit_oids
+        ):
+            raise SecurityBlocker(
+                "fixed batch finding commit is not present in the reviewed PR"
+            )
+
+
 def _verify_readiness(
     request: BatchRequest,
     readiness: ReadinessState,
@@ -739,11 +1040,30 @@ def _verify_readiness(
         or readiness.base_repository not in allowed_base_repositories
     ):
         raise SecurityBlocker("pull request base repository is outside the registered boundary")
-    if readiness.mergeability in {"CONFLICTING", "UNKNOWN", ""}:
+    if readiness.mergeability != "MERGEABLE":
         raise SecurityBlocker(f"pull request mergeability is {readiness.mergeability or 'missing'}")
+    merge_disposition = MERGE_STATE_POLICY.get(readiness.merge_state_status)
+    if merge_disposition is None or merge_disposition == "block":
+        raise SecurityBlocker(
+            "pull request merge state is "
+            f"{readiness.merge_state_status or 'missing'}"
+        )
     if _actor(readiness.actor, "current writer") != request.expected_actor:
         raise SecurityBlocker("authenticated actor identity mismatch")
     verify_commit_signatures(readiness.commits, registry.get("signature_policy"))
+
+
+def _verify_strict_merge_state(
+    readiness: ReadinessState,
+    check_evidence: dict[str, Any],
+) -> None:
+    strict_base_required = check_evidence.get("strict_base_required")
+    if not isinstance(strict_base_required, bool):
+        raise SecurityBlocker("strict required-check evidence is missing")
+    if readiness.merge_state_status == "BEHIND" and strict_base_required:
+        raise SecurityBlocker(
+            "pull request is behind the base required by strict checks"
+        )
 
 
 def _verify_required_checks(
@@ -921,9 +1241,11 @@ def execute_resolution_batch(
     default_branch = registry.get("default_branch") if isinstance(registry, dict) else None
     if request.expected_base_ref != default_branch:
         raise SecurityBlocker("reviewed pull request does not target the registered default branch")
+    _verify_classified_findings(request, reviewed_state, registry)
     check_policy = registry.get("check_policy") if isinstance(registry, dict) else None
     readiness = _read_with_one_retry(lambda: gateway.read_preflight(request))
     _verify_readiness(request, readiness, registry)
+    _verify_finding_commits(request, readiness)
     command_set = registry.get("validation") if isinstance(registry, dict) else None
     if not isinstance(command_set, list):
         raise SecurityBlocker("validation registry command set is missing")
@@ -948,6 +1270,7 @@ def execute_resolution_batch(
         check_evidence.get("required_specs"),
         check_policy,
     )
+    _verify_strict_merge_state(readiness, check_evidence)
     current = _read_with_one_retry(lambda: gateway.read_stable_feedback(request))
     authorized = _authorized_prior_results(request)
     _compare_feedback(request, reviewed_state, current, authorized)
@@ -1001,6 +1324,18 @@ def execute_resolution_batch(
             or target.get("base_sha") != request.expected_base_sha
         ):
             blocker = "last-moment pull request base changed"
+        elif target.get("mergeability") != "MERGEABLE":
+            blocker = "last-moment pull request mergeability changed"
+        elif MERGE_STATE_POLICY.get(target.get("merge_state_status")) in {
+            None,
+            "block",
+        }:
+            blocker = "last-moment pull request merge state changed"
+        elif (
+            target.get("merge_state_status") == "BEHIND"
+            and check_evidence["strict_base_required"] is True
+        ):
+            blocker = "last-moment pull request is behind the strict base"
         elif not isinstance(observed_thread, dict) or expected_thread is None:
             blocker = "last-moment mutation target feedback is incomplete"
         else:
