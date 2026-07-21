@@ -5477,6 +5477,27 @@ class FastPathTests(TestCase):
             {"expected_skipped": "block"},
         )
 
+    def test_blocked_merge_gate_does_not_deadlock_thread_resolution(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        original_preflight = gateway.read_preflight
+
+        def blocked(request_value: Any) -> Any:
+            readiness = original_preflight(request_value)
+            readiness.merge_state_status = "BLOCKED"
+            return readiness
+
+        gateway.read_preflight = blocked
+        gateway.target_merge_state_status = "BLOCKED"
+
+        result = self.execute(reviewed, gateway, 1)
+
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+        self.assertEqual(
+            [call for call in gateway.calls if call[0] == "WRITE"],
+            [("WRITE", "THREAD_1")],
+        )
+
     def test_base_change_blocks_before_first_write(self) -> None:
         reviewed = fast_feedback()
         request = fast_request(reviewed)

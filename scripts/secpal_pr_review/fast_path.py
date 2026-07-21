@@ -62,6 +62,10 @@ MERGE_STATE_POLICY = {
     "HAS_HOOKS": "allow",
     "CLEAN": "allow",
 }
+RESOLUTION_MERGE_STATE_POLICY = {
+    **MERGE_STATE_POLICY,
+    "BLOCKED": "required_checks",
+}
 
 
 class SecurityBlocker(RuntimeError):
@@ -1148,7 +1152,9 @@ def _verify_readiness(
         raise SecurityBlocker("pull request base repository is outside the registered boundary")
     if readiness.mergeability != "MERGEABLE":
         raise SecurityBlocker(f"pull request mergeability is {readiness.mergeability or 'missing'}")
-    merge_disposition = MERGE_STATE_POLICY.get(readiness.merge_state_status)
+    merge_disposition = RESOLUTION_MERGE_STATE_POLICY.get(
+        readiness.merge_state_status
+    )
     if merge_disposition is None or merge_disposition == "block":
         raise SecurityBlocker(
             "pull request merge state is "
@@ -1400,7 +1406,11 @@ def execute_resolution_batch(
             blocker = "last-moment pull request base changed"
         elif target.get("mergeability") != "MERGEABLE":
             blocker = "last-moment pull request mergeability changed"
-        elif MERGE_STATE_POLICY.get(target.get("merge_state_status")) in {
+        elif target.get("merge_state_status") != readiness.merge_state_status:
+            blocker = "last-moment pull request merge state changed"
+        elif RESOLUTION_MERGE_STATE_POLICY.get(
+            target.get("merge_state_status")
+        ) in {
             None,
             "block",
         }:
