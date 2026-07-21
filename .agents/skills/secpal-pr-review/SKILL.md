@@ -18,7 +18,8 @@ Require all of the following before starting:
 - a clean worktree on the current topic branch with its upstream configured;
 - matching local, remote, and PR head OIDs;
 - an open pull request, an understood base, and an exact explained commit set;
-- locally verified SSH signatures for user-authored commits;
+- locally verified SSH or OpenPGP signatures for user-authored commits, as
+  permitted by the repository registry;
 - GitHub `verified: true`, `reason: valid` metadata for GitHub-generated
   commits; and
 - one canonical stable-feedback read containing no Required Check results.
@@ -71,14 +72,16 @@ as argument arrays in the target repository, without a shell.
 6. Create one signed commit containing exactly that staged tree, use
    `attest-validation --bind-commit` to bind the receipt to the signed commit
    without rerunning validation, recheck the remote head, and push once.
-7. Read Required Checks once. Pending, failed, missing, or unknown required
-   results block; never poll.
+7. Read applicable rules and Required Checks once as one bounded logical read.
+   Pending, failed, missing, or unknown required results block; never poll.
 8. Perform one lightweight stable-feedback freshness read. A same-head CI
    transition is irrelevant to this comparison; any unexpected head, comment,
    reaction, or thread-state change blocks before the first write.
 9. Resolve all eligible threads through one schema-bound `resolve-batch
 --apply`. Verify readiness, attestation, checks, and stable feedback once;
-   between writes retain only the minimum target existence/state check.
+   between writes retain one bounded target check that verifies identity, head,
+   open PR/base state, thread state, comments, and reactions without rereading
+   complete PR feedback.
 10. Report the terminal outcome and evidence. Stop at
     `WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION`. The user alone decides whether
     another review round is requested and whether the PR may be merged.
@@ -91,16 +94,17 @@ detected. Green CI alone never establishes technical truth or merge readiness.
 Validate fast-path batch inputs against
 `references/fast-path-batch.schema.json`. One batch may contain only
 `THREAD_RESOLUTION` operations and must bind repository, PR, expected head,
-authenticated actor, reviewed-state and feedback digests, eligible
+reviewed base branch/SHA, authenticated actor, reviewed-state and feedback digests, eligible
 dispositions, and any prior results from the same authorization digest. A
 partial failure stops later writes, reports every applied/failed/blocked target,
 and never retries a write. A manual rerun recognizes an already-resolved thread
 only with matching prior operation evidence.
 
 The stable-feedback projection contains review identities, body digests,
-thread/comment identities and state, reactions, actors, repository, PR, and
-head. It contains no Required Check results. Volatile readiness separately
-contains heads, base, Required Checks, mergeability, worktree, signatures, and
+thread/comment identities and state, reactions, actors, repository, PR, head,
+and the reviewed base branch/SHA. It contains no Required Check results.
+Volatile readiness separately contains heads, current base, Required Checks,
+mergeability, worktree, signatures, and
 the validation-attestation identity.
 
 The following immutable mutation-plan rules remain available only for explicit

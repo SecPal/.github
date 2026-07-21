@@ -191,21 +191,28 @@ python3 scripts/secpal-pr-review-actions.py resolve-batch \
   --reviewed-state SESSION/reviewed-feedback.json \
   --attestation SESSION/validation-attestation.json \
   --repo-root /path/to/SecPal/api \
+  --output SESSION/resolution-report.json \
   --apply
 ```
 
 The capture reads one canonical projection containing feedback identities,
-digests, states, reactions, actors, and the current head. It excludes Required
+digests, states, reactions, actors, the current head, and the reviewed base
+branch/SHA. It excludes Required
 Checks. The complete run produces a staged-tree receipt. After the signed
 commit, the same command binds that receipt to the commit only when its sole
 parent and tree match exactly; this does not rerun validation. The final
 attestation binds the repository, finished head, registry digest, command-set
-digest, successful result, and reviewed-feedback digests. The batch
-verifies local/remote/PR heads, clean worktree, actor, source-appropriate commit
-signatures, the attestation, Required Checks, and current stable feedback once.
-Thirty resolutions therefore use one attestation verification, one Required
-Check read, one freshness read, thirty minimum target checks, thirty writes, and
-zero complete-validation or full-feedback reruns between writes.
+digest, successful result, and reviewed-feedback digests. The batch verifies
+local/remote/PR heads, the unchanged base, clean worktree, actor,
+registry-permitted SSH/OpenPGP signatures, the attestation, applicable
+rules/Required Checks, and current stable feedback once. Each target check also
+compares the open PR/base state and bounded thread comments and reactions
+already returned by the target query. Thirty resolutions therefore use one attestation verification,
+one logical rule/Required Check read, one freshness read, thirty target checks,
+thirty writes, and zero complete-validation or full-feedback reruns between
+writes. The report path is initialized before mutation; a later persistence
+failure emits the complete in-memory operation evidence to standard error and
+stops the batch.
 
 Every legacy forensic plan binds the exact repository, PR, immutable digest,
 and expected head. Each operation names one source finding, target node/database/

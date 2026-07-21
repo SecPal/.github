@@ -1189,48 +1189,13 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
 """
 
 
-FAST_PATH_REQUIRED_CHECKS_QUERY = r"""
-query FastPathRequiredChecks($owner:String!, $name:String!, $number:Int!, $after:String) {
-  repository(owner:$owner, name:$name) {
-    pullRequest(number:$number) {
-      headRefOid
-      commits(last:1) {
-        nodes {
-          commit {
-            oid
-            statusCheckRollup {
-              contexts(first:100, after:$after) {
-                nodes {
-                  __typename
-                  ... on CheckRun {
-                    name
-                    status
-                    conclusion
-                    isRequired(pullRequestNumber:$number)
-                  }
-                  ... on StatusContext {
-                    context
-                    state
-                    isRequired(pullRequestNumber:$number)
-                  }
-                }
-                pageInfo { hasNextPage endCursor }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-"""
-
-
 CURRENT_MUTATION_TARGET_QUERY = r"""
 query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $targetNodeId:ID!, $threadNodeId:ID!) {
   viewer { id databaseId login }
   repository(owner:$owner, name:$name) {
-    pullRequest(number:$number) { id headRefOid state }
+    pullRequest(number:$number) {
+      id headRefOid baseRefName baseRefOid state
+    }
   }
   node(id:$targetNodeId) {
     __typename
@@ -1302,7 +1267,7 @@ query CurrentReviewFeedback(
 ) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      id headRefOid state
+      id headRefOid baseRefName baseRefOid state
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -1397,6 +1362,7 @@ query CurrentRequiredChecks($owner:String!, $name:String!, $number:Int!, $oid:Gi
     }
     object(oid:$oid) {
       ... on Commit {
+        oid
         statusCheckRollup {
           contexts(first:100, after:$after) {
             nodes {
@@ -1449,7 +1415,6 @@ def _validate_action_command(arguments: list[str]) -> None:
             VIEWER_IDENTITY_QUERY,
             CURRENT_REQUIRED_CHECKS_QUERY,
             FAST_PATH_PREFLIGHT_QUERY,
-            FAST_PATH_REQUIRED_CHECKS_QUERY,
         }:
             raise MutationBlocked("GraphQL document is not exactly allowlisted")
         variable_arguments = arguments[7:]
@@ -1493,13 +1458,6 @@ def _validate_action_command(arguments: list[str]) -> None:
                 "oid": "-f",
             }
             optional_variables = {"after": "-f"}
-        elif query == FAST_PATH_REQUIRED_CHECKS_QUERY:
-            expected_variables = {
-                "owner": "-f",
-                "name": "-f",
-                "number": "-F",
-            }
-            optional_variables = {"after": "-f"}
         else:
             expected_variables = {
                 "owner": "-f",
@@ -1516,7 +1474,6 @@ def _validate_action_command(arguments: list[str]) -> None:
                 in {
                     CURRENT_REVIEW_FEEDBACK_QUERY,
                     CURRENT_REQUIRED_CHECKS_QUERY,
-                    FAST_PATH_REQUIRED_CHECKS_QUERY,
                 }
                 else {}
             ),
@@ -1811,6 +1768,8 @@ class LiveGitHub:
                 elif (
                     pull_request.get("id") != initial_pull_request.get("id")
                     or pull_request.get("headRefOid") != initial_pull_request.get("headRefOid")
+                    or pull_request.get("baseRefName") != initial_pull_request.get("baseRefName")
+                    or pull_request.get("baseRefOid") != initial_pull_request.get("baseRefOid")
                     or pull_request.get("state") != initial_pull_request.get("state")
                     or pull_request.get("reactions")
                     != initial_pull_request.get("reactions")
@@ -1885,6 +1844,8 @@ class LiveGitHub:
             )
         result = {
             "head_sha": pull_request.get("headRefOid"),
+            "base_ref": pull_request.get("baseRefName"),
+            "base_sha": pull_request.get("baseRefOid"),
             "pr_state": pull_request.get("state"),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
@@ -1988,7 +1949,11 @@ class LiveGitHub:
                     commit_object = repository["object"]
                 except (KeyError, TypeError) as exc:
                     raise MutationFailure("GitHub returned incomplete required-check evidence") from exc
-                if not isinstance(pull_request, dict) or not isinstance(commit_object, dict):
+                if (
+                    not isinstance(pull_request, dict)
+                    or not isinstance(commit_object, dict)
+                    or commit_object.get("oid") != commit_oid
+                ):
                     raise MutationBlocked("current required-check target is unavailable")
                 potential_merge = pull_request.get("potentialMergeCommit")
                 potential_merge_oid = (
@@ -2232,6 +2197,8 @@ class LiveGitHub:
         return {
             "head_sha": pull_request.get("headRefOid"),
             "pr_state": pull_request.get("state"),
+            "base_ref": pull_request.get("baseRefName"),
+            "base_sha": pull_request.get("baseRefOid"),
             "actor": _actor(target_author),
             "viewer": _actor(data.get("viewer")),
             "target": {
@@ -2544,91 +2511,226 @@ class FastPathGateway:
             commits=commits,
         )
 
-    def read_required_checks(self, request: Any) -> list[dict[str, Any]]:
+    def read_required_checks(
+        self,
+        request: Any,
+        registry: dict[str, Any],
+    ) -> dict[str, Any]:
         owner, name = request.repository.split("/", 1)
-        checks: list[dict[str, Any]] = []
-        cursor: str | None = None
-        seen_cursors: set[str] = set()
-        while True:
-            variables: dict[str, Any] = {
-                "owner": owner,
-                "name": name,
-                "number": request.pull_request_number,
-            }
-            if cursor is not None:
-                variables["after"] = cursor
+        policy = registry.get("check_policy") if isinstance(registry, dict) else None
+        limits = registry.get("limits") if isinstance(registry, dict) else None
+        if not isinstance(policy, dict) or not isinstance(limits, dict):
+            raise fast_path.SecurityBlocker(
+                "required-check policy or limits are missing"
+            )
+        maximum_calls = limits.get("maximum_api_calls")
+        maximum_items = limits.get("maximum_items")
+        if not isinstance(maximum_calls, int) or not isinstance(maximum_items, int):
+            raise fast_path.SecurityBlocker("required-check limits are invalid")
+        budget = {"calls": 0, "items": 0}
+
+        def run(arguments: list[str]) -> Any:
+            if budget["calls"] >= maximum_calls:
+                raise fast_path.SecurityBlocker(
+                    "required-check read exceeds the API-call limit"
+                )
             try:
-                payload = self.github.runner.run(
-                    _graphql_arguments(FAST_PATH_REQUIRED_CHECKS_QUERY, variables)
-                )
-                pull_request = payload["data"]["repository"]["pullRequest"]
-                commit_nodes = pull_request["commits"]["nodes"]
-            except (ActionCommandFailure, MutationFailure, KeyError, TypeError) as exc:
-                raise fast_path.TransientReadFailure(
-                    "required-check read returned incomplete evidence"
-                ) from exc
-            if pull_request.get("headRefOid") != request.expected_head_sha:
+                value = self.github.runner.run(arguments)
+            except (ActionCommandFailure, MutationFailure) as exc:
+                raise fast_path.TransientReadFailure(str(exc)) from exc
+            budget["calls"] += 1
+            return value
+
+        def add_items(count: int) -> None:
+            budget["items"] += count
+            if budget["items"] > maximum_items:
                 raise fast_path.SecurityBlocker(
-                    "required-check target head does not match the batch head"
+                    "required-check read exceeds the item limit"
                 )
-            if not isinstance(commit_nodes, list) or len(commit_nodes) != 1:
-                raise fast_path.TransientReadFailure(
-                    "required-check commit evidence is incomplete"
-                )
-            commit = commit_nodes[0].get("commit")
-            if not isinstance(commit, dict) or commit.get("oid") != request.expected_head_sha:
-                raise fast_path.SecurityBlocker(
-                    "required-check commit does not match the batch head"
-                )
-            rollup = commit.get("statusCheckRollup")
-            if rollup is None:
+
+        encoded_ref = quote(request.expected_base_ref, safe="")
+
+        def read_rulesets() -> list[dict[str, Any]]:
+            if policy.get("require_ruleset_evidence") is not True:
                 return []
-            if not isinstance(rollup, dict):
-                raise fast_path.TransientReadFailure(
-                    "required-check rollup evidence is incomplete"
+            result: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                endpoint = (
+                    f"repos/{owner}/{name}/rules/branches/{encoded_ref}"
+                    f"?per_page=100&page={page}"
                 )
-            try:
-                nodes, next_cursor = _page_nodes(
-                    rollup.get("contexts"), "fast-path required checks"
+                response = run(
+                    ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
                 )
-            except MutationBlocked as exc:
-                raise fast_path.SecurityBlocker(str(exc)) from exc
-            for item in nodes:
-                typename = item.get("__typename")
-                required = item.get("isRequired")
-                if typename not in {"CheckRun", "StatusContext"} or not isinstance(
-                    required, bool
+                if not isinstance(response, list) or any(
+                    not isinstance(item, dict) for item in response
                 ):
                     raise fast_path.TransientReadFailure(
-                        "required-check context evidence is incomplete"
+                        "GitHub returned malformed applicable rules"
                     )
-                if not required:
-                    continue
-                if typename == "CheckRun":
-                    check_name = item.get("name")
-                    check_status = (
-                        item.get("conclusion")
-                        if item.get("status") == "COMPLETED"
-                        else item.get("status")
-                    )
-                else:
-                    check_name = item.get("context")
-                    check_status = item.get("state")
-                checks.append(
-                    {
-                        "name": check_name,
-                        "status": str(check_status or "UNKNOWN").upper(),
-                        "required": True,
-                    }
+                add_items(len(response))
+                result.extend(response)
+                if len(response) < 100:
+                    return result
+                page += 1
+
+        def read_branch_protection() -> dict[str, Any]:
+            if policy.get("require_branch_protection_evidence") is not True:
+                return {}
+            endpoint = (
+                f"repos/{owner}/{name}/branches/{encoded_ref}"
+                "/protection/required_status_checks"
+            )
+            response = run(
+                ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
+            )
+            if not isinstance(response, dict):
+                raise fast_path.TransientReadFailure(
+                    "GitHub returned malformed branch protection"
                 )
-            if next_cursor is None:
-                return checks
-            if next_cursor in seen_cursors:
+            add_items(1)
+            return response
+
+        rulesets = read_rulesets()
+        branch_protection = read_branch_protection()
+        try:
+            required_specs = evidence.require_rule_evidence(
+                rulesets if policy.get("require_ruleset_evidence") is True else None,
+                branch_protection
+                if policy.get("require_branch_protection_evidence") is True
+                else None,
+                policy,
+            )
+        except evidence.BlockedError as exc:
+            raise fast_path.SecurityBlocker(
+                f"required-check rules are incomplete: {exc.message}"
+            ) from exc
+
+        initial_anchor: tuple[Any, ...] | None = None
+
+        def read_checks(commit_oid: str) -> tuple[list[dict[str, Any]], str | None]:
+            nonlocal initial_anchor
+            raw_checks: list[dict[str, Any]] = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            potential_merge_oid: str | None = None
+            while True:
+                variables: dict[str, Any] = {
+                    "owner": owner,
+                    "name": name,
+                    "number": request.pull_request_number,
+                    "oid": commit_oid,
+                }
+                if cursor is not None:
+                    variables["after"] = cursor
+                payload = run(
+                    _graphql_arguments(CURRENT_REQUIRED_CHECKS_QUERY, variables)
+                )
+                try:
+                    repository = payload["data"]["repository"]
+                    pull_request = repository["pullRequest"]
+                    commit_object = repository["object"]
+                except (KeyError, TypeError) as exc:
+                    raise fast_path.TransientReadFailure(
+                        "required-check read returned incomplete evidence"
+                    ) from exc
+                if (
+                    not isinstance(pull_request, dict)
+                    or not isinstance(commit_object, dict)
+                    or commit_object.get("oid") != commit_oid
+                ):
+                    raise fast_path.TransientReadFailure(
+                        "required-check target is unavailable"
+                    )
+                base_repository = pull_request.get("baseRepository")
+                potential_merge = pull_request.get("potentialMergeCommit")
+                potential_merge_oid = (
+                    potential_merge.get("oid")
+                    if isinstance(potential_merge, dict)
+                    else None
+                )
+                anchor = (
+                    pull_request.get("id"),
+                    pull_request.get("headRefOid"),
+                    pull_request.get("state"),
+                    pull_request.get("baseRefName"),
+                    pull_request.get("baseRefOid"),
+                    base_repository.get("nameWithOwner")
+                    if isinstance(base_repository, dict)
+                    else None,
+                    potential_merge_oid,
+                )
+                expected_anchor = (
+                    anchor[0],
+                    request.expected_head_sha,
+                    "OPEN",
+                    request.expected_base_ref,
+                    request.expected_base_sha,
+                    request.repository,
+                    potential_merge_oid,
+                )
+                if not isinstance(anchor[0], str) or not anchor[0] or anchor != expected_anchor:
+                    raise fast_path.SecurityBlocker(
+                        "required-check target changed after review"
+                    )
+                if initial_anchor is None:
+                    initial_anchor = anchor
+                elif anchor != initial_anchor:
+                    raise fast_path.SecurityBlocker(
+                        "required-check target changed during the bounded read"
+                    )
+                rollup = commit_object.get("statusCheckRollup")
+                if rollup is None:
+                    return [], potential_merge_oid
+                if not isinstance(rollup, dict):
+                    raise fast_path.TransientReadFailure(
+                        "required-check rollup evidence is incomplete"
+                    )
+                try:
+                    nodes, next_cursor = _page_nodes(
+                        rollup.get("contexts"), "fast-path required checks"
+                    )
+                except MutationBlocked as exc:
+                    raise fast_path.SecurityBlocker(str(exc)) from exc
+                add_items(len(nodes))
+                raw_checks.extend(nodes)
+                if next_cursor is None:
+                    break
+                if next_cursor in seen_cursors:
+                    raise fast_path.SecurityBlocker(
+                        "required-check pagination did not advance"
+                    )
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            try:
+                normalized = [evidence._normalize_check(item) for item in raw_checks]
+            except evidence.BlockedError as exc:
                 raise fast_path.SecurityBlocker(
-                    "required-check pagination did not advance"
+                    f"required-check evidence is incomplete: {exc.message}"
+                ) from exc
+            stable_ids = [item["stable_id"] for item in normalized]
+            if len(stable_ids) != len(set(stable_ids)):
+                raise fast_path.SecurityBlocker(
+                    "required-check evidence contains duplicate identities"
                 )
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
+            return normalized, potential_merge_oid
+
+        head_checks, potential_merge_oid = read_checks(request.expected_head_sha)
+        merge_checks: list[dict[str, Any]] = []
+        if potential_merge_oid is not None:
+            merge_checks, _ = read_checks(potential_merge_oid)
+        _, check_source = evidence.select_effective_check_target(
+            request.expected_head_sha,
+            potential_merge_oid,
+            merge_checks,
+        )
+        checks = merge_checks if check_source == "test_merge" else head_checks
+        evidence._mark_effective_checks(checks)
+        return {
+            "checks": checks,
+            "required_specs": required_specs,
+        }
 
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         try:
@@ -2674,7 +2776,16 @@ class FastPathGateway:
         return {
             "thread_id": value["target"]["node_id"],
             "head_sha": value["head_sha"],
+            "pr_state": value["pr_state"],
+            "base_ref": value["base_ref"],
+            "base_sha": value["base_sha"],
             "is_resolved": value["target"]["is_resolved"],
+            "thread": {
+                "node_id": value["target"]["parent_thread_id"],
+                "is_resolved": value["target"]["is_resolved"],
+                "is_outdated": value["target"]["is_outdated"],
+                "comments": copy.deepcopy(value["target"]["thread_comments"]),
+            },
         }
 
     def resolve_thread(self, request: Any, operation: Any) -> dict[str, Any]:
@@ -3815,6 +3926,12 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
 def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "repository": entry["repository"],
+        "signature_policy": copy.deepcopy(entry["signature_policy"]),
+        "check_policy": copy.deepcopy(entry["check_policy"]),
+        "limits": {
+            key: entry[key]
+            for key in ("maximum_api_calls", "maximum_items")
+        },
         "validation": copy.deepcopy(
             [*entry["focused_validation"], *entry["required_local_validation"]]
         ),
@@ -3832,6 +3949,20 @@ def _write_fast_report(path: str | None, report: dict[str, Any]) -> None:
         fast_path.atomic_write_json(Path(path), report)
     else:
         sys.stdout.buffer.write(fast_path.canonical_json_bytes(report))
+
+
+def _write_batch_report(path: str | None, report: dict[str, Any]) -> bool:
+    try:
+        _write_fast_report(path, report)
+    except OSError as exc:
+        fallback = {
+            **copy.deepcopy(report),
+            "status": "BLOCKED_REPORT_PERSISTENCE_FAILED",
+            "report_output_error": evidence.redact_diagnostic(str(exc)),
+        }
+        sys.stderr.buffer.write(fast_path.canonical_json_bytes(fallback))
+        return False
+    return True
 
 
 def _run_attestation_git(
@@ -3867,6 +3998,23 @@ def _run_attestation_git(
             evidence.redact_diagnostic(completed.stderr or "local Git command failed")
         )
     return completed
+
+
+def _validated_commit_parent(repository_root: Path, head: str) -> str:
+    result = _run_attestation_git(
+        repository_root,
+        ["rev-list", "--parents", "-n", "1", head],
+    )
+    identities = result.stdout.split()
+    if len(identities) != 2 or identities[0] != head:
+        raise fast_path.SecurityBlocker(
+            "validated remediation commit must have a sole parent"
+        )
+    if not all(OID_PATTERN.fullmatch(identity) for identity in identities):
+        raise fast_path.SecurityBlocker(
+            "validated remediation commit ancestry is malformed"
+        )
+    return identities[1]
 
 
 def _attestation_local_state(repository_root: Path, repository: str) -> tuple[str, str]:
@@ -3967,7 +4115,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         )
         if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
-        parent = _run_attestation_git(repository_root, ["rev-parse", "HEAD^"]).stdout.strip()
+        parent = _validated_commit_parent(repository_root, head)
         tree = _run_attestation_git(repository_root, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
         if parent != receipt["head_sha"] or tree != receipt["validated_tree_sha"]:
             raise fast_path.SecurityBlocker(
@@ -3988,14 +4136,20 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 else "unknown"
             ),
         )
-        if not (
-            local_signature["verified"] is True
-            and local_signature["state"] == "valid"
-            and local_signature["format"] == "ssh"
-        ):
-            raise fast_path.SecurityBlocker(
-                "validated remediation commit is not locally SSH-signed"
-            )
+        fast_path.verify_commit_signatures(
+            [
+                {
+                    "oid": head,
+                    "source": "USER",
+                    "local_signature": local_signature,
+                    "github_verification": {
+                        "verified": False,
+                        "reason": "not_required",
+                    },
+                }
+            ],
+            binding["signature_policy"],
+        )
         attestation = fast_path.create_validation_attestation(
             repository=arguments.repo,
             head_sha=head,
@@ -4072,10 +4226,24 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
+    if arguments.output:
+        _write_fast_report(
+            arguments.output,
+            {
+                "status": "BATCH_NOT_STARTED",
+                "batch_id": request.batch_id,
+                "authorization_digest": request.authorization_digest,
+                "applied": [],
+                "failed": [],
+                "blocked": [],
+                "operation_evidence": copy.deepcopy(request.prior_results),
+            },
+        )
     report = fast_path.execute_resolution_batch(
         request, attestation, reviewed, binding, gateway
     )
-    _write_fast_report(arguments.output, report)
+    if not _write_batch_report(arguments.output, report):
+        return 3
     return 0 if report["status"] in {"BATCH_APPLIED", "BATCH_ALREADY_APPLIED"} else 3
 
 

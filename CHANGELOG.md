@@ -17,11 +17,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   added one staged-tree validation receipt that is bound to the exact signed
   remediation commit without rerunning complete validation
 - added one guarded batch-resolution path that verifies readiness, Required
-  Checks, attestation, and full feedback once, then performs only minimum target
-  checks between ordered writes with fail-closed partial-result reporting
-- selected local SSH verification for user commits and GitHub verification
-  metadata for GitHub-generated commits, treating a missing local GitHub GPG key
-  as unknown rather than invalid
+  Checks, attestation, and full feedback once, then performs bounded target
+  feedback checks between ordered writes with fail-closed partial-result reporting
+- selected configured local SSH/OpenPGP verification for user commits and
+  GitHub verification metadata for GitHub-generated commits, treating a missing
+  local GitHub GPG key as unknown rather than invalid
+- hardened the fast path to bind the reviewed base, enumerate required checks
+  from live rules, enforce a sole-parent remediation commit, honor configured
+  SSH/OpenPGP formats, compare last-moment PR/base/thread feedback, preserve
+  valid empty required-check configurations, and retain batch evidence through
+  report-output failures
 - limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
   ignored session scratch files cannot block a push while tracked violations
   remain enforced

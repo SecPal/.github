@@ -229,6 +229,8 @@ class StableFeedbackState:
     repository: str
     pull_request_number: int
     head_sha: str
+    base_ref: str
+    base_sha: str
     pr_state: str
     feedback: dict[str, Any]
     feedback_digest: str = field(init=False)
@@ -241,6 +243,8 @@ class StableFeedbackState:
         if not isinstance(self.pull_request_number, int) or self.pull_request_number < 1:
             raise SecurityBlocker("pull request identity is invalid")
         self.head_sha = _require_oid(self.head_sha, "stable feedback head")
+        self.base_ref = _require_string(self.base_ref, "stable feedback base")
+        self.base_sha = _require_oid(self.base_sha, "stable feedback base SHA")
         if self.pr_state not in {"OPEN", "CLOSED", "MERGED"}:
             raise SecurityBlocker("pull request state is invalid")
         self.feedback = _feedback_projection(self.feedback)
@@ -254,6 +258,8 @@ class StableFeedbackState:
             repository=payload.get("repository"),
             pull_request_number=payload.get("pull_request_number"),
             head_sha=payload.get("head_sha"),
+            base_ref=payload.get("base_ref"),
+            base_sha=payload.get("base_sha"),
             pr_state=payload.get("pr_state"),
             feedback=_feedback_projection(payload),
         )
@@ -266,6 +272,8 @@ class StableFeedbackState:
                 "repository": self.repository,
                 "pull_request_number": self.pull_request_number,
                 "head_sha": self.head_sha,
+                "base_ref": self.base_ref,
+                "base_sha": self.base_sha,
                 "pr_state": self.pr_state,
                 "feedback": self.feedback,
             }
@@ -277,6 +285,8 @@ class StableFeedbackState:
             "repository": self.repository,
             "pull_request_number": self.pull_request_number,
             "head_sha": self.head_sha,
+            "base_ref": self.base_ref,
+            "base_sha": self.base_sha,
             "pr_state": self.pr_state,
             **copy.deepcopy(self.feedback),
             "feedback_digest": self.feedback_digest,
@@ -317,6 +327,8 @@ class BatchRequest:
     repository: str
     pull_request_number: int
     expected_head_sha: str
+    expected_base_ref: str
+    expected_base_sha: str
     expected_actor: dict[str, Any]
     reviewed_state_digest: str
     reviewed_feedback_digest: str
@@ -333,6 +345,8 @@ class BatchRequest:
             "repository",
             "pull_request_number",
             "expected_head_sha",
+            "expected_base_ref",
+            "expected_base_sha",
             "expected_actor",
             "reviewed_state_digest",
             "reviewed_feedback_digest",
@@ -402,6 +416,8 @@ class BatchRequest:
             repository=repository,
             pull_request_number=pull_request_number,
             expected_head_sha=_require_oid(value["expected_head_sha"], "expected head"),
+            expected_base_ref=_require_string(value["expected_base_ref"], "expected base"),
+            expected_base_sha=_require_oid(value["expected_base_sha"], "expected base SHA"),
             expected_actor=_actor(value["expected_actor"], "expected writer"),
             reviewed_state_digest=_require_digest(
                 value["reviewed_state_digest"], "reviewed state digest"
@@ -422,6 +438,8 @@ class BatchRequest:
                 "repository": self.repository,
                 "pull_request_number": self.pull_request_number,
                 "expected_head_sha": self.expected_head_sha,
+                "expected_base_ref": self.expected_base_ref,
+                "expected_base_sha": self.expected_base_sha,
                 "expected_actor": self.expected_actor,
                 "reviewed_state_digest": self.reviewed_state_digest,
                 "reviewed_feedback_digest": self.reviewed_feedback_digest,
@@ -444,6 +462,8 @@ class BatchRequest:
             "repository": self.repository,
             "pull_request_number": self.pull_request_number,
             "expected_head_sha": self.expected_head_sha,
+            "expected_base_ref": self.expected_base_ref,
+            "expected_base_sha": self.expected_base_sha,
             "expected_actor": copy.deepcopy(self.expected_actor),
             "reviewed_state_digest": self.reviewed_state_digest,
             "reviewed_feedback_digest": self.reviewed_feedback_digest,
@@ -506,9 +526,21 @@ def verify_validation_attestation(
         raise SecurityBlocker("complete validation did not succeed")
 
 
-def verify_commit_signatures(commits: Any) -> list[dict[str, Any]]:
+def verify_commit_signatures(
+    commits: Any,
+    signature_policy: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     if not isinstance(commits, list) or not commits:
         raise SecurityBlocker("commit signature evidence is missing")
+    policy = signature_policy or {"accepted_formats": ["ssh", "openpgp"]}
+    accepted_formats = policy.get("accepted_formats") if isinstance(policy, dict) else None
+    if (
+        not isinstance(accepted_formats, list)
+        or not accepted_formats
+        or any(item not in {"ssh", "openpgp"} for item in accepted_formats)
+    ):
+        raise SecurityBlocker("configured signature formats are missing or unsafe")
+    accepted = frozenset(accepted_formats)
     verified: list[dict[str, Any]] = []
     seen: set[str] = set()
     for commit in commits:
@@ -528,13 +560,14 @@ def verify_commit_signatures(commits: Any) -> list[dict[str, Any]]:
             if not (
                 local.get("verified") is True
                 and local.get("state") == "valid"
-                and local.get("format") == "ssh"
+                and local.get("format") in accepted
             ):
                 raise SecurityBlocker(f"invalid or unsigned user-authored commit: {oid}")
+            signature_format = local["format"]
             verified.append(
                 {
                     "oid": oid,
-                    "classification": "LOCAL_SSH_VERIFIED",
+                    "classification": f"LOCAL_{signature_format.upper()}_VERIFIED",
                     "local_classification": "VALID",
                 }
             )
@@ -553,7 +586,11 @@ def verify_commit_signatures(commits: Any) -> list[dict[str, Any]]:
     return verified
 
 
-def _verify_readiness(request: BatchRequest, readiness: ReadinessState) -> None:
+def _verify_readiness(
+    request: BatchRequest,
+    readiness: ReadinessState,
+    signature_policy: dict[str, Any] | None = None,
+) -> None:
     if readiness.repository != request.repository or readiness.pull_request_number != request.pull_request_number:
         raise SecurityBlocker("repository or pull request identity mismatch")
     heads = {
@@ -570,30 +607,70 @@ def _verify_readiness(request: BatchRequest, readiness: ReadinessState) -> None:
         raise SecurityBlocker("worktree is not clean")
     if not readiness.pull_request_open:
         raise SecurityBlocker("pull request is not open")
-    if not isinstance(readiness.base_ref, str) or not readiness.base_ref:
-        raise SecurityBlocker("base branch identity is missing")
-    _require_oid(readiness.base_sha, "base SHA")
+    if readiness.base_ref != request.expected_base_ref:
+        raise SecurityBlocker("pull request base branch changed after review")
+    if _require_oid(readiness.base_sha, "base SHA") != request.expected_base_sha:
+        raise SecurityBlocker("pull request base SHA changed after review")
     if readiness.mergeability in {"CONFLICTING", "UNKNOWN", ""}:
         raise SecurityBlocker(f"pull request mergeability is {readiness.mergeability or 'missing'}")
     if _actor(readiness.actor, "current writer") != request.expected_actor:
         raise SecurityBlocker("authenticated actor identity mismatch")
-    verify_commit_signatures(readiness.commits)
+    verify_commit_signatures(readiness.commits, signature_policy)
 
 
-def _verify_required_checks(checks: Any) -> None:
-    if not isinstance(checks, list) or not checks:
+def _verify_required_checks(
+    checks: Any,
+    required_specs: Any,
+    policy: Any,
+) -> None:
+    if not isinstance(checks, list):
+        raise SecurityBlocker("required check evidence is malformed")
+    if not isinstance(required_specs, list):
+        raise SecurityBlocker("configured required check evidence is missing")
+    if not required_specs:
+        return
+    if not checks:
         raise SecurityBlocker("required check evidence is missing")
-    required = [item for item in checks if isinstance(item, dict) and item.get("required") is True]
-    if not required:
-        raise SecurityBlocker("required check evidence is missing")
-    names: set[str] = set()
-    for check in required:
-        name = check.get("name")
-        if not isinstance(name, str) or not name or name in names:
-            raise SecurityBlocker("required check identity is missing or duplicated")
-        names.add(name)
-        if check.get("status") != "SUCCESS":
-            raise SecurityBlocker(f"required check {name} is {check.get('status', 'missing')}")
+    skipped_policy = policy.get("expected_skipped") if isinstance(policy, dict) else None
+    if skipped_policy not in {"allow", "block"}:
+        raise SecurityBlocker("required check skipped policy is invalid")
+
+    for spec in required_specs:
+        if not isinstance(spec, dict):
+            raise SecurityBlocker("configured required check identity is malformed")
+        name = spec.get("context")
+        integration_id = spec.get("integration_id")
+        if not isinstance(name, str) or not name:
+            raise SecurityBlocker("configured required check identity is malformed")
+        matching = [
+            item
+            for item in checks
+            if isinstance(item, dict)
+            and item.get("name") == name
+            and item.get("is_effective", True) is True
+            and (
+                integration_id is None
+                or item.get("application", {}).get("database_id") == integration_id
+            )
+        ]
+        if not matching:
+            raise SecurityBlocker(f"required check {name} is missing")
+        for check in matching:
+            status = str(check.get("status") or "").upper()
+            conclusion = str(check.get("conclusion") or "").upper()
+            accepted_conclusion = conclusion in {"SUCCESS", "NEUTRAL"} or (
+                conclusion == "SKIPPED" and skipped_policy == "allow"
+            )
+            stable_id = str(check.get("stable_id") or "")
+            successful = (
+                status == "COMPLETED" and accepted_conclusion
+                if stable_id.startswith("check_run:")
+                else accepted_conclusion
+            )
+            if not successful:
+                raise SecurityBlocker(
+                    f"required check {name} is {conclusion or status or 'missing'}"
+                )
 
 
 T = TypeVar("T")
@@ -644,8 +721,12 @@ def _compare_feedback(
         or current.pull_request_number != request.pull_request_number
         or current.pr_state != "OPEN"
         or current.head_sha != request.expected_head_sha
+        or current.base_ref != request.expected_base_ref
+        or current.base_sha != request.expected_base_sha
     ):
-        raise SecurityBlocker("stable feedback repository, PR, state, or head changed")
+        raise SecurityBlocker(
+            "stable feedback repository, PR, state, head, or base changed"
+        )
     if current.feedback_digest == reviewed.feedback_digest:
         return
     normalized = copy.deepcopy(current.feedback)
@@ -697,8 +778,15 @@ def execute_resolution_batch(
         )
     if request.reviewed_state_digest != reviewed_state.state_digest or request.reviewed_feedback_digest != reviewed_state.feedback_digest:
         raise SecurityBlocker("batch request does not bind the supplied reviewed feedback")
+    if (
+        request.expected_base_ref != reviewed_state.base_ref
+        or request.expected_base_sha != reviewed_state.base_sha
+    ):
+        raise SecurityBlocker("batch request does not bind the reviewed base")
+    signature_policy = registry.get("signature_policy") if isinstance(registry, dict) else None
+    check_policy = registry.get("check_policy") if isinstance(registry, dict) else None
     readiness = _read_with_one_retry(lambda: gateway.read_preflight(request))
-    _verify_readiness(request, readiness)
+    _verify_readiness(request, readiness, signature_policy)
     command_set = registry.get("validation") if isinstance(registry, dict) else None
     if not isinstance(command_set, list):
         raise SecurityBlocker("validation registry command set is missing")
@@ -710,8 +798,16 @@ def execute_resolution_batch(
         command_set=command_set,
         reviewed_state=reviewed_state,
     )
-    checks = _read_with_one_retry(lambda: gateway.read_required_checks(request))
-    _verify_required_checks(checks)
+    check_evidence = _read_with_one_retry(
+        lambda: gateway.read_required_checks(request, registry)
+    )
+    if not isinstance(check_evidence, dict):
+        raise SecurityBlocker("required check evidence is malformed")
+    _verify_required_checks(
+        check_evidence.get("checks"),
+        check_evidence.get("required_specs"),
+        check_policy,
+    )
     current = _read_with_one_retry(lambda: gateway.read_stable_feedback(request))
     authorized = _authorized_prior_results(request)
     _compare_feedback(request, reviewed_state, current, authorized)
@@ -748,19 +844,48 @@ def execute_resolution_batch(
                 for item in request.operations[index + 1 :]
             )
             return report
+        observed_thread = target.get("thread") if isinstance(target, dict) else None
+        expected_thread = current_threads.get(operation.thread_id)
         if not isinstance(target, dict) or target.get("thread_id") != operation.thread_id:
             blocker = "last-moment mutation target identity changed"
         elif target.get("head_sha") != request.expected_head_sha:
             blocker = "last-moment mutation target head changed"
-        elif target.get("is_resolved") is True and operation.thread_id in authorized:
+        elif target.get("pr_state") != "OPEN":
+            blocker = "last-moment pull request state changed"
+        elif (
+            target.get("base_ref") != request.expected_base_ref
+            or target.get("base_sha") != request.expected_base_sha
+        ):
+            blocker = "last-moment pull request base changed"
+        elif not isinstance(observed_thread, dict) or expected_thread is None:
+            blocker = "last-moment mutation target feedback is incomplete"
+        else:
+            try:
+                normalized_thread = _feedback_projection(
+                    {"threads": [observed_thread]}
+                )["threads"][0]
+            except SecurityBlocker:
+                blocker = "last-moment mutation target feedback is incomplete"
+            else:
+                comparable_thread = copy.deepcopy(normalized_thread)
+                if (
+                    operation.thread_id in authorized
+                    and comparable_thread["is_resolved"] is True
+                    and expected_thread["is_resolved"] is False
+                ):
+                    comparable_thread["is_resolved"] = False
+                blocker = (
+                    None
+                    if comparable_thread == expected_thread
+                    else "last-moment mutation target feedback changed"
+                )
+        if blocker is None and target.get("is_resolved") is True and operation.thread_id in authorized:
             report["already_resolved"].append(
                 {"operation_id": operation.operation_id, "thread_id": operation.thread_id}
             )
             continue
-        elif target.get("is_resolved") is not False:
+        if blocker is None and target.get("is_resolved") is not False:
             blocker = "last-moment mutation target state changed"
-        else:
-            blocker = None
         if blocker is not None:
             report["status"] = "BLOCKED_TARGET_CHANGED"
             report["failed"].append(

@@ -1789,6 +1789,7 @@ class MutationTests(TestCase):
                                 },
                             },
                             "object": {
+                                "oid": oid,
                                 "statusCheckRollup": {
                                     "contexts": {
                                         "nodes": nodes,
@@ -3861,6 +3862,8 @@ def fast_feedback(thread_count: int = 2, *, head_sha: str = p21.HEAD) -> Any:
             "repository": "SecPal/.github",
             "pull_request_number": 1,
             "head_sha": head_sha,
+            "base_ref": "main",
+            "base_sha": p21.BASE,
             "pr_state": "OPEN",
             "pull_request_reactions": [],
             "reviews": [
@@ -3903,6 +3906,18 @@ def fast_feedback(thread_count: int = 2, *, head_sha: str = p21.HEAD) -> Any:
 def fast_registry() -> dict[str, Any]:
     return {
         "repository": "SecPal/.github",
+        "signature_policy": {
+            "accepted_formats": ["ssh", "openpgp"],
+        },
+        "check_policy": {
+            "require_ruleset_evidence": True,
+            "require_branch_protection_evidence": True,
+            "expected_skipped": "block",
+        },
+        "limits": {
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
+        },
         "validation": [
             {
                 "argv": [
@@ -3937,6 +3952,8 @@ def fast_request(reviewed: Any, thread_count: int = 2) -> Any:
             "repository": "SecPal/.github",
             "pull_request_number": 1,
             "expected_head_sha": p21.HEAD,
+            "expected_base_ref": reviewed.base_ref,
+            "expected_base_sha": reviewed.base_sha,
             "expected_actor": {
                 "login": "aroviqen",
                 "node_id": "USER_1",
@@ -3962,7 +3979,17 @@ class FakeFastGateway:
     def __init__(self, current_feedback: Any) -> None:
         self.current_feedback = current_feedback
         self.calls: list[tuple[str, str]] = []
-        self.checks = [{"name": "tests", "status": "SUCCESS", "required": True}]
+        self.checks = [
+            {
+                "stable_id": "check_run:tests",
+                "name": "tests",
+                "application": {"database_id": 1},
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "is_effective": True,
+            }
+        ]
+        self.required_specs = [{"context": "tests", "integration_id": 1}]
         self.commits = [
             {
                 "oid": p21.HEAD,
@@ -3978,6 +4005,9 @@ class FakeFastGateway:
         self.snapshot_calls = 0
         self.validation_runs = 0
         self.fail_target: str | None = None
+        self.target_pr_state = "OPEN"
+        self.target_base_ref = current_feedback.base_ref
+        self.target_base_sha = current_feedback.base_sha
 
     def read_preflight(self, request: Any) -> Any:
         self.calls.append(("READ", "preflight"))
@@ -3996,9 +4026,14 @@ class FakeFastGateway:
             commits=copy.deepcopy(self.commits),
         )
 
-    def read_required_checks(self, _request: Any) -> list[dict[str, Any]]:
+    def read_required_checks(
+        self, _request: Any, _registry: dict[str, Any]
+    ) -> dict[str, Any]:
         self.calls.append(("READ", "required-checks"))
-        return copy.deepcopy(self.checks)
+        return {
+            "checks": copy.deepcopy(self.checks),
+            "required_specs": copy.deepcopy(self.required_specs),
+        }
 
     def read_stable_feedback(self, _request: Any) -> Any:
         self.calls.append(("READ", "stable-feedback"))
@@ -4019,7 +4054,11 @@ class FakeFastGateway:
         return {
             "thread_id": operation_value.thread_id,
             "head_sha": self.current_feedback.head_sha,
+            "pr_state": self.target_pr_state,
+            "base_ref": self.target_base_ref,
+            "base_sha": self.target_base_sha,
             "is_resolved": thread["is_resolved"],
+            "thread": copy.deepcopy(thread),
         }
 
     def resolve_thread(self, _request: Any, operation_value: Any) -> dict[str, Any]:
@@ -4170,6 +4209,14 @@ class FastPathTests(TestCase):
             "repository": "SecPal/.github",
             "focused_validation": [],
             "required_local_validation": [],
+            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "check_policy": {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
         }
         mismatches = {
             "repository": fast_path.StableFeedbackState.from_payload(
@@ -4207,6 +4254,14 @@ class FastPathTests(TestCase):
             "repository": "SecPal/.github",
             "focused_validation": [],
             "required_local_validation": [],
+            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "check_policy": {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
         }
         binding = actions._fast_registry_binding(entry)
         receipt = actions._validation_receipt(
@@ -4272,6 +4327,98 @@ class FastPathTests(TestCase):
             ):
                 actions._command_attest_validation(arguments)
 
+    def test_bound_commit_rejects_a_second_parent(self) -> None:
+        head = "d" * 40
+        first_parent = "e" * 40
+        second_parent = "f" * 40
+        with mock.patch.object(
+            actions,
+            "_run_attestation_git",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=f"{head} {first_parent} {second_parent}\n",
+                stderr="",
+            ),
+        ):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "sole parent"):
+                actions._validated_commit_parent(REPO_ROOT, head)
+
+    def test_bound_commit_accepts_configured_openpgp_signature(self) -> None:
+        reviewed = fast_feedback()
+        final_head = "d" * 40
+        tree = "a" * 40
+        entry = {
+            "repository": "SecPal/.github",
+            "focused_validation": [],
+            "required_local_validation": [],
+            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "check_policy": {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
+        }
+        binding = actions._fast_registry_binding(entry)
+        receipt = actions._validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            tree_sha=tree,
+            binding=binding,
+            reviewed=reviewed,
+        )
+        arguments = SimpleNamespace(
+            expected_head=final_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=True,
+            receipt="receipt.json",
+            output="attestation.json",
+        )
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            if command[:4] == ["rev-list", "--parents", "-n", "1"]:
+                stdout = f"{final_head} {reviewed.head_sha}\n"
+                stderr = ""
+            elif command == ["rev-parse", "HEAD^{tree}"]:
+                stdout = tree
+                stderr = ""
+            elif command[:2] == ["cat-file", "commit"]:
+                stdout = (
+                    "tree deadbeef\ngpgsig -----BEGIN PGP SIGNATURE-----\n"
+                    " signature\n -----END PGP SIGNATURE-----\n\nmessage\n"
+                )
+                stderr = ""
+            else:
+                stdout = ""
+                stderr = "gpg: Good signature from SecPal Test\n"
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(final_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(actions, "_read_json", return_value=receipt),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_write_fast_report") as write_report,
+        ):
+            self.assertEqual(actions._command_attest_validation(arguments), 0)
+        write_report.assert_called_once()
+
     def test_missing_upstream_is_a_recoverable_local_error(self) -> None:
         pull_request = {
             "number": 1,
@@ -4325,71 +4472,101 @@ class FastPathTests(TestCase):
             gateway.read_preflight(fast_request(fast_feedback()))
 
     def test_required_checks_use_the_allowlisted_graphql_read(self) -> None:
-        runner = SimpleNamespace(
-            run=mock.Mock(
-                return_value={
-                    "data": {
-                        "repository": {
-                            "pullRequest": {
-                                "headRefOid": p21.HEAD,
-                                "commits": {
-                                    "nodes": [
-                                        {
-                                            "commit": {
-                                                "oid": p21.HEAD,
-                                                "statusCheckRollup": {
-                                                    "contexts": {
-                                                        "nodes": [
-                                                            {
-                                                                "__typename": "CheckRun",
-                                                                "name": "tests",
-                                                                "status": "COMPLETED",
-                                                                "conclusion": "SUCCESS",
-                                                                "isRequired": True,
-                                                            },
-                                                            {
-                                                                "__typename": "StatusContext",
-                                                                "context": "legacy",
-                                                                "state": "SUCCESS",
-                                                                "isRequired": True,
-                                                            },
-                                                            {
-                                                                "__typename": "CheckRun",
-                                                                "name": "optional",
-                                                                "status": "COMPLETED",
-                                                                "conclusion": "SUCCESS",
-                                                                "isRequired": False,
-                                                            },
-                                                        ],
-                                                        "pageInfo": {
-                                                            "hasNextPage": False,
-                                                            "endCursor": None,
-                                                        },
-                                                    }
-                                                },
+        check_payload = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "id": "PR_1",
+                        "headRefOid": p21.HEAD,
+                        "state": "OPEN",
+                        "baseRefName": "main",
+                        "baseRefOid": p21.BASE,
+                        "baseRepository": {"id": "REPO_1", "nameWithOwner": "SecPal/.github"},
+                        "potentialMergeCommit": None,
+                    },
+                    "object": {
+                        "oid": p21.HEAD,
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "id": "CHECK_1",
+                                        "name": "tests",
+                                        "status": "COMPLETED",
+                                        "conclusion": "SUCCESS",
+                                        "startedAt": "2026-07-21T00:00:00Z",
+                                        "detailsUrl": "https://example.invalid/tests",
+                                        "checkSuite": {
+                                            "app": {
+                                                "id": "APP_1",
+                                                "databaseId": 1,
+                                                "name": "CI",
+                                                "slug": "ci",
                                             }
-                                        }
-                                    ]
-                                },
+                                        },
+                                    },
+                                    {
+                                        "__typename": "StatusContext",
+                                        "id": "STATUS_1",
+                                        "context": "legacy",
+                                        "state": "SUCCESS",
+                                        "createdAt": "2026-07-21T00:00:00Z",
+                                        "targetUrl": "https://example.invalid/legacy",
+                                        "creator": {
+                                            "__typename": "User",
+                                            "id": "USER_1",
+                                            "databaseId": 7,
+                                            "login": "reviewer",
+                                            "url": "https://example.invalid/reviewer",
+                                        },
+                                    },
+                                ],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
                             }
-                        }
-                    }
+                        },
+                    },
                 }
-            )
-        )
+            }
+        }
+
+        def run(arguments: list[str]) -> Any:
+            if arguments[4].startswith("repos/") and "/rules/branches/" in arguments[4]:
+                return [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [
+                                {"context": "tests", "integration_id": 1},
+                                {"context": "legacy", "integration_id": None},
+                            ],
+                            "strict_required_status_checks_policy": False,
+                        },
+                    }
+                ]
+            if arguments[4].startswith("repos/"):
+                return {"strict": False, "contexts": [], "checks": []}
+            return check_payload
+
+        runner = SimpleNamespace(run=mock.Mock(side_effect=run))
         gateway = actions.FastPathGateway(
             REPO_ROOT,
             github=SimpleNamespace(runner=runner),
         )
+        result = gateway.read_required_checks(
+            fast_request(fast_feedback()), fast_registry()
+        )
         self.assertEqual(
-            gateway.read_required_checks(fast_request(fast_feedback())),
+            result["required_specs"],
             [
-                {"name": "tests", "status": "SUCCESS", "required": True},
-                {"name": "legacy", "status": "SUCCESS", "required": True},
+                {"context": "legacy", "integration_id": None},
+                {"context": "tests", "integration_id": 1},
             ],
         )
-        runner.run.assert_called_once()
-        actions._validate_action_command(runner.run.call_args.args[0])
+        self.assertEqual([item["name"] for item in result["checks"]], ["tests", "legacy"])
+        self.assertEqual(runner.run.call_count, 3)
+        for call in runner.run.call_args_list:
+            actions._validate_action_command(call.args[0])
 
     def test_fast_preflight_queries_the_signature_signer_as_a_user(self) -> None:
         signer_selection = actions.FAST_PATH_PREFLIGHT_QUERY.split("signer {", 1)[1]
@@ -4429,6 +4606,57 @@ class FastPathTests(TestCase):
                 with self.assertRaisesRegex(fast_path.SecurityBlocker, "required check"):
                     self.execute(reviewed, gateway)
                 self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_missing_configured_required_check_blocks_before_first_write(self) -> None:
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "missing"):
+            fast_path._verify_required_checks(
+                [
+                    {
+                        "stable_id": "check_run:present",
+                        "name": "present",
+                        "application": {"database_id": 1},
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    }
+                ],
+                [
+                    {"context": "present", "integration_id": 1},
+                    {"context": "never-reported", "integration_id": 2},
+                ],
+                {"expected_skipped": "block"},
+            )
+
+    def test_no_configured_required_checks_allows_an_empty_rollup(self) -> None:
+        fast_path._verify_required_checks(
+            [],
+            [],
+            {"expected_skipped": "block"},
+        )
+
+    def test_base_change_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        request = fast_request(reviewed)
+        request.expected_base_ref = "main"
+        request.expected_base_sha = p21.BASE
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_preflight
+
+        def changed_base(request_value: Any) -> Any:
+            readiness = original(request_value)
+            readiness.base_ref = "release"
+            readiness.base_sha = "f" * 40
+            return readiness
+
+        gateway.read_preflight = changed_base
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "base"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
 
     def test_feedback_changes_block_before_first_write(self) -> None:
         mutations = {
@@ -4477,6 +4705,23 @@ class FastPathTests(TestCase):
         gateway.read_preflight = changed_head
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "head"):
             self.execute(reviewed, gateway)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_base_change_during_feedback_freshness_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        current = copy.deepcopy(reviewed)
+        current.base_ref = "release"
+        current.base_sha = "f" * 40
+        current.refresh_digests()
+        gateway = FakeFastGateway(current)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "base"):
+            fast_path.execute_resolution_batch(
+                fast_request(reviewed),
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
         self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
 
     def test_recoverable_local_error_is_corrected_in_same_invocation(self) -> None:
@@ -4545,6 +4790,49 @@ class FastPathTests(TestCase):
         self.assertEqual(gateway.calls.count(("READ", "target:THREAD_2")), 2)
         self.assertFalse(any(identity == "THREAD_3" for kind, identity in gateway.calls if kind == "WRITE"))
 
+    def test_last_moment_thread_feedback_change_blocks_the_write(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_thread_target
+
+        def changed_target(request_value: Any, operation_value: Any) -> dict[str, Any]:
+            target = original(request_value, operation_value)
+            thread = copy.deepcopy(reviewed.feedback["threads"][0])
+            thread["comments"].append(
+                {
+                    "node_id": "COMMENT_LATE",
+                    "body_digest": digest("late feedback"),
+                    "actor": {
+                        "login": "reviewer",
+                        "node_id": "ACTOR_1",
+                        "database_id": 7,
+                    },
+                    "reply_to_id": "COMMENT_1",
+                    "reactions": [],
+                }
+            )
+            target["thread"] = thread
+            return target
+
+        gateway.read_thread_target = changed_target
+        result = self.execute(reviewed, gateway, 1)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_last_moment_pr_or_base_change_blocks_the_write(self) -> None:
+        for attribute, value in (
+            ("target_pr_state", "CLOSED"),
+            ("target_base_ref", "release"),
+            ("target_base_sha", "f" * 40),
+        ):
+            with self.subTest(attribute=attribute):
+                reviewed = fast_feedback(1)
+                gateway = FakeFastGateway(reviewed)
+                setattr(gateway, attribute, value)
+                result = self.execute(reviewed, gateway, 1)
+                self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+                self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
     def test_signature_sources_are_selected_once_per_commit(self) -> None:
         user_valid = {
             "oid": "1" * 40,
@@ -4561,6 +4849,12 @@ class FastPathTests(TestCase):
         result = fast_path.verify_commit_signatures([user_valid, github_valid])
         self.assertEqual([item["classification"] for item in result], ["LOCAL_SSH_VERIFIED", "GITHUB_VERIFIED"])
         self.assertEqual(result[1]["local_classification"], "UNKNOWN_LOCAL_KEY")
+        openpgp_valid = copy.deepcopy(user_valid)
+        openpgp_valid["local_signature"]["format"] = "openpgp"
+        self.assertEqual(
+            fast_path.verify_commit_signatures([openpgp_valid])[0]["classification"],
+            "LOCAL_OPENPGP_VERIFIED",
+        )
         for local_signature in (
             {"verified": False, "state": "unsigned", "format": None},
             {"verified": False, "state": "invalid", "format": "ssh"},
@@ -4664,6 +4958,34 @@ class FastPathTests(TestCase):
             output = Path(directory) / "review state.json"
             fast_path.atomic_write_json(output, {"status": "ok"})
             self.assertEqual(json.loads(output.read_text()), {"status": "ok"})
+
+    def test_batch_report_falls_back_with_operation_evidence_after_output_failure(self) -> None:
+        report = {
+            "status": "BATCH_APPLIED",
+            "batch_id": "batch-001",
+            "applied": [{"operation_id": "resolve-1", "thread_id": "THREAD_1"}],
+            "failed": [],
+            "blocked": [],
+            "operation_evidence": [
+                {
+                    "operation_id": "resolve-1",
+                    "thread_id": "THREAD_1",
+                    "authorization_digest": "a" * 64,
+                    "mutation_identity": "THREAD_1",
+                    "status": "APPLIED",
+                }
+            ],
+        }
+        error_output = SimpleNamespace(buffer=io.BytesIO())
+        with (
+            mock.patch.object(actions, "_write_fast_report", side_effect=OSError("disk full")),
+            mock.patch.object(actions.sys, "stderr", error_output),
+        ):
+            self.assertFalse(actions._write_batch_report("missing/report.json", report))
+        fallback = json.loads(error_output.buffer.getvalue())
+        self.assertEqual(fallback["status"], "BLOCKED_REPORT_PERSISTENCE_FAILED")
+        self.assertEqual(fallback["applied"], report["applied"])
+        self.assertEqual(fallback["operation_evidence"], report["operation_evidence"])
 
 
 class PolicyScriptTests(TestCase):
