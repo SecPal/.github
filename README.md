@@ -214,6 +214,12 @@ Each layer has a separate responsibility. The Copilot review profile is not a
 copy of `AGENTS.md`, and focused overlay bodies are not duplicated into either
 always-on file.
 
+Completed PR feedback can be processed through the explicitly invoked,
+repository-owned [`secpal-pr-review` skill](docs/secpal-pr-review-workflow.md).
+It is finite, treats feedback as untrusted leads, uses the separate read-only
+Package-2.1 evidence helper, and stops at an explicit user merge-authorization
+checkpoint. It never requests review, marks a PR Ready, or merges.
+
 #### Setup Model
 
 When setting up AI instructions in a new repository:

@@ -1,0 +1,576 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "schema_version": "1.0",
+  "repositories": [
+    {
+      "repository": "SecPal/.github",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/.github"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run guarded-action unit tests"
+        },
+        {
+          "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
+          "working_directory": ".",
+          "purpose": "Run finite skill policy tests"
+        },
+        {
+          "argv": ["./tests/secpal-pr-review-skill-integration.sh"],
+          "working_directory": ".",
+          "purpose": "Run fake-GitHub and temporary-HOME integration tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-pr-review-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run accepted Package-2.1 unit tests"
+        },
+        {
+          "argv": ["./tests/secpal-pr-review-integration.sh"],
+          "working_directory": ".",
+          "purpose": "Run accepted Package-2.1 fake-GitHub integration tests"
+        },
+        {
+          "argv": ["./tests/review-governance-suite.sh"],
+          "working_directory": ".",
+          "purpose": "Run instruction and review-memory governance fixtures"
+        },
+        {
+          "argv": ["./tests/reusable-workflow-policy.sh"],
+          "working_directory": ".",
+          "purpose": "Validate reusable-workflow policy"
+        },
+        {
+          "argv": ["npm", "run", "lint:markdown"],
+          "working_directory": ".",
+          "purpose": "Lint Markdown"
+        },
+        {
+          "argv": ["reuse", "lint"],
+          "working_directory": ".",
+          "purpose": "Validate REUSE metadata"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Run pre-commit against the exact changed-file list; the list is session-specific and must not be guessed.",
+        "Run read-only live acceptance only when explicitly required and never use the action helper with --apply before rollout authorization."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/api",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/api"],
+      "reviewer_identities": [],
+      "focused_validation": [],
+      "required_local_validation": [
+        {
+          "argv": ["composer", "test"],
+          "working_directory": ".",
+          "purpose": "Run the documented Laravel test and Pint-check sequence"
+        },
+        {
+          "argv": ["composer", "analyse"],
+          "working_directory": ".",
+          "purpose": "Run the documented PHPStan analysis"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Choose focused Pest or Artisan test paths from the finding and repository instructions; do not guess a static filter.",
+        "Do not run setup, productive migrations, imports, deployment, or any environment-connected validation."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/frontend",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/frontend"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["npm", "run", "test:migration-boundary"],
+          "working_directory": ".",
+          "purpose": "Run documented frontend migration-boundary tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["npm", "run", "format:check"],
+          "working_directory": ".",
+          "purpose": "Check formatting"
+        },
+        {
+          "argv": ["npm", "run", "lint"],
+          "working_directory": ".",
+          "purpose": "Run ESLint"
+        },
+        {
+          "argv": ["npm", "run", "typecheck"],
+          "working_directory": ".",
+          "purpose": "Run TypeScript checks"
+        },
+        {
+          "argv": ["npm", "run", "test:ci"],
+          "working_directory": ".",
+          "purpose": "Run deterministic Vitest suite"
+        },
+        {
+          "argv": ["npm", "run", "build"],
+          "working_directory": ".",
+          "purpose": "Build the web surface"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Select additional focused Vitest paths from the changed behavior using documented test entry points.",
+        "Live, workspace, Lighthouse, Playwright, and environment-connected targets require separate user authorization."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/contracts",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/contracts"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["node", "--test"],
+          "working_directory": ".",
+          "purpose": "Run Node contract-tooling tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["npm", "run", "validate"],
+          "working_directory": ".",
+          "purpose": "Run documented contract lint and formatting validation"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Treat domain or OpenAPI compatibility decisions as a manual contract gate even when automated validation passes."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/android",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/android"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic Vitest tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["npm", "run", "format:check"],
+          "working_directory": ".",
+          "purpose": "Check formatting"
+        },
+        {
+          "argv": ["npm", "run", "lint"],
+          "working_directory": ".",
+          "purpose": "Run ESLint"
+        },
+        {
+          "argv": ["npm", "run", "typecheck"],
+          "working_directory": ".",
+          "purpose": "Run TypeScript checks"
+        },
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic tests"
+        },
+        {
+          "argv": ["npm", "run", "native:verify"],
+          "working_directory": ".",
+          "purpose": "Verify required native project files"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Native Gradle compilation is required when affected but remains a manual gate because local Android toolchain availability is environment-dependent.",
+        "Do not sync Capacitor, access devices, build signed artifacts, deploy, or run live WebView tests."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/changelog",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/changelog"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["npm", "run", "csp:test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic CSP unit tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["npm", "run", "preflight"],
+          "working_directory": ".",
+          "purpose": "Run the repository's documented preflight validation"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Do not restart services, deploy, or use environment-connected preview validation."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/GuardGuide",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/GuardGuide"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["npm", "run", "test:frontend"],
+          "working_directory": ".",
+          "purpose": "Run frontend unit tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["composer", "ci:check"],
+          "working_directory": ".",
+          "purpose": "Run the documented PHP and frontend static CI checks"
+        },
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run frontend tests and production build"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Select focused Laravel tests from the finding when backend behavior changes.",
+        "Do not run setup migrations, serve processes, queues, deployment, or environment-connected validation."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/guardguide.de",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/guardguide.de"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic Node tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["npm", "run", "format:check"],
+          "working_directory": ".",
+          "purpose": "Check formatting"
+        },
+        {
+          "argv": ["npm", "run", "check"],
+          "working_directory": ".",
+          "purpose": "Run Astro checks"
+        },
+        {
+          "argv": ["npm", "run", "lint"],
+          "working_directory": ".",
+          "purpose": "Run ESLint"
+        },
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic tests"
+        },
+        {
+          "argv": ["npm", "run", "build"],
+          "working_directory": ".",
+          "purpose": "Build the static site"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": ["Do not deploy or validate against a live site."],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/secpal.app",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/secpal.app"],
+      "reviewer_identities": [],
+      "focused_validation": [
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic Node tests"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["npm", "run", "format:check"],
+          "working_directory": ".",
+          "purpose": "Check formatting"
+        },
+        {
+          "argv": ["npm", "run", "check"],
+          "working_directory": ".",
+          "purpose": "Run Astro checks"
+        },
+        {
+          "argv": ["npm", "run", "lint"],
+          "working_directory": ".",
+          "purpose": "Run ESLint"
+        },
+        {
+          "argv": ["npm", "run", "test"],
+          "working_directory": ".",
+          "purpose": "Run deterministic tests"
+        },
+        {
+          "argv": ["npm", "run", "build"],
+          "working_directory": ".",
+          "purpose": "Build the static site"
+        }
+      ],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": ["Do not deploy or validate against a live site."],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
+    }
+  ]
+}

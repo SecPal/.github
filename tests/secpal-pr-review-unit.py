@@ -122,8 +122,8 @@ def config() -> dict[str, Any]:
         "maximum_api_calls": 200,
         "maximum_items": 10000,
         "maximum_threads": 500,
-        "maximum_comments": 10000,
-        "maximum_reactions": 10000,
+        "maximum_comments": 200,
+        "maximum_reactions": 50,
     }
 
 
@@ -324,8 +324,8 @@ def snapshot() -> dict[str, Any]:
                 "maximum_api_calls": 200,
                 "maximum_items": 10000,
                 "maximum_threads": 500,
-                "maximum_comments": 10000,
-                "maximum_reactions": 10000,
+                "maximum_comments": 200,
+                "maximum_reactions": 50,
             },
             "fully_paginated_connections": [
                 {"connection": "reviews", "pages": 1, "items": 0},
