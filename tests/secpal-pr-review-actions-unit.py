@@ -47,6 +47,30 @@ def evidence_snapshot() -> dict[str, Any]:
     return p21.finalize_snapshot(value)
 
 
+def descendant_snapshot(
+    initial: dict[str, Any], final_head: str = "d" * 40
+) -> dict[str, Any]:
+    final = copy.deepcopy(initial)
+    final["pull_request"].update(
+        {
+            "head_oid_before": final_head,
+            "head_oid_after": final_head,
+            "check_commit_oid": final_head,
+        }
+    )
+    remediation_commit = copy.deepcopy(final["commits"][-1])
+    remediation_commit.update(
+        {
+            "oid": final_head,
+            "parents": [initial["pull_request"]["head_oid_after"]],
+            "authored_at": "2026-07-19T01:00:00Z",
+            "committed_at": "2026-07-19T01:00:00Z",
+        }
+    )
+    final["commits"].append(remediation_commit)
+    return p21.finalize_snapshot(final)
+
+
 def repository_config() -> dict[str, Any]:
     value = p21.config()
     value["reviewer_identities"] = []
@@ -214,6 +238,23 @@ def plan(*operations: dict[str, Any], current_state: str = "APPLY_JUSTIFIED_REAC
     }
 
 
+def no_push_resolution_plan(*operations: dict[str, Any]) -> dict[str, Any]:
+    value = plan(
+        *operations,
+        current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+    )
+    value["cycle_number"] = 0
+    value["session"].update(
+        remediation_cycles=0,
+        signed_commits=0,
+        fast_forward_pushes=0,
+    )
+    for operation_value in value["operations"]:
+        if operation_value["kind"] == "THREAD_RESOLUTION":
+            operation_value["resolution_preconditions"]["pushed"] = False
+    return value
+
+
 def registry_entry(repository: str) -> dict[str, Any]:
     return {
         "repository": repository,
@@ -278,6 +319,15 @@ class FakeGitHub:
     def read_current_state(self, _plan: dict[str, Any], _operation: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("READ", "current-state"))
         return copy.deepcopy(self.state)
+
+    def read_current_feedback(self, plan_value: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(("READ", "current-feedback"))
+        snapshot = evidence_snapshot()
+        return {
+            "head_sha": p21.HEAD,
+            "pr_state": "OPEN",
+            "feedback": actions._snapshot_review_feedback(snapshot, plan_value),
+        }
 
     def verify_current_required_checks(
         self,
@@ -2291,6 +2341,8 @@ class MutationTests(TestCase):
             [
                 ("READ", "current-state"),
                 ("READ", "required-checks"),
+                ("READ", "current-feedback"),
+                ("READ", "current-state"),
                 ("WRITE", "THREAD_RESOLUTION"),
             ],
         )
@@ -2778,11 +2830,65 @@ class MutationTests(TestCase):
         )
         self.assertEqual(github.calls, [("READ", "current-state")])
 
+    def test_resolution_rechecks_feedback_after_required_check_verification(self) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            reaction=None,
+        )
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        snapshot = evidence_snapshot()
+        github = FakeGitHub()
+        github.state["target"].update(
+            {
+                "node_id": "THREAD_1",
+                "database_id": None,
+                "target_type": "PULL_REQUEST_REVIEW_THREAD",
+                "body_digest": None,
+                "is_resolved": False,
+            }
+        )
+        late_feedback = actions._snapshot_review_feedback(snapshot, value)
+        late_feedback["reviews"].append(
+            {
+                "node_id": "REVIEW_LATE",
+                "body_digest": digest("Late review after required checks"),
+                "actor": copy.deepcopy(github.state["actor"]),
+                "state": "COMMENTED",
+                "commit_oid": p21.HEAD,
+                "reactions": [],
+            }
+        )
+        github.read_current_feedback = mock.Mock(
+            return_value={
+                "head_sha": p21.HEAD,
+                "pr_state": "OPEN",
+                "feedback": late_feedback,
+            }
+        )
+
+        with self.assertRaisesRegex(actions.MutationBlocked, "PR-wide feedback changed"):
+            actions.execute_operation(
+                value,
+                "resolve-001",
+                snapshot,
+                repository_config(),
+                github,
+                apply=True,
+                resolution_evidence=complete_resolution_evidence(),
+            )
+
+        self.assertIn(("READ", "required-checks"), github.calls)
+        self.assertNotIn(("WRITE", "THREAD_RESOLUTION"), github.calls)
+
     def test_resolution_readiness_uses_initial_snapshot_and_blocks_late_feedback(self) -> None:
         initial = evidence_snapshot()
         final = copy.deepcopy(initial)
         op = operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
-        value = plan(op, current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE")
+        value = no_push_resolution_plan(op)
         result = actions.build_resolution_evidence(
             value,
             initial,
@@ -2856,6 +2962,24 @@ class MutationTests(TestCase):
             lambda _repository, _repository_root: True,
         )
         self.assertFalse(result["all_threads_classified"])
+
+    def test_resolution_rejects_a_reused_final_snapshot_as_the_initial_anchor(self) -> None:
+        snapshot = evidence_snapshot()
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+
+        result = actions.build_resolution_evidence(
+            value,
+            snapshot,
+            snapshot,
+            repository_config(),
+            p21.FakeGitRunner(),
+            lambda _repository, _repository_root: True,
+        )
+
+        self.assertFalse(all(result.values()), result)
 
     def test_inline_comment_reactions_are_independent_classification_sources(self) -> None:
         initial = evidence_snapshot()
@@ -3198,25 +3322,7 @@ class MutationTests(TestCase):
     def test_resolution_readiness_accepts_a_verified_descendant_remediation_head(self) -> None:
         initial = evidence_snapshot()
         final_head = "d" * 40
-        final = copy.deepcopy(initial)
-        final["pull_request"].update(
-            {
-                "head_oid_before": final_head,
-                "head_oid_after": final_head,
-                "check_commit_oid": final_head,
-            }
-        )
-        remediation_commit = copy.deepcopy(final["commits"][-1])
-        remediation_commit.update(
-            {
-                "oid": final_head,
-                "parents": [p21.HEAD],
-                "authored_at": "2026-07-19T01:00:00Z",
-                "committed_at": "2026-07-19T01:00:00Z",
-            }
-        )
-        final["commits"].append(remediation_commit)
-        final = p21.finalize_snapshot(final)
+        final = descendant_snapshot(initial, final_head)
 
         value = plan(
             operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
@@ -3256,6 +3362,65 @@ class MutationTests(TestCase):
             lambda _repository, _repository_root: True,
         )
         self.assertTrue(all(result.values()), result)
+
+    def test_resolution_rejects_head_advance_without_a_recorded_push(self) -> None:
+        initial = evidence_snapshot()
+        final_head = "d" * 40
+        final = descendant_snapshot(initial, final_head)
+        value = no_push_resolution_plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
+        )
+        value["snapshot_digest"] = final["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        value["expected_head_sha"] = final_head
+
+        with mock.patch.object(
+            actions.evidence,
+            "verify_local_against_snapshot",
+            return_value={"blockers": [], "repository_root": "/repo"},
+        ):
+            result = actions.build_resolution_evidence(
+                value,
+                initial,
+                final,
+                repository_config(),
+                validation_runner=lambda _repository, _repository_root: True,
+            )
+
+        self.assertFalse(all(result.values()), result)
+
+    def test_resolution_requires_one_new_commit_per_recorded_signed_push(self) -> None:
+        initial = evidence_snapshot()
+        final_head = "d" * 40
+        final = descendant_snapshot(initial, final_head)
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["cycle_number"] = 2
+        value["session"].update(
+            remediation_cycles=2,
+            signed_commits=2,
+            fast_forward_pushes=2,
+        )
+        value["snapshot_digest"] = final["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        value["expected_head_sha"] = final_head
+
+        with mock.patch.object(
+            actions.evidence,
+            "verify_local_against_snapshot",
+            return_value={"blockers": [], "repository_root": "/repo"},
+        ):
+            result = actions.build_resolution_evidence(
+                value,
+                initial,
+                final,
+                repository_config(),
+                validation_runner=lambda _repository, _repository_root: True,
+            )
+
+        self.assertFalse(all(result.values()), result)
 
     def test_resolution_requires_coverage_of_every_initial_thread_comment(self) -> None:
         initial = evidence_snapshot()
@@ -3395,9 +3560,8 @@ class MutationTests(TestCase):
 
     def test_resolution_evidence_runs_registered_validations_fail_closed(self) -> None:
         initial = evidence_snapshot()
-        value = plan(
-            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
-            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        value = no_push_resolution_plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
         )
         observed: list[tuple[str, Path]] = []
 
@@ -3418,9 +3582,8 @@ class MutationTests(TestCase):
 
     def test_resolution_evidence_requires_explicit_manual_gate_evidence(self) -> None:
         initial = evidence_snapshot()
-        value = plan(
-            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
-            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        value = no_push_resolution_plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
         )
         value["manual_gate_evidence"] = []
         with self.assertRaisesRegex(actions.PlanError, "manual gate"):
@@ -3438,9 +3601,8 @@ class MutationTests(TestCase):
 
     def test_resolution_reverifies_local_state_after_registered_validations(self) -> None:
         initial = evidence_snapshot()
-        value = plan(
-            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
-            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        value = no_push_resolution_plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None)
         )
         runner = p21.FakeGitRunner()
 

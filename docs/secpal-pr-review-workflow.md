@@ -182,7 +182,8 @@ the checked-in focused and required local validation commands and compares the
 complete live target-thread comment set with the final snapshot. It then
 re-reads applicable required-check rules, branch protection, the current base,
 the effective check target, and current required-check outcomes; any drift or
-non-successful required result blocks the write. Live PR-wide feedback is read
+non-successful required result blocks the write. The PR-wide feedback and exact
+target reads are repeated after that check gate. Live PR-wide feedback is read
 as two complete bounded projections and must match canonically, including all
 paginated pages. Applicable rules and check contexts use the same two-projection
 stability requirement.
@@ -212,6 +213,10 @@ capacity before writing, while exact idempotent matches reserve nothing. Inline
 reply deltas must also retain the exact parent-comment node ID. A resolution
 without a remediation cycle truthfully records `pushed: false`; the helper binds
 that value to the session's actual fast-forward-push count.
+No-push readiness also requires identical initial and final heads and commit
+lists. Remediation readiness requires one new linear commit per recorded signed
+push. After the live required-check verification, the helper repeats the
+bounded PR-wide feedback and exact target-thread reads before resolving.
 
 ## Snapshot changes, CI, and recovery
 

@@ -36,11 +36,14 @@ generic API, Git-write, label/issue, merge, or auto-merge capability, and failur
 are never retried. It independently verifies Package-2.1 evidence before every
 operation; resolutions additionally run all registered local validations and
 re-check the complete live thread comment set, applicable required-check rules,
-current base, effective check target, and required-check outcomes. PR-wide
-feedback must also match across two complete bounded projections. Resolution plans reject
+current base, effective check target, and required-check outcomes, then repeat
+the PR-wide feedback and exact target reads. PR-wide feedback must match across
+two complete bounded projections. Resolution plans reject
 unrecorded already-resolved targets, canonical-reference cycles, unsafe
 canonical dispositions, actionable fixes without commit and test proof, and
-operations whose evidence does not match their logical finding.
+operations whose evidence does not match their logical finding. Their initial
+and final heads must also encode exactly one new linear commit per recorded
+signed push, or no commit movement for a no-push session.
 
 ### `install-secpal-pr-review-skill.sh`
 

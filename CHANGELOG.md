@@ -65,6 +65,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - bound the resolution push precondition to actual remediation history, reserved
   effective feedback capacity before pending reactions and replies, and matched
   idempotent reply deltas to their exact parent comment
+- bind resolution readiness to the exact initial-to-final remediation commit
+  chain and repeat feedback and target reads after the live required-check gate
 
 ---
 

@@ -280,6 +280,12 @@ independently prove all of the following:
   unsafe GitHub state; and
 - no counter limit exceeded.
 
+A no-push session requires identical initial and final heads and commit lists.
+A remediation session requires exactly one new linear commit per recorded
+signed commit and fast-forward push, with the chain starting at the immutable
+initial head and ending at the expected final head. Reusing the final snapshot
+as the initial anchor therefore fails closed.
+
 Immediately before each resolution write, the helper runs the repository's
 registered focused and required local validation commands without a shell and
 performs one bounded live PR-wide feedback read. It compares the canonical
@@ -289,14 +295,15 @@ resolutions, and separately compares the complete live target-thread comment
 set with that snapshot. Top-level review, conversation-comment, and thread
 connections are cursor-paginated within the registered API and item caps; a
 missing, repeated, or non-advancing cursor fails closed.
-After local validation, the final feedback comparison, and the exact target
-read, the helper uses its last pre-write gate to re-read applicable rulesets,
-branch-protection required checks, the current base identity/OID,
-test-merge/head check target, and every required-check outcome within the same
-registered caps. Rules and check contexts each require two equal complete
-projections, including all paginated pages. Any rule drift, target drift,
+After local validation and the initial final-feedback comparison, the helper
+re-reads applicable rulesets, branch-protection required checks, the current
+base identity/OID, test-merge/head check target, and every required-check
+outcome within the same registered caps. Rules and check contexts each require
+two equal complete projections, including all paginated pages. It then repeats
+the bounded PR-wide feedback comparison and exact target-thread read immediately
+before the resolution mutation. Any rule drift, feedback drift, target drift,
 partial response, missing check, or non-successful required outcome blocks the
-resolution write.
+write.
 The aggregate registry budgets of 200 recorded comments and 50 recorded
 reactions include Package 2.1's mandatory second observation. Their effective
 live limits of 100 comments and 25 reactions stay within every unpaginated

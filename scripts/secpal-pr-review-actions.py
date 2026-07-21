@@ -2774,6 +2774,20 @@ def execute_operation(
         ):
             raise MutationBlocked("BLOCKED_UNRESOLVED_MATERIAL_FINDING: resolution evidence is incomplete")
         github.verify_current_required_checks(validated, snapshot, configuration)
+        post_check_feedback = github.read_current_feedback(validated)
+        _verify_current_feedback(
+            validated,
+            snapshot,
+            post_check_feedback,
+            operation,
+        )
+        post_check_state = github.read_current_state(validated, operation)
+        _verify_current_state(
+            validated,
+            operation,
+            post_check_state,
+            snapshot,
+        )
     method = {
         "REACTION": github.apply_reaction,
         "EVIDENCE_REPLY": github.apply_reply,
@@ -3033,6 +3047,47 @@ def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict
     return True
 
 
+def _remediation_head_transition_is_valid(
+    plan: dict[str, Any],
+    initial_snapshot: dict[str, Any],
+    final_snapshot: dict[str, Any],
+) -> bool:
+    initial_head = initial_snapshot["pull_request"]["head_oid_after"]
+    final_head = final_snapshot["pull_request"]["head_oid_after"]
+    initial_commit_oids = [commit["oid"] for commit in initial_snapshot["commits"]]
+    final_commits_by_oid = {
+        commit["oid"]: commit for commit in final_snapshot["commits"]
+    }
+    final_commit_oids = list(final_commits_by_oid)
+    signed_pushes = plan["session"]["fast_forward_pushes"]
+    if not (
+        plan["cycle_number"]
+        == plan["session"]["remediation_cycles"]
+        == plan["session"]["signed_commits"]
+        == signed_pushes
+    ):
+        return False
+    if signed_pushes == 0:
+        return initial_head == final_head and initial_commit_oids == final_commit_oids
+
+    new_commit_oids = set(final_commit_oids) - set(initial_commit_oids)
+    cursor = final_head
+    traversed: set[str] = set()
+    for _index in range(signed_pushes):
+        commit = final_commits_by_oid.get(cursor)
+        parents = commit.get("parents") if isinstance(commit, dict) else None
+        if (
+            cursor not in new_commit_oids
+            or not isinstance(parents, list)
+            or len(parents) != 1
+            or not isinstance(parents[0], str)
+        ):
+            return False
+        traversed.add(cursor)
+        cursor = parents[0]
+    return cursor == initial_head and traversed == new_commit_oids
+
+
 def build_resolution_evidence(
     plan: dict[str, Any],
     initial_snapshot: dict[str, Any],
@@ -3062,6 +3117,9 @@ def build_resolution_evidence(
         or final_snapshot["repository"]["name_with_owner"] != plan["repository"]
         or final_snapshot["pull_request"]["number"] != plan["pull_request_number"]
         or final_snapshot["pull_request"]["head_oid_after"] != plan["expected_head_sha"]
+        or not _remediation_head_transition_is_valid(
+            plan, initial_snapshot, final_snapshot
+        )
         or not {
             commit["oid"] for commit in initial_snapshot["commits"]
         } <= {
