@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # ADR-015: Global Identity Key Security
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-07-20
 
@@ -17,7 +17,7 @@ SPDX-License-Identifier: CC0-1.0
 
 [ADR-014](20260720-tenant-identity-access-model-adr014.md) is accepted and is the binding architectural baseline. It establishes a global user identity, tenant memberships, and a Global Identity Key boundary distinct from tenant data. This ADR only specifies the security design inside that boundary. It neither weakens nor reopens ADR-014.
 
-This ADR is proposed. Its implementation details must not be treated as accepted until the decision authority accepts it.
+This ADR is accepted and is the binding security architecture for implementation inside the Global Identity Key boundary established by ADR-014.
 
 ## Context
 
@@ -409,7 +409,9 @@ last_delivery_error_class
 
 The state machine semantically distinguishes `pending`, `claimed`, `dispatch_committed`, `delivered`, `retryable_failed`, `delivery_unknown`, and `terminal`; exact enum names are implementation details. `delivery_attempt_id` is a unique random identifier for one claim. `delivery_fence_version` increases monotonically whenever a claim is created, replaced, expired, or invalidated. `lease_expires_at` bounds the claim. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content.
 
-`transport_idempotency_key` is an independently generated opaque CSPRNG value with at least 128 bits of entropy; V1 should use 256 bits. It is generated exactly once during the claim transaction, stored atomically with `delivery_attempt_id`, and immutable for that attempt. A new attempt receives a new independent key. Reuse is permitted only for an explicitly provider-supported idempotent repetition of the same attempt. Provider-compatible encoding should use unpadded Base64url or an equivalently opaque format.
+For V1, `transport_idempotency_key` consists of exactly 32 independently generated operating-system CSPRNG bytes, providing a 256-bit random value before encoding. There is no 128-bit fallback. The 32 random bytes are generated exactly once during the claim transaction, stored atomically with `delivery_attempt_id`, and immutable for that attempt. Every new attempt receives new independent 32 CSPRNG bytes. Reuse is permitted only for an explicitly provider-supported idempotent repetition of the same attempt using the exact stored value.
+
+The 32 random bytes are the canonical internal form. V1 encodes them for provider use as unpadded Base64url without truncation, producing an opaque 43-character value. Encoding does not change the entropy requirement, and no truncation step is permitted. A provider that cannot accept the complete 43-character V1 representation is incompatible with the V1 idempotency-key mechanism: it must receive no weakened or shortened key and instead uses the existing no-provider-idempotency `delivery_unknown` and reconciliation policy.
 
 The idempotency key is never derived from or constructed with an email address, token, user ID, tenant ID, operation ID, attempt ID, or other business identifier, and its external representation exposes no internal ID. Binding to the operation and attempt comes only from the atomic database association. The value is correlation metadata, not an authentication or security secret, but it is handled confidentially: normal logs and audits contain only an internal reference or a shortened keyed or cryptographic digest, never the complete value.
 
@@ -419,7 +421,7 @@ No database transaction or row lock may remain open during template rendering th
 
 ### Phase 1: Claim
 
-In one short database transaction, the worker locks the operation and verifies that it remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded, and that its bound user and optional `email_version` remain current. It creates a new unique `delivery_attempt_id`, independently generates the opaque CSPRNG `transport_idempotency_key`, stores both atomically, increments `delivery_fence_version` and `delivery_attempt_count`, records a bounded lease, and changes the state to `claimed`. It then commits and releases every row lock. Only one current, unexpired claim may proceed.
+In one short database transaction, the worker locks the operation and verifies that it remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded, and that its bound user and optional `email_version` remain current. It creates a new unique `delivery_attempt_id`, independently generates exactly 32 operating-system CSPRNG bytes for `transport_idempotency_key`, stores both atomically, increments `delivery_fence_version` and `delivery_attempt_count`, records a bounded lease, and changes the state to `claimed`. It then commits and releases every row lock. Only one current, unexpired claim may proceed.
 
 ### Phase 2: Preparation
 
@@ -760,12 +762,13 @@ Implementation work must add positive, negative, concurrency, failure-injection,
 - final-fence failure creating no dispatch commitment, and transport occurring only after the `dispatch_committed` state is durably committed;
 - confirmed transport acceptance clearing `delivery_token_enc` while retaining `token_hash`, and a confirmed pre-acceptance failure retaining the encrypted secret only for an allowed retry;
 - a timeout, network interruption, or crash after possible provider acceptance entering `delivery_unknown` without a blind automatic resend;
-- idempotency keys meeting the configured minimum CSPRNG entropy, with independent attempts for the same operation receiving different keys;
-- an explicitly supported repetition of the same attempt reusing its exact stored idempotency key while a new attempt receives a new key;
+- idempotency keys consisting of exactly 32 CSPRNG bytes before encoding, unpadded 43-character Base64url provider representations, and no truncation;
+- independent attempts for the same operation receiving different 32-byte values, while an explicitly supported repetition of the same attempt reuses its exact stored value;
 - provider-facing idempotency keys containing no operation, attempt, user, tenant, email, token, or other business-identifier component;
-- logs, audits, traces, errors, and failed-job data containing no complete idempotency key or provider message reference;
+- logs, audits, traces, exceptions, errors, and failed-job data containing no complete idempotency key or provider message reference;
 - provider message references containing no email, token, complete URL, rendered content, or application identifier and remaining semantically distinct from idempotency keys;
 - provider idempotency preventing duplicate acceptance where supported, including reuse of the same key only for an explicitly idempotent repetition;
+- rejection or disablement of provider idempotency when the provider cannot accept the complete untruncated 43-character V1 representation, without reducing key entropy;
 - SMTP or another transport without authoritative status or idempotency support remaining `delivery_unknown`, including when no provider reference exists, with no blind resend;
 - crash recovery reconciling hanging `dispatch_committed` and `delivery_unknown` attempts first by provider reference and then by explicitly supported idempotency operations;
 - expired, consumed, revoked, cancelled, or superseded operations sending nothing, including stale reset/verification `email_version` bindings;
@@ -873,4 +876,4 @@ These choices do not reopen the binding security boundaries above:
 9. Move MFA secrets and recovery data from the broad `APP_KEY` boundary to a dedicated global credential purpose while preserving fail-closed migration rules in the clean baseline.
 10. Implement and exercise encryption-key, blind-index-key, root/KEK, and emergency rotation state machines, including interrupted operations and uniqueness stress tests.
 11. Update deployment, backup, recovery, mail, queue, and encryption documentation; run isolated recovery drills for backups from before, during, and after rotations.
-12. Complete the full test strategy, secret/redaction scans, security review, and product/domain-owner decision. The ADR remains `Proposed` until explicitly accepted by the decision authority.
+12. Complete the full test strategy, secret/redaction scans, and security review before implementation. This accepted ADR is binding for implementation inside the Global Identity Key boundary established by ADR-014.
