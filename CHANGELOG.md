@@ -58,6 +58,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   unresolved canonical roots from resolution; corrected and proven-existing
   actionable findings now require commit and test proof, and the action tests
   use one consistent `unittest` import form
+- kept final-snapshot coverage complete after authorized reactions and replies
+  by admitting only structurally verified recorded policy writes, while keeping
+  finding coverage exact to the immutable initial snapshot and rejecting reused
+  mutation identities
 
 ---
 

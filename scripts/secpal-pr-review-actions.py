@@ -427,6 +427,7 @@ def _validate_operation_semantics(
     reacted_targets: set[str] = set()
     replied_findings: set[str] = set()
     resolved_threads: set[str] = set()
+    recorded_mutation_identities: set[str] = set()
     reply_count = 0
     recorded_writes = {
         "REACTION": 0,
@@ -445,6 +446,9 @@ def _validate_operation_semantics(
         if mutation_identity is not None:
             if not mutation_identity:
                 raise PlanError("recorded mutation identity must be non-empty")
+            if mutation_identity in recorded_mutation_identities:
+                raise PlanError("recorded mutation identity must belong to one operation")
+            recorded_mutation_identities.add(mutation_identity)
             recorded_writes[kind] += 1
         finding_id = operation["logical_finding_id"]
         finding = findings.get(finding_id)
@@ -681,6 +685,71 @@ def _snapshot_evidence_ids(
     return node_ids, database_ids, thread_ids, actors, targets
 
 
+def _recorded_policy_write_source_ids(
+    plan: dict[str, Any], snapshot: dict[str, Any]
+) -> set[str]:
+    """Return recorded reaction/reply IDs proven to belong to their operations."""
+
+    feedback_items = [*snapshot["reviews"], *snapshot["conversation_comments"]]
+    feedback_items.extend(
+        comment
+        for thread in snapshot["review_threads"]
+        for comment in thread["comments"]
+    )
+    feedback_targets = {item["id"]: item for item in feedback_items}
+    thread_comments = {
+        comment["id"]: (thread["id"], comment)
+        for thread in snapshot["review_threads"]
+        for comment in thread["comments"]
+    }
+    recorded_source_ids: set[str] = set()
+    for operation in plan["operations"]:
+        identity = operation["applied_mutation_identity"]
+        if identity is None or operation["kind"] == "THREAD_RESOLUTION":
+            continue
+        if operation["kind"] == "REACTION":
+            target = feedback_targets.get(operation["target_node_id"])
+            recorded = next(
+                (
+                    reaction
+                    for reaction in target.get("reactions", [])
+                    if reaction.get("id") == identity
+                ),
+                None,
+            ) if isinstance(target, dict) else None
+            actor = recorded.get("user") if isinstance(recorded, dict) else None
+            valid = (
+                isinstance(recorded, dict)
+                and recorded.get("content") == operation["reaction"]
+                and isinstance(actor, dict)
+                and all(
+                    actor.get(key) == operation["expected_actor_identity"].get(key)
+                    for key in ("login", "node_id", "database_id")
+                )
+            )
+        else:
+            reply_item = thread_comments.get(identity)
+            thread_id, recorded = reply_item if reply_item is not None else (None, None)
+            actor = recorded.get("author") if isinstance(recorded, dict) else None
+            valid = (
+                isinstance(recorded, dict)
+                and thread_id == operation["parent_thread_id"]
+                and recorded.get("reply_to_id") == operation["target_node_id"]
+                and recorded.get("body") == operation["reply_body"]
+                and isinstance(actor, dict)
+                and all(
+                    actor.get(key) == operation["expected_actor_identity"].get(key)
+                    for key in ("login", "node_id", "database_id")
+                )
+            )
+        if not valid:
+            raise PlanError(
+                "recorded policy write identity differs from the bound snapshot"
+            )
+        recorded_source_ids.add(identity)
+    return recorded_source_ids
+
+
 def _validate_snapshot_bindings(
     plan: dict[str, Any],
     snapshot: dict[str, Any],
@@ -755,7 +824,12 @@ def _validate_snapshot_bindings(
         for finding in findings.values()
         for source_id in finding["source_node_ids"]
     }
-    if classified_source_ids != node_ids:
+    covered_source_ids = classified_source_ids
+    if plan["created_for_state"] == "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE":
+        covered_source_ids = classified_source_ids | _recorded_policy_write_source_ids(
+            plan, snapshot
+        )
+    if covered_source_ids != node_ids:
         raise PlanError(
             "classification coverage must include every immutable snapshot source"
         )
@@ -2806,6 +2880,15 @@ def _no_late_feedback(
 
 
 def _all_initial_threads_classified(plan: dict[str, Any], initial_snapshot: dict[str, Any]) -> bool:
+    classified_source_ids = {
+        source_id
+        for finding in plan["findings"]
+        for source_id in finding["source_node_ids"]
+    }
+    initial_source_ids, _, _, _, _ = _snapshot_evidence_ids(initial_snapshot)
+    if classified_source_ids != initial_source_ids:
+        return False
+
     findings_by_thread: dict[str, list[dict[str, Any]]] = {}
     findings_by_id = {
         finding["logical_finding_id"]: finding for finding in plan["findings"]

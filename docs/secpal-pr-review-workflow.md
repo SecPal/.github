@@ -203,6 +203,10 @@ evidence. Duplicate and superseded references must be acyclic, and their
 canonical finding must be safely disposed before resolution. An already-resolved
 live thread is accepted only with its recorded prior resolution identity.
 Recorded mutation identities are re-read from live state before they are trusted.
+Finding sources must exactly equal the initial snapshot's evidence sources.
+Final snapshot coverage admits only recorded reaction and reply identities whose
+target, payload, parent thread, and authenticated writer exactly match their
+operation; those policy writes do not become new findings.
 
 ## Snapshot changes, CI, and recovery
 

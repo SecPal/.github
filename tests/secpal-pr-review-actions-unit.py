@@ -612,6 +612,113 @@ class ContractTests(TestCase):
         with self.assertRaisesRegex(actions.PlanError, "classification coverage"):
             actions.validate_plan(value, snapshot, repository_config())
 
+    def test_resolution_coverage_allows_exact_recorded_policy_writes(self) -> None:
+        initial = evidence_snapshot()
+        writer = p21.actor("aroviqen")
+        writer_identity = {
+            key: writer[key] for key in ("login", "node_id", "database_id")
+        }
+
+        reaction_snapshot = copy.deepcopy(initial)
+        own_reaction = p21.reaction("REACTION_OWN", "THUMBS_UP")
+        own_reaction["user"] = writer
+        reaction_snapshot["review_threads"][0]["comments"][0]["reactions"] = [
+            own_reaction
+        ]
+        reaction_snapshot = p21.finalize_snapshot(reaction_snapshot)
+        recorded_reaction = operation()
+        recorded_reaction["applied_mutation_identity"] = "REACTION_OWN"
+        recorded_reaction["expected_actor_identity"] = writer_identity
+        reaction_plan = plan(
+            recorded_reaction,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        reaction_plan["snapshot_digest"] = reaction_snapshot["snapshot_digest"]
+        reaction_plan["initial_snapshot_digest"] = initial["snapshot_digest"]
+        reaction_plan["session"]["reaction_writes"] = 1
+
+        self.assertEqual(
+            actions.validate_plan(
+                reaction_plan, reaction_snapshot, repository_config()
+            ),
+            reaction_plan,
+        )
+        self.assertTrue(
+            actions._all_initial_threads_classified(reaction_plan, initial)
+        )
+
+        reply_snapshot = copy.deepcopy(initial)
+        own_reply = p21.review_comment(
+            "REPLY_OWN", login="aroviqen", body="Independent evidence"
+        )
+        own_reply["database_id"] = 22
+        own_reply["reply_to_id"] = "RC_1"
+        reply_snapshot["review_threads"][0]["comments"].append(own_reply)
+        reply_snapshot = p21.finalize_snapshot(reply_snapshot)
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["applied_mutation_identity"] = "REPLY_OWN"
+        recorded_reply["expected_actor_identity"] = writer_identity
+        reply_plan = plan(
+            recorded_reply,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        reply_plan["snapshot_digest"] = reply_snapshot["snapshot_digest"]
+        reply_plan["initial_snapshot_digest"] = initial["snapshot_digest"]
+        reply_plan["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        reply_plan["session"]["evidence_replies"] = 1
+
+        self.assertEqual(
+            actions.validate_plan(reply_plan, reply_snapshot, repository_config()),
+            reply_plan,
+        )
+        self.assertTrue(actions._all_initial_threads_classified(reply_plan, initial))
+
+    def test_resolution_coverage_rejects_forged_recorded_policy_writes(self) -> None:
+        initial = evidence_snapshot()
+        final = copy.deepcopy(initial)
+        late_reply = p21.review_comment(
+            "REPLY_LATE", login="reviewer", body="Late feedback"
+        )
+        late_reply["database_id"] = 22
+        late_reply["reply_to_id"] = "RC_1"
+        final["review_threads"][0]["comments"].append(late_reply)
+        final = p21.finalize_snapshot(final)
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-001",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["applied_mutation_identity"] = "REPLY_LATE"
+        value = plan(
+            recorded_reply,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["snapshot_digest"] = final["snapshot_digest"]
+        value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        value["findings"][0].update(
+            {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+            }
+        )
+        value["session"]["evidence_replies"] = 1
+
+        with self.assertRaisesRegex(actions.PlanError, "recorded policy write"):
+            actions.validate_plan(value, final, repository_config())
+
     def test_compound_source_supports_unique_stable_subitem_classifications(self) -> None:
         first = finding()
         first["source_subitem_id"] = "runtime-behavior"
@@ -881,6 +988,36 @@ class ContractTests(TestCase):
         ):
             with self.subTest(kind=name), self.assertRaisesRegex(actions.PlanError, "counter"):
                 actions.validate_plan(value, evidence_snapshot(), repository_config())
+
+    def test_recorded_mutation_identity_belongs_to_only_one_operation(self) -> None:
+        recorded_reaction = operation()
+        recorded_reaction["applied_mutation_identity"] = "MUTATION_SHARED"
+        recorded_reply = operation(
+            "EVIDENCE_REPLY",
+            operation_id="reply-002",
+            classification="INVALID_FALSE_OR_MISLEADING",
+            reaction=None,
+            reply_body="Independent evidence",
+        )
+        recorded_reply["logical_finding_id"] = "finding-002"
+        recorded_reply["applied_mutation_identity"] = "MUTATION_SHARED"
+        second_finding = finding(
+            "finding-002",
+            "INVALID_FALSE_OR_MISLEADING",
+            disposition="DISPROVEN_WITH_EVIDENCE",
+        )
+        second_finding["source_node_ids"] = ["RC_2"]
+        second_finding["source_database_ids"] = [22]
+        recorded_reply["evidence_digest"] = second_finding["evidence_digest"]
+        value = plan(recorded_reaction, recorded_reply)
+        value["findings"].append(second_finding)
+        value["session"]["reaction_writes"] = 1
+        value["session"]["evidence_replies"] = 1
+
+        with self.assertRaisesRegex(actions.PlanError, "mutation identity"):
+            actions._validate_operation_semantics(
+                value, actions._validate_finding_semantics(value["findings"])
+            )
 
 
 class MutationTests(TestCase):
@@ -2964,6 +3101,29 @@ class MutationTests(TestCase):
         )
         value["snapshot_digest"] = initial["snapshot_digest"]
         value["initial_snapshot_digest"] = initial["snapshot_digest"]
+        self.assertFalse(actions._all_initial_threads_classified(value, initial))
+
+    def test_resolution_classifies_only_initial_snapshot_sources(self) -> None:
+        initial = evidence_snapshot()
+        value = plan(
+            operation("THREAD_RESOLUTION", operation_id="resolve-001", reaction=None),
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        generated_write = finding(
+            "finding-generated-write",
+            "INFORMATIONAL",
+            disposition="NON_ACTIONABLE",
+        )
+        generated_write.update(
+            {
+                "source_node_ids": ["REPLY_OWN"],
+                "source_database_ids": [22],
+                "commit_sha": None,
+                "test_evidence": [],
+            }
+        )
+        value["findings"].append(generated_write)
+
         self.assertFalse(actions._all_initial_threads_classified(value, initial))
 
     def test_resolution_requires_classification_of_resolved_initial_threads(self) -> None:

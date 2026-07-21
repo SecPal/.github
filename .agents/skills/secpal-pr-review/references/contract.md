@@ -210,11 +210,15 @@ requires its own safely disposed finding before resolution.
 Reactions nested under reviews, conversation comments, and inline review
 comments are likewise independent classification sources and require their own
 safely disposed findings.
-Every immutable source item is covered before any policy write. An unsplit
-source occurs in exactly one logical finding; a compound source may occur in
-multiple findings only when each uses a unique non-empty `source_subitem_id`.
-A reaction is never folded into its parent comment's classification, and
-duplicate source/sub-item anchors are rejected.
+Every immutable initial-snapshot source item, and no later source, is covered
+before any policy write. An unsplit source occurs in exactly one logical
+finding; a compound source may occur in multiple findings only when each uses a
+unique non-empty `source_subitem_id`. A reaction is never folded into its parent
+comment's classification, and duplicate source/sub-item anchors are rejected.
+Final-snapshot coverage may additionally contain an earlier policy write only
+when its recorded identity, target, payload, parent thread, and authenticated
+writer exactly match the operation that produced it. Such writes satisfy final
+coverage but never become classification sources.
 
 Plans are deterministic, secret-free, and bound to the exact repository, PR,
 snapshot digest, and expected head SHA. A changed head invalidates a plan.
