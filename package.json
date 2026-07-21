@@ -28,8 +28,8 @@
   "author": "SecPal Contributors",
   "license": "CC0-1.0",
   "devDependencies": {
-    "js-yaml": "^4.2.0",
-    "markdownlint-cli": "0.49.0",
+    "js-yaml": "^5.2.1",
+    "markdownlint-cli": "0.49.1",
     "prettier": "3.5.3"
   }
 }
