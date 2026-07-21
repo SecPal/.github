@@ -7,8 +7,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INSTALLER="$REPO_ROOT/scripts/install-polyscope-system-components.sh"
+YAML_CHECK="$REPO_ROOT/scripts/verify-js-yaml-package.cjs"
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-system-installer.XXXXXX")"
 trap 'rm -rf "$WORKSPACE"' EXIT
+
+node "$YAML_CHECK" "$REPO_ROOT/node_modules/js-yaml"
+
+missing_yaml_entry="$WORKSPACE/missing-yaml-entry/js-yaml"
+mkdir -p "$(dirname -- "$missing_yaml_entry")"
+cp -R "$REPO_ROOT/node_modules/js-yaml" "$missing_yaml_entry"
+missing_yaml_module="$(node -e \
+    'process.stdout.write(require.resolve(process.argv[1]))' \
+    "$missing_yaml_entry")"
+rm "$missing_yaml_module"
+if node "$YAML_CHECK" "$missing_yaml_entry"; then
+    echo "js-yaml verification must reject a missing declared entry point" >&2
+    exit 1
+fi
+
+invalid_yaml_api="$WORKSPACE/invalid-yaml-api/js-yaml"
+mkdir -p "$invalid_yaml_api"
+cat >"$invalid_yaml_api/package.json" <<'JSON'
+{
+  "name": "js-yaml",
+  "main": "index.cjs"
+}
+JSON
+cat >"$invalid_yaml_api/index.cjs" <<'JS'
+module.exports = {};
+JS
+if node "$YAML_CHECK" "$invalid_yaml_api"; then
+    echo "js-yaml verification must reject a package without yaml.load" >&2
+    exit 1
+fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
     if "$INSTALLER" >"$WORKSPACE/non-root.out" 2>"$WORKSPACE/non-root.err"; then

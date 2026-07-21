@@ -12,6 +12,8 @@ ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
 RUNTIME_ROLLOUT_SOURCE="/home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py"
 RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
+RUNTIME_YAML_CHECK="$RUNTIME_SCRIPT_DIR/verify-js-yaml-package.cjs"
+RUNTIME_YAML_PACKAGE="$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml"
 DESTDIR="${DESTDIR:-}"
 NODE_BIN=""
 STAGE_ONLY=0
@@ -106,6 +108,7 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         "$RUNTIME_ROLLOUT_SOURCE" \
         "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
+        "$RUNTIME_YAML_CHECK" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml/package.json"; do
@@ -118,6 +121,11 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         || ! -x "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
         || ! -x "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ]]; then
         echo "Error: canonical Polyscope runtime scripts and pinned validator must be executable below $RUNTIME_TOOLCHAIN_ROOT." >&2
+        exit 1
+    fi
+    if ! /usr/bin/sudo -u secpal -- \
+        "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$RUNTIME_YAML_PACKAGE"; then
+        echo "Error: canonical Polyscope runtime js-yaml package is unusable; reinstall the committed dependencies before activation." >&2
         exit 1
     fi
 fi

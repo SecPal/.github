@@ -209,6 +209,11 @@ if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
     echo "Error: canonical instruction validator is missing or not executable next to the rollout source: $VALIDATOR_SOURCE" >&2
     exit 1
 fi
+VALIDATOR_YAML_CHECK="$(dirname -- "$SOURCE_SCRIPT")/verify-js-yaml-package.cjs"
+if [[ ! -f "$VALIDATOR_YAML_CHECK" ]]; then
+    echo "Error: canonical js-yaml verifier is missing next to the rollout source: $VALIDATOR_YAML_CHECK" >&2
+    exit 1
+fi
 NGINX_LIBRARY_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/polyscope_nginx.py"
 NGINX_HELPER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal-polyscope-nginx-apply.py"
 if [[ ! -f "$NGINX_LIBRARY_SOURCE" || ! -x "$NGINX_HELPER_SOURCE" ]]; then
@@ -229,20 +234,15 @@ for _validator_tool in bash basename dirname find grep head node python3 wc; do
     fi
 done
 
-validator_yaml_available() {
-    PATH="$SERVICE_PATH" node - "$VALIDATOR_YAML_PACKAGE" <<'JS' >/dev/null 2>&1
-try {
-    require.resolve(process.argv[2]);
-} catch (_error) {
-    process.exit(1);
-}
-JS
+validator_yaml_usable() {
+    PATH="$SERVICE_PATH" node \
+        "$VALIDATOR_YAML_CHECK" "$VALIDATOR_YAML_PACKAGE" >/dev/null 2>&1
 }
 
 if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     || ! -f "$VALIDATOR_INSTALLED_PACKAGE_LOCK" \
     || ! -x "$VALIDATOR_MARKDOWNLINT" ]] \
-    || ! validator_yaml_available; then
+    || ! validator_yaml_usable; then
     echo "Error: rollout validator toolchain is incomplete; install the source bundle's committed npm dependencies before installing the rollout." >&2
     exit 1
 fi

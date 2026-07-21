@@ -433,10 +433,11 @@ authorization is unavailable.
 `--source-script` accepts a custom rollout implementation only as part of a
 complete source bundle: the script must be executable, have the constrained
 `polyscope_nginx.py` library and executable nginx helper beside it, and have an
-executable `validate-ai-instructions.sh` sibling with the committed npm
-validator dependencies installed. The installer resolves this bundle before
-any installation writes and watches these files and the npm lock state for
-rollout changes and dependency-install recovery.
+executable `validate-ai-instructions.sh` sibling plus the canonical js-yaml
+verifier with the committed npm validator dependencies installed. The installer
+loads the pinned parser and verifies its required API before any installation
+writes, then watches the runtime files and npm lock state for rollout changes
+and dependency-install recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new
@@ -502,12 +503,13 @@ always resolves the target host's `secpal` UID and an executable Node.js path
 before activation. Packaging tests may pass `--node-bin` to render the intended
 service `PATH` without inspecting the target account.
 
-Before activation, the installer verifies the executable canonical rollout
-and validator source bundle, committed lockfile, and installed pinned Markdown
-dependencies under `/home/secpal/code/SecPal/.github/`. The system drop-in
-executes that source directly, so a fresh installation does not depend on the
-user-local rollout link created during the following unprivileged installation
-step.
+Before activation, the installer verifies the executable canonical rollout and
+validator source bundle, committed lockfile, and installed pinned Markdown and
+YAML dependencies under `/home/secpal/code/SecPal/.github/`. The parser must
+resolve and expose the required loading API to the `secpal` service account.
+The system drop-in executes that source directly, so a fresh installation does
+not depend on the user-local rollout link created during the following
+unprivileged installation step.
 
 The installed `/usr/local/libexec/secpal-polyscope-nginx-apply` accepts only no
 arguments (apply) or `--check` (non-mutating boundary check). It reads the fixed
