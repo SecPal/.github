@@ -400,19 +400,26 @@ delivery_attempt_id
 delivery_fence_version
 lease_expires_at
 transport_idempotency_key
+provider_message_reference
 dispatch_committed_at
 delivered_at
 delivery_attempt_count
 last_delivery_error_class
 ```
 
-The state machine semantically distinguishes `pending`, `claimed`, `dispatch_committed`, `delivered`, `retryable_failed`, `delivery_unknown`, and `terminal`; exact enum names are implementation details. `delivery_attempt_id` is a unique random identifier for one claim. `delivery_fence_version` increases monotonically whenever a claim is created, replaced, expired, or invalidated. `lease_expires_at` bounds the claim. `transport_idempotency_key` is derived deterministically from the operation and attempt through an unambiguous, domain-separated encoding and remains stable for that attempt. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content.
+The state machine semantically distinguishes `pending`, `claimed`, `dispatch_committed`, `delivered`, `retryable_failed`, `delivery_unknown`, and `terminal`; exact enum names are implementation details. `delivery_attempt_id` is a unique random identifier for one claim. `delivery_fence_version` increases monotonically whenever a claim is created, replaced, expired, or invalidated. `lease_expires_at` bounds the claim. `last_delivery_error_class` is an allowlist-based redacted code and contains no recipient, token, URL, exception message, or ciphertext content.
+
+`transport_idempotency_key` is an independently generated opaque CSPRNG value with at least 128 bits of entropy; V1 should use 256 bits. It is generated exactly once during the claim transaction, stored atomically with `delivery_attempt_id`, and immutable for that attempt. A new attempt receives a new independent key. Reuse is permitted only for an explicitly provider-supported idempotent repetition of the same attempt. Provider-compatible encoding should use unpadded Base64url or an equivalently opaque format.
+
+The idempotency key is never derived from or constructed with an email address, token, user ID, tenant ID, operation ID, attempt ID, or other business identifier, and its external representation exposes no internal ID. Binding to the operation and attempt comes only from the atomic database association. The value is correlation metadata, not an authentication or security secret, but it is handled confidentially: normal logs and audits contain only an internal reference or a shortened keyed or cryptographic digest, never the complete value.
+
+`provider_message_reference` is optional and has a separate meaning. It stores only an opaque identifier actually returned by the provider when that identifier is required for an authoritative status query or reconciliation. It contains no email address, token, complete URL, rendered message, or internal business identifier; it is stored with restricted access and omitted from normal logs. Audit and monitoring use only an internal reference or digest. Transports without a queryable provider reference leave it absent. An RFC Message-ID is not automatically authoritative evidence of provider acceptance or delivery. The provider reference identifies provider-side state; the idempotency key controls supported repetition of one application attempt. They are never substituted for one another.
 
 No database transaction or row lock may remain open during template rendering that has external dependencies, an SMTP or mail-provider API call, transport-status lookup, or any other external I/O. Database state cannot atomically commit with an external mail system, and a transport can accept a message even when the client observes a timeout or crashes. Holding a lock across that boundary would block lifecycle transitions, consume database connections, increase deadlock and availability risk, and still would not eliminate ambiguous or duplicate external handoffs.
 
 ### Phase 1: Claim
 
-In one short database transaction, the worker locks the operation and verifies that it remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded, and that its bound user and optional `email_version` remain current. It creates a new unique `delivery_attempt_id`, increments `delivery_fence_version` and `delivery_attempt_count`, records a bounded lease, derives and persists the operation- and attempt-bound `transport_idempotency_key`, and changes the state to `claimed`. It then commits and releases every row lock. Only one current, unexpired claim may proceed.
+In one short database transaction, the worker locks the operation and verifies that it remains active, unexpired, unconsumed, not revoked, not cancelled, and not superseded, and that its bound user and optional `email_version` remain current. It creates a new unique `delivery_attempt_id`, independently generates the opaque CSPRNG `transport_idempotency_key`, stores both atomically, increments `delivery_fence_version` and `delivery_attempt_count`, records a bounded lease, and changes the state to `claimed`. It then commits and releases every row lock. Only one current, unexpired claim may proceed.
 
 ### Phase 2: Preparation
 
@@ -445,9 +452,9 @@ The transaction must commit and release every row lock before the worker invokes
 
 ### Phase 4: External transport
 
-The worker calls SMTP or the mail-provider API without an open database transaction or row lock. It supplies the stored `transport_idempotency_key` whenever the provider supports idempotency. Only the recipient, rendered message, and other immediately required values cross the transport boundary; logs, exception contexts, failed-job payloads, and transport metadata contain no plaintext token, complete URL, recipient address, or decrypted delivery ciphertext.
+The worker calls SMTP or the mail-provider API without an open database transaction or row lock. It supplies the stored `transport_idempotency_key` only when the provider explicitly supports idempotency for the operation. Only the recipient, rendered message, and other immediately required values cross the transport boundary; logs, exception contexts, failed-job payloads, and transport metadata contain no plaintext token, complete URL, recipient address, decrypted delivery ciphertext, complete idempotency key, or provider message reference.
 
-Provider idempotency reduces duplicate acceptance but does not redefine token validity or make the database and provider atomic. The application retains any provider message identifier needed for redacted reconciliation when available; it must not embed a token, recipient, or complete URL.
+Provider idempotency reduces duplicate acceptance but does not redefine token validity or make the database and provider atomic. If the provider returns a usable opaque reference, the application stores it as `provider_message_reference` in a short result transaction. The application never invents a provider reference or treats a generic SMTP Message-ID as authoritative status evidence.
 
 ### Lifecycle invalidation around the point of no return
 
@@ -461,9 +468,17 @@ After confirmed provider acceptance, a short transaction verifies the current at
 
 After a confirmed failure before provider acceptance, a short transaction verifies the current attempt and that no terminal lifecycle transition has superseded it, then sets `delivery_state = retryable_failed` or a terminal state according to the allowlisted error class. It clears the lease and retains the delivery secret only when a controlled retry is allowed. A late failure cannot reopen a terminal operation. Retry metadata contains no sensitive plaintext.
 
-A client timeout, process crash after possible provider acceptance, network interruption without an authoritative response, or any other ambiguous handoff sets or reconciles the attempt to `delivery_unknown`. The system must not automatically resend with a new attempt ID or token. It queries provider state by the same idempotency key or provider message ID where possible. It may repeat the same attempt with the same idempotency key only when the provider explicitly guarantees idempotent repetition. Without authoritative evidence, it performs no blind resend; it may terminalize the operation, and any required new business delivery uses a new operation and new random token.
+A client timeout, process crash after possible provider acceptance, network interruption without an authoritative response, or any other ambiguous handoff sets or reconciles the attempt to `delivery_unknown`. Reconciliation follows this binding order:
 
-A reconciler processes expired `claimed` states, hanging `dispatch_committed` states, `delivery_unknown`, provider status available through idempotency keys or message IDs, and terminal operations that retain ciphertext. It can mark an evidenced outcome delivered, retryable, unknown, or terminal and clean residual ciphertext. It cannot reconstruct a token or create a replacement operation unless the explicit business workflow authorizes that new operation.
+1. Query authoritative provider status through `provider_message_reference` when the provider supports that operation and the reference is present.
+2. Otherwise query by the stored `transport_idempotency_key`, or repeat the same attempt with that exact stored key, only when the provider explicitly supports authoritative lookup or idempotent repetition by that key.
+3. Without authoritative provider evidence, keep the attempt `delivery_unknown`.
+4. Never perform a blind automatic resend.
+5. If a new business delivery is required, terminalize the uncertain operation as policy requires and create a new operation with a new random token, attempt, and idempotency key.
+
+SMTP alone does not generically provide authoritative status lookup or idempotency. A transport or provider without those documented capabilities remains fail-closed in `delivery_unknown`; absence of `provider_message_reference` never triggers an automatic resend.
+
+A reconciler processes expired `claimed` states, hanging `dispatch_committed` states, `delivery_unknown`, authoritative provider status available through provider references or idempotency keys, and terminal operations that retain ciphertext. It can mark an evidenced outcome delivered, retryable, unknown, or terminal and clean residual ciphertext. It cannot reconstruct a token or create a replacement operation unless the explicit business workflow authorizes that new operation.
 
 ## Login flow
 
@@ -696,14 +711,14 @@ Loss of the final recoverable Global Identity Root Key can make encrypted global
 | Delivery-secret or recipient decryption failure      | Do not send; fail the claimed attempt closed, retain encrypted retry material only when lifecycle permits, and emit a redacted event.        |
 | Invalid or terminal delivery state                   | Do not decrypt or send; delete residual delivery secrets for terminal operations and audit only allowlisted state metadata.                  |
 | Final fence failure                                  | Create no dispatch commitment and invoke no transport; discard prepared plaintext and invalidate the stale claim.                            |
-| Ambiguous external transport result                  | Set `delivery_unknown`; reconcile by idempotency key or provider message ID and never perform a blind automatic resend.                      |
+| Ambiguous external transport result                  | Set `delivery_unknown`; reconcile by provider reference, then supported idempotency operation, and never perform a blind automatic resend.   |
 | Delivery-Secret-Key unavailable                      | Fail delivery closed; if exact recovery is impossible, terminalize and reissue required affected operations with new tokens.                 |
 | Delivery-Secret-Key suspected compromised            | Revoke every affected active or still-valid delivered operation; never merely re-encrypt or reuse the existing token.                        |
 | Historical backup contains affected delivery secrets | Keep it quarantined; reconcile and revoke affected operations before any service or delivery resumes.                                        |
 
 ## Audit and redaction
 
-Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, dispatch commitments, provider outcomes, `delivery_unknown` reconciliation, retry, terminal delivery cleanup, Delivery-Secret-Key loss/compromise inventories, security revocation, and replacement-operation incident links. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt ID, attempt count, fence version, idempotency-key identifier or digest where needed, timestamps, and allowlisted result/error class.
+Audit key generation, verification, activation, wrapping, rotation start/checkpoints/completion, re-encryption, re-indexing, deactivation, destruction authorization, recovery access, restore tests, integrity failures, email-change transitions, credential revocation, delivery claims, dispatch commitments, provider outcomes, `delivery_unknown` reconciliation, retry, terminal delivery cleanup, Delivery-Secret-Key loss/compromise inventories, security revocation, and replacement-operation incident links. Delivery events may include operation ID/type, user ID, invitation tenant ID, key ID/version, delivery state, attempt ID, attempt count, fence version, internal references or shortened keyed/cryptographic digests for idempotency keys and provider references, timestamps, and allowlisted result/error class. Complete idempotency keys and provider message references are prohibited in logs and audits.
 
 Never log, persist outside the protected operation field, or attach plaintext email, normalized email, ciphertext plaintext, raw root or working keys, wrapped-key plaintext, blind-index values, plaintext bearer tokens, complete delivery URLs, `delivery_token_enc`, full reset/verification/invitation/access tokens, MFA secrets, recovery codes, session payloads, or decrypted recipient values. Queue and failed-job payloads, exception context, validation context, traces, APM attributes, activity properties, mail events, audits, and API output follow the same rule.
 
@@ -745,8 +760,14 @@ Implementation work must add positive, negative, concurrency, failure-injection,
 - final-fence failure creating no dispatch commitment, and transport occurring only after the `dispatch_committed` state is durably committed;
 - confirmed transport acceptance clearing `delivery_token_enc` while retaining `token_hash`, and a confirmed pre-acceptance failure retaining the encrypted secret only for an allowed retry;
 - a timeout, network interruption, or crash after possible provider acceptance entering `delivery_unknown` without a blind automatic resend;
-- provider idempotency preventing duplicate acceptance where supported, including reuse of the same idempotency key only for an explicitly idempotent repetition;
-- crash recovery reconciling hanging `dispatch_committed` and `delivery_unknown` attempts by idempotency key or provider message ID;
+- idempotency keys meeting the configured minimum CSPRNG entropy, with independent attempts for the same operation receiving different keys;
+- an explicitly supported repetition of the same attempt reusing its exact stored idempotency key while a new attempt receives a new key;
+- provider-facing idempotency keys containing no operation, attempt, user, tenant, email, token, or other business-identifier component;
+- logs, audits, traces, errors, and failed-job data containing no complete idempotency key or provider message reference;
+- provider message references containing no email, token, complete URL, rendered content, or application identifier and remaining semantically distinct from idempotency keys;
+- provider idempotency preventing duplicate acceptance where supported, including reuse of the same key only for an explicitly idempotent repetition;
+- SMTP or another transport without authoritative status or idempotency support remaining `delivery_unknown`, including when no provider reference exists, with no blind resend;
+- crash recovery reconciling hanging `dispatch_committed` and `delivery_unknown` attempts first by provider reference and then by explicitly supported idempotency operations;
 - expired, consumed, revoked, cancelled, or superseded operations sending nothing, including stale reset/verification `email_version` bindings;
 - invitation and pending-email-change delivery tokens authenticating only for the correct operation, with recipient and token ciphertexts remaining purpose-separated;
 - restore never resending a delivered, terminal, `dispatch_committed`, `delivery_unknown`, or otherwise ambiguous operation and retaining exact historical delivery-key versions only while referenced;
