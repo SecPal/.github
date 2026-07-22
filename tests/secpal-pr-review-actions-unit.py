@@ -4257,6 +4257,22 @@ class FastPathTests(TestCase):
             gateway,
         )
 
+    def test_attest_validation_expected_head_help_distinguishes_phases(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch.object(actions.sys, "stdout", output),
+            self.assertRaises(SystemExit) as exit_status,
+        ):
+            actions.build_parser().parse_args(["attest-validation", "--help"])
+        self.assertEqual(exit_status.exception.code, 0)
+        normalized_help = " ".join(output.getvalue().split())
+        self.assertIn(
+            "Expected current local HEAD. For initial validation this is the "
+            "reviewed parent head; with --bind-commit this is the newly created "
+            "signed commit.",
+            normalized_help,
+        )
+
     def test_thirty_threads_share_one_attestation_checks_and_feedback_read(self) -> None:
         reviewed = fast_feedback(30)
         gateway = FakeFastGateway(reviewed)
@@ -5107,6 +5123,151 @@ class FastPathTests(TestCase):
             ):
                 actions._command_attest_validation(arguments)
 
+    def test_bind_expected_head_is_current_signed_commit_not_receipt_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            repository_root = temporary_root / "repository"
+            repository_root.mkdir()
+            signing_key = temporary_root / "signing-key"
+            allowed_signers = temporary_root / "allowed-signers"
+            reviewed_state_path = temporary_root / "reviewed-state.json"
+            receipt_path = temporary_root / "validation-receipt.json"
+            attestation_path = temporary_root / "validation-attestation.json"
+            environment = p21.uncontrolled_git_test_environment()
+            environment["GIT_CONFIG_GLOBAL"] = actions.os.devnull
+            environment["GIT_CONFIG_NOSYSTEM"] = "1"
+            git = actions.evidence.resolve_trusted_executable("git")
+            ssh_keygen = next(
+                (
+                    directory / "ssh-keygen"
+                    for directory in actions.evidence.TRUSTED_COMMAND_DIRECTORIES
+                    if (directory / "ssh-keygen").is_file()
+                ),
+                None,
+            )
+            self.assertIsNotNone(ssh_keygen)
+
+            def run_git(*arguments: str) -> Any:
+                return actions.subprocess.run(
+                    [git, *arguments],
+                    cwd=repository_root,
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            actions.subprocess.run(
+                [
+                    str(ssh_keygen),
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    "test@example.com",
+                    "-f",
+                    str(signing_key),
+                ],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            allowed_signers.write_text(
+                f"test@example.com {signing_key.with_suffix('.pub').read_text(encoding='utf-8')}",
+                encoding="utf-8",
+            )
+            run_git("init", "--quiet")
+            run_git("config", "user.name", "SecPal Test")
+            run_git("config", "user.email", "test@example.com")
+            run_git("config", "gpg.format", "ssh")
+            run_git("config", "user.signingkey", str(signing_key))
+            run_git("config", "gpg.ssh.allowedSignersFile", str(allowed_signers))
+            run_git("remote", "add", "origin", "https://github.com/SecPal/.github.git")
+
+            tracked_file = repository_root / "tracked.txt"
+            tracked_file.write_text("reviewed parent\n", encoding="utf-8")
+            run_git("add", "tracked.txt")
+            run_git("commit", "--quiet", "-m", "reviewed parent")
+            parent = run_git("rev-parse", "HEAD").stdout.strip()
+
+            tracked_file.write_text("validated remediation\n", encoding="utf-8")
+            run_git("add", "tracked.txt")
+            validated_tree = run_git("write-tree").stdout.strip()
+            reviewed = fast_feedback(head_sha=parent)
+            entry = actions.select_repository(
+                actions.load_registry(), "SecPal/.github"
+            )
+            binding = actions._fast_registry_binding(entry)
+            manual_gate_evidence = [
+                {
+                    "gate": gate,
+                    "satisfied": True,
+                    "evidence": f"fixture gate {index} satisfied",
+                }
+                for index, gate in enumerate(binding["manual_gates"], start=1)
+            ]
+            receipt = actions._validation_receipt(
+                repository="SecPal/.github",
+                head_sha=parent,
+                tree_sha=validated_tree,
+                binding=binding,
+                reviewed=reviewed,
+                manual_gate_evidence=manual_gate_evidence,
+            )
+            fast_path.atomic_write_json(reviewed_state_path, reviewed.to_dict())
+            fast_path.atomic_write_json(receipt_path, receipt)
+            run_git(
+                "commit",
+                "--quiet",
+                "-S",
+                "-m",
+                "validated remediation",
+                "-m",
+                f"SecPal-Validation-Receipt: {receipt['receipt_digest']}",
+            )
+            commit = run_git("rev-parse", "HEAD").stdout.strip()
+
+            self.assertEqual(
+                run_git("rev-list", "--parents", "-n", "1", commit).stdout.split(),
+                [commit, parent],
+            )
+            self.assertEqual(
+                run_git("rev-parse", "HEAD^{tree}").stdout.strip(), validated_tree
+            )
+            self.assertEqual(
+                actions._commit_validation_receipt_digest(repository_root, commit),
+                receipt["receipt_digest"],
+            )
+            self.assertEqual(run_git("verify-commit", "--raw", commit).returncode, 0)
+
+            arguments = SimpleNamespace(
+                expected_head=parent,
+                repo_root=str(repository_root),
+                repo="SecPal/.github",
+                reviewed_state=str(reviewed_state_path),
+                registry=None,
+                bind_commit=True,
+                receipt=str(receipt_path),
+                output=str(attestation_path),
+                manual_gate_evidence=None,
+            )
+            with mock.patch.object(actions, "_run_registered_validations") as validations:
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    rf"^local head mismatch: expected {parent}, observed {commit}$",
+                ):
+                    actions._command_attest_validation(arguments)
+                arguments.expected_head = commit
+                self.assertEqual(actions._command_attest_validation(arguments), 0)
+            validations.assert_not_called()
+            self.assertEqual(
+                json.loads(attestation_path.read_text(encoding="utf-8"))["head_sha"],
+                commit,
+            )
+
     def test_bound_commit_rejects_a_malformed_validation_receipt(self) -> None:
         reviewed = fast_feedback()
         entry = registry_entry("SecPal/.github")
@@ -5466,6 +5627,54 @@ class FastPathTests(TestCase):
         pending = fast_path.StableFeedbackState.from_payload(payload)
         self.assertEqual(successful.state_digest, pending.state_digest)
         self.assertEqual(successful.feedback_digest, pending.feedback_digest)
+
+    def test_stable_feedback_preserves_direct_inline_review_wrapper_shape(self) -> None:
+        payload = fast_feedback(1).to_dict()
+        payload["reviews"] = [
+            {
+                "node_id": "REVIEW_WRAPPER_1",
+                "body_digest": digest(""),
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+                "state": "COMMENTED",
+                "commit_oid": payload["head_sha"],
+                "reactions": [],
+            }
+        ]
+        payload["threads"][0]["comments"][0].update(
+            {
+                "node_id": "INLINE_COMMENT_FOR_REVIEW_WRAPPER_1",
+                "body_digest": digest("inline finding"),
+            }
+        )
+
+        state = fast_path.StableFeedbackState.from_payload(payload)
+        wrapper = state.feedback["reviews"][0]
+        thread = state.feedback["threads"][0]
+        inline_comment = thread["comments"][0]
+        self.assertEqual(
+            (wrapper["node_id"], wrapper["state"], wrapper["body_digest"]),
+            ("REVIEW_WRAPPER_1", "COMMENTED", digest("")),
+        )
+        self.assertEqual(thread["node_id"], "THREAD_1")
+        self.assertEqual(
+            (inline_comment["node_id"], inline_comment["body_digest"]),
+            ("INLINE_COMMENT_FOR_REVIEW_WRAPPER_1", digest("inline finding")),
+        )
+        self.assertEqual(
+            fast_path._classified_feedback_sources(state),
+            {
+                ("REVIEW", "REVIEW_WRAPPER_1"): (digest(""), None),
+                (
+                    "THREAD_COMMENT",
+                    "INLINE_COMMENT_FOR_REVIEW_WRAPPER_1",
+                ): (digest("inline finding"), "THREAD_1"),
+            },
+        )
+        self.assertNotIn("findings", state.to_dict())
 
     def test_stable_feedback_preserves_deleted_source_actor_identity(self) -> None:
         payload = fast_feedback(1).to_dict()

@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## Unreleased
+
+**Changed:**
+
+- clarified GitHub's structural empty `COMMENTED` review wrapper for direct
+  inline feedback, validation `--expected-head` phases, and repository-pinned
+  formatter provisioning without changing fast-path behavior
+- added focused regression coverage for signed commit binding, CLI guidance,
+  and stable-feedback preservation of direct-inline source objects
+
 ## 2026-07-21 - Add Fast PR Feedback Remediation Path
 
 **Changed:**
