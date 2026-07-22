@@ -22,7 +22,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - selected configured local SSH/OpenPGP verification for user commits and
   required GitHub verification metadata for both configured user commits and
   GitHub-generated commits, treating a missing local GitHub GPG key as unknown
-  rather than invalid
+  rather than invalid, while deferring GitHub-only proof until the commit is
+  available to the post-push readiness read
 - hardened the fast path to bind the reviewed base, enumerate required checks
   from live rules, enforce a sole-parent remediation commit, honor configured
   SSH/OpenPGP formats, compare last-moment PR/base/thread feedback, preserve

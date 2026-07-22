@@ -96,7 +96,9 @@ manual gate. Time is informational only and cannot determine validity.
 signed commit with the receipt digest as its single
 `SecPal-Validation-Receipt` trailer and proves that its sole parent, tree, and
 signed trailer exactly match the receipt. It then returns the final head-bound
-attestation without rerunning validation.
+attestation without rerunning validation. This pre-push bind verifies the local
+signature and configured format only; required GitHub verification is enforced
+later from live commit evidence during resolution readiness.
 `NORMAL_PUSH` proves the remote branch still has the expected predecessor and
 makes one ordinary push. Neither state amends, rebases, force-pushes, bypasses
 hooks, or uses administrator authority.

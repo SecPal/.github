@@ -79,8 +79,9 @@ as argument arrays in the target repository, without a shell.
    receipt.
 6. Create one signed commit containing exactly that staged tree, use
    the receipt digest as its single `SecPal-Validation-Receipt` trailer, and use
-   `attest-validation --bind-commit` to verify that signed binding without
-   rerunning validation. Recheck the remote head and push once.
+   `attest-validation --bind-commit` to verify that signed binding and its local
+   signature without rerunning validation. Recheck the remote head and push
+   once; the later live readiness check enforces required GitHub verification.
 7. Read applicable rules and Required Checks once as one bounded logical read.
    Pending, failed, missing, or unknown required results block; never poll.
 8. Perform one lightweight stable-feedback freshness read. A same-head CI

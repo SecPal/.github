@@ -4261,6 +4261,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 else "unknown"
             ),
         )
+        local_signature_policy = {
+            **binding["signature_policy"],
+            "require_github_verified": False,
+        }
         fast_path.verify_commit_signatures(
             [
                 {
@@ -4273,7 +4277,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                     },
                 }
             ],
-            binding["signature_policy"],
+            local_signature_policy,
         )
         attestation = fast_path.create_validation_attestation(
             repository=arguments.repo,

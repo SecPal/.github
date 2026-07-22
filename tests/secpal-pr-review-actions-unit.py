@@ -5182,7 +5182,7 @@ class FastPathTests(TestCase):
             ):
                 actions._commit_validation_receipt_digest(REPO_ROOT, p21.HEAD)
 
-    def test_bound_commit_accepts_configured_openpgp_signature(self) -> None:
+    def test_bound_commit_accepts_local_signature_before_push(self) -> None:
         reviewed = fast_feedback()
         final_head = "d" * 40
         tree = "a" * 40
@@ -5193,7 +5193,11 @@ class FastPathTests(TestCase):
             "manual_gates": [],
             "focused_validation": [],
             "required_local_validation": [],
-            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "signature_policy": {
+                "require_github_verified": True,
+                "require_local_verified": True,
+                "accepted_formats": ["ssh", "openpgp"],
+            },
             "check_policy": {
                 "require_ruleset_evidence": True,
                 "require_branch_protection_evidence": True,

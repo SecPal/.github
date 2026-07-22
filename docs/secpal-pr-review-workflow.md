@@ -214,13 +214,15 @@ receipt only when the commit's sole parent, tree, signature, and receipt trailer
 match exactly; this does not rerun validation. The final attestation binds the
 repository, finished head, registry digest, command-set digest, successful
 result, validated tree, signed receipt, manual gates, and reviewed-feedback
-digests. The batch reconstructs the receipt from the signed commit, verifies
-local/remote/PR heads, the registered default/base-repository boundary, clean
-worktree, actor, registry-permitted SSH/OpenPGP signatures, applicable
-rules/Required Checks, strict-base/merge-state policy, and current stable
-feedback once. Capture and freshness use the same explicitly selected registry
-entry as attestation and checks. Schema version 1.2 requires the reviewed state
-to originate from an open PR and a classified finding record for every
+digests. Before the commit exists on GitHub, binding checks its local signature
+and configured format only. The batch reconstructs the receipt from the signed
+commit and enforces any required GitHub verification from live post-push
+evidence while also verifying local/remote/PR heads, the registered default/
+base-repository boundary, clean worktree, actor, applicable rules/Required
+Checks, strict-base/merge-state policy, and current stable feedback once.
+Capture and freshness use the same explicitly selected registry entry as
+attestation and checks. Schema version 1.2 requires the reviewed state to
+originate from an open PR and a classified finding record for every
 top-level review/comment and its reactions, stable pull-request reaction, and
 comment/reaction in every unresolved thread. PR-level `EYES` activity markers
 are excluded before canonicalization; nested and all other reactions remain
