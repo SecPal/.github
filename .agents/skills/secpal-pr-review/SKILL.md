@@ -67,6 +67,10 @@ as argument arrays in the target repository, without a shell.
    thread comments and their reactions. PR-level `EYES` activity markers are
    volatile workflow state rather than review feedback. Never infer truth from
    reviewer identity, keywords, or CI.
+   Treat GitHub's empty `COMMENTED` review wrapper for a direct inline comment
+   as structural coverage, not another technical finding; classify the inline
+   comment/thread as specified in the finite contract. A review body containing
+   material text remains separate feedback.
 3. Reproduce every valid finding, add a failing test first, make the smallest
    coherent corrections, and use focused validation while editing.
 4. Perform the one holistic audit across correctness, security, privacy, data
@@ -82,6 +86,9 @@ as argument arrays in the target repository, without a shell.
    `attest-validation --bind-commit` to verify that signed binding and its local
    signature without rerunning validation. Recheck the remote head and push
    once; the later live readiness check enforces required GitHub verification.
+   For initial validation, `--expected-head` is the reviewed parent/head. With
+   `--bind-commit`, it is the new signed commit `HEAD`; the receipt still binds
+   its own recorded parent internally.
 7. Read applicable rules and Required Checks once as one bounded logical read.
    Pending, failed, missing, or unknown required results block; never poll.
 8. Perform one lightweight stable-feedback freshness read. A same-head CI
@@ -100,6 +107,13 @@ as argument arrays in the target repository, without a shell.
 
 Short-circuit immediately to the applicable terminal outcome when a blocker is
 detected. Green CI alone never establishes technical truth or merge readiness.
+
+For setup and fixture preparation, provision the target repository's locked
+dependencies by its documented method before using its committed formatter
+script or local binary. Never use bare `npx prettier` in an unprovisioned
+worktree. Provisioning is setup, not another complete validation run; do not add
+ad hoc production formatting when registered validation already covers it. See
+the workflow guide for the repository-local tooling rationale and scope.
 
 ## Fast-path and forensic-plan discipline
 

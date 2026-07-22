@@ -51,6 +51,21 @@ cannot be substituted. Environment-dependent, migration, native-toolchain,
 live-service, and deployment validation is represented by explicit manual gates
 instead of guessed commands.
 
+### Repository-local setup and formatting
+
+During setup or fixture preparation, provision the target repository's locked
+dependencies using that repository's documented method. Then use its committed
+npm script or repository-local formatter binary. Never run bare `npx prettier`
+in an unprovisioned worktree: `npx` can install a Prettier release without the
+repository's declared plugins and produce a false setup failure. This rule is
+limited to setup, fixture preparation, and repository-local tooling; it does not
+mandate `npm ci` for every repository.
+
+Formatting remains registered validation. Dependency provisioning prepares the
+tooling and is not a second complete validation run. Production remediation
+must not add an ad hoc formatting pass when the registered validation already
+covers formatting.
+
 ## Architecture
 
 The workflow has six narrow parts:
@@ -151,6 +166,12 @@ is ready. Likewise, outdated does not mean invalid and resolved does not mean
 fixed. The helper has no keyword classifier; technical truth is established from
 repository evidence while deterministic code validates structure and policy transitions.
 
+GitHub's direct-inline shape is defined canonically in the finite contract. Its
+empty `COMMENTED` review wrapper remains in stable-feedback coverage but does
+not create a second technical finding; the inline comment/thread carries that
+finding. A material review body remains independent feedback, regardless of the
+reviewer's identity.
+
 ## Bounded GitHub actions
 
 The reaction/reply/resolution table is normative in the finite contract. In
@@ -220,6 +241,10 @@ commit and enforces any required GitHub verification from live post-push
 evidence while also verifying local/remote/PR heads, the registered default/
 base-repository boundary, clean worktree, actor, applicable rules/Required
 Checks, strict-base/merge-state policy, and current stable feedback once.
+For the initial invocation, `--expected-head` is the reviewed parent/head. For
+`--bind-commit`, it is the newly created signed commit at local `HEAD`; the
+receipt remains internally bound to its recorded parent, which is not the bind
+invocation's expected head.
 Capture and freshness use the same explicitly selected registry entry as
 attestation and checks. Schema version 1.2 requires the reviewed state to
 originate from an open PR and a classified finding record for every

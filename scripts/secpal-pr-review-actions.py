@@ -3863,7 +3863,15 @@ def build_parser() -> argparse.ArgumentParser:
             mutation_parser.add_argument("--initial-snapshot", required=True)
     attestation_parser = subparsers.add_parser("attest-validation")
     attestation_parser.add_argument("--repo", required=True)
-    attestation_parser.add_argument("--expected-head", required=True)
+    attestation_parser.add_argument(
+        "--expected-head",
+        required=True,
+        help=(
+            "Expected current local HEAD. For initial validation this is the "
+            "reviewed parent head; with --bind-commit this is the newly created "
+            "signed commit."
+        ),
+    )
     attestation_parser.add_argument("--reviewed-state", required=True)
     attestation_parser.add_argument("--repo-root", default=".")
     attestation_parser.add_argument("--registry")

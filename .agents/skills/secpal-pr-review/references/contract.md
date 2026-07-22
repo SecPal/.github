@@ -213,6 +213,17 @@ validation attestation can authorize the expected reviewed-head-to-remediation-
 head transition; the state digest includes the head and base. It contains no
 Required Check, mergeability, worktree, signature, or validation result.
 
+For a direct inline review comment, GitHub emits an empty-body `COMMENTED`
+review wrapper, the inline review comment, and its review thread. Retain all
+three source objects: the wrapper's identity and empty-body digest remain in
+stable-feedback coverage, while the inline comment/thread contains the
+technical finding. The structural wrapper is not an independent finding and is
+not contamination merely because it is the only review. A review body with
+material text remains separate feedback and is classified normally. Reviewer
+identity never determines either classification. The reasoned skill supplies
+the wrapper's structural coverage classification; the deterministic helper only
+preserves and validates source coverage and does not invent a second finding.
+
 Volatile readiness separately contains the current PR head, registered default
 branch and allowed base repository, base SHA, local and remote heads,
 clean-worktree result, Required Checks, mergeability, GitHub merge-state status,
@@ -236,6 +247,11 @@ timestamps do not participate. Any bound-value change invalidates the
 attestation. It contains no environment dump, command output, credential, or
 secret. Manual-gate evidence and every user-controlled batch string are rejected
 when they contain the same secret-like patterns prohibited in forensic plans.
+
+The initial `attest-validation --expected-head` names the reviewed parent/head.
+The `--bind-commit` invocation instead names the newly created signed commit at
+the current local `HEAD`. The receipt continues to bind its own recorded parent;
+the bind invocation's expected head is not the receipt parent.
 
 A batch input validates against `fast-path-batch.schema.json`. It binds one
 repository, PR, expected head, reviewed base branch/SHA, actor, reviewed digests, authorization digest,
