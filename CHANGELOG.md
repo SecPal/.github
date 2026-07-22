@@ -9,6 +9,47 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-21 - Add Fast PR Feedback Remediation Path
+
+**Changed:**
+
+- made canonical stable feedback independent from volatile Required Checks and
+  added one staged-tree validation receipt that is bound to the exact signed
+  remediation commit without rerunning complete validation
+- added one guarded batch-resolution path that verifies readiness, Required
+  Checks, attestation, and full feedback once, then performs bounded target
+  feedback checks between ordered writes with fail-closed partial-result reporting
+- selected configured local SSH/OpenPGP verification for user commits and
+  required GitHub verification metadata for both configured user commits and
+  GitHub-generated commits, treating a missing local GitHub GPG key as unknown
+  rather than invalid, while deferring GitHub-only proof until the commit is
+  available to the post-push readiness read
+- hardened the fast path to bind the reviewed base, enumerate required checks
+  from live rules, enforce a sole-parent remediation commit, honor configured
+  SSH/OpenPGP formats, compare last-moment PR/base/thread feedback, preserve
+  valid empty required-check configurations, and retain batch evidence through
+  report-output failures
+- bound the registered default/base-repository policy, explicit manual-gate
+  evidence, validated tree, and deterministic receipt digest to one signed
+  commit trailer; rejected reopened prior resolutions and allowed only GitHub's
+  derived false-to-true outdated transition after the attested remediation push
+- bound capture and freshness to the explicitly selected registry, required
+  source-backed classification coverage for every unresolved-thread comment,
+  enforced strict and last-moment merge-state blockers, and rejected
+  secret-like batch or manual-gate evidence before persisting artifacts
+- rejected unauthenticated prior-result reuse and non-open reviewed states,
+  required typed classification coverage for top-level feedback and reactions,
+  and bound fixed-finding test evidence to the signed validation receipt
+- removed resolution deadlocks by allowing an independently checked blocked
+  merge gate during conversation resolution and excluding volatile PR-level
+  `EYES` activity markers from stable-feedback digests
+- limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
+  ignored session scratch files cannot block a push while tracked violations
+  remain enforced, and terminated REUSE copy-command options explicitly so
+  option-like tracked names cannot become command flags
+
+---
+
 ## 2026-07-20 - Add Finite PR Feedback Remediation Workflow
 
 **Added:**

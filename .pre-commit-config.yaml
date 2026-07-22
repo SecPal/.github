@@ -8,10 +8,14 @@
 
 repos:
   # REUSE compliance
-  - repo: https://github.com/fsfe/reuse-tool
-    rev: v5.0.2
+  - repo: local
     hooks:
       - id: reuse
+        name: REUSE tracked files
+        entry: scripts/preflight.sh --reuse-tracked-only
+        language: python
+        additional_dependencies: [reuse==5.0.2]
+        pass_filenames: false
 
   # Code formatting
   - repo: local

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Validate finite review plans and apply one exact guarded GitHub mutation."""
+"""Validate review evidence and apply exact guarded GitHub mutations."""
 
 from __future__ import annotations
 
@@ -37,6 +37,11 @@ REGISTRY_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
+FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
+FAST_BATCH_SCHEMA_PATH = (
+    REPOSITORY_ROOT
+    / ".agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
+)
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
 
@@ -52,6 +57,36 @@ def _load_evidence_helper() -> Any:
 
 
 evidence = _load_evidence_helper()
+
+
+def _load_fast_path_helper() -> Any:
+    module_name = "secpal_pr_review.fast_path"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != FAST_PATH_HELPER.resolve()
+        ):
+            raise RuntimeError("Canonical fast-path module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        module_name, FAST_PATH_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load fast-path helper: {FAST_PATH_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get(spec.name) is module:
+            sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+fast_path = _load_fast_path_helper()
 ACCOUNT_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
 ACCOUNT_NAME = pwd.getpwuid(os.getuid()).pw_name
 USER_SITE_PACKAGES = site.getusersitepackages()
@@ -190,9 +225,7 @@ REPLY_CLASSIFICATIONS = {
 STATUS_REPLY = re.compile(
     r"(?is)^\s*(?:fixed|addressed|resolved|done)\b.*$|^\s*status\s*:.*$"
 )
-SECRET_VALUE = re.compile(
-    r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
-)
+SECRET_VALUE = fast_path.SECRET_VALUE
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SAFE_COMMAND_NAME = re.compile(r"^(?:[A-Za-z0-9_.+-]+|\./[A-Za-z0-9_./+-]+)$")
@@ -271,11 +304,16 @@ def _target_belongs_to_pull_request(url: Any, repository: str, number: int) -> b
     )
 
 
-def _read_json(path: str, label: str) -> dict[str, Any]:
+def _read_json_value(path: str, label: str) -> Any:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PlanError(f"Cannot load {label}: {evidence.redact_diagnostic(str(exc))}") from exc
+    return value
+
+
+def _read_json(path: str, label: str) -> dict[str, Any]:
+    value = _read_json_value(path, label)
     if not isinstance(value, dict):
         raise PlanError(f"{label} must be a JSON object")
     return value
@@ -1113,11 +1151,56 @@ def _run_registered_validations(
     return True
 
 
+FAST_PATH_PREFLIGHT_QUERY = r"""
+query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
+  viewer { id databaseId login }
+  repository(owner:$owner, name:$name) {
+    nameWithOwner
+    pullRequest(number:$number) {
+      number
+      state
+      headRefOid
+      headRefName
+      baseRefName
+      baseRefOid
+      baseRepository { nameWithOwner }
+      mergeable
+      mergeStateStatus
+      headRepository { nameWithOwner }
+      commits(first:100) {
+        nodes {
+          commit {
+            oid
+            committedViaWeb
+            committer { user { login } }
+            signature {
+              __typename
+              isValid
+              state
+              signer {
+                __typename
+                id
+                databaseId
+                login
+              }
+            }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}
+"""
+
+
 CURRENT_MUTATION_TARGET_QUERY = r"""
 query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $targetNodeId:ID!, $threadNodeId:ID!) {
   viewer { id databaseId login }
   repository(owner:$owner, name:$name) {
-    pullRequest(number:$number) { id headRefOid state }
+    pullRequest(number:$number) {
+      id headRefOid baseRefName baseRefOid state mergeable mergeStateStatus
+    }
   }
   node(id:$targetNodeId) {
     __typename
@@ -1189,7 +1272,7 @@ query CurrentReviewFeedback(
 ) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      id headRefOid state
+      id headRefOid baseRefName baseRefOid state
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -1284,6 +1367,7 @@ query CurrentRequiredChecks($owner:String!, $name:String!, $number:Int!, $oid:Gi
     }
     object(oid:$oid) {
       ... on Commit {
+        oid
         statusCheckRollup {
           contexts(first:100, after:$after) {
             nodes {
@@ -1335,6 +1419,7 @@ def _validate_action_command(arguments: list[str]) -> None:
             RESOLVE_REVIEW_THREAD_MUTATION,
             VIEWER_IDENTITY_QUERY,
             CURRENT_REQUIRED_CHECKS_QUERY,
+            FAST_PATH_PREFLIGHT_QUERY,
         }:
             raise MutationBlocked("GraphQL document is not exactly allowlisted")
         variable_arguments = arguments[7:]
@@ -1355,17 +1440,21 @@ def _validate_action_command(arguments: list[str]) -> None:
             expected_variables = {"threadId": "-f"}
         elif query == ADD_REACTION_MUTATION:
             expected_variables = {"subjectId": "-f", "content": "-f"}
-        elif query == CURRENT_REVIEW_FEEDBACK_QUERY:
+        elif query in {CURRENT_REVIEW_FEEDBACK_QUERY, FAST_PATH_PREFLIGHT_QUERY}:
             expected_variables = {
                 "owner": "-f",
                 "name": "-f",
                 "number": "-F",
             }
-            optional_variables = {
-                "reviewsCursor": "-f",
-                "commentsCursor": "-f",
-                "threadsCursor": "-f",
-            }
+            optional_variables = (
+                {
+                    "reviewsCursor": "-f",
+                    "commentsCursor": "-f",
+                    "threadsCursor": "-f",
+                }
+                if query == CURRENT_REVIEW_FEEDBACK_QUERY
+                else {}
+            )
         elif query == CURRENT_REQUIRED_CHECKS_QUERY:
             expected_variables = {
                 "owner": "-f",
@@ -1386,7 +1475,11 @@ def _validate_action_command(arguments: list[str]) -> None:
             **expected_variables,
             **(
                 optional_variables
-                if query in {CURRENT_REVIEW_FEEDBACK_QUERY, CURRENT_REQUIRED_CHECKS_QUERY}
+                if query
+                in {
+                    CURRENT_REVIEW_FEEDBACK_QUERY,
+                    CURRENT_REQUIRED_CHECKS_QUERY,
+                }
                 else {}
             ),
         }
@@ -1680,6 +1773,8 @@ class LiveGitHub:
                 elif (
                     pull_request.get("id") != initial_pull_request.get("id")
                     or pull_request.get("headRefOid") != initial_pull_request.get("headRefOid")
+                    or pull_request.get("baseRefName") != initial_pull_request.get("baseRefName")
+                    or pull_request.get("baseRefOid") != initial_pull_request.get("baseRefOid")
                     or pull_request.get("state") != initial_pull_request.get("state")
                     or pull_request.get("reactions")
                     != initial_pull_request.get("reactions")
@@ -1754,6 +1849,8 @@ class LiveGitHub:
             )
         result = {
             "head_sha": pull_request.get("headRefOid"),
+            "base_ref": pull_request.get("baseRefName"),
+            "base_sha": pull_request.get("baseRefOid"),
             "pr_state": pull_request.get("state"),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
@@ -1857,7 +1954,11 @@ class LiveGitHub:
                     commit_object = repository["object"]
                 except (KeyError, TypeError) as exc:
                     raise MutationFailure("GitHub returned incomplete required-check evidence") from exc
-                if not isinstance(pull_request, dict) or not isinstance(commit_object, dict):
+                if (
+                    not isinstance(pull_request, dict)
+                    or not isinstance(commit_object, dict)
+                    or commit_object.get("oid") != commit_oid
+                ):
                     raise MutationBlocked("current required-check target is unavailable")
                 potential_merge = pull_request.get("potentialMergeCommit")
                 potential_merge_oid = (
@@ -2101,6 +2202,12 @@ class LiveGitHub:
         return {
             "head_sha": pull_request.get("headRefOid"),
             "pr_state": pull_request.get("state"),
+            "base_ref": pull_request.get("baseRefName"),
+            "base_sha": pull_request.get("baseRefOid"),
+            "mergeability": str(pull_request.get("mergeable") or "UNKNOWN"),
+            "merge_state_status": str(
+                pull_request.get("mergeStateStatus") or "UNKNOWN"
+            ),
             "actor": _actor(target_author),
             "viewer": _actor(data.get("viewer")),
             "target": {
@@ -2246,6 +2353,520 @@ class LiveGitHub:
         ):
             raise MutationFailure("GitHub resolution response identity or state changed")
         return {"mutation_id": thread.get("id"), "is_resolved": thread.get("isResolved")}
+
+
+class FastPathGateway:
+    """Narrow live adapter for one logical read per fast-path evidence class."""
+
+    def __init__(
+        self,
+        repository_root: Path,
+        registry_entry: dict[str, Any],
+        github: LiveGitHub | None = None,
+    ) -> None:
+        self.repository_root = repository_root.resolve(strict=True)
+        if not self.repository_root.is_dir():
+            raise fast_path.RecoverableLocalError("repository root is not a directory")
+        if (
+            not isinstance(registry_entry, dict)
+            or not isinstance(registry_entry.get("repository"), str)
+        ):
+            raise fast_path.SecurityBlocker(
+                "selected feedback registry entry is malformed"
+            )
+        self.registry_entry = copy.deepcopy(registry_entry)
+        self.github = github or LiveGitHub()
+        try:
+            self.git_executable = evidence.resolve_trusted_executable("git")
+        except evidence.CommandPolicyError as exc:
+            raise fast_path.RecoverableLocalError(
+                "trusted git executable is unavailable"
+            ) from exc
+
+    def _git(self, arguments: list[str], *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
+        try:
+            completed = subprocess.run(
+                [self.git_executable, *arguments],
+                cwd=self.repository_root,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=evidence.command_environment("git"),
+                timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise fast_path.TransientReadFailure("local Git read failed") from exc
+        if completed.returncode != 0 and not allow_failure:
+            raise fast_path.TransientReadFailure(
+                evidence.redact_diagnostic(completed.stderr or "local Git read failed")
+            )
+        return completed
+
+    @staticmethod
+    def _remote_repository(value: str) -> str | None:
+        match = re.fullmatch(
+            r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?",
+            value.strip(),
+        )
+        return match.group(1) if match else None
+
+    def _local_signature(self, oid: str) -> dict[str, Any]:
+        commit_object = self._git(["cat-file", "commit", oid], allow_failure=True)
+        if commit_object.returncode != 0:
+            return {
+                "state": "object_unavailable",
+                "verified": False,
+                "format": None,
+            }
+        verified = self._git(["verify-commit", "--raw", oid], allow_failure=True)
+        value = evidence.interpret_local_signature(
+            verified.returncode,
+            f"{verified.stdout}\n{verified.stderr}",
+            signature_format_hint=evidence._commit_signature_format(commit_object.stdout),
+        )
+        return {
+            "state": value["state"],
+            "verified": value["verified"],
+            "format": value["format"],
+        }
+
+    def read_preflight(self, request: Any) -> Any:
+        owner, name = request.repository.split("/", 1)
+        try:
+            payload = self.github.runner.run(
+                _graphql_arguments(
+                    FAST_PATH_PREFLIGHT_QUERY,
+                    {"owner": owner, "name": name, "number": request.pull_request_number},
+                )
+            )
+        except (ActionCommandFailure, MutationFailure) as exc:
+            raise fast_path.TransientReadFailure(str(exc)) from exc
+        try:
+            data = payload["data"]
+            repository = data["repository"]
+            pull_request = repository["pullRequest"]
+            viewer = _actor(data["viewer"])
+            commit_connection = pull_request["commits"]
+            commit_nodes = commit_connection["nodes"]
+        except (KeyError, TypeError) as exc:
+            raise fast_path.TransientReadFailure(
+                "GitHub returned incomplete fast-path preflight evidence"
+            ) from exc
+        if (
+            not isinstance(repository, dict)
+            or not isinstance(pull_request, dict)
+            or not isinstance(commit_nodes, list)
+            or commit_connection.get("pageInfo", {}).get("hasNextPage") is True
+        ):
+            raise fast_path.SecurityBlocker(
+                "fast-path commit evidence is incomplete or exceeds its bound"
+            )
+        head_repository = pull_request.get("headRepository")
+        if (
+            repository.get("nameWithOwner") != request.repository
+            or not isinstance(head_repository, dict)
+            or head_repository.get("nameWithOwner") != request.repository
+            or pull_request.get("number") != request.pull_request_number
+        ):
+            raise fast_path.SecurityBlocker("GitHub repository or PR identity mismatch")
+
+        local_head = self._git(["rev-parse", "HEAD"]).stdout.strip()
+        upstream = self._git(["rev-parse", "@{upstream}"], allow_failure=True)
+        upstream_head = upstream.stdout.strip()
+        if upstream.returncode != 0 or not OID_PATTERN.fullmatch(upstream_head):
+            raise fast_path.RecoverableLocalError(
+                "current branch has no valid configured upstream"
+            )
+        branch = self._git(["branch", "--show-current"]).stdout.strip()
+        status = self._git(
+            ["status", "--porcelain=v2", "--untracked-files=all"]
+        ).stdout
+        remote_url = self._git(["remote", "get-url", "origin"]).stdout.strip()
+        if self._remote_repository(remote_url) != request.repository:
+            raise fast_path.SecurityBlocker("local origin repository identity mismatch")
+        if branch != pull_request.get("headRefName"):
+            raise fast_path.SecurityBlocker("local branch does not match the PR head branch")
+
+        commits: list[dict[str, Any]] = []
+        for node in commit_nodes:
+            commit = node.get("commit") if isinstance(node, dict) else None
+            if not isinstance(commit, dict) or not isinstance(commit.get("oid"), str):
+                raise fast_path.TransientReadFailure("GitHub commit evidence is incomplete")
+            oid = commit["oid"]
+            github_signature = evidence.normalize_github_signature(commit.get("signature"))
+            committer = commit.get("committer")
+            committer_user = committer.get("user") if isinstance(committer, dict) else None
+            generated = commit.get("committedViaWeb") is True or (
+                isinstance(committer_user, dict)
+                and committer_user.get("login") == "web-flow"
+            )
+            commits.append(
+                {
+                    "oid": oid,
+                    "source": "GITHUB" if generated else "USER",
+                    "local_signature": self._local_signature(oid),
+                    "github_verification": {
+                        "verified": github_signature["verified"],
+                        "reason": github_signature["reason"],
+                    },
+                }
+            )
+        return fast_path.ReadinessState(
+            repository=repository.get("nameWithOwner"),
+            pull_request_number=pull_request.get("number"),
+            head_sha=pull_request.get("headRefOid"),
+            base_ref=pull_request.get("baseRefName"),
+            base_sha=pull_request.get("baseRefOid"),
+            base_repository=(
+                pull_request.get("baseRepository", {}).get("nameWithOwner")
+                if isinstance(pull_request.get("baseRepository"), dict)
+                else None
+            ),
+            local_head_sha=local_head,
+            remote_head_sha=upstream_head,
+            head_parent_sha=_validated_commit_parent(
+                self.repository_root, local_head
+            ),
+            head_tree_sha=_run_attestation_git(
+                self.repository_root, ["rev-parse", "HEAD^{tree}"]
+            ).stdout.strip(),
+            validation_receipt_digest=_commit_validation_receipt_digest(
+                self.repository_root, local_head
+            ),
+            worktree_clean=not status.strip(),
+            pull_request_open=pull_request.get("state") == "OPEN",
+            mergeability=str(pull_request.get("mergeable") or "UNKNOWN"),
+            merge_state_status=str(
+                pull_request.get("mergeStateStatus") or "UNKNOWN"
+            ),
+            actor=viewer,
+            commits=commits,
+        )
+
+    def read_required_checks(
+        self,
+        request: Any,
+        registry: dict[str, Any],
+    ) -> dict[str, Any]:
+        owner, name = request.repository.split("/", 1)
+        policy = registry.get("check_policy") if isinstance(registry, dict) else None
+        limits = registry.get("limits") if isinstance(registry, dict) else None
+        if not isinstance(policy, dict) or not isinstance(limits, dict):
+            raise fast_path.SecurityBlocker(
+                "required-check policy or limits are missing"
+            )
+        maximum_calls = limits.get("maximum_api_calls")
+        maximum_items = limits.get("maximum_items")
+        if not isinstance(maximum_calls, int) or not isinstance(maximum_items, int):
+            raise fast_path.SecurityBlocker("required-check limits are invalid")
+        budget = {"calls": 0, "items": 0}
+
+        def run(arguments: list[str]) -> Any:
+            if budget["calls"] >= maximum_calls:
+                raise fast_path.SecurityBlocker(
+                    "required-check read exceeds the API-call limit"
+                )
+            try:
+                value = self.github.runner.run(arguments)
+            except (ActionCommandFailure, MutationFailure) as exc:
+                raise fast_path.TransientReadFailure(str(exc)) from exc
+            budget["calls"] += 1
+            return value
+
+        def add_items(count: int) -> None:
+            budget["items"] += count
+            if budget["items"] > maximum_items:
+                raise fast_path.SecurityBlocker(
+                    "required-check read exceeds the item limit"
+                )
+
+        encoded_ref = quote(request.expected_base_ref, safe="")
+
+        def read_rulesets() -> list[dict[str, Any]]:
+            if policy.get("require_ruleset_evidence") is not True:
+                return []
+            result: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                endpoint = (
+                    f"repos/{owner}/{name}/rules/branches/{encoded_ref}"
+                    f"?per_page=100&page={page}"
+                )
+                response = run(
+                    ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
+                )
+                if not isinstance(response, list) or any(
+                    not isinstance(item, dict) for item in response
+                ):
+                    raise fast_path.TransientReadFailure(
+                        "GitHub returned malformed applicable rules"
+                    )
+                add_items(len(response))
+                result.extend(response)
+                if len(response) < 100:
+                    return result
+                page += 1
+
+        def read_branch_protection() -> dict[str, Any]:
+            if policy.get("require_branch_protection_evidence") is not True:
+                return {}
+            endpoint = (
+                f"repos/{owner}/{name}/branches/{encoded_ref}"
+                "/protection/required_status_checks"
+            )
+            response = run(
+                ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
+            )
+            if not isinstance(response, dict):
+                raise fast_path.TransientReadFailure(
+                    "GitHub returned malformed branch protection"
+                )
+            add_items(1)
+            return response
+
+        rulesets = read_rulesets()
+        branch_protection = read_branch_protection()
+        try:
+            required_specs = evidence.require_rule_evidence(
+                rulesets if policy.get("require_ruleset_evidence") is True else None,
+                branch_protection
+                if policy.get("require_branch_protection_evidence") is True
+                else None,
+                policy,
+            )
+        except evidence.BlockedError as exc:
+            raise fast_path.SecurityBlocker(
+                f"required-check rules are incomplete: {exc.message}"
+            ) from exc
+
+        initial_anchor: tuple[Any, ...] | None = None
+
+        def read_checks(commit_oid: str) -> tuple[list[dict[str, Any]], str | None]:
+            nonlocal initial_anchor
+            raw_checks: list[dict[str, Any]] = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            potential_merge_oid: str | None = None
+            while True:
+                variables: dict[str, Any] = {
+                    "owner": owner,
+                    "name": name,
+                    "number": request.pull_request_number,
+                    "oid": commit_oid,
+                }
+                if cursor is not None:
+                    variables["after"] = cursor
+                payload = run(
+                    _graphql_arguments(CURRENT_REQUIRED_CHECKS_QUERY, variables)
+                )
+                try:
+                    repository = payload["data"]["repository"]
+                    pull_request = repository["pullRequest"]
+                    commit_object = repository["object"]
+                except (KeyError, TypeError) as exc:
+                    raise fast_path.TransientReadFailure(
+                        "required-check read returned incomplete evidence"
+                    ) from exc
+                if (
+                    not isinstance(pull_request, dict)
+                    or not isinstance(commit_object, dict)
+                    or commit_object.get("oid") != commit_oid
+                ):
+                    raise fast_path.TransientReadFailure(
+                        "required-check target is unavailable"
+                    )
+                base_repository = pull_request.get("baseRepository")
+                potential_merge = pull_request.get("potentialMergeCommit")
+                potential_merge_oid = (
+                    potential_merge.get("oid")
+                    if isinstance(potential_merge, dict)
+                    else None
+                )
+                anchor = (
+                    pull_request.get("id"),
+                    pull_request.get("headRefOid"),
+                    pull_request.get("state"),
+                    pull_request.get("baseRefName"),
+                    pull_request.get("baseRefOid"),
+                    base_repository.get("nameWithOwner")
+                    if isinstance(base_repository, dict)
+                    else None,
+                    potential_merge_oid,
+                )
+                expected_anchor = (
+                    anchor[0],
+                    request.expected_head_sha,
+                    "OPEN",
+                    request.expected_base_ref,
+                    request.expected_base_sha,
+                    request.repository,
+                    potential_merge_oid,
+                )
+                if not isinstance(anchor[0], str) or not anchor[0] or anchor != expected_anchor:
+                    raise fast_path.SecurityBlocker(
+                        "required-check target changed after review"
+                    )
+                if initial_anchor is None:
+                    initial_anchor = anchor
+                elif anchor != initial_anchor:
+                    raise fast_path.SecurityBlocker(
+                        "required-check target changed during the bounded read"
+                    )
+                rollup = commit_object.get("statusCheckRollup")
+                if rollup is None:
+                    return [], potential_merge_oid
+                if not isinstance(rollup, dict):
+                    raise fast_path.TransientReadFailure(
+                        "required-check rollup evidence is incomplete"
+                    )
+                try:
+                    nodes, next_cursor = _page_nodes(
+                        rollup.get("contexts"), "fast-path required checks"
+                    )
+                except MutationBlocked as exc:
+                    raise fast_path.SecurityBlocker(str(exc)) from exc
+                add_items(len(nodes))
+                raw_checks.extend(nodes)
+                if next_cursor is None:
+                    break
+                if next_cursor in seen_cursors:
+                    raise fast_path.SecurityBlocker(
+                        "required-check pagination did not advance"
+                    )
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            try:
+                normalized = [evidence._normalize_check(item) for item in raw_checks]
+            except evidence.BlockedError as exc:
+                raise fast_path.SecurityBlocker(
+                    f"required-check evidence is incomplete: {exc.message}"
+                ) from exc
+            stable_ids = [item["stable_id"] for item in normalized]
+            if len(stable_ids) != len(set(stable_ids)):
+                raise fast_path.SecurityBlocker(
+                    "required-check evidence contains duplicate identities"
+                )
+            return normalized, potential_merge_oid
+
+        head_checks, potential_merge_oid = read_checks(request.expected_head_sha)
+        merge_checks: list[dict[str, Any]] = []
+        if potential_merge_oid is not None:
+            merge_checks, _ = read_checks(potential_merge_oid)
+        _, check_source = evidence.select_effective_check_target(
+            request.expected_head_sha,
+            potential_merge_oid,
+            merge_checks,
+        )
+        checks = merge_checks if check_source == "test_merge" else head_checks
+        evidence._mark_effective_checks(checks)
+        ruleset_strict = policy.get("require_ruleset_evidence") is True and any(
+            item.get("type") == "required_status_checks"
+            and isinstance(item.get("parameters"), dict)
+            and item["parameters"].get("strict_required_status_checks_policy")
+            is True
+            and bool(item["parameters"].get("required_status_checks"))
+            for item in rulesets
+        )
+        branch_protection_strict = (
+            policy.get("require_branch_protection_evidence") is True
+            and branch_protection.get("strict") is True
+            and bool(
+                branch_protection.get("contexts")
+                or branch_protection.get("checks")
+            )
+        )
+        return {
+            "checks": checks,
+            "required_specs": required_specs,
+            "strict_base_required": (
+                ruleset_strict or branch_protection_strict
+            ),
+        }
+
+    def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
+        try:
+            if self.registry_entry.get("repository") != repository:
+                raise fast_path.SecurityBlocker(
+                    "selected feedback registry repository does not match the request"
+                )
+            result = self.github._read_current_feedback_once(
+                {"repository": repository, "pull_request_number": pull_request_number},
+                self.registry_entry,
+                {"calls": 0},
+            )
+        except (ActionCommandFailure, MutationFailure) as exc:
+            raise fast_path.TransientReadFailure(str(exc)) from exc
+        except (MutationBlocked, RegistryError) as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
+        return fast_path.StableFeedbackState.from_payload(
+            {
+                "repository": repository,
+                "pull_request_number": pull_request_number,
+                **result,
+            }
+        )
+
+    def read_stable_feedback(self, request: Any) -> Any:
+        return self.capture_stable_feedback(
+            request.repository, request.pull_request_number
+        )
+
+    def read_thread_target(self, request: Any, operation: Any) -> dict[str, Any]:
+        try:
+            value = self.github.read_current_state(
+                {
+                    "repository": request.repository,
+                    "pull_request_number": request.pull_request_number,
+                },
+                {
+                    "target_node_id": operation.thread_id,
+                    "parent_thread_id": operation.thread_id,
+                },
+            )
+        except MutationFailure as exc:
+            raise fast_path.TransientReadFailure(str(exc)) from exc
+        except MutationBlocked as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
+        return {
+            "thread_id": value["target"]["node_id"],
+            "head_sha": value["head_sha"],
+            "pr_state": value["pr_state"],
+            "base_ref": value["base_ref"],
+            "base_sha": value["base_sha"],
+            "mergeability": value["mergeability"],
+            "merge_state_status": value["merge_state_status"],
+            "is_resolved": value["target"]["is_resolved"],
+            "thread": {
+                "node_id": value["target"]["parent_thread_id"],
+                "is_resolved": value["target"]["is_resolved"],
+                "is_outdated": value["target"]["is_outdated"],
+                "comments": copy.deepcopy(value["target"]["thread_comments"]),
+            },
+        }
+
+    def resolve_thread(self, request: Any, operation: Any) -> dict[str, Any]:
+        try:
+            value = self.github.runner.run(
+                _graphql_arguments(
+                    RESOLVE_REVIEW_THREAD_MUTATION,
+                    {"threadId": operation.thread_id},
+                )
+            )
+            thread = value["data"]["resolveReviewThread"]["thread"]
+        except (ActionCommandFailure, MutationFailure, KeyError, TypeError) as exc:
+            raise fast_path.UnknownWriteResult(str(exc)) from exc
+        if (
+            not isinstance(thread, dict)
+            or thread.get("id") != operation.thread_id
+            or thread.get("isResolved") is not True
+        ):
+            raise fast_path.UnknownWriteResult(
+                "GitHub returned an unverifiable batch resolution result"
+            )
+        return {"thread_id": thread["id"], "is_resolved": True}
 
 
 def _same_actor(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
@@ -3206,6 +3827,11 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+class RecoverableArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise fast_path.RecoverableLocalError(f"invalid helper arguments: {message}")
+
+
 def _add_plan_evidence_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--plan", required=True)
     parser.add_argument("--snapshot", required=True)
@@ -3223,7 +3849,7 @@ def _add_mutation_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = RecoverableArgumentParser(
         description="Validate one deterministic review mutation plan or apply one allowlisted operation."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -3235,6 +3861,27 @@ def build_parser() -> argparse.ArgumentParser:
         _add_mutation_arguments(mutation_parser)
         if name == "resolve":
             mutation_parser.add_argument("--initial-snapshot", required=True)
+    attestation_parser = subparsers.add_parser("attest-validation")
+    attestation_parser.add_argument("--repo", required=True)
+    attestation_parser.add_argument("--expected-head", required=True)
+    attestation_parser.add_argument("--reviewed-state", required=True)
+    attestation_parser.add_argument("--repo-root", default=".")
+    attestation_parser.add_argument("--registry")
+    attestation_parser.add_argument("--output", required=True)
+    attestation_parser.add_argument("--bind-commit", action="store_true")
+    attestation_parser.add_argument("--receipt")
+    attestation_parser.add_argument("--manual-gate-evidence")
+    batch_parser = subparsers.add_parser("resolve-batch")
+    batch_parser.add_argument("--repo", required=True)
+    batch_parser.add_argument("--pr", required=True, type=_positive_integer)
+    batch_parser.add_argument("--repo-root", default=".")
+    batch_parser.add_argument("--registry")
+    batch_parser.add_argument("--capture-reviewed-state")
+    batch_parser.add_argument("--request")
+    batch_parser.add_argument("--reviewed-state")
+    batch_parser.add_argument("--attestation")
+    batch_parser.add_argument("--output")
+    batch_parser.add_argument("--apply", action="store_true")
     return parser
 
 
@@ -3336,14 +3983,439 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "repository": entry["repository"],
+        "default_branch": entry["default_branch"],
+        "allowed_base_repositories": copy.deepcopy(
+            entry["allowed_base_repositories"]
+        ),
+        "manual_gates": copy.deepcopy(entry["manual_gates"]),
+        "signature_policy": copy.deepcopy(entry["signature_policy"]),
+        "check_policy": copy.deepcopy(entry["check_policy"]),
+        "limits": {
+            key: entry[key]
+            for key in ("maximum_api_calls", "maximum_items")
+        },
+        "validation": copy.deepcopy(
+            [*entry["focused_validation"], *entry["required_local_validation"]]
+        ),
+    }
+
+
+def _load_fast_state(path: str) -> Any:
+    return fast_path.StableFeedbackState.from_payload(
+        _read_json(path, "stable reviewed feedback")
+    )
+
+
+def _load_fast_manual_gate_evidence(
+    path: str | None,
+    binding: dict[str, Any],
+) -> list[dict[str, Any]]:
+    gates = binding.get("manual_gates")
+    if not path:
+        if gates:
+            raise fast_path.RecoverableLocalError(
+                "registered manual gates require --manual-gate-evidence"
+            )
+        return []
+    return fast_path.validate_manual_gate_evidence(
+        _read_json_value(path, "manual-gate evidence"), gates
+    )
+
+
+def _write_fast_report(path: str | None, report: dict[str, Any]) -> None:
+    if path:
+        fast_path.atomic_write_json(Path(path), report)
+    else:
+        sys.stdout.buffer.write(fast_path.canonical_json_bytes(report))
+
+
+def _write_batch_report(path: str | None, report: dict[str, Any]) -> bool:
     try:
+        _write_fast_report(path, report)
+    except OSError as exc:
+        fallback = {
+            **copy.deepcopy(report),
+            "status": "BLOCKED_REPORT_PERSISTENCE_FAILED",
+            "report_output_error": evidence.redact_diagnostic(str(exc)),
+        }
+        sys.stderr.buffer.write(fast_path.canonical_json_bytes(fallback))
+        return False
+    return True
+
+
+def _run_attestation_git(
+    repository_root: Path,
+    arguments: list[str],
+    *,
+    allow_failure: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        git_executable = evidence.resolve_trusted_executable("git")
+    except evidence.CommandPolicyError as exc:
+        raise fast_path.RecoverableLocalError(
+            "trusted git executable is unavailable"
+        ) from exc
+
+    try:
+        completed = subprocess.run(
+            [git_executable, *arguments],
+            cwd=repository_root,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=evidence.command_environment("git"),
+            timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise fast_path.RecoverableLocalError("local Git command is unavailable") from exc
+    if completed.returncode != 0 and not allow_failure:
+        raise fast_path.RecoverableLocalError(
+            evidence.redact_diagnostic(completed.stderr or "local Git command failed")
+        )
+    return completed
+
+
+def _validated_commit_parent(repository_root: Path, head: str) -> str:
+    result = _run_attestation_git(
+        repository_root,
+        ["rev-list", "--parents", "-n", "1", head],
+    )
+    identities = result.stdout.split()
+    if len(identities) != 2 or identities[0] != head:
+        raise fast_path.SecurityBlocker(
+            "validated remediation commit must have a sole parent"
+        )
+    if not all(OID_PATTERN.fullmatch(identity) for identity in identities):
+        raise fast_path.SecurityBlocker(
+            "validated remediation commit ancestry is malformed"
+        )
+    return identities[1]
+
+
+def _commit_validation_receipt_digest(
+    repository_root: Path,
+    head: str,
+) -> str | None:
+    result = _run_attestation_git(
+        repository_root,
+        [
+            "show",
+            "-s",
+            "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)",
+            head,
+        ],
+    )
+    values = [
+        value.strip()
+        for value in result.stdout.rstrip("\n").split("\x00")
+        if value.strip()
+    ]
+    if not values:
+        return None
+    if len(values) != 1 or not re.fullmatch(r"[0-9a-f]{64}", values[0]):
+        raise fast_path.SecurityBlocker(
+            "signed commit validation-receipt trailer is malformed"
+        )
+    return values[0]
+
+
+def _attestation_local_state(repository_root: Path, repository: str) -> tuple[str, str]:
+    head = _run_attestation_git(repository_root, ["rev-parse", "HEAD"]).stdout.strip()
+    status = _run_attestation_git(
+        repository_root, ["status", "--porcelain=v2", "--untracked-files=all"]
+    ).stdout
+    remote = FastPathGateway._remote_repository(
+        _run_attestation_git(repository_root, ["remote", "get-url", "origin"]).stdout.strip()
+    )
+    if remote != repository:
+        raise fast_path.SecurityBlocker("local origin repository identity mismatch")
+    return head, status
+
+
+def _staged_tree(repository_root: Path, status: str) -> str:
+    for line in status.splitlines():
+        if line.startswith("? ") or line.startswith("u "):
+            raise fast_path.SecurityBlocker(
+                "validation receipt requires every repository input to be staged"
+            )
+        if line.startswith(("1 ", "2 ")):
+            fields = line.split(" ", 2)
+            xy = fields[1] if len(fields) > 1 else ""
+            if len(xy) != 2 or xy[0] == "." or xy[1] != ".":
+                raise fast_path.SecurityBlocker(
+                    "validation receipt requires staged changes with no unstaged delta"
+                )
+    tree = _run_attestation_git(repository_root, ["write-tree"]).stdout.strip()
+    if not OID_PATTERN.fullmatch(tree):
+        raise fast_path.SecurityBlocker("validated staged tree identity is invalid")
+    return tree
+
+
+def _validation_receipt(
+    *,
+    repository: str,
+    head_sha: str,
+    tree_sha: str,
+    binding: dict[str, Any],
+    reviewed: Any,
+    manual_gate_evidence: Any,
+) -> dict[str, Any]:
+    return fast_path.create_validation_receipt(
+        repository=repository,
+        head_sha=head_sha,
+        validated_tree_sha=tree_sha,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=reviewed,
+        manual_gate_evidence=manual_gate_evidence,
+    )
+
+
+def _command_attest_validation(arguments: argparse.Namespace) -> int:
+    if not OID_PATTERN.fullmatch(arguments.expected_head):
+        raise fast_path.RecoverableLocalError("--expected-head must be a complete commit OID")
+    repository_root = Path(arguments.repo_root).resolve(strict=True)
+    head, status = _attestation_local_state(repository_root, arguments.repo)
+    if head != arguments.expected_head:
+        raise fast_path.SecurityBlocker(
+            f"local head mismatch: expected {arguments.expected_head}, observed {head}"
+        )
+    reviewed = _load_fast_state(arguments.reviewed_state)
+    if reviewed.repository != arguments.repo:
+        raise fast_path.SecurityBlocker(
+            "reviewed feedback repository does not match --repo"
+        )
+    if not arguments.bind_commit and reviewed.head_sha != arguments.expected_head:
+        raise fast_path.SecurityBlocker(
+            "reviewed feedback head does not match --expected-head"
+        )
+    registry = load_registry(arguments.registry)
+    entry = select_repository(registry, arguments.repo)
+    binding = _fast_registry_binding(entry)
+    if arguments.bind_commit:
+        if not arguments.receipt:
+            raise fast_path.RecoverableLocalError("--bind-commit requires --receipt")
+        if status.strip():
+            raise fast_path.SecurityBlocker(
+                "worktree is not clean while binding the validated commit"
+            )
+        receipt = _read_json(arguments.receipt, "validation receipt")
+        if not isinstance(receipt, dict):
+            raise fast_path.SecurityBlocker("validation receipt is malformed")
+        if reviewed.head_sha != receipt.get("head_sha"):
+            raise fast_path.SecurityBlocker(
+                "receipt head does not match reviewed feedback head"
+            )
+        receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
+        expected_receipt = _validation_receipt(
+            repository=arguments.repo,
+            head_sha=receipt.get("head_sha"),
+            tree_sha=receipt.get("validated_tree_sha"),
+            binding=binding,
+            reviewed=reviewed,
+            manual_gate_evidence=receipt.get("manual_gate_evidence"),
+        )
+        if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
+            raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
+        parent = _validated_commit_parent(repository_root, head)
+        tree = _run_attestation_git(repository_root, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
+        if parent != receipt["head_sha"] or tree != receipt["validated_tree_sha"]:
+            raise fast_path.SecurityBlocker(
+                "signed commit does not contain exactly the validated staged tree"
+            )
+        if (
+            _commit_validation_receipt_digest(repository_root, head)
+            != receipt["receipt_digest"]
+        ):
+            raise fast_path.SecurityBlocker(
+                "signed commit does not bind the validation receipt"
+            )
+        supplied_manual_evidence = getattr(
+            arguments, "manual_gate_evidence", None
+        )
+        if supplied_manual_evidence and _load_fast_manual_gate_evidence(
+            supplied_manual_evidence, binding
+        ) != receipt["manual_gate_evidence"]:
+            raise fast_path.SecurityBlocker(
+                "manual-gate evidence differs from the validated receipt"
+            )
+        commit_object = _run_attestation_git(
+            repository_root, ["cat-file", "commit", head], allow_failure=True
+        )
+        verified_commit = _run_attestation_git(
+            repository_root, ["verify-commit", "--raw", head], allow_failure=True
+        )
+        local_signature = evidence.interpret_local_signature(
+            verified_commit.returncode,
+            f"{verified_commit.stdout}\n{verified_commit.stderr}",
+            signature_format_hint=(
+                evidence._commit_signature_format(commit_object.stdout)
+                if commit_object.returncode == 0
+                else "unknown"
+            ),
+        )
+        local_signature_policy = {
+            **binding["signature_policy"],
+            "require_github_verified": False,
+        }
+        fast_path.verify_commit_signatures(
+            [
+                {
+                    "oid": head,
+                    "source": "USER",
+                    "local_signature": local_signature,
+                    "github_verification": {
+                        "verified": False,
+                        "reason": "not_required",
+                    },
+                }
+            ],
+            local_signature_policy,
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository=arguments.repo,
+            head_sha=head,
+            registry=binding,
+            command_set=binding["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        _write_fast_report(arguments.output, attestation)
+        return 0
+    if arguments.receipt:
+        raise fast_path.RecoverableLocalError(
+            "--receipt is valid only with --bind-commit"
+        )
+    manual_gate_evidence = _load_fast_manual_gate_evidence(
+        getattr(arguments, "manual_gate_evidence", None), binding
+    )
+    tree = _staged_tree(repository_root, status)
+    if not _run_registered_validations(entry, repository_root):
+        raise fast_path.SecurityBlocker("complete registered validation failed")
+    head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
+    tree_after = _staged_tree(repository_root, status_after)
+    if head_after != head or tree_after != tree or status_after != status:
+        raise fast_path.SecurityBlocker(
+            "local head, staged tree, or worktree changed during complete validation"
+        )
+    receipt = _validation_receipt(
+        repository=arguments.repo,
+        head_sha=head,
+        tree_sha=tree,
+        binding=binding,
+        reviewed=reviewed,
+        manual_gate_evidence=manual_gate_evidence,
+    )
+    _write_fast_report(arguments.output, receipt)
+    return 0
+
+
+def _command_resolve_batch(arguments: argparse.Namespace) -> int:
+    repository_root = Path(arguments.repo_root).resolve(strict=True)
+    registry = load_registry(arguments.registry)
+    entry = select_repository(registry, arguments.repo)
+    binding = _fast_registry_binding(entry)
+    gateway = FastPathGateway(repository_root, entry)
+    if arguments.capture_reviewed_state:
+        if any(
+            (
+                arguments.apply,
+                arguments.request,
+                arguments.reviewed_state,
+                arguments.attestation,
+                arguments.output,
+            )
+        ):
+            raise fast_path.RecoverableLocalError(
+                "feedback capture cannot be combined with batch-application arguments"
+            )
+        try:
+            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+        except fast_path.TransientReadFailure:
+            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+        fast_path.atomic_write_json(
+            Path(arguments.capture_reviewed_state), reviewed.to_dict()
+        )
+        return 0
+    if not arguments.apply:
+        raise fast_path.RecoverableLocalError(
+            "resolve-batch requires --apply outside feedback-capture mode"
+        )
+    if not all((arguments.request, arguments.reviewed_state, arguments.attestation)):
+        raise fast_path.RecoverableLocalError(
+            "resolve-batch requires --request, --reviewed-state, and --attestation"
+        )
+    request_value = _read_json(arguments.request, "batch request")
+    _validate_schema(request_value, FAST_BATCH_SCHEMA_PATH, "fast batch", PlanError)
+    request = fast_path.BatchRequest.from_dict(request_value)
+    if request.repository != arguments.repo or request.pull_request_number != arguments.pr:
+        raise fast_path.SecurityBlocker("explicit repository or PR anchor mismatch")
+    reviewed = _load_fast_state(arguments.reviewed_state)
+    attestation = _read_json(arguments.attestation, "validation attestation")
+    if arguments.output:
+        _write_fast_report(
+            arguments.output,
+            {
+                "status": "BATCH_NOT_STARTED",
+                "batch_id": request.batch_id,
+                "authorization_digest": request.authorization_digest,
+                "applied": [],
+                "failed": [],
+                "blocked": [],
+            },
+        )
+    report = fast_path.execute_resolution_batch(
+        request, attestation, reviewed, binding, gateway
+    )
+    if not _write_batch_report(arguments.output, report):
+        return 3
+    return 0 if report["status"] == "BATCH_APPLIED" else 3
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        arguments = build_parser().parse_args(argv)
         if arguments.command == "inspect-actor":
             return _command_inspect_actor()
         if arguments.command == "validate-plan":
             return _command_validate(arguments)
+        if arguments.command == "attest-validation":
+            return _command_attest_validation(arguments)
+        if arguments.command == "resolve-batch":
+            return _command_resolve_batch(arguments)
         return _command_mutation(arguments)
+    except fast_path.RecoverableLocalError as exc:
+        report = {
+            "status": "RECOVERABLE_LOCAL_ERROR",
+            "error": evidence.redact_diagnostic(str(exc)),
+            "remediation_cycle_consumed": False,
+        }
+        print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
+        return 2
+    except fast_path.TransientReadFailure as exc:
+        report = {
+            "status": "BLOCKED_TRANSIENT_READ_FAILED",
+            "error": evidence.redact_diagnostic(str(exc)),
+            "retry_performed": True,
+        }
+        print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
+        return 3
+    except fast_path.SecurityBlocker as exc:
+        report = {
+            "status": "BLOCKED_SECURITY",
+            "blocker": evidence.redact_diagnostic(str(exc)),
+            "retry_performed": False,
+        }
+        print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
+        return 3
     except MutationFailure as exc:
         report = {
             "status": "BLOCKED_MUTATION_FAILED",

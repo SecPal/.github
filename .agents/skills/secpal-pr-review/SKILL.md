@@ -18,8 +18,12 @@ Require all of the following before starting:
 - a clean worktree on the current topic branch with its upstream configured;
 - matching local, remote, and PR head OIDs;
 - an open pull request, an understood base, and an exact explained commit set;
-- valid SSH or OpenPGP signatures for every relevant commit; and
-- one complete immutable initial review snapshot.
+- locally verified SSH or OpenPGP signatures for user-authored commits, as
+  permitted by the repository registry, plus valid GitHub verification metadata
+  when the registry requires it;
+- GitHub `verified: true`, `reason: valid` metadata for GitHub-generated
+  commits; and
+- one canonical stable-feedback read containing no Required Check results.
 
 Do not use this skill for generic code review, creating a PR, requesting any
 review, debugging CI without completed feedback, ordinary implementation,
@@ -39,11 +43,12 @@ for development rules.
 Resolve this skill directory canonically. Its central source repository is three
 directories above it. Use that source repository's:
 
-- `scripts/secpal-pr-review.py` for every read-only GitHub snapshot and accepted
-  Package-2.1 evidence verification; and
-- `scripts/secpal-pr-review-actions.py` only to validate a deterministic plan or
-  to apply one individually authorized reaction, evidence reply, or resolution
-  after every stated precondition succeeds.
+- `scripts/secpal-pr-review-actions.py resolve-batch` for the normal stable
+  feedback capture and guarded batch-resolution path;
+- `scripts/secpal-pr-review-actions.py attest-validation` for one deterministic
+  complete-validation attestation bound to the finished local head; and
+- `scripts/secpal-pr-review.py` plus the legacy action commands only when the
+  user explicitly selects forensic/audit snapshot mode.
 
 Never import or call the action helper from the evidence helper. Never add a
 mutation command to the evidence helper. Execute configured validation commands
@@ -51,45 +56,78 @@ as argument arrays in the target repository, without a shell.
 
 ## Run the finite invocation
 
-1. Create a mode-`0700` temporary session directory and keep all session output
-   there. Initialize the contract counters.
-2. Verify repository, topic branch, upstream, clean state, open PR, heads, base,
-   exact commits, and signatures. Stop on any discrepancy.
-3. Capture exactly one complete immutable initial snapshot with the Package-2.1
-   helper. Bind the session to repository, PR, digest, and expected head. Never
-   append later feedback to it.
-4. Read the authenticated writer through the action helper's exact
-   `inspect-actor` query. Split compound comments into stable logical findings
-   and classify every item using technical evidence. Do not use keyword
-   heuristics or reviewer identity to decide truth.
-5. Build and schema-validate a deterministic mutation plan. In audit/default
-   mode, do no writes. Apply only an individually authorized operation through
-   the action helper with all explicit anchors and `--apply`.
-6. For valid actionable findings, reproduce the defect and add a failing test
-   first. Make the smallest coherent correction and run focused validation.
-7. Run all configured local validation, inspect the complete diff, create one
-   signed commit, verify it, recheck the expected remote head, and perform one
-   ordinary fast-forward push. Any failure stops the invocation.
-8. Perform the one allowed holistic audit across correctness, security, privacy,
-   data integrity, lifecycle, rollout, and avoidable complexity.
-9. Perform the single post-cycle-1 complete GitHub read. Any new feedback or head
-   movement ends this session and requires a fresh explicit user invocation.
-10. Use cycle 2 only for an unresolved valid initial-snapshot item or one
-    in-scope defect found by the holistic audit. Repeat the same test, signature,
-    validation, remote-head, and one-push rules. A third cycle is prohibited.
-11. Perform the single final complete GitHub read. Do not retry, poll, sleep, or
-    automatically rerun after a push.
-12. Resolve an eligible initial-snapshot thread only through one explicitly
-    authorized action after the remediation-resolution readiness proof in the
-    contract succeeds.
-13. Report the terminal outcome and evidence. Stop at
+1. Create a mode-`0700` temporary session directory. Capture stable feedback
+   once with `resolve-batch --capture-reviewed-state`; do not create a Package
+   2.1 or Package 2.2 snapshot in normal mode.
+2. Split compound comments into stable logical findings and classify every item
+   from source, tests, and repository context. Bind each finding's typed source
+   identity/digest, optional unresolved thread, classification, disposition,
+   and evidence digest in the batch. Cover top-level reviews, conversation
+   comments and their reactions, stable pull-request reactions, and unresolved-
+   thread comments and their reactions. PR-level `EYES` activity markers are
+   volatile workflow state rather than review feedback. Never infer truth from
+   reviewer identity, keywords, or CI.
+3. Reproduce every valid finding, add a failing test first, make the smallest
+   coherent corrections, and use focused validation while editing.
+4. Perform the one holistic audit across correctness, security, privacy, data
+   integrity, lifecycle, rollout, and avoidable complexity. Fix material
+   in-scope defects before the complete validation.
+5. Stage the finished tree and run complete registered local validation exactly
+   once through `attest-validation`, supplying explicit satisfied evidence for
+   every registered manual gate. Preserve its deterministic staged-tree,
+   parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
+   receipt.
+6. Create one signed commit containing exactly that staged tree, use
+   the receipt digest as its single `SecPal-Validation-Receipt` trailer, and use
+   `attest-validation --bind-commit` to verify that signed binding and its local
+   signature without rerunning validation. Recheck the remote head and push
+   once; the later live readiness check enforces required GitHub verification.
+7. Read applicable rules and Required Checks once as one bounded logical read.
+   Pending, failed, missing, or unknown required results block; never poll.
+8. Perform one lightweight stable-feedback freshness read. A same-head CI
+   transition is irrelevant to this comparison. The single attested remediation
+   head may cause GitHub's derived `isOutdated` state to change from false to
+   true; every other unexpected head, comment, reaction, or thread-state change
+   blocks before the first write.
+9. Resolve all eligible threads through one schema-bound `resolve-batch
+--apply`. Verify readiness, attestation, checks, and stable feedback once;
+   between writes retain one bounded target check that verifies identity, head,
+   open PR/base state, thread state, comments, and reactions without rereading
+   complete PR feedback.
+10. Report the terminal outcome and evidence. Stop at
     `WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION`. The user alone decides whether
     another review round is requested and whether the PR may be merged.
 
 Short-circuit immediately to the applicable terminal outcome when a blocker is
 detected. Green CI alone never establishes technical truth or merge readiness.
 
-## Mutation plan discipline
+## Fast-path and forensic-plan discipline
+
+Validate fast-path batch inputs against
+`references/fast-path-batch.schema.json`. One batch may contain only
+`THREAD_RESOLUTION` operations and must bind repository, PR, expected head,
+reviewed base branch/SHA, authenticated actor, reviewed-state and feedback digests, and eligible
+classified findings. The reviewed state must originate from an open PR. Every
+top-level review/comment and its reactions, stable pull-request reaction, unresolved
+reviewed thread, and comment/reaction in it must be covered; PR-level `EYES`
+activity markers are excluded before digesting. Each resolution names exactly its threaded
+findings, and classification/disposition pairs must follow policy. A
+partial failure stops later writes, reports every applied/failed/blocked target,
+and never retries a write. Applied-target report entries are audit output, not
+reusable authorization. A manual rerun with an already-resolved or otherwise changed thread fails closed.
+
+The stable-feedback projection contains review identities, body digests,
+thread/comment identities and state, stable reactions, actors, repository, PR,
+head, and the reviewed base branch/SHA. It excludes PR-level `EYES` activity
+markers and contains no Required Check results.
+Volatile readiness separately contains heads, the registered default/base
+repository boundary, Required Checks, mergeability and merge-state policy,
+worktree, signatures, the signed validation-receipt trailer, and the
+validation-attestation identity. Capture, freshness, checks, and target reads
+must use the one explicitly selected registry entry.
+
+The following immutable mutation-plan rules remain available only for explicit
+forensic/audit mode.
 
 Validate plans against
 [references/mutation-plan.schema.json](references/mutation-plan.schema.json).
@@ -111,7 +149,9 @@ without retry.
 ## Reporting
 
 Report every finding's sources, classification, proof, disposition, and any
-authorized operation identity. Report counter use, head and snapshot anchors,
-validation, signatures, CI, unresolved material items, and the exact terminal
+authorized operation identity. Report counter use, stable-state or forensic
+snapshot anchors,
+validation attestation, signature-source classifications, CI, stable-feedback
+freshness, batch results, unresolved material items, and the exact terminal
 outcome. Do not post redundant “fixed,” “addressed,” SHA-status, or progress
 comments on the PR.

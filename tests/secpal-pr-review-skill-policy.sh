@@ -12,6 +12,8 @@ ACTIONS="$REPO_ROOT/scripts/secpal-pr-review-actions.py"
 EVIDENCE="$REPO_ROOT/scripts/secpal-pr-review.py"
 REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.json"
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
+FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
+FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
 INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 GOVERNANCE_SUITE="$REPO_ROOT/tests/review-governance-suite.sh"
@@ -22,23 +24,24 @@ fail() {
   exit 1
 }
 
-for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$REGISTRY" "$PLAN_SCHEMA"; do
+for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$FAST_PATH" "$REGISTRY" "$PLAN_SCHEMA" "$FAST_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
 test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executable'
 
-# Policy cases: exact finite counters, one audit, explicit checkpoint, no third
-# cycle, no polling/retry, no automatic late-feedback incorporation, and zero
-# review-request/merge authority.
-grep -Fq 'maximum_remediation_cycles: 2' "$CONTRACT" || fail 'maximum remediation cycles drifted'
-grep -Fq 'maximum_logical_github_state_captures: 3' "$CONTRACT" || fail 'state capture limit drifted'
+# Policy cases: exact fast-path counters, one audit, explicit checkpoint, one
+# bounded read retry, no polling, and zero review-request/merge authority.
+grep -Fq 'normal_complete_snapshots: 0' "$CONTRACT" || fail 'normal snapshot limit drifted'
+grep -Fq 'normal_stable_feedback_reads: 2' "$CONTRACT" || fail 'stable feedback read limit drifted'
+grep -Fq 'normal_required_check_reads_before_resolution: 1' "$CONTRACT" || fail 'required-check read limit drifted'
+grep -Fq 'normal_complete_validation_runs: 1' "$CONTRACT" || fail 'complete validation limit drifted'
 grep -Fq 'maximum_holistic_audits: 1' "$CONTRACT" || fail 'holistic audit limit drifted'
-grep -Fq 'maximum_signed_remediation_commits: 2' "$CONTRACT" || fail 'commit limit drifted'
-grep -Fq 'maximum_fast_forward_pushes: 2' "$CONTRACT" || fail 'push limit drifted'
+grep -Fq 'normal_signed_remediation_commits: 1' "$CONTRACT" || fail 'commit limit drifted'
+grep -Fq 'normal_fast_forward_pushes: 1' "$CONTRACT" || fail 'push limit drifted'
 grep -Fq 'maximum_evidence_replies_total: 10' "$CONTRACT" || fail 'reply limit drifted'
 grep -Fq 'WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION' "$CONTRACT" || fail 'user checkpoint missing'
-grep -Fq 'A third remediation cycle is prohibited.' "$CONTRACT" || fail 'third-cycle prohibition missing'
-grep -Fq 'Late feedback requires a fresh explicit user invocation' "$CONTRACT" || fail 'late-feedback rule missing'
+grep -Fq 'A normal invocation has one remediation pass.' "$CONTRACT" || fail 'single-pass rule missing'
+grep -Fq 'never appends unreviewed feedback' "$CONTRACT" || fail 'late-feedback rule missing'
 
 for phrase in \
   'zero review requests' \
@@ -51,11 +54,11 @@ for phrase in \
   grep -Fqi "$phrase" "$CONTRACT" || fail "missing contract phrase: $phrase"
 done
 
-if grep -En 'sleep\(|time\.sleep|while[[:space:]]+true|for[[:space:]].*retry|retrying' "$ACTIONS"; then
-  fail 'mutation helper contains polling or retry behavior'
+if grep -En 'sleep\(|time\.sleep|while[[:space:]]+true|retrying' "$ACTIONS" "$FAST_PATH"; then
+  fail 'mutation helper contains polling behavior'
 fi
 
-if grep -En 'gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue' "$ACTIONS"; then
+if grep -En 'gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue' "$ACTIONS" "$FAST_PATH"; then
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
@@ -101,12 +104,13 @@ done
 test "$(git -C "$REPO_ROOT" diff --name-only "$P21_BASELINE" -- "${relative_paths[@]}" | wc -l)" -eq 0 \
   || fail 'existing review governance or instruction routing changed'
 
-python3 - "$PLAN_SCHEMA" "$REGISTRY" <<'PY'
+python3 - "$PLAN_SCHEMA" "$FAST_SCHEMA" "$REGISTRY" <<'PY'
 import json
 import sys
 
 plan_schema = json.load(open(sys.argv[1], encoding="utf-8"))
-registry = json.load(open(sys.argv[2], encoding="utf-8"))
+fast_schema = json.load(open(sys.argv[2], encoding="utf-8"))
+registry = json.load(open(sys.argv[3], encoding="utf-8"))
 
 allowed = {"REACTION", "EVIDENCE_REPLY", "THREAD_RESOLUTION"}
 operation_kind = plan_schema["$defs"]["operation"]["properties"]["kind"]["enum"]
@@ -117,6 +121,10 @@ for prohibited in (
     "MERGE", "AUTO_MERGE", "COMMENT_DELETE", "REVIEW_DISMISSAL", "BRANCH_WRITE",
 ):
     assert f'"{prohibited}"' not in serialized
+    assert f'"{prohibited}"' not in json.dumps(fast_schema, sort_keys=True)
+assert fast_schema["$defs"]["operation"]["properties"]["kind"] == {
+    "const": "THREAD_RESOLUTION"
+}
 
 expected = [
     "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts",

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import importlib.util
 import io
 import json
@@ -34,6 +35,7 @@ def load_module(name: str, path: Path) -> Any:
 
 
 actions = load_module("secpal_pr_review_actions", ACTIONS_HELPER)
+fast_path = actions.fast_path
 p21 = load_module("secpal_pr_review_p21_tests", P21_TESTS)
 
 
@@ -1787,6 +1789,7 @@ class MutationTests(TestCase):
                                 },
                             },
                             "object": {
+                                "oid": oid,
                                 "statusCheckRollup": {
                                     "contexts": {
                                         "nodes": nodes,
@@ -3853,7 +3856,2123 @@ class AuditModeTests(TestCase):
         self.assertEqual(json.loads(output.buffer.getvalue())["status"], "VALIDATED_NO_MUTATION")
 
 
+def fast_feedback(thread_count: int = 2, *, head_sha: str = p21.HEAD) -> Any:
+    return fast_path.StableFeedbackState.from_payload(
+        {
+            "repository": "SecPal/.github",
+            "pull_request_number": 1,
+            "head_sha": head_sha,
+            "base_ref": "main",
+            "base_sha": p21.BASE,
+            "pr_state": "OPEN",
+            "pull_request_reactions": [],
+            "reviews": [
+                {
+                    "node_id": "REVIEW_1",
+                    "body_digest": digest("review summary"),
+                    "actor": {"login": "reviewer", "node_id": "ACTOR_1", "database_id": 7},
+                    "state": "COMMENTED",
+                    "commit_oid": head_sha,
+                    "reactions": [],
+                }
+            ],
+            "conversation_comments": [],
+            "threads": [
+                {
+                    "node_id": f"THREAD_{index}",
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": f"COMMENT_{index}",
+                            "body_digest": digest(f"finding {index}"),
+                            "actor": {
+                                "login": "reviewer",
+                                "node_id": "ACTOR_1",
+                                "database_id": 7,
+                            },
+                            "reply_to_id": None,
+                            "reactions": [],
+                        }
+                    ],
+                }
+                for index in range(1, thread_count + 1)
+            ],
+            "required_checks": [{"name": "tests", "state": "SUCCESS"}],
+        }
+    )
+
+
+def fast_registry() -> dict[str, Any]:
+    return {
+        "repository": "SecPal/.github",
+        "default_branch": "main",
+        "allowed_base_repositories": ["SecPal/.github"],
+        "manual_gates": [],
+        "signature_policy": {
+            "accepted_formats": ["ssh", "openpgp"],
+        },
+        "check_policy": {
+            "require_ruleset_evidence": True,
+            "require_branch_protection_evidence": True,
+            "expected_skipped": "block",
+        },
+        "limits": {
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
+        },
+        "validation": [
+            {
+                "argv": [
+                    "python3",
+                    "-m",
+                    "unittest",
+                    "tests/secpal-pr-review-actions-unit.py",
+                ],
+                "working_directory": ".",
+            }
+        ],
+    }
+
+
+def fast_attestation(reviewed: Any, *, head_sha: str = p21.HEAD) -> dict[str, Any]:
+    registry = fast_registry()
+    receipt = fast_path.create_validation_receipt(
+        repository="SecPal/.github",
+        head_sha=reviewed.head_sha,
+        validated_tree_sha="a" * 40,
+        registry=registry,
+        command_set=registry["validation"],
+        successful_result=True,
+        reviewed_state=reviewed,
+        manual_gate_evidence=[],
+    )
+    return fast_path.create_validation_attestation(
+        repository="SecPal/.github",
+        head_sha=head_sha,
+        registry=registry,
+        command_set=registry["validation"],
+        successful_result=True,
+        reviewed_state=reviewed,
+        validation_receipt=receipt,
+    )
+
+
+def fast_request(
+    reviewed: Any,
+    thread_count: int = 2,
+    *,
+    cover_top_level: bool = True,
+    cover_reactions: bool = True,
+) -> Any:
+    reviewed_threads = {
+        item["node_id"]: item for item in reviewed.feedback["threads"]
+    }
+    receipt_digest = fast_attestation(reviewed)["validation_receipt_digest"]
+    findings: list[dict[str, Any]] = []
+    operation_finding_ids: dict[str, list[str]] = {}
+
+    def add_finding(
+        finding_id: str,
+        thread_id: str | None,
+        sources: list[dict[str, str]],
+        *,
+        classification: str = "INFORMATIONAL",
+        disposition: str = "NON_ACTIONABLE",
+    ) -> None:
+        fixed = disposition in fast_path.FIXED_DISPOSITIONS
+        findings.append(
+            {
+                "finding_id": finding_id,
+                "thread_id": thread_id,
+                "sources": sources,
+                "source_subitem_id": None,
+                "classification": classification,
+                "disposition": disposition,
+                "evidence_digest": digest(f"finding evidence {finding_id}"),
+                "test_evidence_digest": receipt_digest if fixed else None,
+                "commit_sha": p21.HEAD if fixed else None,
+                "canonical_finding_id": None,
+            }
+        )
+        if thread_id is not None:
+            operation_finding_ids.setdefault(thread_id, []).append(finding_id)
+
+    for index in range(1, thread_count + 1):
+        thread_id = f"THREAD_{index}"
+        thread = reviewed_threads[thread_id]
+        add_finding(
+            f"finding-{index}",
+            thread_id,
+            [
+                {
+                    "kind": "THREAD_COMMENT",
+                    "node_id": item["node_id"],
+                    "digest": item["body_digest"],
+                }
+                for item in thread["comments"]
+            ],
+            classification="VALID_ACTIONABLE",
+            disposition="CORRECTED_AND_VERIFIED",
+        )
+        if cover_reactions:
+            for comment_index, comment in enumerate(thread["comments"], 1):
+                for reaction_index, reaction in enumerate(comment["reactions"], 1):
+                    add_finding(
+                        f"finding-{index}-comment-{comment_index}-reaction-{reaction_index}",
+                        thread_id,
+                        [
+                            {
+                                "kind": "THREAD_COMMENT_REACTION",
+                                "node_id": reaction["mutation_id"],
+                                "digest": fast_path.digest_json(reaction),
+                            }
+                        ],
+                    )
+
+    if cover_top_level:
+        for index, reaction in enumerate(
+            reviewed.feedback["pull_request_reactions"], 1
+        ):
+            add_finding(
+                f"finding-pr-reaction-{index}",
+                None,
+                [
+                    {
+                        "kind": "PULL_REQUEST_REACTION",
+                        "node_id": reaction["mutation_id"],
+                        "digest": fast_path.digest_json(reaction),
+                    }
+                ],
+            )
+        for index, review in enumerate(reviewed.feedback["reviews"], 1):
+            add_finding(
+                f"finding-review-{index}",
+                None,
+                [
+                    {
+                        "kind": "REVIEW",
+                        "node_id": review["node_id"],
+                        "digest": review["body_digest"],
+                    }
+                ],
+            )
+            if cover_reactions:
+                for reaction_index, reaction in enumerate(review["reactions"], 1):
+                    add_finding(
+                        f"finding-review-{index}-reaction-{reaction_index}",
+                        None,
+                        [
+                            {
+                                "kind": "REVIEW_REACTION",
+                                "node_id": reaction["mutation_id"],
+                                "digest": fast_path.digest_json(reaction),
+                            }
+                        ],
+                    )
+        for index, comment in enumerate(
+            reviewed.feedback["conversation_comments"], 1
+        ):
+            add_finding(
+                f"finding-conversation-{index}",
+                None,
+                [
+                    {
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": comment["node_id"],
+                        "digest": comment["body_digest"],
+                    }
+                ],
+            )
+            if cover_reactions:
+                for reaction_index, reaction in enumerate(comment["reactions"], 1):
+                    add_finding(
+                        f"finding-conversation-{index}-reaction-{reaction_index}",
+                        None,
+                        [
+                            {
+                                "kind": "CONVERSATION_REACTION",
+                                "node_id": reaction["mutation_id"],
+                                "digest": fast_path.digest_json(reaction),
+                            }
+                        ],
+                    )
+
+    return fast_path.BatchRequest.from_dict(
+        {
+            "schema_version": "1.2",
+            "batch_id": "batch-001",
+            "repository": "SecPal/.github",
+            "pull_request_number": 1,
+            "expected_head_sha": p21.HEAD,
+            "expected_base_ref": reviewed.base_ref,
+            "expected_base_sha": reviewed.base_sha,
+            "expected_actor": {
+                "login": "aroviqen",
+                "node_id": "USER_1",
+                "database_id": 7,
+            },
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "findings": findings,
+            "operations": [
+                {
+                    "operation_id": f"resolve-{index}",
+                    "kind": "THREAD_RESOLUTION",
+                    "thread_id": f"THREAD_{index}",
+                    "finding_ids": operation_finding_ids[f"THREAD_{index}"],
+                }
+                for index in range(1, thread_count + 1)
+            ]
+        }
+    )
+
+
+class FakeFastGateway:
+    def __init__(self, current_feedback: Any, validated_feedback: Any | None = None) -> None:
+        self.current_feedback = current_feedback
+        self.validated_feedback = validated_feedback or current_feedback
+        self.calls: list[tuple[str, str]] = []
+        self.checks = [
+            {
+                "stable_id": "check_run:tests",
+                "name": "tests",
+                "application": {"database_id": 1},
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "is_effective": True,
+            }
+        ]
+        self.required_specs = [{"context": "tests", "integration_id": 1}]
+        self.commits = [
+            {
+                "oid": p21.HEAD,
+                "source": "USER",
+                "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        ]
+        self.fail_feedback_reads = 0
+        self.fail_at_write: int | None = None
+        self.unknown_at_write: int | None = None
+        self.write_attempts: dict[str, int] = {}
+        self.snapshot_calls = 0
+        self.validation_runs = 0
+        self.fail_target: str | None = None
+        self.target_pr_state = "OPEN"
+        self.target_base_ref = current_feedback.base_ref
+        self.target_base_sha = current_feedback.base_sha
+        self.target_mergeability = "MERGEABLE"
+        self.target_merge_state_status = "CLEAN"
+
+    def read_preflight(self, request: Any) -> Any:
+        self.calls.append(("READ", "preflight"))
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=self.validated_feedback.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=self.validated_feedback,
+            manual_gate_evidence=[],
+        )
+        return fast_path.ReadinessState(
+            repository="SecPal/.github",
+            pull_request_number=1,
+            head_sha=request.expected_head_sha,
+            base_ref="main",
+            base_sha=p21.BASE,
+            base_repository="SecPal/.github",
+            local_head_sha=request.expected_head_sha,
+            remote_head_sha=request.expected_head_sha,
+            head_parent_sha=self.validated_feedback.head_sha,
+            head_tree_sha="a" * 40,
+            validation_receipt_digest=receipt["receipt_digest"],
+            worktree_clean=True,
+            pull_request_open=True,
+            mergeability="MERGEABLE",
+            merge_state_status="CLEAN",
+            actor={"login": "aroviqen", "node_id": "USER_1", "database_id": 7},
+            commits=copy.deepcopy(self.commits),
+        )
+
+    def read_required_checks(
+        self, _request: Any, _registry: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append(("READ", "required-checks"))
+        return {
+            "checks": copy.deepcopy(self.checks),
+            "required_specs": copy.deepcopy(self.required_specs),
+            "strict_base_required": False,
+        }
+
+    def read_stable_feedback(self, _request: Any) -> Any:
+        self.calls.append(("READ", "stable-feedback"))
+        if self.fail_feedback_reads:
+            self.fail_feedback_reads -= 1
+            raise fast_path.TransientReadFailure("temporary transport failure")
+        return copy.deepcopy(self.current_feedback)
+
+    def read_thread_target(self, _request: Any, operation_value: Any) -> dict[str, Any]:
+        self.calls.append(("READ", f"target:{operation_value.thread_id}"))
+        if self.fail_target == operation_value.thread_id:
+            raise fast_path.TransientReadFailure("target read remained unavailable")
+        thread = next(
+            item
+            for item in self.current_feedback.feedback["threads"]
+            if item["node_id"] == operation_value.thread_id
+        )
+        return {
+            "thread_id": operation_value.thread_id,
+            "head_sha": self.current_feedback.head_sha,
+            "pr_state": self.target_pr_state,
+            "base_ref": self.target_base_ref,
+            "base_sha": self.target_base_sha,
+            "mergeability": self.target_mergeability,
+            "merge_state_status": self.target_merge_state_status,
+            "is_resolved": thread["is_resolved"],
+            "thread": copy.deepcopy(thread),
+        }
+
+    def resolve_thread(self, _request: Any, operation_value: Any) -> dict[str, Any]:
+        self.calls.append(("WRITE", operation_value.thread_id))
+        attempt = self.write_attempts.get(operation_value.thread_id, 0) + 1
+        self.write_attempts[operation_value.thread_id] = attempt
+        write_number = sum(self.write_attempts.values())
+        if self.unknown_at_write == write_number:
+            raise fast_path.UnknownWriteResult("mutation response was lost")
+        if self.fail_at_write == write_number:
+            raise fast_path.MutationFailure("mutation was rejected")
+        return {"thread_id": operation_value.thread_id, "is_resolved": True}
+
+
+class FastPathTests(TestCase):
+    def execute(self, reviewed: Any, gateway: FakeFastGateway, count: int = 2) -> dict[str, Any]:
+        return fast_path.execute_resolution_batch(
+            fast_request(reviewed, count),
+            fast_attestation(reviewed),
+            reviewed,
+            fast_registry(),
+            gateway,
+        )
+
+    def test_thirty_threads_share_one_attestation_checks_and_feedback_read(self) -> None:
+        reviewed = fast_feedback(30)
+        gateway = FakeFastGateway(reviewed)
+        with mock.patch.object(
+            fast_path,
+            "verify_validation_attestation",
+            wraps=fast_path.verify_validation_attestation,
+        ) as verify_attestation:
+            result = self.execute(reviewed, gateway, 30)
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+        self.assertEqual(len(result["applied"]), 30)
+        self.assertEqual(verify_attestation.call_count, 1)
+        self.assertEqual(gateway.calls.count(("READ", "required-checks")), 1)
+        self.assertEqual(gateway.calls.count(("READ", "stable-feedback")), 1)
+        self.assertEqual(sum(kind == "WRITE" for kind, _ in gateway.calls), 30)
+        self.assertEqual(gateway.validation_runs, 0)
+        self.assertEqual(gateway.snapshot_calls, 0)
+
+    def test_normal_two_thread_batch_has_no_package_snapshot_dependency(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        self.assertEqual(self.execute(reviewed, gateway)["status"], "BATCH_APPLIED")
+        self.assertNotIn(("READ", "package-2.1-snapshot"), gateway.calls)
+        self.assertNotIn(("READ", "package-2.2-snapshot"), gateway.calls)
+
+    def test_legacy_batch_without_classified_findings_is_rejected(self) -> None:
+        reviewed = fast_feedback(1)
+        payload = fast_request(reviewed, 1).to_dict()
+        payload["schema_version"] = "1.0"
+        payload.pop("findings", None)
+        payload["operations"] = [
+            {
+                "operation_id": "resolve-1",
+                "kind": "THREAD_RESOLUTION",
+                "thread_id": "THREAD_1",
+                "disposition": "NON_ACTIONABLE",
+            }
+        ]
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_batch_rejects_secret_like_identifiers(self) -> None:
+        payload = fast_request(fast_feedback()).to_dict()
+        payload["batch_id"] = "github_pat_example"
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "secret"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_batch_rejects_incompatible_classification_and_disposition(self) -> None:
+        payload = fast_request(fast_feedback()).to_dict()
+        payload["findings"][0].update(
+            classification="INFORMATIONAL",
+            disposition="CORRECTED_AND_VERIFIED",
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "incompatible"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_batch_requires_finding_coverage_for_every_unresolved_thread(self) -> None:
+        reviewed = fast_feedback()
+        payload = fast_request(reviewed).to_dict()
+        payload["findings"] = payload["findings"][:1]
+        payload["operations"] = payload["operations"][:1]
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "every unresolved"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_batch_finding_source_must_match_reviewed_comment(self) -> None:
+        reviewed = fast_feedback()
+        payload = fast_request(reviewed).to_dict()
+        payload["findings"][0]["sources"][0]["digest"] = digest(
+            "forged source"
+        )
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "source"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_batch_finding_and_operation_counts_honor_registry_item_limit(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        registry["limits"]["maximum_items"] = 3
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "item limit"):
+            fast_path.execute_resolution_batch(
+                fast_request(reviewed),
+                fast_attestation(reviewed),
+                reviewed,
+                registry,
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_corrected_finding_must_bind_the_remediation_head(self) -> None:
+        reviewed = fast_feedback()
+        alternate_commit = "f" * 40
+        payload = fast_request(reviewed).to_dict()
+        payload["findings"][0]["commit_sha"] = alternate_commit
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        gateway.commits.append(
+            {
+                "oid": alternate_commit,
+                "source": "USER",
+                "local_signature": {
+                    "verified": True,
+                    "state": "valid",
+                    "format": "ssh",
+                },
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "remediation head"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_caller_authored_prior_results_are_rejected(self) -> None:
+        request = fast_request(fast_feedback(1), 1)
+        payload = request.to_dict()
+        payload["prior_results"] = [
+            {
+                "operation_id": "resolve-1",
+                "thread_id": "THREAD_1",
+                "authorization_digest": request.authorization_digest,
+                "mutation_identity": "THREAD_1",
+                "status": "APPLIED",
+            }
+        ]
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_non_open_reviewed_state_blocks_before_live_reads(self) -> None:
+        reviewed = fast_feedback(1)
+        reviewed.pr_state = "CLOSED"
+        reviewed.refresh_digests()
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "reviewed.*open"):
+            self.execute(reviewed, gateway, 1)
+        self.assertEqual(gateway.calls, [])
+
+    def test_unclassified_top_level_feedback_blocks_before_live_reads(self) -> None:
+        for label, add_feedback in (
+            (
+                "review",
+                lambda state: state.feedback["reviews"].append(
+                    {
+                        "node_id": "REVIEW_TOP_LEVEL",
+                        "body_digest": digest("material review body"),
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "ACTOR_1",
+                            "database_id": 7,
+                        },
+                        "state": "COMMENTED",
+                        "commit_oid": p21.HEAD,
+                        "reactions": [],
+                    }
+                ),
+            ),
+            (
+                "conversation comment",
+                lambda state: state.feedback["conversation_comments"].append(
+                    {
+                        "node_id": "COMMENT_TOP_LEVEL",
+                        "body_digest": digest("material conversation comment"),
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "ACTOR_1",
+                            "database_id": 7,
+                        },
+                        "updated_at": "2026-07-21T00:00:00Z",
+                        "reactions": [],
+                    }
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                reviewed = fast_feedback(1)
+                add_feedback(reviewed)
+                reviewed.refresh_digests()
+                request = fast_request(reviewed, 1, cover_top_level=False)
+                gateway = FakeFastGateway(reviewed)
+                with self.assertRaisesRegex(fast_path.SecurityBlocker, "coverage"):
+                    fast_path.execute_resolution_batch(
+                        request,
+                        fast_attestation(reviewed),
+                        reviewed,
+                        fast_registry(),
+                        gateway,
+                    )
+                self.assertEqual(gateway.calls, [])
+
+    def test_unclassified_reactions_block_before_live_reads(self) -> None:
+        for label, add_reaction in (
+            (
+                "pull request",
+                lambda state, reaction: state.feedback[
+                    "pull_request_reactions"
+                ].append(reaction),
+            ),
+            (
+                "thread comment",
+                lambda state, reaction: state.feedback["threads"][0]["comments"][
+                    0
+                ]["reactions"].append(reaction),
+            ),
+        ):
+            with self.subTest(label=label):
+                reviewed = fast_feedback(1)
+                reaction = {
+                    "mutation_id": f"REACTION_{label.replace(' ', '_')}",
+                    "content": "THUMBS_UP",
+                    "actor": {
+                        "login": "reviewer",
+                        "node_id": "ACTOR_1",
+                        "database_id": 7,
+                    },
+                }
+                add_reaction(reviewed, reaction)
+                reviewed.refresh_digests()
+                request = fast_request(
+                    reviewed,
+                    1,
+                    cover_top_level=False,
+                    cover_reactions=False,
+                )
+                gateway = FakeFastGateway(reviewed)
+                with self.assertRaisesRegex(fast_path.SecurityBlocker, "coverage"):
+                    fast_path.execute_resolution_batch(
+                        request,
+                        fast_attestation(reviewed),
+                        reviewed,
+                        fast_registry(),
+                        gateway,
+                )
+                self.assertEqual(gateway.calls, [])
+
+    def test_pr_eyes_reaction_rotation_is_not_stable_feedback(self) -> None:
+        payload = fast_feedback(1).to_dict()
+
+        def eyes(identity: str) -> dict[str, Any]:
+            return {
+                "mutation_id": identity,
+                "content": "EYES",
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+            }
+
+        payload["pull_request_reactions"] = [eyes("REACTION_PR_1")]
+        first = fast_path.StableFeedbackState.from_payload(payload)
+        payload["pull_request_reactions"] = [eyes("REACTION_PR_2")]
+        payload["reviews"][0]["reactions"] = [eyes("REACTION_REVIEW")]
+        second = fast_path.StableFeedbackState.from_payload(payload)
+
+        self.assertEqual(first.feedback["pull_request_reactions"], [])
+        self.assertEqual(second.feedback["pull_request_reactions"], [])
+        self.assertEqual(
+            second.feedback["reviews"][0]["reactions"][0]["mutation_id"],
+            "REACTION_REVIEW",
+        )
+        payload["reviews"][0]["reactions"] = []
+        second_without_nested_reaction = fast_path.StableFeedbackState.from_payload(
+            payload
+        )
+        self.assertEqual(
+            first.feedback_digest,
+            second_without_nested_reaction.feedback_digest,
+        )
+
+    def test_complete_feedback_source_taxonomy_is_classified(self) -> None:
+        reviewed = fast_feedback(1)
+
+        def reaction(identity: str) -> dict[str, Any]:
+            return {
+                "mutation_id": identity,
+                "content": "THUMBS_UP",
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+            }
+
+        reviewed.feedback["pull_request_reactions"].append(reaction("REACTION_PR"))
+        reviewed.feedback["reviews"].append(
+            {
+                "node_id": "REVIEW_TOP_LEVEL",
+                "body_digest": digest("review body"),
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+                "state": "COMMENTED",
+                "commit_oid": p21.HEAD,
+                "reactions": [reaction("REACTION_REVIEW")],
+            }
+        )
+        reviewed.feedback["conversation_comments"].append(
+            {
+                "node_id": "COMMENT_TOP_LEVEL",
+                "body_digest": digest("conversation body"),
+                "actor": {
+                    "login": "reviewer",
+                    "node_id": "ACTOR_1",
+                    "database_id": 7,
+                },
+                "updated_at": "2026-07-21T00:00:00Z",
+                "reactions": [reaction("REACTION_CONVERSATION")],
+            }
+        )
+        reviewed.feedback["threads"][0]["comments"][0]["reactions"].append(
+            reaction("REACTION_THREAD")
+        )
+        reviewed.refresh_digests()
+        request = fast_request(reviewed, 1)
+        observed_kinds = {
+            source.kind
+            for finding in request.findings
+            for source in finding.sources
+        }
+        self.assertEqual(observed_kinds, fast_path.SOURCE_KINDS)
+        result = fast_path.execute_resolution_batch(
+            request,
+            fast_attestation(reviewed),
+            reviewed,
+            fast_registry(),
+            FakeFastGateway(reviewed),
+        )
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+
+    def test_fixed_finding_test_evidence_binds_validation_receipt(self) -> None:
+        reviewed = fast_feedback(1)
+        payload = fast_request(reviewed, 1).to_dict()
+        payload["findings"][0]["test_evidence_digest"] = "f" * 64
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "test evidence"):
+            fast_path.execute_resolution_batch(
+                fast_path.BatchRequest.from_dict(payload),
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+        )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_non_fixed_finding_rejects_fix_only_evidence(self) -> None:
+        payload = fast_request(fast_feedback(1), 1).to_dict()
+        payload["findings"][0].update(
+            classification="INFORMATIONAL",
+            disposition="NON_ACTIONABLE",
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "non-fixed"):
+            fast_path.BatchRequest.from_dict(payload)
+
+    def test_fast_policy_tables_match_the_legacy_resolution_invariants(self) -> None:
+        self.assertEqual(fast_path.MERGE_STATE_POLICY, p21.review.MERGE_STATE_POLICY)
+        self.assertEqual(
+            set(fast_path.CLASSIFICATION_DISPOSITIONS),
+            actions.RESOLVABLE_CLASSIFICATIONS,
+        )
+        for classification, dispositions in fast_path.CLASSIFICATION_DISPOSITIONS.items():
+            self.assertEqual(
+                dispositions,
+                actions.DISPOSITION_POLICY[classification]
+                & actions.RESOLVABLE_DISPOSITIONS,
+            )
+
+    def test_fast_batch_schema_matches_runtime_security_policy(self) -> None:
+        schema = json.loads(actions.FAST_BATCH_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["schema_version"]["const"], "1.2")
+        self.assertNotIn("prior_results", schema["properties"])
+        self.assertEqual(
+            set(schema["$defs"]["source"]["properties"]["kind"]["enum"]),
+            fast_path.SOURCE_KINDS,
+        )
+
+    def test_actions_uses_the_canonical_fast_path_module(self) -> None:
+        self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
+        self.assertIs(
+            actions.fast_path,
+            importlib.import_module("secpal_pr_review.fast_path"),
+        )
+
+    def test_fast_path_loader_rejects_a_preloaded_module_from_another_path(self) -> None:
+        with mock.patch.dict(
+            actions.sys.modules,
+            {
+                "secpal_pr_review.fast_path": SimpleNamespace(
+                    __file__="/tmp/untrusted-fast-path.py"
+                )
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected path"):
+                actions._load_fast_path_helper()
+
+    def test_fast_path_loader_removes_a_partially_initialized_module(self) -> None:
+        module_name = "secpal_pr_review.fast_path"
+        partial_module = SimpleNamespace(__file__=str(actions.FAST_PATH_HELPER))
+        loader = SimpleNamespace(exec_module=mock.Mock(side_effect=SyntaxError("broken")))
+        spec = SimpleNamespace(name=module_name, loader=loader)
+        with (
+            mock.patch.dict(actions.sys.modules, {module_name: None}),
+            mock.patch.object(actions.importlib.util, "spec_from_file_location", return_value=spec),
+            mock.patch.object(actions.importlib.util, "module_from_spec", return_value=partial_module),
+        ):
+            with self.assertRaisesRegex(SyntaxError, "broken"):
+                actions._load_fast_path_helper()
+            self.assertIsNone(actions.sys.modules.get(module_name))
+
+    def test_batch_request_identity_must_match_reviewed_feedback(self) -> None:
+        reviewed = fast_feedback()
+        mismatches = {
+            "repository": "SecPal/api",
+            "pull_request_number": 2,
+        }
+        for field, value in mismatches.items():
+            with self.subTest(field=field):
+                payload = fast_request(reviewed).to_dict()
+                payload[field] = value
+                request = fast_path.BatchRequest.from_dict(payload)
+                gateway = FakeFastGateway(reviewed)
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "reviewed feedback identity",
+                ):
+                    fast_path.execute_resolution_batch(
+                        request,
+                        fast_attestation(reviewed),
+                        reviewed,
+                        fast_registry(),
+                        gateway,
+                    )
+                self.assertEqual(gateway.calls, [])
+
+    def test_batch_allows_the_attested_remediation_head_transition(self) -> None:
+        reviewed = fast_feedback()
+        remediation_head = "f" * 40
+        current_payload = reviewed.to_dict()
+        current_payload["head_sha"] = remediation_head
+        current = fast_path.StableFeedbackState.from_payload(current_payload)
+        payload = fast_request(reviewed).to_dict()
+        payload["expected_head_sha"] = remediation_head
+        for finding_value in payload["findings"]:
+            if finding_value["disposition"] in fast_path.FIXED_DISPOSITIONS:
+                finding_value["commit_sha"] = remediation_head
+        gateway = FakeFastGateway(current, reviewed)
+        gateway.commits.append(
+            {
+                "oid": remediation_head,
+                "source": "USER",
+                "local_signature": {
+                    "verified": True,
+                    "state": "valid",
+                    "format": "ssh",
+                },
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        )
+        result = fast_path.execute_resolution_batch(
+            fast_path.BatchRequest.from_dict(payload),
+            fast_attestation(reviewed, head_sha=remediation_head),
+            reviewed,
+            fast_registry(),
+            gateway,
+        )
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+
+    def test_attested_head_transition_allows_threads_to_become_outdated(self) -> None:
+        reviewed = fast_feedback(1)
+        remediation_head = "f" * 40
+        current_payload = reviewed.to_dict()
+        current_payload["head_sha"] = remediation_head
+        current_payload["threads"][0]["is_outdated"] = True
+        current = fast_path.StableFeedbackState.from_payload(current_payload)
+        payload = fast_request(reviewed, 1).to_dict()
+        payload["expected_head_sha"] = remediation_head
+        payload["findings"][0]["commit_sha"] = remediation_head
+        gateway = FakeFastGateway(current, reviewed)
+        gateway.commits.append(
+            {
+                "oid": remediation_head,
+                "source": "USER",
+                "local_signature": {
+                    "verified": True,
+                    "state": "valid",
+                    "format": "ssh",
+                },
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+        )
+        result = fast_path.execute_resolution_batch(
+            fast_path.BatchRequest.from_dict(payload),
+            fast_attestation(reviewed, head_sha=remediation_head),
+            reviewed,
+            fast_registry(),
+            gateway,
+        )
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+
+    def test_fast_registry_binds_default_branch_base_repository_and_manual_gates(self) -> None:
+        entry = registry_entry("SecPal/.github")
+        binding = actions._fast_registry_binding(entry)
+        self.assertEqual(binding["default_branch"], "main")
+        self.assertEqual(binding["allowed_base_repositories"], ["SecPal/.github"])
+        self.assertEqual(binding["manual_gates"], entry["manual_gates"])
+
+    def test_non_default_reviewed_base_blocks_before_live_reads(self) -> None:
+        reviewed = fast_feedback()
+        reviewed.base_ref = "release"
+        reviewed.refresh_digests()
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "default branch"):
+            fast_path.execute_resolution_batch(
+                fast_request(reviewed),
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
+
+    def test_attestation_without_signed_validation_receipt_is_rejected(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_preflight
+
+        def missing_receipt(request_value: Any) -> Any:
+            readiness = original(request_value)
+            readiness.validation_receipt_digest = None
+            return readiness
+
+        gateway.read_preflight = missing_receipt
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "validation receipt"):
+            self.execute(reviewed, gateway)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_manual_gate_evidence_is_bound_into_the_signed_receipt(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        registry["manual_gates"] = ["Confirm the exact changed-file validation."]
+        evidence = [
+            {
+                "gate": registry["manual_gates"][0],
+                "satisfied": True,
+                "evidence": "pre-commit passed for the exact changed-file list",
+            }
+        ]
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=evidence,
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha=p21.HEAD,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=p21.HEAD,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="a" * 40,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+        forged_evidence = copy.deepcopy(evidence)
+        forged_evidence[0]["evidence"] = "not actually run"
+        forged_receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=forged_evidence,
+        )
+        forged_attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha=p21.HEAD,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=forged_receipt,
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "signed commit"):
+            fast_path.verify_validation_attestation(
+                forged_attestation,
+                repository="SecPal/.github",
+                head_sha=p21.HEAD,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=reviewed.head_sha,
+                commit_tree_sha="a" * 40,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+            )
+
+    def test_registered_manual_gates_require_explicit_satisfied_evidence(self) -> None:
+        binding = actions._fast_registry_binding(registry_entry("SecPal/.github"))
+        with self.assertRaisesRegex(
+            fast_path.RecoverableLocalError, "manual gates"
+        ):
+            actions._load_fast_manual_gate_evidence(None, binding)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "not satisfied"):
+            fast_path.validate_manual_gate_evidence(
+                [
+                    {
+                        "gate": binding["manual_gates"][0],
+                        "satisfied": False,
+                        "evidence": "not run",
+                    }
+                ],
+                binding["manual_gates"],
+            )
+
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "secret"):
+            fast_path.validate_manual_gate_evidence(
+                [
+                    {
+                        "gate": binding["manual_gates"][0],
+                        "satisfied": True,
+                        "evidence": "Authorization: Bearer example-token",
+                    }
+                ],
+                binding["manual_gates"],
+            )
+
+    def test_registered_manual_gate_evidence_loads_from_ordered_json_list(self) -> None:
+        binding = actions._fast_registry_binding(registry_entry("SecPal/.github"))
+        evidence = [
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"verified gate {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            evidence_path = Path(temporary_directory) / "manual-gates.json"
+            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertEqual(
+                actions._load_fast_manual_gate_evidence(
+                    str(evidence_path), binding
+                ),
+                evidence,
+            )
+
+    def test_unregistered_base_repository_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_preflight
+
+        def foreign_base(request_value: Any) -> Any:
+            readiness = original(request_value)
+            readiness.base_repository = "outside/fork"
+            return readiness
+
+        gateway.read_preflight = foreign_base
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "base repository"):
+            self.execute(reviewed, gateway)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_batch_schema_accepts_graphql_ids_with_padding(self) -> None:
+        payload = fast_request(fast_feedback(), 1).to_dict()
+        payload["expected_actor"]["node_id"] = "U_kgDOD9_SfQ=="
+        actions._validate_schema(
+            payload,
+            actions.FAST_BATCH_SCHEMA_PATH,
+            "fast batch",
+            actions.PlanError,
+        )
+        fast_path.BatchRequest.from_dict(payload)
+
+    def test_attestation_receipt_requires_matching_reviewed_identity(self) -> None:
+        arguments = SimpleNamespace(
+            expected_head=p21.HEAD,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=False,
+            receipt=None,
+            output="receipt.json",
+        )
+        entry = {
+            "repository": "SecPal/.github",
+            "default_branch": "main",
+            "allowed_base_repositories": ["SecPal/.github"],
+            "manual_gates": [],
+            "focused_validation": [],
+            "required_local_validation": [],
+            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "check_policy": {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
+        }
+        mismatches = {
+            "repository": fast_path.StableFeedbackState.from_payload(
+                {**fast_feedback().to_dict(), "repository": "SecPal/api"}
+            ),
+            "head": fast_feedback(head_sha="e" * 40),
+        }
+        for field, reviewed in mismatches.items():
+            with (
+                self.subTest(field=field),
+                mock.patch.object(
+                    actions,
+                    "_attestation_local_state",
+                    return_value=(p21.HEAD, ""),
+                ),
+                mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+                mock.patch.object(actions, "load_registry", return_value={}),
+                mock.patch.object(actions, "select_repository", return_value=entry),
+                mock.patch.object(actions, "_staged_tree", return_value="a" * 40),
+                mock.patch.object(actions, "_run_registered_validations", return_value=True),
+                mock.patch.object(actions, "_write_fast_report"),
+            ):
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "reviewed feedback (repository|head)",
+                ):
+                    actions._command_attest_validation(arguments)
+
+    def test_bound_commit_requires_receipt_for_reviewed_head(self) -> None:
+        reviewed = fast_feedback()
+        receipt_head = "e" * 40
+        final_head = "d" * 40
+        tree = "a" * 40
+        entry = {
+            "repository": "SecPal/.github",
+            "default_branch": "main",
+            "allowed_base_repositories": ["SecPal/.github"],
+            "manual_gates": [],
+            "focused_validation": [],
+            "required_local_validation": [],
+            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "check_policy": {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
+        }
+        binding = actions._fast_registry_binding(entry)
+        receipt = actions._validation_receipt(
+            repository="SecPal/.github",
+            head_sha=receipt_head,
+            tree_sha=tree,
+            binding=binding,
+            reviewed=reviewed,
+            manual_gate_evidence=[],
+        )
+        arguments = SimpleNamespace(
+            expected_head=final_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=True,
+            receipt="receipt.json",
+            output="attestation.json",
+        )
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            outputs = {
+                ("rev-parse", "HEAD^"): receipt_head,
+                ("rev-parse", "HEAD^{tree}"): tree,
+                ("cat-file", "commit", final_head): (
+                    "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+                    " signature\n -----END SSH SIGNATURE-----\n\nmessage\n"
+                ),
+                ("verify-commit", "--raw", final_head): "",
+            }
+            return SimpleNamespace(
+                returncode=0,
+                stdout=outputs[tuple(command)],
+                stderr=(
+                    'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
+                    if command[:2] == ["verify-commit", "--raw"]
+                    else ""
+                ),
+            )
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(final_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(actions, "_read_json", return_value=receipt),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_write_fast_report"),
+        ):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "receipt head does not match reviewed feedback head",
+            ):
+                actions._command_attest_validation(arguments)
+
+    def test_bound_commit_rejects_a_malformed_validation_receipt(self) -> None:
+        reviewed = fast_feedback()
+        entry = registry_entry("SecPal/.github")
+        arguments = SimpleNamespace(
+            expected_head="d" * 40,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=True,
+            receipt="receipt.json",
+            output="attestation.json",
+            manual_gate_evidence=None,
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(arguments.expected_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(actions, "_read_json", return_value=[]),
+        ):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "validation receipt is malformed"
+            ):
+                actions._command_attest_validation(arguments)
+
+    def test_bound_commit_rejects_a_second_parent(self) -> None:
+        head = "d" * 40
+        first_parent = "e" * 40
+        second_parent = "f" * 40
+        with mock.patch.object(
+            actions,
+            "_run_attestation_git",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=f"{head} {first_parent} {second_parent}\n",
+                stderr="",
+            ),
+        ):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "sole parent"):
+                actions._validated_commit_parent(REPO_ROOT, head)
+
+    def test_signed_validation_receipt_trailer_must_be_unique_and_well_formed(self) -> None:
+        digest_value = "a" * 64
+        for output, expected in (("\n", None), (f"{digest_value}\n", digest_value)):
+            with (
+                self.subTest(output=output),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    return_value=SimpleNamespace(stdout=output),
+                ),
+            ):
+                self.assertEqual(
+                    actions._commit_validation_receipt_digest(
+                        REPO_ROOT, p21.HEAD
+                    ),
+                    expected,
+                )
+        for output in ("not-a-digest\n", f"{digest_value}\x00{digest_value}\n"):
+            with (
+                self.subTest(output=output),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    return_value=SimpleNamespace(stdout=output),
+                ),
+                self.assertRaisesRegex(fast_path.SecurityBlocker, "malformed"),
+            ):
+                actions._commit_validation_receipt_digest(REPO_ROOT, p21.HEAD)
+
+    def test_bound_commit_accepts_local_signature_before_push(self) -> None:
+        reviewed = fast_feedback()
+        final_head = "d" * 40
+        tree = "a" * 40
+        entry = {
+            "repository": "SecPal/.github",
+            "default_branch": "main",
+            "allowed_base_repositories": ["SecPal/.github"],
+            "manual_gates": [],
+            "focused_validation": [],
+            "required_local_validation": [],
+            "signature_policy": {
+                "require_github_verified": True,
+                "require_local_verified": True,
+                "accepted_formats": ["ssh", "openpgp"],
+            },
+            "check_policy": {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+            "maximum_api_calls": 200,
+            "maximum_items": 10000,
+        }
+        binding = actions._fast_registry_binding(entry)
+        receipt = actions._validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            tree_sha=tree,
+            binding=binding,
+            reviewed=reviewed,
+            manual_gate_evidence=[],
+        )
+        arguments = SimpleNamespace(
+            expected_head=final_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=True,
+            receipt="receipt.json",
+            output="attestation.json",
+        )
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            if command[:4] == ["rev-list", "--parents", "-n", "1"]:
+                stdout = f"{final_head} {reviewed.head_sha}\n"
+                stderr = ""
+            elif command == ["rev-parse", "HEAD^{tree}"]:
+                stdout = tree
+                stderr = ""
+            elif command[:2] == ["show", "-s"]:
+                stdout = f"{receipt['receipt_digest']}\n"
+                stderr = ""
+            elif command[:2] == ["cat-file", "commit"]:
+                stdout = (
+                    "tree deadbeef\ngpgsig -----BEGIN PGP SIGNATURE-----\n"
+                    " signature\n -----END PGP SIGNATURE-----\n\nmessage\n"
+                )
+                stderr = ""
+            else:
+                stdout = ""
+                stderr = "gpg: Good signature from SecPal Test\n"
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(final_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(actions, "_read_json", return_value=receipt),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_write_fast_report") as write_report,
+        ):
+            self.assertEqual(actions._command_attest_validation(arguments), 0)
+        write_report.assert_called_once()
+
+    def test_missing_upstream_is_a_recoverable_local_error(self) -> None:
+        pull_request = {
+            "number": 1,
+            "headRepository": {"nameWithOwner": "SecPal/.github"},
+            "headRefName": "feature",
+            "headRefOid": p21.HEAD,
+            "baseRefName": "main",
+            "baseRefOid": p21.BASE,
+            "state": "OPEN",
+            "mergeable": "MERGEABLE",
+            "commits": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+        github = SimpleNamespace(
+            runner=SimpleNamespace(
+                run=mock.Mock(
+                    return_value={
+                        "data": {
+                            "viewer": {
+                                "login": "aroviqen",
+                                "id": "USER_1",
+                                "databaseId": 7,
+                            },
+                            "repository": {
+                                "nameWithOwner": "SecPal/.github",
+                                "pullRequest": pull_request,
+                            },
+                        }
+                    }
+                )
+            )
+        )
+        gateway = actions.FastPathGateway(
+            REPO_ROOT,
+            registry_entry("SecPal/.github"),
+            github=github,
+        )
+
+        def git_result(command: list[str], *, allow_failure: bool = False) -> Any:
+            del allow_failure
+            values = {
+                ("rev-parse", "HEAD"): (0, p21.HEAD),
+                ("rev-parse", "@{upstream}"): (128, ""),
+                ("branch", "--show-current"): (0, "feature"),
+                ("status", "--porcelain=v2", "--untracked-files=all"): (0, ""),
+                ("remote", "get-url", "origin"): (0, "https://github.com/SecPal/.github.git"),
+            }
+            returncode, stdout = values[tuple(command)]
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="no upstream")
+
+        gateway._git = mock.Mock(side_effect=git_result)
+        with self.assertRaisesRegex(
+            fast_path.RecoverableLocalError,
+            "configured upstream",
+        ):
+            gateway.read_preflight(fast_request(fast_feedback()))
+
+    def test_stable_feedback_uses_the_selected_registry_entry(self) -> None:
+        selected = registry_entry("SecPal/.github")
+        selected["maximum_comments"] = 1
+        payload = fast_feedback(1).to_dict()
+        for key in (
+            "schema_version",
+            "repository",
+            "pull_request_number",
+            "state_digest",
+            "feedback_digest",
+        ):
+            payload.pop(key)
+        read_feedback = mock.Mock(return_value=payload)
+        github = SimpleNamespace(_read_current_feedback_once=read_feedback)
+        with mock.patch.object(
+            actions,
+            "load_registry",
+            side_effect=AssertionError("default registry must not be reloaded"),
+        ):
+            gateway = actions.FastPathGateway(
+                REPO_ROOT,
+                selected,
+                github=github,
+            )
+            state = gateway.capture_stable_feedback("SecPal/.github", 1)
+        self.assertEqual(state.feedback_digest, fast_feedback(1).feedback_digest)
+        self.assertEqual(read_feedback.call_args.args[1], selected)
+
+    def test_required_checks_use_the_allowlisted_graphql_read(self) -> None:
+        check_payload = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "id": "PR_1",
+                        "headRefOid": p21.HEAD,
+                        "state": "OPEN",
+                        "baseRefName": "main",
+                        "baseRefOid": p21.BASE,
+                        "baseRepository": {"id": "REPO_1", "nameWithOwner": "SecPal/.github"},
+                        "potentialMergeCommit": None,
+                    },
+                    "object": {
+                        "oid": p21.HEAD,
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "id": "CHECK_1",
+                                        "name": "tests",
+                                        "status": "COMPLETED",
+                                        "conclusion": "SUCCESS",
+                                        "startedAt": "2026-07-21T00:00:00Z",
+                                        "detailsUrl": "https://example.invalid/tests",
+                                        "checkSuite": {
+                                            "app": {
+                                                "id": "APP_1",
+                                                "databaseId": 1,
+                                                "name": "CI",
+                                                "slug": "ci",
+                                            }
+                                        },
+                                    },
+                                    {
+                                        "__typename": "StatusContext",
+                                        "id": "STATUS_1",
+                                        "context": "legacy",
+                                        "state": "SUCCESS",
+                                        "createdAt": "2026-07-21T00:00:00Z",
+                                        "targetUrl": "https://example.invalid/legacy",
+                                        "creator": {
+                                            "__typename": "User",
+                                            "id": "USER_1",
+                                            "databaseId": 7,
+                                            "login": "reviewer",
+                                            "url": "https://example.invalid/reviewer",
+                                        },
+                                    },
+                                ],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        },
+                    },
+                }
+            }
+        }
+
+        def run(arguments: list[str]) -> Any:
+            if arguments[4].startswith("repos/") and "/rules/branches/" in arguments[4]:
+                return [
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [
+                                {"context": "tests", "integration_id": 1},
+                                {"context": "legacy", "integration_id": None},
+                            ],
+                            "strict_required_status_checks_policy": False,
+                        },
+                    }
+                ]
+            if arguments[4].startswith("repos/"):
+                return {"strict": False, "contexts": [], "checks": []}
+            return check_payload
+
+        runner = SimpleNamespace(run=mock.Mock(side_effect=run))
+        gateway = actions.FastPathGateway(
+            REPO_ROOT,
+            registry_entry("SecPal/.github"),
+            github=SimpleNamespace(runner=runner),
+        )
+        result = gateway.read_required_checks(
+            fast_request(fast_feedback()), fast_registry()
+        )
+        self.assertEqual(
+            result["required_specs"],
+            [
+                {"context": "legacy", "integration_id": None},
+                {"context": "tests", "integration_id": 1},
+            ],
+        )
+        self.assertEqual([item["name"] for item in result["checks"]], ["tests", "legacy"])
+        self.assertEqual(runner.run.call_count, 3)
+        for call in runner.run.call_args_list:
+            actions._validate_action_command(call.args[0])
+
+    def test_fast_preflight_queries_the_signature_signer_as_a_user(self) -> None:
+        signer_selection = actions.FAST_PATH_PREFLIGHT_QUERY.split("signer {", 1)[1]
+        signer_selection = signer_selection.split("}", 1)[0]
+        self.assertIn("id", signer_selection)
+        self.assertIn("databaseId", signer_selection)
+        self.assertIn("login", signer_selection)
+        self.assertNotIn("... on", signer_selection)
+
+    def test_stable_feedback_ignores_same_head_required_check_transitions(self) -> None:
+        successful = fast_feedback()
+        payload = successful.to_dict()
+        payload["required_checks"] = [{"name": "tests", "state": "PENDING"}]
+        pending = fast_path.StableFeedbackState.from_payload(payload)
+        self.assertEqual(successful.state_digest, pending.state_digest)
+        self.assertEqual(successful.feedback_digest, pending.feedback_digest)
+
+    def test_stable_feedback_preserves_deleted_source_actor_identity(self) -> None:
+        payload = fast_feedback(1).to_dict()
+        payload["threads"][0]["comments"][0]["actor"] = {
+            "login": None,
+            "node_id": None,
+            "database_id": None,
+        }
+        state = fast_path.StableFeedbackState.from_payload(payload)
+        self.assertEqual(
+            state.feedback["threads"][0]["comments"][0]["actor"],
+            {"login": None, "node_id": None, "database_id": None},
+        )
+
+    def test_pending_or_failed_required_checks_block_before_first_write(self) -> None:
+        for status in ("PENDING", "FAILURE"):
+            with self.subTest(status=status):
+                reviewed = fast_feedback()
+                gateway = FakeFastGateway(reviewed)
+                gateway.checks[0]["status"] = status
+                with self.assertRaisesRegex(fast_path.SecurityBlocker, "required check"):
+                    self.execute(reviewed, gateway)
+                self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_missing_configured_required_check_blocks_before_first_write(self) -> None:
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "missing"):
+            fast_path._verify_required_checks(
+                [
+                    {
+                        "stable_id": "check_run:present",
+                        "name": "present",
+                        "application": {"database_id": 1},
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    }
+                ],
+                [
+                    {"context": "present", "integration_id": 1},
+                    {"context": "never-reported", "integration_id": 2},
+                ],
+                {"expected_skipped": "block"},
+            )
+
+    def test_no_configured_required_checks_allows_an_empty_rollup(self) -> None:
+        fast_path._verify_required_checks(
+            [],
+            [],
+            {"expected_skipped": "block"},
+        )
+
+    def test_blocked_merge_gate_does_not_deadlock_thread_resolution(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        original_preflight = gateway.read_preflight
+
+        def blocked(request_value: Any) -> Any:
+            readiness = original_preflight(request_value)
+            readiness.merge_state_status = "BLOCKED"
+            return readiness
+
+        gateway.read_preflight = blocked
+        gateway.target_merge_state_status = "BLOCKED"
+
+        result = self.execute(reviewed, gateway, 1)
+
+        self.assertEqual(result["status"], "BATCH_APPLIED")
+        self.assertEqual(
+            [call for call in gateway.calls if call[0] == "WRITE"],
+            [("WRITE", "THREAD_1")],
+        )
+
+    def test_base_change_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        request = fast_request(reviewed)
+        request.expected_base_ref = "main"
+        request.expected_base_sha = p21.BASE
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_preflight
+
+        def changed_base(request_value: Any) -> Any:
+            readiness = original(request_value)
+            readiness.base_ref = "release"
+            readiness.base_sha = "f" * 40
+            return readiness
+
+        gateway.read_preflight = changed_base
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "base"):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_behind_merge_state_with_strict_checks_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        original_preflight = gateway.read_preflight
+        original_checks = gateway.read_required_checks
+
+        def behind(request_value: Any) -> Any:
+            readiness = original_preflight(request_value)
+            readiness.merge_state_status = "BEHIND"
+            return readiness
+
+        def strict_checks(
+            request_value: Any, registry_value: dict[str, Any]
+        ) -> dict[str, Any]:
+            result = original_checks(request_value, registry_value)
+            result["strict_base_required"] = True
+            return result
+
+        gateway.read_preflight = behind
+        gateway.read_required_checks = strict_checks
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "behind"):
+            self.execute(reviewed, gateway)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_unknown_mergeability_enum_blocks_preflight_and_target(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        original_preflight = gateway.read_preflight
+
+        def unexpected_mergeability(request_value: Any) -> Any:
+            readiness = original_preflight(request_value)
+            readiness.mergeability = "FUTURE_STATE"
+            return readiness
+
+        gateway.read_preflight = unexpected_mergeability
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "mergeability"):
+            self.execute(reviewed, gateway, 1)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+        gateway = FakeFastGateway(reviewed)
+        gateway.target_mergeability = "FUTURE_STATE"
+        result = self.execute(reviewed, gateway, 1)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+        self.assertRegex(result["failed"][0]["error"], "mergeability")
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_feedback_changes_block_before_first_write(self) -> None:
+        mutations = {
+            "new comment": lambda state: state.feedback["conversation_comments"].append(
+                {
+                    "node_id": "COMMENT_NEW",
+                    "body_digest": digest("new"),
+                    "actor": {"login": "reviewer", "node_id": "ACTOR_1", "database_id": 7},
+                    "updated_at": "2026-07-21T00:00:00Z",
+                    "reactions": [],
+                }
+            ),
+            "changed digest": lambda state: state.feedback["threads"][0]["comments"][0].update(
+                body_digest=digest("changed")
+            ),
+            "new reaction": lambda state: state.feedback["threads"][0]["comments"][0]["reactions"].append(
+                {
+                    "mutation_id": "REACTION_1",
+                    "content": "THUMBS_UP",
+                    "actor": {"login": "other", "node_id": "ACTOR_2", "database_id": 8},
+                }
+            ),
+            "changed thread": lambda state: state.feedback["threads"][0].update(is_outdated=True),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                reviewed = fast_feedback()
+                current = copy.deepcopy(reviewed)
+                mutate(current)
+                current.refresh_digests()
+                gateway = FakeFastGateway(current, reviewed)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    self.execute(reviewed, gateway)
+                self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_head_change_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_preflight
+
+        def changed_head(request: Any) -> Any:
+            value = original(request)
+            value.head_sha = "f" * 40
+            return value
+
+        gateway.read_preflight = changed_head
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "head"):
+            self.execute(reviewed, gateway)
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_base_change_during_feedback_freshness_blocks_before_first_write(self) -> None:
+        reviewed = fast_feedback()
+        current = copy.deepcopy(reviewed)
+        current.base_ref = "release"
+        current.base_sha = "f" * 40
+        current.refresh_digests()
+        gateway = FakeFastGateway(current, reviewed)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "base"):
+            fast_path.execute_resolution_batch(
+                fast_request(reviewed),
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_recoverable_local_error_is_corrected_in_same_invocation(self) -> None:
+        attempts = 0
+        corrections = 0
+
+        def command() -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise fast_path.RecoverableLocalError("self-supplied CLI argument was invalid")
+            return "ok"
+
+        def correct() -> None:
+            nonlocal corrections
+            corrections += 1
+
+        self.assertEqual(fast_path.run_recoverable_local_step(command, correct), "ok")
+        self.assertEqual((attempts, corrections), (2, 1))
+
+    def test_one_transient_feedback_read_is_retried_once(self) -> None:
+        reviewed = fast_feedback()
+        gateway = FakeFastGateway(reviewed)
+        gateway.fail_feedback_reads = 1
+        self.assertEqual(self.execute(reviewed, gateway)["status"], "BATCH_APPLIED")
+        self.assertEqual(gateway.calls.count(("READ", "stable-feedback")), 2)
+
+    def test_exhausted_transient_read_has_performed_exactly_one_retry(self) -> None:
+        attempts = 0
+
+        def fail() -> None:
+            nonlocal attempts
+            attempts += 1
+            raise fast_path.TransientReadFailure("still unavailable")
+
+        with self.assertRaises(fast_path.TransientReadFailure):
+            fast_path._read_with_one_retry(fail)
+        self.assertEqual(attempts, 2)
+
+    def test_mutation_failure_and_unknown_result_are_never_retried(self) -> None:
+        for attribute, expected_status in (
+            ("fail_at_write", "BLOCKED_MUTATION_FAILED"),
+            ("unknown_at_write", "BLOCKED_UNKNOWN_WRITE_RESULT"),
+        ):
+            with self.subTest(attribute=attribute):
+                reviewed = fast_feedback(3)
+                gateway = FakeFastGateway(reviewed)
+                setattr(gateway, attribute, 2)
+                result = self.execute(reviewed, gateway, 3)
+                self.assertEqual(result["status"], expected_status)
+                self.assertEqual([item["thread_id"] for item in result["applied"]], ["THREAD_1"])
+                self.assertEqual(result["failed"][0]["thread_id"], "THREAD_2")
+                self.assertEqual([item["thread_id"] for item in result["blocked"]], ["THREAD_3"])
+                self.assertEqual(gateway.write_attempts["THREAD_2"], 1)
+                self.assertNotIn("THREAD_3", gateway.write_attempts)
+
+    def test_target_read_failure_retains_prior_writes_and_stops_batch(self) -> None:
+        reviewed = fast_feedback(3)
+        gateway = FakeFastGateway(reviewed)
+        gateway.fail_target = "THREAD_2"
+        result = self.execute(reviewed, gateway, 3)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_READ_FAILED")
+        self.assertEqual([item["thread_id"] for item in result["applied"]], ["THREAD_1"])
+        self.assertEqual(result["failed"][0]["thread_id"], "THREAD_2")
+        self.assertEqual([item["thread_id"] for item in result["blocked"]], ["THREAD_3"])
+        self.assertEqual(gateway.calls.count(("READ", "target:THREAD_2")), 2)
+        self.assertFalse(any(identity == "THREAD_3" for kind, identity in gateway.calls if kind == "WRITE"))
+
+    def test_last_moment_thread_feedback_change_blocks_the_write(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        original = gateway.read_thread_target
+
+        def changed_target(request_value: Any, operation_value: Any) -> dict[str, Any]:
+            target = original(request_value, operation_value)
+            thread = copy.deepcopy(reviewed.feedback["threads"][0])
+            thread["comments"].append(
+                {
+                    "node_id": "COMMENT_LATE",
+                    "body_digest": digest("late feedback"),
+                    "actor": {
+                        "login": "reviewer",
+                        "node_id": "ACTOR_1",
+                        "database_id": 7,
+                    },
+                    "reply_to_id": "COMMENT_1",
+                    "reactions": [],
+                }
+            )
+            target["thread"] = thread
+            return target
+
+        gateway.read_thread_target = changed_target
+        result = self.execute(reviewed, gateway, 1)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_last_moment_pr_or_base_change_blocks_the_write(self) -> None:
+        for attribute, value in (
+            ("target_pr_state", "CLOSED"),
+            ("target_base_ref", "release"),
+            ("target_base_sha", "f" * 40),
+        ):
+            with self.subTest(attribute=attribute):
+                reviewed = fast_feedback(1)
+                gateway = FakeFastGateway(reviewed)
+                setattr(gateway, attribute, value)
+                result = self.execute(reviewed, gateway, 1)
+                self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+                self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_last_moment_merge_state_change_blocks_the_write(self) -> None:
+        reviewed = fast_feedback(1)
+        gateway = FakeFastGateway(reviewed)
+        gateway.target_merge_state_status = "BLOCKED"
+        result = self.execute(reviewed, gateway, 1)
+        self.assertEqual(result["status"], "BLOCKED_TARGET_CHANGED")
+        self.assertRegex(result["failed"][0]["error"], "merge state")
+        self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_signature_sources_are_selected_once_per_commit(self) -> None:
+        user_valid = {
+            "oid": "1" * 40,
+            "source": "USER",
+            "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+            "github_verification": {"verified": False, "reason": "unknown_key"},
+        }
+        github_valid = {
+            "oid": "2" * 40,
+            "source": "GITHUB",
+            "local_signature": {"verified": False, "state": "unknown_key", "format": "openpgp"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        result = fast_path.verify_commit_signatures([user_valid, github_valid])
+        self.assertEqual([item["classification"] for item in result], ["LOCAL_SSH_VERIFIED", "GITHUB_VERIFIED"])
+        self.assertEqual(result[1]["local_classification"], "UNKNOWN_LOCAL_KEY")
+        openpgp_valid = copy.deepcopy(user_valid)
+        openpgp_valid["local_signature"]["format"] = "openpgp"
+        self.assertEqual(
+            fast_path.verify_commit_signatures([openpgp_valid])[0]["classification"],
+            "LOCAL_OPENPGP_VERIFIED",
+        )
+        for local_signature in (
+            {"verified": False, "state": "unsigned", "format": None},
+            {"verified": False, "state": "invalid", "format": "ssh"},
+        ):
+            candidate = copy.deepcopy(user_valid)
+            candidate["local_signature"] = local_signature
+            with self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.verify_commit_signatures([candidate])
+        github_invalid = copy.deepcopy(github_valid)
+        github_invalid["github_verification"] = {"verified": False, "reason": "bad_email"}
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_commit_signatures([github_invalid])
+
+    def test_user_commit_honors_required_github_verification(self) -> None:
+        commit = {
+            "oid": "1" * 40,
+            "source": "USER",
+            "local_signature": {
+                "verified": True,
+                "state": "valid",
+                "format": "ssh",
+            },
+            "github_verification": {
+                "verified": False,
+                "reason": "unknown_key",
+            },
+        }
+        policy = {
+            "require_github_verified": True,
+            "require_local_verified": True,
+            "accepted_formats": ["ssh", "openpgp"],
+        }
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "GitHub verification rejected user-authored commit",
+        ):
+            fast_path.verify_commit_signatures([commit], policy)
+
+        commit["github_verification"] = {"verified": True, "reason": "valid"}
+        self.assertEqual(
+            fast_path.verify_commit_signatures([commit], policy)[0][
+                "classification"
+            ],
+            "LOCAL_SSH_VERIFIED",
+        )
+
+    def test_successful_batch_reports_every_thread_category(self) -> None:
+        reviewed = fast_feedback(4)
+        result = self.execute(reviewed, FakeFastGateway(reviewed), 4)
+        self.assertEqual(
+            [item["thread_id"] for item in result["applied"]],
+            ["THREAD_1", "THREAD_2", "THREAD_3", "THREAD_4"],
+        )
+        self.assertEqual(result["blocked"], [])
+        self.assertEqual(result["failed"], [])
+
+    def test_applied_report_cannot_be_reused_as_authorization(self) -> None:
+        reviewed = fast_feedback()
+        request = fast_request(reviewed)
+        first = self.execute(reviewed, FakeFastGateway(reviewed))
+        repeated_payload = request.to_dict()
+        repeated_payload["prior_results"] = first["applied"]
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior"):
+            fast_path.BatchRequest.from_dict(repeated_payload)
+
+    def test_batch_surface_cannot_gain_user_controlled_capabilities(self) -> None:
+        self.assertEqual(fast_path.SUPPORTED_BATCH_CAPABILITIES, frozenset({"THREAD_RESOLUTION"}))
+        reviewed = fast_feedback(1)
+        for prohibited in actions.PROHIBITED_OPERATION_KINDS:
+            payload = fast_request(reviewed, 1).to_dict()
+            payload["operations"][0]["kind"] = prohibited
+            with self.subTest(prohibited=prohibited), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.BatchRequest.from_dict(payload)
+
+    def test_attestation_is_deterministic_and_bound_to_all_inputs(self) -> None:
+        reviewed = fast_feedback()
+        attestation = fast_attestation(reviewed)
+        self.assertEqual(attestation, fast_attestation(reviewed))
+        self.assertFalse(
+            {
+                "repository",
+                "head_sha",
+                "registry_digest",
+                "command_set_digest",
+                "successful_result",
+            }
+            - set(attestation)
+        )
+        fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=p21.HEAD,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="a" * 40,
+            commit_validation_receipt_digest=attestation[
+                "validation_receipt_digest"
+            ],
+        )
+        for key, value in (
+            ("head_sha", "f" * 40),
+            ("registry_digest", "0" * 64),
+            ("command_set_digest", "0" * 64),
+            ("successful_result", False),
+        ):
+            changed = copy.deepcopy(attestation)
+            changed[key] = value
+            with self.subTest(key=key), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.verify_validation_attestation(
+                    changed,
+                    repository="SecPal/.github",
+                    head_sha=p21.HEAD,
+                    registry=fast_registry(),
+                    command_set=fast_registry()["validation"],
+                    reviewed_state=reviewed,
+                    commit_parent_sha=reviewed.head_sha,
+                    commit_tree_sha="a" * 40,
+                    commit_validation_receipt_digest=attestation[
+                        "validation_receipt_digest"
+                    ],
+                )
+
+    def test_atomic_json_output_supports_spaces(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fast path ") as directory:
+            output = Path(directory) / "review state.json"
+            fast_path.atomic_write_json(output, {"status": "ok"})
+            self.assertEqual(json.loads(output.read_text()), {"status": "ok"})
+
+    def test_batch_report_falls_back_with_applied_targets_after_output_failure(self) -> None:
+        report = {
+            "status": "BATCH_APPLIED",
+            "batch_id": "batch-001",
+            "applied": [{"operation_id": "resolve-1", "thread_id": "THREAD_1"}],
+            "failed": [],
+            "blocked": [],
+        }
+        error_output = SimpleNamespace(buffer=io.BytesIO())
+        with (
+            mock.patch.object(actions, "_write_fast_report", side_effect=OSError("disk full")),
+            mock.patch.object(actions.sys, "stderr", error_output),
+        ):
+            self.assertFalse(actions._write_batch_report("missing/report.json", report))
+        fallback = json.loads(error_output.buffer.getvalue())
+        self.assertEqual(fallback["status"], "BLOCKED_REPORT_PERSISTENCE_FAILED")
+        self.assertEqual(fallback["applied"], report["applied"])
+        self.assertEqual(fallback["applied"], report["applied"])
+
+
 class PolicyScriptTests(TestCase):
+    def test_reuse_precommit_hook_provisions_the_pinned_tool(self) -> None:
+        pre_commit = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        reuse_hook = pre_commit.split("  # Code formatting", 1)[0]
+        self.assertIn("language: python", reuse_hook)
+        self.assertIn("additional_dependencies: [reuse==5.0.2]", reuse_hook)
+        self.assertNotIn("language: system", reuse_hook)
+
     def test_policy_script_has_deterministic_tool_and_baseline_guards(self) -> None:
         policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
             encoding="utf-8"
