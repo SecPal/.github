@@ -19,8 +19,8 @@ run_reuse_tracked() (
     case "$file" in
       */*) target_dir="$reuse_workspace/${file%/*}" ;;
     esac
-    mkdir -p "$target_dir" || return 1
-    cp -P "./$file" "$reuse_workspace/$file" || return 1
+    mkdir -p -- "$target_dir" || return 1
+    cp -P -- "./$file" "$reuse_workspace/$file" || return 1
   done < <(git ls-files -z)
   cd "$reuse_workspace" || return 1
   reuse lint

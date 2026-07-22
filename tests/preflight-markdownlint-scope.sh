@@ -54,6 +54,10 @@ if [ ! -e README.md ]; then
   echo "Tracked files did not reach REUSE" >&2
   exit 6
 fi
+if [ ! -e ./-tracked.md ]; then
+  echo "Option-like tracked file did not reach REUSE" >&2
+  exit 5
+fi
 exit 0
 EOF
 chmod +x "$workspace/bin/reuse"
@@ -74,6 +78,10 @@ cat >"$workspace/README.md" <<'EOF'
 # Test Workspace
 EOF
 
+cat >"$workspace/-tracked.md" <<'EOF'
+# Leading Option-Like Name
+EOF
+
 mkdir -p "$workspace/docs"
 cat >"$workspace/docs/guide.md" <<'EOF'
 # Nested Test Guide
@@ -92,11 +100,34 @@ EOF
   git init --quiet
   git config user.name 'SecPal Test'
   git config user.email 'test@secpal.dev'
-  git add .gitignore README.md docs/guide.md
+  git add -- .gitignore README.md docs/guide.md -tracked.md
   git commit --quiet -m 'test: seed preflight workspace'
   git checkout --quiet -b test-branch
   git update-ref refs/remotes/origin/main HEAD
   git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+
+  cat >"$workspace/bin/mkdir" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" != "-p" ] || [ "${2:-}" != "--" ]; then
+  echo "mkdir did not receive an explicit option terminator" >&2
+  exit 24
+fi
+shift 2
+exec /bin/mkdir -p -- "$@"
+EOF
+  chmod +x "$workspace/bin/mkdir"
+
+  cat >"$workspace/bin/cp" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" != "-P" ] || [ "${2:-}" != "--" ]; then
+  echo "cp did not receive an explicit option terminator" >&2
+  exit 25
+fi
+shift 2
+exec /bin/cp -P -- "$@"
+EOF
+  chmod +x "$workspace/bin/cp"
+
   LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null
 )
 

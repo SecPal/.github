@@ -45,7 +45,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   `EYES` activity markers from stable-feedback digests
 - limited local Markdownlint and Prettier pre-push inputs to Git-tracked files so
   ignored session scratch files cannot block a push while tracked violations
-  remain enforced
+  remain enforced, and terminated REUSE copy-command options explicitly so
+  option-like tracked names cannot become command flags
 
 ---
 
