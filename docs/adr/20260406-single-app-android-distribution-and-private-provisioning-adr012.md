@@ -11,6 +11,8 @@ SPDX-License-Identifier: CC0-1.0
 ([Issue #587](https://github.com/SecPal/.github/issues/587)); the Android
 distribution decisions identified below remain accepted.
 
+**Previous status:** Accepted (Epic #327, PR-0 / Issue #328)
+
 ## Supersession Notice
 
 Epic #586 supersedes the frontend-issued Android enrollment and provisioning
