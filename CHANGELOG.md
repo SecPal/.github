@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-23 - Supersede Retired Android Provisioning Documentation
+
+**Changed:**
+
+- marked ADR-012 as partially superseded by Epic #586, retiring the
+  frontend-issued enrollment/provisioning, enrollment-session, bootstrap-token,
+  and dependent native coordination decisions while preserving the accepted
+  Android package, signing, distribution, artifact-host, Stable/Beta, landing
+  surface, and managed-device decisions
+- removed the obsolete delivered provisioning-flow claim from the ideas backlog
+  and aligned ADR-014's Android impact with current native authentication,
+  membership context, Device Owner/profile-owner semantics, and test coverage
+
+---
+
 ## 2026-07-21 - Add Fast PR Feedback Remediation Path
 
 **Changed:**
