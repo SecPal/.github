@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - non-canonical parking only; promote items into issues before implementation
 
-**Last Updated:** 2026-04-19
+**Last Updated:** 2026-07-23
 
 > **Note:** This document is non-canonical idea parking only. Active planning lives in GitHub Issues and milestones. `feature-requirements.md` remains historical background only and is not a planning destination. Any actionable idea from this file must be promoted into a repo-local issue, epic, or ADR before implementation starts.
 
@@ -26,7 +26,6 @@ enterprise deployments via Android Device Owner (MDM/managed device provisioning
 
 **Delivered so far:**
 
-- Device Owner / Android Enterprise provisioning QR flow (bootstrap token exchange)
 - Capacitor bridge for native enterprise capabilities
 - Offline persistence layer
 

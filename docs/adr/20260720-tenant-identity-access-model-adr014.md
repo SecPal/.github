@@ -429,9 +429,18 @@ Negative consequences are new Tenant and membership context infrastructure, a se
 
 ### `SecPal/android`
 
-- `docs/ANDROID_AUTH_ARCHITECTURE.md`, `KeystoreTokenStorage.java`, `NativeAuthHttpClient.java`, `SecPalNativeAuthPlugin.java`, `ProvisioningBootstrapCoordinator.java`, and `src/secpal/native-auth-bridge.ts` must bind bearer-token/device context to an active membership.
-- Membership switching and revocation clear token- and Tenant-dependent native/browser caches. Planned, suspended, and ended memberships cannot become device context. Provisioning QR/URL data is never authorization evidence.
-- Extend Keystore-token, native-auth, bootstrap, and logout tests for context switching, invalid membership, credential revocation, and redaction. Raw tokens and sensitive decrypted values remain outside JavaScript.
+- Current native authentication and bridge components must bind bearer-token/device
+  context to an active membership.
+- Membership switching and revocation clear token- and Tenant-dependent
+  native/browser caches. Planned, suspended, and ended memberships cannot become
+  device context.
+- Preserve current Device Owner and profile-owner semantics independently from
+  membership authorization; neither ownership mode nor membership context is
+  inferred from the other.
+- Extend the current Keystore-token, native-auth, membership-context,
+  Device Owner/profile-owner, and logout tests for context switching, invalid
+  membership, credential revocation, cache clearing, and redaction. Raw tokens
+  and sensitive decrypted values remain outside JavaScript.
 
 ### `SecPal/secpal.app`
 

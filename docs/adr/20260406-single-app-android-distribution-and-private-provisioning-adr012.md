@@ -7,7 +7,44 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Accepted** (Epic #327, PR-0 / Issue #328)
+**Partially superseded by [Epic #586](https://github.com/SecPal/.github/issues/586)**
+([Issue #587](https://github.com/SecPal/.github/issues/587)); the Android
+distribution decisions identified below remain accepted.
+
+**Previous status:** Accepted (Epic #327, PR-0 / Issue #328)
+
+## Supersession Notice
+
+Epic #586 supersedes the frontend-issued Android enrollment and provisioning
+part of this ADR:
+
+- frontend-generated provisioning QR or URL payloads;
+- API enrollment sessions and bootstrap-token exchange;
+- contracts for those enrollment and bootstrap surfaces; and
+- native enrollment-token coordination that depended on those surfaces.
+
+Those decisions and their repository follow-ups are retired. They are neither
+accepted architecture nor planned work.
+
+The following distribution decisions remain accepted:
+
+- one Android application package, `app.secpal`, with one signing identity and
+  one version line;
+- Play Store, GitHub Releases, Obtainium, and direct APK distribution;
+- `apk.secpal.app` as the canonical host for APKs, checksums, Stable/Beta
+  metadata, and other machine-readable release metadata;
+- Stable and Beta as the supported release tracks and public metadata paths;
+- `secpal.app/android` as the human-facing Android landing surface; and
+- the same signed application package for normal, Device Owner, and
+  profile-owner operation.
+
+Epic #586 does not redefine Android package/signing identity, distribution
+routes, release-track metadata, or native Device Owner/profile-owner semantics.
+The preserved distribution security boundary continues to prohibit embedding
+long-lived secrets in public Android distribution artifacts.
+
+The historical content below is retained for context. This supersession notice
+controls which decisions remain accepted.
 
 ## Date
 
@@ -86,6 +123,7 @@ Provisioning QR rules are:
    - Contra: exposes provisioning data publicly and does not support audited, permission-gated enrollment
 
 3. **Use `secpal.app/android` as both landing page and artifact host**
+
    - Pro: fewer hostnames to explain
    - Contra: mixes human-facing navigation with stable machine-facing artifact and metadata delivery
 
@@ -93,3 +131,5 @@ Provisioning QR rules are:
 
 - [Epic #327](https://github.com/SecPal/.github/issues/327)
 - [Issue #328](https://github.com/SecPal/.github/issues/328)
+- [Epic #586](https://github.com/SecPal/.github/issues/586)
+- [Issue #587](https://github.com/SecPal/.github/issues/587)
