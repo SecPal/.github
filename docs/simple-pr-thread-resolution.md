@@ -21,6 +21,13 @@ The simple resolver keeps those concerns separate. It does not run tests, read
 CI, classify reactions, compare unrelated PR feedback, create commits, push, or
 make a merge decision.
 
+GitHub-hosted CI may be inspected only when the current user instruction
+explicitly requests CI status, check status, merge readiness, or merge
+authorization. A push, PR creation, review-remediation request, previous
+request, repository convention, or thread-resolution request does not provide
+that authorization. Local validation and local push hooks remain required and
+allowed.
+
 ## Normal cost
 
 For each explicitly named review thread:
@@ -44,7 +51,7 @@ The command verifies only the invariants required for this operation:
 - repository and PR exist;
 - repository is an exact entry in the canonical production registry;
 - PR is open;
-- current PR head equals the caller-provided expected head;
+- current PR head equals the caller-provided expected current head OID;
 - every requested thread belongs to that PR;
 - PR state, head, resolved/outdated state, and canonical target-comment state
   are rechecked immediately before each mutation;
@@ -98,6 +105,8 @@ Repeat `--thread-id` to resolve several fixed threads in one invocation.
 ## Operational rule
 
 When the user explicitly asks to resolve comments that have been fixed and
-pushed, use this simple path. Do not route the request through the full
-merge-readiness or forensic review workflow unless the user explicitly asks for
-a readiness audit, forensic evidence, or merge authorization.
+pushed, use this simple path. Full review remediation also uses this path after
+its one signed push. Do not route resolution through the readiness or forensic
+workflow unless the current user instruction explicitly asks for CI inspection,
+readiness, or merge authorization. Even then, the CI observation is one bounded
+current-state read with no polling, waiting, sleeping, or automatic repetition.

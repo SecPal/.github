@@ -93,28 +93,38 @@ INITIALIZE
   → CLASSIFY_AND_FIX_ALL_CURRENT_FINDINGS
   → FOCUSED_VALIDATION_WHILE_EDITING
   → HOLISTIC_AUDIT
-  → COMPLETE_VALIDATION_OF_STAGED_TREE_ONCE
-  → SIGNED_COMMIT_AND_BIND_VALIDATION_ATTESTATION
-  → NORMAL_PUSH
-  → READ_REQUIRED_CHECKS_ONCE
-  → READ_STABLE_FEEDBACK_FRESHNESS_ONCE
-  → RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH
-  → WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION
-  → TERMINAL
+  → COMPLETE_LOCAL_VALIDATION_ONCE
+  → SIGNED_COMMIT
+  → PUSH_ONCE
+  → RESOLVE_FIXED_THREADS
+  → STOP
 ```
 
-One normal invocation uses zero full snapshots, two stable-feedback reads, one
-Required Check read before resolution, one complete local validation, one
-holistic audit, one signed remediation commit, and one ordinary push. The second
-stable read is a lightweight freshness comparison, not a volatile readiness
-snapshot. Package-2.1/2.2 snapshots remain available only in explicit forensic
-mode.
+One normal invocation uses zero full snapshots, one stable-feedback read, zero
+hosted-CI or Required Check reads, one complete local validation, one holistic
+audit, one signed remediation commit, one ordinary push, and one target-bound
+simple resolution pass. Package-2.1/2.2 snapshots remain available only in
+explicit forensic mode.
 
-There is no polling, sleep-and-retry, recursive review loop, automatic late-
-feedback incorporation, review request, Ready transition, merge, or auto-merge.
+There is no polling, waiting, sleep-and-retry, recursive review loop, automatic
+late-feedback incorporation, review request, Ready transition, merge, or
+auto-merge.
 A correctable local error is repaired in the same invocation, and a read-only
 failure may receive one bounded retry. Writes never retry; an unknown write
 result stops with its exact operation identity.
+
+## Hosted CI authorization
+
+GitHub-hosted CI is outside ordinary Polyscope and AI execution. A push, PR
+creation, review-remediation request, repository convention, previous request,
+or thread-resolution request does not authorize reading or summarizing hosted
+checks.
+
+Only a current user instruction that explicitly requests CI inspection, check
+status, merge readiness, or merge authorization permits one bounded
+current-state read. Report that state and stop. Never poll, wait, sleep, repeat
+the read automatically, keep the run active for pending checks, or suggest
+monitoring. Merge remains separately user-authorized.
 
 ## Classification and technical truth
 
@@ -159,8 +169,9 @@ findings may receive 👎, and all other reaction decisions are conservative.
 Evidence replies exist only for a non-obvious material misunderstanding. The
 workflow never posts fixed/addressed/SHA/progress messages.
 
-The normal path captures only stable feedback, creates one reusable validation
-attestation, and applies one ordered batch:
+The normal path captures stable feedback once, creates one reusable local
+validation attestation, pushes one signed commit, and resolves only the named
+fixed threads:
 
 ```bash
 python3 scripts/secpal-pr-review-actions.py resolve-batch \
@@ -190,14 +201,11 @@ python3 scripts/secpal-pr-review-actions.py attest-validation \
   --bind-commit \
   --output SESSION/validation-attestation.json
 
-python3 scripts/secpal-pr-review-actions.py resolve-batch \
+python3 scripts/secpal-resolve-fixed-threads.py \
   --repo SecPal/api \
   --pr 123 \
-  --request SESSION/resolution-batch.json \
-  --reviewed-state SESSION/reviewed-feedback.json \
-  --attestation SESSION/validation-attestation.json \
-  --repo-root /path/to/SecPal/api \
-  --output SESSION/resolution-report.json \
+  --expected-head HEAD \
+  --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
 
@@ -215,30 +223,17 @@ match exactly; this does not rerun validation. The final attestation binds the
 repository, finished head, registry digest, command-set digest, successful
 result, validated tree, signed receipt, manual gates, and reviewed-feedback
 digests. Before the commit exists on GitHub, binding checks its local signature
-and configured format only. The batch reconstructs the receipt from the signed
-commit and enforces any required GitHub verification from live post-push
-evidence while also verifying local/remote/PR heads, the registered default/
-base-repository boundary, clean worktree, actor, applicable rules/Required
-Checks, strict-base/merge-state policy, and current stable feedback once.
-Capture and freshness use the same explicitly selected registry entry as
-attestation and checks. Schema version 1.2 requires the reviewed state to
-originate from an open PR and a classified finding record for every
-top-level review/comment and its reactions, stable pull-request reaction, and
-comment/reaction in every unresolved thread. PR-level `EYES` activity markers
-are excluded before canonicalization; nested and all other reactions remain
-stable feedback. Those records bind typed source IDs/digests,
-classification-compatible dispositions, evidence digests, and fixed-finding
-test proof to the signed validation receipt; each resolution names its threaded
-finding IDs instead of carrying an unverified disposition. Caller-authored
-prior results are rejected; applied/failed/blocked report entries are audit output only.
-Each target check also
-compares the open PR/base/merge state and bounded thread comments and reactions
-already returned by the target query. Thirty resolutions therefore use one attestation verification,
-one logical rule/Required Check read, one freshness read, thirty target checks,
-thirty writes, and zero complete-validation or full-feedback reruns between
-writes. The report path is initialized before mutation; a later persistence
-failure emits the complete in-memory operation evidence to standard error and
-stops the batch.
+and configured format only. After the push, the simple resolver verifies the
+exact PR head and target identity without reading checks, rules, reactions,
+unrelated feedback, mergeability, or branch protection. Each target is read
+once initially and once immediately before its mutation; every mutation
+response must confirm the exact resolved thread.
+
+The schema-bound `resolve-batch --apply` path remains available only when the
+current user instruction explicitly requests readiness or merge evaluation. In
+that path, volatile readiness performs at most one bounded current-state read.
+Pending or failed checks are reported as observed facts; they do not start
+monitoring, delay fixed-thread resolution, or authorize another automatic read.
 
 Every legacy forensic plan binds the exact repository, PR, immutable digest,
 and expected head. Each operation names one source finding, target node/database/
@@ -266,11 +261,13 @@ python3 scripts/secpal-pr-review-actions.py react \
   --expected-head HEAD
 ```
 
-The `validate-plan` example is forensic audit mode. The `react`, `reply`, and
-individual `resolve` commands remain compatible for explicitly selected
-forensic processing; they are not the normal remediation path. Audit mode performs one bounded current-target read
-and zero writes. An individually authorized operation additionally requires
-`--apply`. `reply` has the same anchors. `resolve` also requires
+The `validate-plan` example is forensic audit mode. The `react` and `reply`
+commands remain compatible for explicitly selected forensic processing.
+Individual `resolve` remains available only when the current user instruction
+also explicitly requests readiness or merge evaluation; none of these commands
+is the normal remediation path. Audit mode performs one bounded current-target
+read and zero writes. An individually authorized operation additionally
+requires `--apply`. `reply` has the same anchors. `resolve` also requires
 `--initial-snapshot` and refuses the write until final evidence proves clean and
 matching heads, accepted signatures, complete validation, successful required
 checks, no late feedback, and complete dispositions for all unresolved initial
@@ -315,29 +312,26 @@ lists. Remediation readiness requires one new linear commit per recorded signed
 push. After the live required-check verification, the helper repeats the
 bounded PR-wide feedback and exact target-thread reads before resolving.
 
-## Fast-path freshness, forensic snapshots, CI, and recovery
+## Explicit readiness, forensic snapshots, and recovery
 
-The normal path compares one post-push stable-feedback projection with the
-reviewed feedback, allowing only same-batch prior resolutions proven by matching
-operation evidence. A recorded prior resolution that has since been reopened is
-never applied again. Required Checks are evaluated separately immediately
-before that comparison, so a same-head CI transition never changes stable
-equality. The single attested head transition may deterministically change
-GitHub's derived `isOutdated` state from false to true; every unexpected head,
-comment, reaction, resolution, or other thread-state change blocks before the
-first write.
+The normal path performs no post-push PR-wide feedback or hosted-CI read. The
+simple resolver compares only each named target's exact state before its write.
+
+An explicitly requested readiness path may compare one current stable-feedback
+projection and the requested volatile readiness state. It reports that
+current-state observation immediately and stops without monitoring.
 
 In explicit forensic mode, the initial snapshot never changes. The one post-cycle-1 capture and one final
 capture are comparisons, not extensions. A signed remediation commit may advance
 the final head only as a verified descendant that retains every initial commit;
 any other head movement or new/edited review feedback ends the invocation and
-requires a fresh explicit user request with a new immutable snapshot. There is
-no wait loop for CI; pending, failed, skipped, missing, or incomplete
-required-check evidence is a terminal blocker.
+requires a fresh explicit user request with a new immutable snapshot. An
+explicitly requested CI observation reports pending, failed, skipped, missing,
+or incomplete required-check evidence once and stops.
 
-After any blocker, preserve the session report and do not retry a failed action.
-A fresh invocation starts from new evidence and re-verifies every anchor. The
-complete terminal-outcome detection table is in the finite contract.
+After any mutation or evidence blocker, preserve the session report and do not
+retry a failed action. No hosted-CI state triggers an automatic or recommended
+rerun. The complete terminal-outcome detection table is in the finite contract.
 
 Later-state plans retain the returned identity of each authorized reaction or
 reply. This lets comparison reads allow those exact writes while treating every

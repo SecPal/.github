@@ -17,7 +17,20 @@ class ProcessCall:
     function_name: str
     executable: str
     arguments: str
-    keywords: frozenset[str]
+    keywords: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class DynamicImportCall:
+    functions: tuple[str, ...]
+    expression: str
+
+
+@dataclass(frozen=True)
+class LoopSite:
+    kind: str
+    functions: tuple[str, ...]
+    iterator: str
 
 
 ACTION_CALLS = (
@@ -26,24 +39,30 @@ ACTION_CALLS = (
         "_run_registered_validations",
         "executable",
         "command['argv'][1:]",
-        frozenset({"check", "cwd", "env", "stderr", "stdin", "stdout", "timeout"}),
+        (
+            ("check", "False"),
+            ("cwd", "working_directory"),
+            ("env", "environment"),
+            ("stderr", "subprocess.DEVNULL"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("stdout", "subprocess.DEVNULL"),
+            ("timeout", "LOCAL_VALIDATION_TIMEOUT_SECONDS"),
+        ),
     ),
     ProcessCall(
         "ActionCommandRunner",
         "run",
         "self.executable_path",
         "arguments[1:]",
-        frozenset(
-            {
-                "capture_output",
-                "check",
-                "encoding",
-                "env",
-                "errors",
-                "stdin",
-                "text",
-                "timeout",
-            }
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('gh')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
         ),
     ),
     ProcessCall(
@@ -51,18 +70,16 @@ ACTION_CALLS = (
         "_git",
         "self.git_executable",
         "arguments",
-        frozenset(
-            {
-                "capture_output",
-                "check",
-                "cwd",
-                "encoding",
-                "env",
-                "errors",
-                "stdin",
-                "text",
-                "timeout",
-            }
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "self.repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
         ),
     ),
     ProcessCall(
@@ -70,18 +87,35 @@ ACTION_CALLS = (
         "_run_attestation_git",
         "git_executable",
         "arguments",
-        frozenset(
-            {
-                "capture_output",
-                "check",
-                "cwd",
-                "encoding",
-                "env",
-                "errors",
-                "stdin",
-                "text",
-                "timeout",
-            }
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+)
+
+EVIDENCE_CALLS = (
+    ProcessCall(
+        "CommandRunner",
+        "run",
+        "command",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("encoding", "'utf-8'"),
+            ("env", "environment"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "self.timeout_seconds"),
         ),
     ),
 )
@@ -92,22 +126,21 @@ RESOLVER_CALLS = (
         "_run_gh",
         "executable",
         "arguments",
-        frozenset(
-            {
-                "capture_output",
-                "check",
-                "encoding",
-                "env",
-                "errors",
-                "stdin",
-                "text",
-                "timeout",
-            }
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('gh')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
         ),
     ),
 )
 
 EXPECTED_CALLS = {
+    "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
     "fast_path.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
@@ -121,15 +154,104 @@ SAFE_SUBPROCESS_ATTRIBUTES = {
 SAFE_OS_ATTRIBUTES = {
     "X_OK",
     "access",
+    "chmod",
     "close",
     "devnull",
+    "environ",
     "fchmod",
     "fdopen",
     "fsync",
     "getuid",
+    "path",
     "pathsep",
     "replace",
     "unlink",
+}
+ALLOWED_IMPORT_ROOTS = {
+    "__future__",
+    "argparse",
+    "copy",
+    "dataclasses",
+    "datetime",
+    "functools",
+    "hashlib",
+    "importlib",
+    "json",
+    "os",
+    "pathlib",
+    "pwd",
+    "re",
+    "site",
+    "stat",
+    "subprocess",
+    "sys",
+    "tempfile",
+    "typing",
+    "urllib",
+}
+ALLOWED_IMPORTS = {
+    "secpal-pr-review.py": {
+        "from __future__ import annotations",
+        "import argparse",
+        "import copy",
+        "import hashlib",
+        "import json",
+        "import os",
+        "import re",
+        "import stat",
+        "import subprocess",
+        "import sys",
+        "import tempfile",
+        "from dataclasses import dataclass",
+        "from datetime import datetime",
+        "from functools import cache",
+        "from pathlib import Path",
+        "from typing import Any, Callable, Iterable",
+        "from urllib.parse import quote, urlparse",
+    },
+    "secpal-pr-review-actions.py": {
+        "from __future__ import annotations",
+        "import argparse",
+        "import copy",
+        "import hashlib",
+        "import importlib.util",
+        "import json",
+        "import os",
+        "import pwd",
+        "import re",
+        "import site",
+        "import subprocess",
+        "import sys",
+        "import tempfile",
+        "from pathlib import Path",
+        "from typing import Any, Iterable",
+        "from urllib.parse import quote",
+    },
+    "fast_path.py": {
+        "from __future__ import annotations",
+        "import copy",
+        "import hashlib",
+        "import json",
+        "import os",
+        "import re",
+        "import tempfile",
+        "from dataclasses import dataclass, field",
+        "from pathlib import Path",
+        "from typing import Any, Callable, TypeVar",
+    },
+    "secpal-resolve-fixed-threads.py": {
+        "from __future__ import annotations",
+        "import argparse",
+        "import hashlib",
+        "import importlib.util",
+        "import json",
+        "import re",
+        "import subprocess",
+        "import sys",
+        "from dataclasses import dataclass",
+        "from pathlib import Path",
+        "from typing import Any, Callable, Sequence",
+    },
 }
 PROHIBITED_IMPORT_ROOTS = {
     "asyncio",
@@ -142,6 +264,199 @@ PROHIBITED_IMPORT_ROOTS = {
     "runpy",
     "time",
 }
+PROHIBITED_PROCESS_CALL_ATTRIBUTES = {
+    "Popen",
+    "call",
+    "check_call",
+    "check_output",
+    "execv",
+    "execve",
+    "fork",
+    "forkpty",
+    "getoutput",
+    "getstatusoutput",
+    "popen",
+    "posix_spawn",
+    "posix_spawnp",
+    "spawnl",
+    "spawnle",
+    "spawnlp",
+    "spawnlpe",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
+    "spawnvpe",
+    "startfile",
+    "system",
+}
+SAFE_RUN_TARGETS = {
+    "secpal-pr-review.py": {
+        "runner.run",
+        "self.runner.run",
+    },
+    "secpal-pr-review-actions.py": {
+        "self.github.runner.run",
+        "self.runner.run",
+    },
+}
+DIRECT_MODULE_ATTRIBUTES = {
+    "secpal-pr-review.py": {
+        "stat": {"S_ISDIR", "S_ISLNK", "S_ISREG"},
+        "sys": {"stderr", "stdout"},
+        "tempfile": {"mkstemp"},
+    },
+    "secpal-pr-review-actions.py": {
+        "importlib": {"util"},
+        "pwd": {"getpwuid"},
+        "site": {"getusersitepackages"},
+        "sys": {"modules", "stderr", "stdout", "version_info"},
+        "tempfile": {"TemporaryDirectory"},
+    },
+    "fast_path.py": {
+        "tempfile": {"mkstemp"},
+    },
+    "secpal-resolve-fixed-threads.py": {
+        "importlib": {"util"},
+        "sys": {"argv", "modules", "stderr"},
+    },
+}
+LOADED_MODULE_ATTRIBUTES = {
+    "secpal-pr-review-actions.py": {
+        "evidence": {
+            "BlockedError",
+            "CommandPolicyError",
+            "CommandRunner",
+            "ContractError",
+            "TRUSTED_COMMAND_DIRECTORIES",
+            "_commit_signature_format",
+            "_mark_effective_checks",
+            "_normalize_applicable_rules",
+            "_normalize_check",
+            "command_environment",
+            "evaluate_checks",
+            "interpret_local_signature",
+            "normalize_github_signature",
+            "redact_diagnostic",
+            "require_rule_evidence",
+            "resolve_trusted_executable",
+            "select_effective_check_target",
+            "validate_against_authoritative_schema",
+            "validate_config",
+            "validate_snapshot",
+            "verify_local_against_snapshot",
+            "verify_snapshot_evidence",
+        },
+        "fast_path": {
+            "BatchRequest",
+            "ReadinessState",
+            "RecoverableLocalError",
+            "SECRET_VALUE",
+            "SecurityBlocker",
+            "StableFeedbackState",
+            "TransientReadFailure",
+            "UnknownWriteResult",
+            "atomic_write_json",
+            "canonical_json_bytes",
+            "create_validation_attestation",
+            "create_validation_receipt",
+            "digest_json",
+            "execute_resolution_batch",
+            "validate_manual_gate_evidence",
+            "verify_commit_signatures",
+        },
+    },
+    "secpal-resolve-fixed-threads.py": {
+        "evidence": {
+            "CommandPolicyError",
+            "ContractError",
+            "command_environment",
+            "redact_diagnostic",
+            "resolve_trusted_executable",
+            "validate_against_authoritative_schema",
+        },
+    },
+}
+DYNAMIC_IMPORT_CALLS = {
+    "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+    },
+    "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+    },
+}
+SAFE_GETATTR_CALLS = {
+    "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'manual_gate_evidence', None)",
+        ),
+    },
+    "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+    },
+}
+RESOLVER_LOOP_SITES = {
+    LoopSite("for", ("_graphql",), "variables.items()"),
+    LoopSite(
+        "for",
+        ("read_target_thread",),
+        "range(budget.remaining_api_calls)",
+    ),
+    LoopSite("for", ("read_target_thread",), "nodes"),
+    LoopSite("for", ("resolve_threads",), "thread_ids"),
+    LoopSite("for", ("resolve_threads",), "enumerate(pending)"),
+    LoopSite("comprehension", ("load_repository_limits",), "repositories"),
+    LoopSite(
+        "comprehension",
+        ("_run_gh",),
+        "arguments[len(GH_GRAPHQL_PREFIX):]",
+    ),
+    LoopSite("comprehension", ("resolve_threads",), "thread_ids"),
+    LoopSite("comprehension", ("validate_request",), "thread_ids"),
+    LoopSite("comprehension", ("resolve_threads",), "pending"),
+}
 
 
 class PolicyVisitor(ast.NodeVisitor):
@@ -153,6 +468,7 @@ class PolicyVisitor(ast.NodeVisitor):
         bounded_resolver: bool,
     ) -> None:
         self.label = label
+        self.source_name = Path(label).name
         self.expected_calls = expected_calls
         self.bounded_resolver = bounded_resolver
         self.findings: list[str] = []
@@ -160,12 +476,26 @@ class PolicyVisitor(ast.NodeVisitor):
         self.classes: list[str] = []
         self.functions: list[str] = []
         self.parents: dict[ast.AST, ast.AST] = {}
+        self.top_level_functions: set[str] = set()
+        self.function_calls: dict[str, set[str]] = {}
 
     def inspect(self, tree: ast.AST) -> list[str]:
+        if isinstance(tree, ast.Module):
+            self.top_level_functions = {
+                node.name
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
         for parent in ast.walk(tree):
             for child in ast.iter_child_nodes(parent):
                 self.parents[child] = parent
         self.visit(tree)
+        recursive_cycle = self._recursive_cycle()
+        if recursive_cycle is not None:
+            self.findings.append(
+                f"{self.label}: recursive resolver call graph is prohibited: "
+                f"{' -> '.join(recursive_cycle)}"
+            )
         missing = [call for call in self.expected_calls if call not in self.seen_calls]
         for call in missing:
             self.findings.append(
@@ -173,6 +503,33 @@ class PolicyVisitor(ast.NodeVisitor):
                 f"{call.class_name + '.' if call.class_name else ''}{call.function_name}"
             )
         return self.findings
+
+    def _recursive_cycle(self) -> list[str] | None:
+        if not self.bounded_resolver:
+            return None
+        visiting: list[str] = []
+        visited: set[str] = set()
+
+        def find(function_name: str) -> list[str] | None:
+            if function_name in visiting:
+                start = visiting.index(function_name)
+                return [*visiting[start:], function_name]
+            if function_name in visited:
+                return None
+            visiting.append(function_name)
+            for called in sorted(self.function_calls.get(function_name, set())):
+                cycle = find(called)
+                if cycle is not None:
+                    return cycle
+            visiting.pop()
+            visited.add(function_name)
+            return None
+
+        for function_name in sorted(self.top_level_functions):
+            cycle = find(function_name)
+            if cycle is not None:
+                return cycle
+        return None
 
     def finding(self, node: ast.AST, message: str) -> None:
         self.findings.append(
@@ -185,6 +542,8 @@ class PolicyVisitor(ast.NodeVisitor):
         self.classes.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        if self.bounded_resolver and node.name in {"__iter__", "__next__"}:
+            self.finding(node, "resolver-defined iterators are prohibited")
         self.functions.append(node.name)
         self.generic_visit(node)
         self.functions.pop()
@@ -192,8 +551,13 @@ class PolicyVisitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_Import(self, node: ast.Import) -> None:
+        allowed_imports = ALLOWED_IMPORTS.get(self.source_name)
+        if allowed_imports is not None and ast.unparse(node) not in allowed_imports:
+            self.finding(node, "import statement is outside the file allowlist")
         for alias in node.names:
             root = alias.name.split(".", 1)[0]
+            if root not in ALLOWED_IMPORT_ROOTS:
+                self.finding(node, f"import is outside the closed allowlist: {root}")
             if root in PROHIBITED_IMPORT_ROOTS:
                 self.finding(node, f"prohibited process-capable import: {root}")
             if root in {"os", "subprocess"} and alias.asname is not None:
@@ -204,18 +568,42 @@ class PolicyVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         root = (node.module or "").split(".", 1)[0]
+        allowed_imports = ALLOWED_IMPORTS.get(self.source_name)
+        if allowed_imports is not None and ast.unparse(node) not in allowed_imports:
+            self.finding(node, "import statement is outside the file allowlist")
+        if root not in ALLOWED_IMPORT_ROOTS:
+            self.finding(node, f"import is outside the closed allowlist: {root}")
         if root in PROHIBITED_IMPORT_ROOTS | {"importlib", "os", "subprocess"}:
             self.finding(node, f"prohibited direct import from {root}")
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
-        if node.id in {"os", "subprocess"} and isinstance(node.ctx, ast.Load):
+        protected_names = {
+            "os",
+            "subprocess",
+            *DIRECT_MODULE_ATTRIBUTES.get(self.source_name, {}),
+        }
+        if node.id in protected_names and isinstance(node.ctx, ast.Load):
             parent = self.parents.get(node)
             if not isinstance(parent, ast.Attribute) or parent.value is not node:
                 self.finding(node, f"bare {node.id} module reference is prohibited")
+        if node.id in {
+            "__builtins__",
+            "__import__",
+            "breakpoint",
+            "compile",
+            "eval",
+            "exec",
+            "globals",
+            "locals",
+            "vars",
+        } and isinstance(node.ctx, ast.Load):
+            self.finding(node, f"dynamic execution reference is prohibited: {node.id}")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
+        direct_modules = DIRECT_MODULE_ATTRIBUTES.get(self.source_name, {})
+        loaded_modules = LOADED_MODULE_ATTRIBUTES.get(self.source_name, {})
         if isinstance(node.value, ast.Name) and node.value.id == "subprocess":
             parent = self.parents.get(node)
             if node.attr == "run":
@@ -226,15 +614,101 @@ class PolicyVisitor(ast.NodeVisitor):
         elif isinstance(node.value, ast.Name) and node.value.id == "os":
             if node.attr not in SAFE_OS_ATTRIBUTES:
                 self.finding(node, f"prohibited os attribute: {node.attr}")
+        elif isinstance(node.value, ast.Name) and node.value.id in direct_modules:
+            if node.attr not in direct_modules[node.value.id]:
+                self.finding(
+                    node,
+                    f"prohibited {node.value.id} attribute: {node.attr}",
+                )
+            parent = self.parents.get(node)
+            if (
+                node.value.id == "importlib"
+                and node.attr == "util"
+                and (
+                    not isinstance(parent, ast.Attribute)
+                    or parent.value is not node
+                )
+            ):
+                self.finding(node, "importlib.util may not be aliased")
+            if (
+                node.value.id == "sys"
+                and node.attr == "modules"
+                and not isinstance(parent, (ast.Attribute, ast.Subscript))
+            ):
+                self.finding(node, "sys.modules may not be aliased")
+        elif (
+            isinstance(node.value, ast.Name)
+            and node.value.id in loaded_modules
+            and node.attr not in loaded_modules[node.value.id]
+        ):
+            self.finding(
+                node,
+                f"prohibited {node.value.id} module attribute: {node.attr}",
+            )
+        if node.attr == "run":
+            parent = self.parents.get(node)
+            expression = ast.unparse(node)
+            if (
+                not isinstance(parent, ast.Call)
+                or parent.func is not node
+                or (
+                    expression != "subprocess.run"
+                    and expression
+                    not in SAFE_RUN_TARGETS.get(self.source_name, set())
+                )
+            ):
+                self.finding(node, "run reference is outside the closed allowlist")
+        if node.attr in PROHIBITED_PROCESS_CALL_ATTRIBUTES:
+            self.finding(
+                node,
+                f"prohibited process-capable attribute: {node.attr}",
+            )
+        if node.attr == "exec_module":
+            parent = self.parents.get(node)
+            dynamic_call = (
+                DynamicImportCall(tuple(self.functions), ast.unparse(parent))
+                if isinstance(parent, ast.Call) and parent.func is node
+                else None
+            )
+            if dynamic_call not in DYNAMIC_IMPORT_CALLS.get(self.source_name, set()):
+                self.finding(node, "dynamic loader reference is outside the allowlist")
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        if isinstance(node.func, ast.Name) and node.func.id in {
-            "__import__",
-            "eval",
-            "exec",
-        }:
-            self.finding(node, f"dynamic execution is prohibited: {node.func.id}")
+        function_expression = ast.unparse(node.func)
+        if (
+            self.bounded_resolver
+            and len(self.functions) == 1
+            and isinstance(node.func, ast.Name)
+            and node.func.id in self.top_level_functions
+        ):
+            self.function_calls.setdefault(self.functions[0], set()).add(node.func.id)
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+        ):
+            call = DynamicImportCall(tuple(self.functions), ast.unparse(node))
+            if call not in SAFE_GETATTR_CALLS.get(self.source_name, set()):
+                self.finding(node, "getattr call is outside the closed allowlist")
+        if (
+            self.bounded_resolver
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "iter"
+        ):
+            self.finding(node, "resolver iterator construction is prohibited")
+        if (
+            function_expression.startswith("importlib.")
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "exec_module"
+            )
+        ):
+            dynamic_call = DynamicImportCall(
+                tuple(self.functions),
+                ast.unparse(node),
+            )
+            if dynamic_call not in DYNAMIC_IMPORT_CALLS.get(self.source_name, set()):
+                self.finding(node, "dynamic import is outside the closed allowlist")
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -242,6 +716,20 @@ class PolicyVisitor(ast.NodeVisitor):
             and node.func.attr == "run"
         ):
             self._inspect_process_call(node)
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == "run":
+            if function_expression not in SAFE_RUN_TARGETS.get(
+                self.source_name,
+                set(),
+            ):
+                self.finding(node, "run call is outside the closed allowlist")
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in PROHIBITED_PROCESS_CALL_ATTRIBUTES
+        ):
+            self.finding(
+                node,
+                f"prohibited process-capable call: {node.func.attr}",
+            )
         self.generic_visit(node)
 
     def _inspect_process_call(self, node: ast.Call) -> None:
@@ -261,26 +749,39 @@ class PolicyVisitor(ast.NodeVisitor):
             return
         self.seen_calls.append(expected)
 
-        if len(node.args) != 1 or not isinstance(node.args[0], ast.List):
-            self.finding(node, "process argv must be one inline list")
-            return
-        argv = node.args[0]
-        if len(argv.elts) != 2 or not isinstance(argv.elts[1], ast.Starred):
-            self.finding(node, "process argv must have one executable and one starred tail")
-            return
-        if ast.unparse(argv.elts[0]) != expected.executable:
-            self.finding(node, "process executable expression changed")
-        if ast.unparse(argv.elts[1].value) != expected.arguments:
-            self.finding(node, "process argument expression changed")
+        if expected.arguments:
+            if len(node.args) != 1 or not isinstance(node.args[0], ast.List):
+                self.finding(node, "process argv must be one inline list")
+                return
+            argv = node.args[0]
+            if len(argv.elts) != 2 or not isinstance(argv.elts[1], ast.Starred):
+                self.finding(
+                    node,
+                    "process argv must have one executable and one starred tail",
+                )
+                return
+            if ast.unparse(argv.elts[0]) != expected.executable:
+                self.finding(node, "process executable expression changed")
+            if ast.unparse(argv.elts[1].value) != expected.arguments:
+                self.finding(node, "process argument expression changed")
+        elif len(node.args) != 1 or ast.unparse(node.args[0]) != expected.executable:
+            self.finding(node, "process argv expression changed")
 
         if any(keyword.arg is None for keyword in node.keywords):
             self.finding(node, "expanded process keyword arguments are prohibited")
             return
-        keywords = frozenset(
-            keyword.arg for keyword in node.keywords if keyword.arg is not None
+        keywords = tuple(
+            sorted(
+                (
+                    keyword.arg,
+                    ast.unparse(keyword.value),
+                )
+                for keyword in node.keywords
+                if keyword.arg is not None
+            )
         )
-        if keywords != expected.keywords or len(node.keywords) != len(keywords):
-            self.finding(node, "process keyword set changed")
+        if keywords != tuple(sorted(expected.keywords)):
+            self.finding(node, "process keyword values changed")
 
     def visit_While(self, node: ast.While) -> None:
         if self.bounded_resolver:
@@ -292,25 +793,35 @@ class PolicyVisitor(ast.NodeVisitor):
             self.finding(node, "simple resolver must not use async iteration")
         self.generic_visit(node)
 
+    def visit_Yield(self, node: ast.Yield) -> None:
+        if self.bounded_resolver:
+            self.finding(node, "resolver generators are prohibited")
+        self.generic_visit(node)
+
+    def visit_YieldFrom(self, node: ast.YieldFrom) -> None:
+        if self.bounded_resolver:
+            self.finding(node, "resolver generators are prohibited")
+        self.generic_visit(node)
+
     def visit_For(self, node: ast.For) -> None:
-        if self.bounded_resolver and isinstance(node.iter, ast.Call):
-            if isinstance(node.iter.func, ast.Name) and node.iter.func.id == "range":
-                valid_range = (
-                    (self.functions[-1] if self.functions else "") == "read_target_thread"
-                    and len(node.iter.args) == 1
-                    and not node.iter.keywords
-                    and ast.unparse(node.iter.args[0])
-                    == "budget.remaining_api_calls"
-                )
-                if not valid_range:
-                    self.finding(node, "resolver range loop is outside the bounded pagination site")
-            elif isinstance(node.iter.func, ast.Name) and node.iter.func.id == "iter":
-                self.finding(node, "callable-sentinel loops are prohibited")
+        if self.bounded_resolver:
+            site = LoopSite("for", tuple(self.functions), ast.unparse(node.iter))
+            if site not in RESOLVER_LOOP_SITES:
+                self.finding(node, "resolver loop is outside the bounded allowlist")
         self.generic_visit(node)
 
     def visit_comprehension(self, node: ast.comprehension) -> None:
-        if self.bounded_resolver and isinstance(node.iter, ast.Call):
-            self.finding(node, "resolver comprehensions must not poll call results")
+        if self.bounded_resolver:
+            site = LoopSite(
+                "comprehension",
+                tuple(self.functions),
+                ast.unparse(node.iter),
+            )
+            if site not in RESOLVER_LOOP_SITES:
+                self.finding(
+                    node,
+                    "resolver comprehension is outside the bounded allowlist",
+                )
         self.generic_visit(node)
 
 
@@ -335,7 +846,7 @@ def self_test() -> None:
         "safe_runner",
         "executable",
         "arguments",
-        frozenset({"check"}),
+        (("check", "False"),),
     )
     safe = (
         "import subprocess\n"
@@ -383,6 +894,14 @@ def self_test() -> None:
             ),
             (safe_call,),
         ),
+        "changed-process-keyword-value": (
+            (
+                "import subprocess\n"
+                "def safe_runner(executable, arguments):\n"
+                "    return subprocess.run([executable, *arguments], check=True)\n"
+            ),
+            (safe_call,),
+        ),
         "blocking-wait": (
             "from time import sleep\nsleep(1)\n",
             (),
@@ -391,17 +910,128 @@ def self_test() -> None:
             "import os\nos.system(command)\n",
             (),
         ),
+        "indirect-process-module": (
+            (
+                "def unsafe_runner(arguments):\n"
+                "    return evidence.subprocess.run(arguments, check=False)\n"
+            ),
+            (),
+        ),
+        "dynamic-process-module": (
+            (
+                "import importlib.util\n"
+                "spec = importlib.util.spec_from_file_location('unsafe', path)\n"
+                "module = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(module)\n"
+            ),
+            (),
+        ),
+        "process-capable-library": (
+            "import webbrowser\nwebbrowser.open(url)\n",
+            (),
+        ),
+        "builtin-namespace-loader": (
+            (
+                "builtins = globals()['__builtins__']\n"
+                "loader = builtins['__import__']\n"
+                "loader('os')\n"
+            ),
+            (),
+        ),
     }
     for name, (source, expected) in unsafe.items():
         if not inspect_source(source, name, expected):
             raise SystemExit(f"static policy negative fixture was not detected: {name}")
 
+    unbounded_resolver_loops = {
+        "attribute-call-iterator": (
+            "import itertools\n"
+            "for _item in itertools.count():\n"
+            "    pass\n"
+        ),
+        "precomputed-infinite-iterator": (
+            "import itertools\n"
+            "forever = itertools.count()\n"
+            "for _item in forever:\n"
+            "    pass\n"
+        ),
+        "precomputed-callable-sentinel": (
+            "forever = iter(int, 1)\n"
+            "for _item in forever:\n"
+            "    pass\n"
+        ),
+    }
+    for name, source in unbounded_resolver_loops.items():
+        if not inspect_source(source, name, (), bounded_resolver=True):
+            raise SystemExit(
+                f"static policy unbounded-loop fixture was not detected: {name}"
+            )
+
+    resolver_specific_unsafe = {
+        "allowed-name-rebound-to-infinite-iterator": (
+            "def resolve_threads():\n"
+            "    thread_ids = iter(int, 1)\n"
+            "    for thread_id in thread_ids:\n"
+            "        pass\n"
+        ),
+        "resolver-import-expansion": "import site\n",
+        "aliased-dynamic-loader": (
+            "import importlib.util\n"
+            "util = importlib.util\n"
+            "spec = util.spec_from_file_location('unsafe', path)\n"
+            "loader = spec.loader.exec_module\n"
+            "loader(module)\n"
+        ),
+        "aliased-getattr-process-loader": (
+            "ev = evidence\n"
+            "process_module = getattr(ev, 'subprocess')\n"
+            "launch = getattr(process_module, 'run')\n"
+            "launch(arguments)\n"
+        ),
+        "direct-recursion": (
+            "def poll():\n"
+            "    return poll()\n"
+        ),
+        "mutual-recursion": (
+            "def first():\n"
+            "    return second()\n"
+            "def second():\n"
+            "    return first()\n"
+        ),
+    }
+    for name, source in resolver_specific_unsafe.items():
+        if not inspect_source(
+            source,
+            "secpal-resolve-fixed-threads.py",
+            (),
+            bounded_resolver=True,
+        ):
+            raise SystemExit(
+                f"static policy resolver fixture was not detected: {name}"
+            )
+
+    source_specific_unsafe = (
+        (
+            "secpal-pr-review.py",
+            "import sys\nlauncher = sys.modules['subprocess'].run\nlauncher(argv)\n",
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            "import site\nsite.addsitedir(path)\n",
+        ),
+    )
+    for label, source in source_specific_unsafe:
+        if not inspect_source(source, label, ()):
+            raise SystemExit(
+                f"static policy source-specific fixture was not detected: {label}"
+            )
+
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 4:
+    if len(argv) != 5:
         raise SystemExit(
             "usage: secpal-pr-review-static-policy.py "
-            "ACTIONS FAST_PATH SIMPLE_RESOLVER"
+            "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER"
         )
     self_test()
     findings: list[str] = []

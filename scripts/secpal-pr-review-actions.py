@@ -203,7 +203,6 @@ ALWAYS_REQUIRED_RESOLUTION_PRECONDITIONS = frozenset(
     {
         "focused_validation_succeeded",
         "complete_validation_succeeded",
-        "required_ci_succeeded",
         "valid_signatures",
         "heads_match",
         "worktree_clean",

@@ -185,7 +185,6 @@ def operation(
             "pushed": True,
             "focused_validation_succeeded": True,
             "complete_validation_succeeded": True,
-            "required_ci_succeeded": True,
             "valid_signatures": True,
             "heads_match": True,
             "worktree_clean": True,

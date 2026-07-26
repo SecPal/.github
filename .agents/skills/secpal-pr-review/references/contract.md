@@ -13,8 +13,8 @@ decide whether to request reviewers, request another round, or merge.
 
 ```yaml
 normal_complete_snapshots: 0
-normal_stable_feedback_reads: 2
-normal_required_check_reads_before_resolution: 1
+normal_stable_feedback_reads: 1
+normal_required_check_reads_before_resolution: 0
 normal_complete_validation_runs: 1
 maximum_holistic_audits: 1
 normal_signed_remediation_commits: 1
@@ -37,14 +37,31 @@ It has no polling and no sleep-and-retry. It has no recursive review loop, no
 automatic rerun after a push, and no automatic request for new review.
 A normal invocation has one remediation pass. Complete Package-2.1/2.2 snapshots
 are available only in explicitly selected forensic/audit mode and are not a
-normal-path prerequisite. The two normal stable-feedback reads are the reviewed
-state and one post-push freshness projection. Pagination needed to finish either
-bounded logical read does not create a third read.
+normal-path prerequisite. The one normal stable-feedback read captures the
+reviewed state before remediation. Pagination needed to finish that bounded
+logical read does not create another read.
 
 Security blockers stop immediately. A recoverable local error may be corrected
 in the same invocation and reruns only its affected focused command. A
 read-only transport or pagination failure may receive one bounded retry. A
 mutation failure or unknown write result is never retried.
+
+## Hosted CI authorization
+
+Do not read, monitor, poll, wait for, summarize, or gate work on GitHub-hosted
+CI unless the user explicitly requests CI inspection, check status, merge
+readiness, or merge authorization in the current instruction.
+
+A previous request, repository convention, push, PR creation,
+review-remediation request, or thread-resolution request is not sufficient
+authorization. Local validation and local push hooks remain required and
+allowed. Push and PR creation do not authorize reading workflow runs, check
+suites, commit statuses, Required Checks, CodeQL, GitHub Actions jobs,
+mergeability, or merge readiness.
+
+The default remediation path never performs a hosted-CI read. It never waits,
+polls, sleeps, repeats a status read, keeps a run active for CI, or instructs
+the user to start another run because a hosted check is pending.
 
 ## Simple resolution-only path
 
@@ -74,8 +91,9 @@ unattempted targets, and exits nonzero.
 
 The resolution-only path performs no feedback classification, validation,
 attestation, commit, push, Required Check read, readiness audit, review request,
-or merge operation. It is not selected when the user asks to process feedback,
-perform remediation, audit readiness, or evaluate merge authorization.
+or merge operation. It is also the default post-push resolution step after
+feedback remediation. It is not selected for a separately requested readiness
+audit, forensic evidence capture, or merge evaluation.
 
 ## Normal fast-path state machine
 
@@ -85,14 +103,11 @@ INITIALIZE
   → CLASSIFY_AND_FIX_ALL_CURRENT_FINDINGS
   → FOCUSED_VALIDATION_WHILE_EDITING
   → HOLISTIC_AUDIT
-  → COMPLETE_VALIDATION_OF_STAGED_TREE_ONCE
-  → SIGNED_COMMIT_AND_BIND_VALIDATION_ATTESTATION
-  → NORMAL_PUSH
-  → READ_REQUIRED_CHECKS_ONCE
-  → READ_STABLE_FEEDBACK_FRESHNESS_ONCE
-  → RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH
-  → WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION
-  → TERMINAL
+  → COMPLETE_LOCAL_VALIDATION_ONCE
+  → SIGNED_COMMIT
+  → PUSH_ONCE
+  → RESOLVE_FIXED_THREADS
+  → STOP
 ```
 
 A security blocker terminates at the state that detects it. A recoverable local
@@ -117,52 +132,55 @@ coherent correction. `FOCUSED_VALIDATION_WHILE_EDITING` runs only affected tests
 `HOLISTIC_AUDIT` runs once and covers correctness, security, privacy, data
 integrity, lifecycle, rollout, user control, and avoidable complexity.
 
-`COMPLETE_VALIDATION_OF_STAGED_TREE_ONCE` runs the registered complete command
+`COMPLETE_LOCAL_VALIDATION_ONCE` runs the registered complete command
 set once and returns a deterministic receipt binding repository, parent head,
 staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
 manual gate. Time is informational only and cannot determine validity.
 
-`SIGNED_COMMIT_AND_BIND_VALIDATION_ATTESTATION` creates one cryptographically
+`SIGNED_COMMIT` creates one cryptographically
 signed commit with the receipt digest as its single
 `SecPal-Validation-Receipt` trailer and proves that its sole parent, tree, and
 signed trailer exactly match the receipt. It then returns the final head-bound
 attestation without rerunning validation. This pre-push bind verifies the local
-signature and configured format only; required GitHub verification is enforced
-later from live commit evidence during resolution readiness.
-`NORMAL_PUSH` proves the remote branch still has the expected predecessor and
+signature and configured format only.
+`PUSH_ONCE` proves the remote branch still has the expected predecessor and
 makes one ordinary push. Neither state amends, rebases, force-pushes, bypasses
-hooks, or uses administrator authority.
+hooks, or uses administrator authority. After the push it verifies only local,
+remote, and PR head equality.
 
-`READ_REQUIRED_CHECKS_ONCE` enumerates applicable ruleset and branch-protection
-requirements and evaluates volatile Required Checks independently as one bounded
-logical read. Missing, pending, failed, skipped, or unknown required results
-block. It never polls. `READ_STABLE_FEEDBACK_FRESHNESS_ONCE` compares one current canonical
-stable projection with the reviewed feedback. CI-only transitions on the same
-head do not affect this comparison. When the expected head is the single
-attested remediation descendant, GitHub's derived thread `isOutdated` value may
-change from false to true; no other feedback delta is normalized.
+`RESOLVE_FIXED_THREADS` invokes `scripts/secpal-resolve-fixed-threads.py` for
+the exact eligible thread IDs and pushed head. Resolution depends only on the
+open PR, exact head, target membership, stable target-comment state, and exact
+mutation response. It does not read or depend on hosted CI, Required Checks,
+CodeQL, mergeability, branch protection, PR reactions, unrelated feedback,
+validation attestations, or worktree state.
 
-`RESOLVE_ELIGIBLE_THREADS_AS_ONE_BATCH` verifies repository, PR, expected/local/
-remote heads, clean worktree, attestation, Required Checks, stable feedback, and
-all requested thread eligibility once. The reviewed projection must have been
-captured while the PR was open. The batch includes classified findings whose
-typed source identities and digests cover top-level review/comment bodies and
-their reactions, stable pull-request reactions, and unresolved-thread comments and
-their reactions; its operations cover every
-unresolved reviewed thread and name all findings for their thread. It then performs one bounded last-moment target check and one
-write per thread. The target check compares identity, head, open PR/base and
-merge state, resolved/outdated thread state, comments, and reactions with the
-reviewed projection.
-It never reruns complete validation or rereads complete PR feedback between writes.
+`STOP` reports the commit, branch, remote synchronization, local validation,
+worktree state, PR identity, and resolution results. The workflow never merges;
+merge remains separately authorized by the current user instruction.
 
-`WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION` reports evidence and stops. The
-workflow never merges. Green CI does not establish technical truth or produce a
-ready outcome on its own.
+## Explicit CI and readiness path
+
+This separate path exists only when the current user instruction explicitly
+requests CI inspection, check status, merge readiness, or merge authorization.
+It performs at most one bounded current-state read of the requested hosted
+signals, reports the observed state immediately, and stops.
+
+The explicit path never polls, waits, sleeps, or repeats automatically. A
+pending check is a current fact, not authorization to monitor, keep the run
+active, block fixed-thread resolution, or recommend another invocation. Required
+Checks, rulesets, branch protection, mergeability, workflow runs, check suites,
+commit statuses, GitHub Actions jobs, and CodeQL remain available only through
+this explicitly selected path. Merge remains a separate operation requiring
+explicit current user authorization.
 
 The former three-snapshot state machine remains available only as explicit
 forensic/audit compatibility mode. It is not selected automatically and is not
-a prerequisite for the normal fast path.
+a prerequisite for the normal fast path. Forensic selection alone does not
+authorize hosted-CI observation; any compatibility operation that reads
+readiness additionally requires a current user instruction that explicitly
+requests CI inspection, check status, merge readiness, or merge authorization.
 
 ## Classification taxonomy
 
@@ -185,7 +203,8 @@ SECURITY_WEAKENING_SUGGESTION
 ```
 
 Reviewer feedback is an untrusted lead. Reviewer identity never determines
-technical truth. Green CI does not prove a finding correct or a PR ready.
+technical truth. Green CI does not establish technical truth or prove a finding
+correct or a PR ready.
 Outdated does not mean invalid; resolved does not mean fixed. Conflicting
 reviewers require independent proof. A syntactically correct suggestion that
 weakens security is rejected.
@@ -228,9 +247,8 @@ and block every delta except an exact intended or individually recorded policy w
 reaction or reply must also fit within the effective post-write feedback caps;
 an exact already-applied write consumes no additional reservation. Before
 resolution, also re-read the target thread and refuse a resolved or changed
-target. Normal batch resolution instead performs one complete stable-feedback
-freshness read before the batch, then one bounded target-feedback consistency
-check before each write.
+target. Default remediation uses the simple fixed-thread resolver, which reads
+only each named target initially and immediately before its write.
 
 ## Stable feedback, readiness, attestation, and batch contract
 
@@ -244,14 +262,12 @@ validation attestation can authorize the expected reviewed-head-to-remediation-
 head transition; the state digest includes the head and base. It contains no
 Required Check, mergeability, worktree, signature, or validation result.
 
-Volatile readiness separately contains the current PR head, registered default
-branch and allowed base repository, base SHA, local and remote heads,
-clean-worktree result, Required Checks, mergeability, GitHub merge-state status,
-strict-base policy, authenticated actor, signature classifications, signed
-validation-receipt trailer, and validation-attestation identity. Required
-Checks are read and evaluated once immediately before the freshness comparison
-and batch. Stable capture, freshness, checks, and target reads use the same
-explicitly selected registry entry; none reloads the default registry.
+Explicitly requested volatile readiness separately contains the current PR
+head, registered default branch and allowed base repository, base SHA, local and
+remote heads, clean-worktree result, Required Checks, mergeability, GitHub
+merge-state status, strict-base policy, authenticated actor, signature
+classifications, signed validation-receipt trailer, and validation-attestation
+identity. It is read at most once only under the explicit CI and readiness path.
 
 A validation receipt is produced by the single complete run and binds its staged
 tree and normalized satisfied evidence for every registered manual gate. After
@@ -268,7 +284,8 @@ attestation. It contains no environment dump, command output, credential, or
 secret. Manual-gate evidence and every user-controlled batch string are rejected
 when they contain the same secret-like patterns prohibited in forensic plans.
 
-A batch input validates against `fast-path-batch.schema.json`. It binds one
+An explicitly requested readiness batch validates against
+`fast-path-batch.schema.json`. It binds one
 repository, PR, expected head, reviewed base branch/SHA, actor, reviewed digests, authorization digest,
 classified findings, and a unique ordered set of eligible `THREAD_RESOLUTION`
 operations. Each finding binds typed stable-feedback source identities/digests,
@@ -441,23 +458,23 @@ other readiness evidence.
 exception evidence replies performed before the blocker; no write is allowed
 after detection.
 
-| Outcome                                   | Exact detection                                                                                                                             | Permitted prior writes                                                     | Required report                                                                         | Fresh invocation?                                                             |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `NO_ACTIONABLE_FINDINGS`                  | Every stable reviewed item is classified and none requires correction or user decision; technical evidence is complete                      | Classification-policy writes only                                          | Stable-state/head anchors, all dispositions, counters, CI as evidence rather than truth | No; only if the user later chooses to process new feedback                    |
-| `READY_FOR_USER_AUTHORIZED_SQUASH_MERGE`  | All technical, local, signature, push, final-state, CI, and thread-disposition proofs succeed; readiness is not based on CI alone           | Policy writes and eligible resolutions                                     | Full readiness evidence and explicit merge checkpoint                                   | No; wait for the user's separate merge decision                               |
-| `NOT_READY_FOR_MERGE`                     | No more specific blocker applies, but complete readiness proof is absent                                                                    | Prior policy writes                                                        | Missing readiness evidence and current anchors                                          | Yes for any renewed processing                                                |
-| `BLOCKED_UNCLEAN_WORKTREE`                | Worktree is not clean at entry or a required cleanliness check                                                                              | None when found at entry; otherwise prior policy writes                    | Exact status paths without changing them                                                | Yes after the user restores/accepts state                                     |
-| `BLOCKED_HEAD_MOVED`                      | Local, remote, or PR head differs from the expected anchor at any check                                                                     | None before feedback capture; otherwise prior policy writes                | Expected and observed OIDs and detection state                                          | Yes                                                                           |
-| `BLOCKED_UNEXPLAINED_COMMIT`              | Exact PR commit set contains a commit not explained by the reviewed session                                                                 | None                                                                       | Commit OIDs and why provenance is unexplained                                           | Yes after user decision                                                       |
-| `BLOCKED_INVALID_SIGNATURE`               | A user commit lacks required local SSH/OpenPGP or GitHub verification, or GitHub-generated commits lack valid GitHub verification metadata. | No correction/push/resolution; prior policy writes possible if found later | Commit source and selected verification evidence                                        | Yes after new signed history is user-authorized; never amend reviewed commits |
-| `BLOCKED_INCOMPLETE_REVIEW_STATE`         | Snapshot/check/rule pagination or evidence is incomplete, digest mismatches, or late feedback appears                                       | Prior policy writes only                                                   | Completeness blocker, digest/head anchors, and late item IDs when applicable            | Yes                                                                           |
-| `BLOCKED_FAILED_OR_PENDING_CI`            | Any required check is failed, pending, missing, skipped contrary to policy, or unknown                                                      | Prior policy writes; no resolution                                         | Exact required-check evidence                                                           | Yes; no polling in this invocation                                            |
-| `BLOCKED_UNRESOLVED_MATERIAL_FINDING`     | A material finding remains valid, ambiguous, conflicting, or lacks safe disposition                                                         | Prior policy writes; no resolution of affected thread                      | Finding IDs, proof gap, and cycle count                                                 | Yes after user direction or new evidence                                      |
-| `BLOCKED_UNSAFE_GITHUB_STATE`             | Actor/target/thread identity, head anchor, repository/PR binding, or current target state differs from plan                                 | No attempted mutation after detection                                      | Expected versus current non-secret identity evidence                                    | Yes                                                                           |
-| `BLOCKED_SCOPE_REQUIRES_OTHER_REPOSITORY` | A required fix belongs in another repository                                                                                                | Prior policy writes only; no sibling edits                                 | Source finding, affected repository, and dependency                                     | Yes in a separately authorized repository scope                               |
-| `BLOCKED_CYCLE_LIMIT_REACHED`             | A material issue remains after two cycles or any third cycle is attempted                                                                   | Writes within the first two cycles only                                    | Remaining findings and all consumed counters                                            | Yes only after a new explicit user decision                                   |
-| `BLOCKED_MUTATION_FAILED`                 | One reaction, reply, or resolution call or its required read fails or returns invalid evidence                                              | Earlier successful policy writes plus the single failed attempt            | Operation ID, redacted failure, returned identity if any, and `retry_performed: false`  | Yes                                                                           |
-| `BLOCKED_UNKNOWN_WRITE_RESULT`            | A mutation response cannot prove whether the requested write applied                                                                        | Earlier successful writes plus the single ambiguous attempt                | Batch/operation/thread identity and all available redacted GitHub evidence              | Yes; inspect manually and never auto-retry                                    |
+| Outcome                                   | Exact detection                                                                                                                             | Permitted prior writes                                                     | Required report                                                                        | Fresh invocation?                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `NO_ACTIONABLE_FINDINGS`                  | Every stable reviewed item is classified and none requires correction or user decision; technical evidence is complete                      | Classification-policy writes only                                          | Stable-state/head anchors, all dispositions, and counters                              | No; only if the user later chooses to process new feedback                    |
+| `READY_FOR_USER_AUTHORIZED_SQUASH_MERGE`  | All technical, local, signature, push, final-state, CI, and thread-disposition proofs succeed; readiness is not based on CI alone           | Policy writes and eligible resolutions                                     | Full readiness evidence and explicit merge checkpoint                                  | No; wait for the user's separate merge decision                               |
+| `NOT_READY_FOR_MERGE`                     | No more specific blocker applies, but complete readiness proof is absent                                                                    | Prior policy writes                                                        | Missing readiness evidence and current anchors                                         | Yes for any renewed processing                                                |
+| `BLOCKED_UNCLEAN_WORKTREE`                | Worktree is not clean at entry or a required cleanliness check                                                                              | None when found at entry; otherwise prior policy writes                    | Exact status paths without changing them                                               | Yes after the user restores/accepts state                                     |
+| `BLOCKED_HEAD_MOVED`                      | Local, remote, or PR head differs from the expected anchor at any check                                                                     | None before feedback capture; otherwise prior policy writes                | Expected and observed OIDs and detection state                                         | Yes                                                                           |
+| `BLOCKED_UNEXPLAINED_COMMIT`              | Exact PR commit set contains a commit not explained by the reviewed session                                                                 | None                                                                       | Commit OIDs and why provenance is unexplained                                          | Yes after user decision                                                       |
+| `BLOCKED_INVALID_SIGNATURE`               | A user commit lacks required local SSH/OpenPGP or GitHub verification, or GitHub-generated commits lack valid GitHub verification metadata. | No correction/push/resolution; prior policy writes possible if found later | Commit source and selected verification evidence                                       | Yes after new signed history is user-authorized; never amend reviewed commits |
+| `BLOCKED_INCOMPLETE_REVIEW_STATE`         | Snapshot/check/rule pagination or evidence is incomplete, digest mismatches, or late feedback appears                                       | Prior policy writes only                                                   | Completeness blocker, digest/head anchors, and late item IDs when applicable           | Yes                                                                           |
+| `OBSERVED_PENDING_OR_FAILED_CI`           | An explicitly requested single readiness read observes a failed, pending, missing, skipped, or unknown required result                      | None                                                                       | Exact current required-check evidence                                                  | No automatic repeat; report and stop                                          |
+| `BLOCKED_UNRESOLVED_MATERIAL_FINDING`     | A material finding remains valid, ambiguous, conflicting, or lacks safe disposition                                                         | Prior policy writes; no resolution of affected thread                      | Finding IDs, proof gap, and cycle count                                                | Yes after user direction or new evidence                                      |
+| `BLOCKED_UNSAFE_GITHUB_STATE`             | Actor/target/thread identity, head anchor, repository/PR binding, or current target state differs from plan                                 | No attempted mutation after detection                                      | Expected versus current non-secret identity evidence                                   | Yes                                                                           |
+| `BLOCKED_SCOPE_REQUIRES_OTHER_REPOSITORY` | A required fix belongs in another repository                                                                                                | Prior policy writes only; no sibling edits                                 | Source finding, affected repository, and dependency                                    | Yes in a separately authorized repository scope                               |
+| `BLOCKED_CYCLE_LIMIT_REACHED`             | A material issue remains after two cycles or any third cycle is attempted                                                                   | Writes within the first two cycles only                                    | Remaining findings and all consumed counters                                           | Yes only after a new explicit user decision                                   |
+| `BLOCKED_MUTATION_FAILED`                 | One reaction, reply, or resolution call or its required read fails or returns invalid evidence                                              | Earlier successful policy writes plus the single failed attempt            | Operation ID, redacted failure, returned identity if any, and `retry_performed: false` | Yes                                                                           |
+| `BLOCKED_UNKNOWN_WRITE_RESULT`            | A mutation response cannot prove whether the requested write applied                                                                        | Earlier successful writes plus the single ambiguous attempt                | Batch/operation/thread identity and all available redacted GitHub evidence             | Yes; inspect manually and never auto-retry                                    |
 
 ## Recovery and merge checkpoint
 
@@ -468,6 +485,7 @@ security blocker, exhausted transient read, or write failure/unknown result.
 The terminal report must distinguish what changed, what remains untrusted, and
 which user decision is required.
 
-At `WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION`, stop. Only the user decides
-whether another review round or a squash merge is requested. The skill and
-helper contain no capability to do those things.
+In the explicitly requested readiness path,
+`WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION` is a stop state. Only the user
+decides whether another review round or a squash merge is requested. The skill
+and helper contain no capability to do those things.
