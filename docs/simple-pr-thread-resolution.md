@@ -32,17 +32,21 @@ allowed.
 
 For each explicitly named review thread:
 
-1. one direct GraphQL read containing its PR membership, PR state, head OID,
-   resolved/outdated state, and canonical comment state;
-2. one equivalent last-moment target read before each write;
+1. one initial complete GraphQL read containing its PR membership, PR state,
+   head OID, resolved/outdated state, and canonical comment state;
+2. two equivalent complete last-moment target projections before each write or
+   successful already-resolved report;
 3. one GraphQL resolution mutation for each explicitly named thread that is
-   still open after that read.
+   still open after those reads.
 
-Already-resolved targets are treated idempotently and require no write. Target
-comments are cursor-paginated as needed. The complete invocation shares the
-canonical repository registry's API-call, review-thread, and comment limits,
-and verifies before the first write that the remaining budgets cover every
-known target recheck and mutation.
+Every apply invocation therefore performs three complete target reads per
+thread before any mutation cost. Already-resolved targets are treated
+idempotently and require no write, but receive the same two stable rechecks.
+Target comments are cursor-paginated as needed. A dry run performs only the
+initial read. The complete invocation shares the canonical repository
+registry's API-call, review-thread, and comment limits, and verifies before the
+first write that the remaining budgets cover every known target recheck and
+mutation.
 
 ## Safety boundary
 

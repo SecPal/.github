@@ -31,6 +31,22 @@ fail() {
   exit 1
 }
 
+assert_polyscope_template_baseline() {
+  local template_path="$1"
+  local accepted_baseline
+  local protected_prefix
+
+  accepted_baseline="$(
+    git -C "$REPO_ROOT" show \
+      "$P21_BASELINE:templates/polyscope-codex-AGENTS.md"
+  )" || fail 'accepted Polyscope template baseline is unavailable'
+  protected_prefix="$(
+    sed '/^## Hosted CI isolation$/,$d' "$template_path"
+  )"
+  test "$protected_prefix" = "$accepted_baseline" \
+    || fail 'existing Polyscope global safety instructions changed'
+}
+
 for required in \
   "$SKILL" \
   "$CONTRACT" \
@@ -88,6 +104,17 @@ grep -Fq 'Resolution of fixed review comments is independent of GitHub-hosted CI
   || fail 'fixed-comment resolution is still coupled to hosted CI'
 grep -Fq 'Push and PR creation never imply CI-observation authorization.' <<<"$template_text" \
   || fail 'push and PR creation authorization boundary is missing'
+assert_polyscope_template_baseline "$POLYSCOPE_TEMPLATE"
+if (
+  mutated_template="$(mktemp)"
+  trap 'rm -f "$mutated_template"' EXIT
+  sed \
+    's/Preserve a branch or worktree already provisioned by Polyscope/Discard the branch or worktree already provisioned by Polyscope/' \
+    "$POLYSCOPE_TEMPLATE" >"$mutated_template"
+  assert_polyscope_template_baseline "$mutated_template"
+) >/dev/null 2>&1; then
+  fail 'Polyscope template baseline negative fixture was not detected'
+fi
 grep -F 'CODEX_AGENTS_SOURCE=' "$POLYSCOPE_INSTALLER" \
   | grep -Fq 'templates' \
   || fail 'Polyscope rollout no longer sources the repository template'
@@ -143,6 +170,8 @@ if jq -e \
 fi
 grep -Fq -- '--reviewed-state REVIEWED_STATE' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation does not bind mutations to reviewed feedback'
+grep -Fq 'three complete target reads' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation undercounts stable target rechecks'
 grep -Fq 'When remediation changes no tracked source file' "$CONTRACT" \
   || fail 'normal remediation lost the no-change resolution path'
 grep -Fq 'skip the commit and push states' "$SKILL" \

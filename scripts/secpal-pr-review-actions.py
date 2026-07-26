@@ -60,8 +60,7 @@ evidence = _load_evidence_helper()
 
 
 def _load_fast_path_helper() -> Any:
-    module_name = "secpal_pr_review.fast_path"
-    loaded = sys.modules.get(module_name)
+    loaded = sys.modules.get("secpal_pr_review.fast_path")
     if loaded is not None:
         loaded_path = getattr(loaded, "__file__", None)
         if (
@@ -71,7 +70,7 @@ def _load_fast_path_helper() -> Any:
             raise RuntimeError("Canonical fast-path module has an unexpected path")
         return loaded
     spec = importlib.util.spec_from_file_location(
-        module_name, FAST_PATH_HELPER
+        "secpal_pr_review.fast_path", FAST_PATH_HELPER
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load fast-path helper: {FAST_PATH_HELPER}")
@@ -652,11 +651,14 @@ def _manual_gates_verified(
             return False
         if item.get("status") != "SATISFIED":
             return False
-        evidence = item.get("evidence")
+        gate_evidence = item.get("evidence")
         if (
-            not isinstance(evidence, list)
-            or not evidence
-            or any(not isinstance(value, str) or not value.strip() for value in evidence)
+            not isinstance(gate_evidence, list)
+            or not gate_evidence
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in gate_evidence
+            )
         ):
             return False
         evidence_by_gate[item["gate"]] = item

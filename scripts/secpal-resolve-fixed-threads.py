@@ -82,8 +82,7 @@ class ResolutionError(RuntimeError):
 
 
 def _load_evidence_helper() -> Any:
-    module_name = "secpal_pr_review_evidence_shared"
-    loaded = sys.modules.get(module_name)
+    loaded = sys.modules.get("secpal_pr_review_evidence_shared")
     if loaded is not None:
         loaded_path = getattr(loaded, "__file__", None)
         if (
@@ -92,7 +91,10 @@ def _load_evidence_helper() -> Any:
         ):
             raise RuntimeError("accepted evidence helper has an unexpected path")
         return loaded
-    spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review_evidence_shared",
+        EVIDENCE_HELPER,
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load accepted evidence helper: {EVIDENCE_HELPER}")
     module = importlib.util.module_from_spec(spec)

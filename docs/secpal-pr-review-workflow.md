@@ -232,10 +232,11 @@ push; never create an artificial empty commit.
 
 The simple resolver verifies the exact PR head and target identity without
 reading checks, rules, reactions, unrelated feedback, mergeability, or branch
-protection. It requires target comments to match the reviewed-state identities
-and digests. Immediately before each mutation or successful already-resolved
-report, it requires two equal complete target projections; every mutation
-response must confirm the exact resolved thread.
+protection. It first reads each target completely and requires its comments to
+match the reviewed-state identities and digests. Immediately before each
+mutation or successful already-resolved report, it requires two more equal
+complete target projections; every mutation response must confirm the exact
+resolved thread.
 
 The schema-bound `resolve-batch --apply` path remains available only when the
 current user instruction explicitly requests readiness or merge evaluation. In

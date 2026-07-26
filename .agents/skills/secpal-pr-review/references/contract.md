@@ -72,13 +72,13 @@ state machine.
 
 This path requires the exact repository, pull request number, expected current
 head OID, reviewed-state file, and thread IDs. It verifies the reviewed-state
-digests and requires every named target's comment identities, body digests,
-reply relationships, and resolution state to match the feedback that was
-actually classified. It then verifies PR membership and records current
-resolved/outdated state. Immediately before each write or successful
-already-resolved report, it performs two equal complete target projections,
-rechecks the open PR and expected head, and verifies the exact target state. It
-then verifies that a mutation response
+digests, reads every named target completely, and requires its comment
+identities, body digests, reply relationships, and resolution state to match the
+feedback that was actually classified. It then verifies PR membership and
+records current resolved/outdated state. Immediately before each write or
+successful already-resolved report, it performs two more equal complete target
+projections, rechecks the open PR and expected head, and verifies the exact
+target state. It then verifies that a mutation response
 identifies the requested resolved thread. A changed head, closed PR, missing
 target, reviewed-state mismatch, unstable projection, or externally changed
 target blocks the next write. Only repositories in the canonical production

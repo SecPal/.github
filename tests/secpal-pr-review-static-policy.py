@@ -289,6 +289,17 @@ PROHIBITED_PROCESS_CALL_ATTRIBUTES = {
     "startfile",
     "system",
 }
+PROHIBITED_REFLECTION_ATTRIBUTES = {
+    "__bases__",
+    "__class__",
+    "__closure__",
+    "__code__",
+    "__dict__",
+    "__getattribute__",
+    "__globals__",
+    "__mro__",
+    "__subclasses__",
+}
 SAFE_RUN_TARGETS = {
     "secpal-pr-review.py": {
         "runner.run",
@@ -393,7 +404,8 @@ DYNAMIC_IMPORT_CALLS = {
         ),
         DynamicImportCall(
             ("_load_fast_path_helper",),
-            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER)",
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review.fast_path', FAST_PATH_HELPER)",
         ),
         DynamicImportCall(
             ("_load_fast_path_helper",),
@@ -407,7 +419,8 @@ DYNAMIC_IMPORT_CALLS = {
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
             ("_load_evidence_helper",),
-            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
         ),
         DynamicImportCall(
             ("_load_evidence_helper",),
@@ -434,6 +447,54 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_load_evidence_helper",),
             "getattr(loaded, '__file__', None)",
+        ),
+    },
+}
+SAFE_SYS_MODULES_CALLS = {
+    "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "sys.modules.get('secpal_pr_review.fast_path')",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "sys.modules.get(spec.name)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+    },
+    "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get('secpal_pr_review_evidence_shared')",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get(spec.name)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+    },
+}
+SAFE_SYS_MODULES_STORES = {
+    "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "sys.modules[spec.name]",
+        ),
+    },
+    "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
         ),
     },
 }
@@ -597,6 +658,7 @@ class PolicyVisitor(ast.NodeVisitor):
             "os",
             "subprocess",
             *DIRECT_MODULE_ATTRIBUTES.get(self.source_name, {}),
+            *LOADED_MODULE_ATTRIBUTES.get(self.source_name, {}),
         }
         if node.id in protected_names and isinstance(node.ctx, ast.Load):
             parent = self.parents.get(node)
@@ -648,9 +710,37 @@ class PolicyVisitor(ast.NodeVisitor):
             if (
                 node.value.id == "sys"
                 and node.attr == "modules"
-                and not isinstance(parent, (ast.Attribute, ast.Subscript))
             ):
-                self.finding(node, "sys.modules may not be aliased")
+                allowed = False
+                if isinstance(parent, ast.Subscript) and parent.value is node:
+                    access = DynamicImportCall(
+                        tuple(self.functions),
+                        ast.unparse(parent),
+                    )
+                    allowed = (
+                        isinstance(parent.ctx, ast.Store)
+                        and access
+                        in SAFE_SYS_MODULES_STORES.get(self.source_name, set())
+                    )
+                elif isinstance(parent, ast.Attribute) and parent.value is node:
+                    grandparent = self.parents.get(parent)
+                    if (
+                        isinstance(grandparent, ast.Call)
+                        and grandparent.func is parent
+                    ):
+                        access = DynamicImportCall(
+                            tuple(self.functions),
+                            ast.unparse(grandparent),
+                        )
+                        allowed = access in SAFE_SYS_MODULES_CALLS.get(
+                            self.source_name,
+                            set(),
+                        )
+                if not allowed:
+                    self.finding(
+                        node,
+                        "sys.modules access is outside the loader allowlist",
+                    )
         elif (
             isinstance(node.value, ast.Name)
             and node.value.id in loaded_modules
@@ -677,6 +767,11 @@ class PolicyVisitor(ast.NodeVisitor):
             self.finding(
                 node,
                 f"prohibited process-capable attribute: {node.attr}",
+            )
+        if node.attr in PROHIBITED_REFLECTION_ATTRIBUTES:
+            self.finding(
+                node,
+                f"prohibited reflection attribute: {node.attr}",
             )
         if node.attr == "exec_module":
             parent = self.parents.get(node)
@@ -1029,6 +1124,38 @@ def self_test() -> None:
         (
             "secpal-pr-review.py",
             "import sys\nlauncher = sys.modules['subprocess'].run\nlauncher(argv)\n",
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            (
+                "import sys\n"
+                "sys.modules['subprocess'].__dict__['run'](argv, shell=True)\n"
+            ),
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            (
+                "import sys\n"
+                "def _load_fast_path_helper():\n"
+                "    module_name = 'subprocess'\n"
+                "    return sys.modules.get(module_name).__dict__['run'](\n"
+                "        argv, shell=True\n"
+                "    )\n"
+            ),
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            (
+                "module_alias = evidence\n"
+                "module_alias.__dict__['subprocess'].run(argv, shell=True)\n"
+            ),
+        ),
+        (
+            "secpal-resolve-fixed-threads.py",
+            (
+                "import sys\n"
+                "sys.modules['os'].__dict__['spawnv'](mode, path, argv)\n"
+            ),
         ),
         (
             "secpal-pr-review-actions.py",
