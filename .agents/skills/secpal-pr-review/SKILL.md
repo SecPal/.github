@@ -22,6 +22,19 @@ request number, expected current head OID, and thread IDs. The command rechecks
 the open PR, expected head, membership, resolved/outdated state, and canonical
 target-comment state immediately before each write.
 
+Invoke the resolver in write mode; omitting `--apply` is only a dry run:
+
+```bash
+python3 scripts/secpal-resolve-fixed-threads.py \
+  --repo OWNER/REPOSITORY \
+  --pr PULL_REQUEST_NUMBER \
+  --expected-head FULL_40_CHARACTER_HEAD_OID \
+  --thread-id REVIEW_THREAD_NODE_ID \
+  --apply
+```
+
+Repeat `--thread-id REVIEW_THREAD_NODE_ID` for each additional fixed thread.
+
 This resolution-only path does not capture or reclassify PR-wide feedback, run
 validation, inspect CI or readiness, create commits, push, or make a merge
 decision. Report the exact resolved and already-resolved targets, then stop.

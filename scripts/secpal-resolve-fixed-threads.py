@@ -313,7 +313,7 @@ def read_target_thread(
     seen_cursors: set[str] = set()
     pagination_complete = False
 
-    while budget.remaining_api_calls > 0:
+    for _page in range(budget.remaining_api_calls):
         variables: dict[str, str | int] = {"threadId": thread_id}
         if after is not None:
             variables["commentsAfter"] = after

@@ -55,14 +55,9 @@ for phrase in \
   grep -Fqi "$phrase" "$CONTRACT" || fail "missing contract phrase: $phrase"
 done
 
-polling_pattern='sleep\(|time\.sleep|while[[:space:]]+true|retrying'
-resolver_polling_pattern="$polling_pattern|while[[:space:]]+True"
 prohibited_authority_pattern='gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue'
 
-if grep -En "$polling_pattern" "$ACTIONS" "$FAST_PATH"; then
-  fail 'mutation helper contains polling behavior'
-fi
-if grep -En "$resolver_polling_pattern" "$SIMPLE_RESOLVER"; then
+if grep -En 'retrying' "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER"; then
   fail 'mutation helper contains polling behavior'
 fi
 
@@ -77,8 +72,14 @@ import pathlib
 import sys
 
 
-def unsafe_calls(source: str, label: str) -> list[str]:
+def unsafe_calls(
+    source: str,
+    label: str,
+    *,
+    prohibit_while: bool = False,
+) -> list[str]:
     tree = ast.parse(source, filename=label)
+    findings: list[str] = []
     shell_executable_names = {
         "sh",
         "bash",
@@ -93,23 +94,52 @@ def unsafe_calls(source: str, label: str) -> list[str]:
         "pwsh",
         "pwsh.exe",
     }
-    subprocess_call_names = {
-        "run",
+    subprocess_process_names = {
         "Popen",
         "call",
         "check_call",
         "check_output",
+        "getoutput",
+        "getstatusoutput",
+        "run",
     }
-    subprocess_shell_names = {"getoutput", "getstatusoutput"}
-    os_shell_names = {"system", "popen"}
-    asyncio_shell_names = {"create_subprocess_shell"}
+    allowed_subprocess_call_names = {"run"}
+    safe_subprocess_attribute_names = {
+        "CompletedProcess",
+        "DEVNULL",
+        "TimeoutExpired",
+    }
+    safe_os_attribute_names = {
+        "X_OK",
+        "access",
+        "close",
+        "devnull",
+        "fchmod",
+        "fdopen",
+        "fsync",
+        "getuid",
+        "pathsep",
+        "replace",
+        "unlink",
+    }
+    asyncio_process_names = {
+        "create_subprocess_exec",
+        "create_subprocess_shell",
+    }
+    pty_process_names = {"fork", "spawn"}
     subprocess_modules: set[str] = set()
     subprocess_functions: set[str] = set()
-    subprocess_shell_functions: set[str] = set()
+    prohibited_subprocess_functions: set[str] = set()
     os_modules: set[str] = set()
-    os_shell_functions: set[str] = set()
+    os_process_functions: set[str] = set()
     asyncio_modules: set[str] = set()
-    asyncio_shell_functions: set[str] = set()
+    asyncio_process_functions: set[str] = set()
+    pty_modules: set[str] = set()
+    pty_process_functions: set[str] = set()
+    time_modules: set[str] = set()
+    sleep_functions: set[str] = set()
+    importlib_modules: set[str] = set()
+    dynamic_import_functions: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -119,121 +149,282 @@ def unsafe_calls(source: str, label: str) -> list[str]:
                     os_modules.add(alias.asname or alias.name)
                 elif alias.name == "asyncio":
                     asyncio_modules.add(alias.asname or alias.name)
+                elif alias.name == "pty":
+                    pty_modules.add(alias.asname or alias.name)
+                elif alias.name == "time":
+                    time_modules.add(alias.asname or alias.name)
+                elif alias.name == "importlib":
+                    importlib_modules.add(alias.asname or alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module == "subprocess":
                 for alias in node.names:
-                    if alias.name in subprocess_call_names:
+                    if alias.name == "*":
+                        findings.append(
+                            f"{label}:{node.lineno}: wildcard process imports are prohibited"
+                        )
+                    elif alias.name in allowed_subprocess_call_names:
                         subprocess_functions.add(alias.asname or alias.name)
-                    elif alias.name in subprocess_shell_names:
-                        subprocess_shell_functions.add(alias.asname or alias.name)
+                    elif alias.name not in safe_subprocess_attribute_names:
+                        prohibited_subprocess_functions.add(
+                            alias.asname or alias.name
+                        )
             elif node.module == "os":
                 for alias in node.names:
-                    if alias.name in os_shell_names:
-                        os_shell_functions.add(alias.asname or alias.name)
+                    if alias.name == "*":
+                        findings.append(
+                            f"{label}:{node.lineno}: wildcard process imports are prohibited"
+                        )
+                    elif alias.name not in safe_os_attribute_names:
+                        os_process_functions.add(alias.asname or alias.name)
             elif node.module == "asyncio":
                 for alias in node.names:
-                    if alias.name in asyncio_shell_names:
-                        asyncio_shell_functions.add(alias.asname or alias.name)
+                    if alias.name == "*":
+                        findings.append(
+                            f"{label}:{node.lineno}: wildcard process imports are prohibited"
+                        )
+                    elif alias.name in asyncio_process_names:
+                        asyncio_process_functions.add(alias.asname or alias.name)
+                    elif alias.name == "sleep":
+                        sleep_functions.add(alias.asname or alias.name)
+            elif node.module == "pty":
+                for alias in node.names:
+                    if alias.name == "*":
+                        findings.append(
+                            f"{label}:{node.lineno}: wildcard process imports are prohibited"
+                        )
+                    elif alias.name in pty_process_names:
+                        pty_process_functions.add(alias.asname or alias.name)
+            elif node.module == "time":
+                for alias in node.names:
+                    if alias.name == "sleep":
+                        sleep_functions.add(alias.asname or alias.name)
+            elif node.module == "importlib":
+                for alias in node.names:
+                    if alias.name == "import_module":
+                        dynamic_import_functions.add(alias.asname or alias.name)
 
-    assignment_values: list[ast.AST] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            assignment_values.append(node.value)
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            assignment_values.append(node.value)
-        elif isinstance(node, ast.NamedExpr):
-            assignment_values.append(node.value)
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    restricted_modules = (
+        subprocess_modules
+        | os_modules
+        | asyncio_modules
+        | pty_modules
+        | time_modules
+        | importlib_modules
+    )
+    restricted_direct_functions = (
+        subprocess_functions
+        | prohibited_subprocess_functions
+        | os_process_functions
+        | asyncio_process_functions
+        | pty_process_functions
+        | sleep_functions
+        | dynamic_import_functions
+    )
 
-    def aliases_name(value: ast.AST, names: set[str]) -> bool:
-        return isinstance(value, ast.Name) and value.id in names
-
-    def aliases_attribute(
-        value: ast.AST,
-        modules: set[str],
-        attributes: set[str],
-    ) -> bool:
+    def restricted_attribute(node: ast.Attribute) -> bool:
+        if not isinstance(node.value, ast.Name):
+            return False
+        module = node.value.id
         return (
-            isinstance(value, ast.Attribute)
-            and isinstance(value.value, ast.Name)
-            and value.value.id in modules
-            and value.attr in attributes
+            (module in restricted_modules and node.attr == "__dict__")
+            or (
+                module in subprocess_modules
+                and node.attr not in safe_subprocess_attribute_names
+            )
+            or (
+                module in os_modules
+                and node.attr not in safe_os_attribute_names
+            )
+            or (
+                module in asyncio_modules
+                and node.attr in asyncio_process_names | {"sleep"}
+            )
+            or (module in pty_modules and node.attr in pty_process_names)
+            or (module in time_modules and node.attr == "sleep")
+            or (
+                module in importlib_modules
+                and node.attr == "import_module"
+            )
         )
 
-    findings: list[str] = []
-    for value in assignment_values:
-        if (
-            aliases_name(
-                value,
-                subprocess_modules
-                | subprocess_functions
-                | subprocess_shell_functions
-                | os_modules
-                | os_shell_functions
-                | asyncio_modules
-                | asyncio_shell_functions,
-            )
-            or aliases_attribute(
-                value,
-                subprocess_modules,
-                subprocess_call_names | subprocess_shell_names,
-            )
-            or aliases_attribute(value, os_modules, os_shell_names)
-            or aliases_attribute(value, asyncio_modules, asyncio_shell_names)
-        ):
+    for node in ast.walk(tree):
+        parent = parents.get(node)
+        if isinstance(node, ast.Name) and node.id in restricted_modules:
+            if isinstance(parent, ast.Attribute) and parent.value is node:
+                continue
             findings.append(
-                f"{label}:{value.lineno}: process-call assignment aliases are prohibited"
+                f"{label}:{node.lineno}: process modules may not be passed or aliased"
             )
+        elif (
+            isinstance(node, ast.Name)
+            and node.id in restricted_direct_functions
+        ):
+            if isinstance(parent, ast.Call) and parent.func is node:
+                continue
+            findings.append(
+                f"{label}:{node.lineno}: process APIs may not be passed or aliased"
+            )
+        elif isinstance(node, ast.Attribute) and restricted_attribute(node):
+            if isinstance(parent, ast.Call) and parent.func is node:
+                continue
+            findings.append(
+                f"{label}:{node.lineno}: process APIs may not be passed or aliased"
+            )
+
+    if prohibit_while:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.AsyncFor, ast.While)):
+                findings.append(
+                    f"{label}:{node.lineno}: unbounded loops are prohibited in the simple resolver"
+                )
+            elif (
+                isinstance(node, ast.For)
+                and isinstance(node.iter, ast.Call)
+                and isinstance(node.iter.func, ast.Name)
+                and node.iter.func.id == "range"
+            ):
+                parent_function = parents.get(node)
+                while parent_function is not None and not isinstance(
+                    parent_function,
+                    (ast.FunctionDef, ast.AsyncFunctionDef),
+                ):
+                    parent_function = parents.get(parent_function)
+                allowed_page_bound = (
+                    isinstance(parent_function, ast.FunctionDef)
+                    and parent_function.name == "read_target_thread"
+                    and len(node.iter.args) == 1
+                    and isinstance(node.iter.args[0], ast.Attribute)
+                    and isinstance(node.iter.args[0].value, ast.Name)
+                    and node.iter.args[0].value.id == "budget"
+                    and node.iter.args[0].attr == "remaining_api_calls"
+                )
+                if not allowed_page_bound:
+                    findings.append(
+                        f"{label}:{node.lineno}: range loops are prohibited outside bounded pagination"
+                    )
+            elif (
+                isinstance(node, ast.For)
+                and isinstance(node.iter, ast.Call)
+                and isinstance(node.iter.func, ast.Name)
+                and node.iter.func.id == "iter"
+                and len(node.iter.args) == 2
+            ):
+                findings.append(
+                    f"{label}:{node.lineno}: sentinel loops are prohibited in the simple resolver"
+                )
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec"}:
+        if isinstance(node.func, ast.Name) and node.func.id in {
+            "__import__",
+            "eval",
+            "exec",
+        } | dynamic_import_functions:
             findings.append(
                 f"{label}:{node.lineno}: dynamic code execution is prohibited"
             )
             continue
-        os_shell_call = (
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in importlib_modules
+            and node.func.attr == "import_module"
+        ):
+            findings.append(
+                f"{label}:{node.lineno}: dynamic code execution is prohibited"
+            )
+            continue
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id
+            in subprocess_modules | os_modules | asyncio_modules | pty_modules
+        ):
+            findings.append(
+                f"{label}:{node.lineno}: dynamic process API lookup is prohibited"
+            )
+            continue
+        wait_call = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and (
+                (
+                    node.func.value.id in time_modules
+                    and node.func.attr == "sleep"
+                )
+                or (
+                    node.func.value.id in asyncio_modules
+                    and node.func.attr == "sleep"
+                )
+            )
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in sleep_functions
+        )
+        if wait_call:
+            findings.append(
+                f"{label}:{node.lineno}: waiting in a mutation helper is prohibited"
+            )
+            continue
+        os_process_call = (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in os_modules
-            and node.func.attr in os_shell_names
+            and node.func.attr not in safe_os_attribute_names
         ) or (
             isinstance(node.func, ast.Name)
-            and node.func.id in os_shell_functions
+            and node.func.id in os_process_functions
         )
-        asyncio_shell_call = (
+        asyncio_process_call = (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in asyncio_modules
-            and node.func.attr in asyncio_shell_names
+            and node.func.attr in asyncio_process_names
         ) or (
             isinstance(node.func, ast.Name)
-            and node.func.id in asyncio_shell_functions
+            and node.func.id in asyncio_process_functions
         )
-        if os_shell_call or asyncio_shell_call:
+        pty_process_call = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in pty_modules
+            and node.func.attr in pty_process_names
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in pty_process_functions
+        )
+        if os_process_call or asyncio_process_call or pty_process_call:
             findings.append(
-                f"{label}:{node.lineno}: shell process creation is prohibited"
+                f"{label}:{node.lineno}: alternate process creation is prohibited"
             )
             continue
-        subprocess_shell_call = (
+        prohibited_subprocess_call = (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in subprocess_modules
-            and node.func.attr in subprocess_shell_names
+            and node.func.attr not in allowed_subprocess_call_names
         ) or (
             isinstance(node.func, ast.Name)
-            and node.func.id in subprocess_shell_functions
+            and node.func.id in prohibited_subprocess_functions
         )
-        if subprocess_shell_call:
+        if prohibited_subprocess_call:
             findings.append(
-                f"{label}:{node.lineno}: implicit shell execution is prohibited"
+                f"{label}:{node.lineno}: only subprocess.run is permitted"
             )
             continue
         subprocess_call = (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in subprocess_modules
-            and node.func.attr in subprocess_call_names
+            and node.func.attr in allowed_subprocess_call_names
         ) or (
             isinstance(node.func, ast.Name)
             and node.func.id in subprocess_functions
@@ -356,6 +547,21 @@ negative_fixtures = {
         "execute = launch\n"
         "execute(command, shell=True)\n"
     ),
+    "container-process-call-alias": (
+        "import subprocess\n"
+        "callbacks = (subprocess.run,)\n"
+        "callbacks[0](command, shell=True)\n"
+    ),
+    "returned-process-call-alias": (
+        "import subprocess\n"
+        "def launcher():\n"
+        "    return subprocess.run\n"
+    ),
+    "partial-process-call-alias": (
+        "import functools\n"
+        "import subprocess\n"
+        "launch = functools.partial(subprocess.run, shell=True)\n"
+    ),
     "assigned-os-shell-call": (
         "import os\n"
         "launch = os.system\n"
@@ -375,18 +581,74 @@ negative_fixtures = {
     "eval": "eval(source)\n",
     "exec": "exec(source)\n",
     "os-system": "import os\nos.system(command)\n",
+    "os-spawnv-shell": (
+        "import os\n"
+        "os.spawnv(os.P_WAIT, '/bin/bash', ['bash', '-c', command])\n"
+    ),
+    "os-execv": "import os\nos.execv('/bin/bash', ['bash', '-c', command])\n",
+    "os-posix-spawn": (
+        "from os import posix_spawn\n"
+        "posix_spawn('/bin/bash', ['bash', '-c', command], {})\n"
+    ),
+    "private-os-process-call": (
+        "import os\n"
+        "os._execvpe('/bin/bash', ['bash', '-c', command])\n"
+    ),
+    "private-os-process-import": (
+        "from os import _execvpe as launch\n"
+        "launch('/bin/bash', ['bash', '-c', command])\n"
+    ),
     "asyncio-shell": (
         "import asyncio\n"
         "asyncio.create_subprocess_shell(command)\n"
     ),
+    "asyncio-exec": (
+        "import asyncio\n"
+        "asyncio.create_subprocess_exec('/bin/bash', '-c', command)\n"
+    ),
+    "pty-spawn": "import pty\npty.spawn(['/bin/bash', '-c', command])\n",
     "subprocess-call": (
         "import subprocess\n"
         "subprocess.call(command, shell=True)\n"
+    ),
+    "subprocess-popen-without-shell": (
+        "import subprocess\n"
+        "subprocess.Popen(command, shell=False)\n"
+    ),
+    "subprocess-check-output-without-shell": (
+        "from subprocess import check_output\n"
+        "check_output(command)\n"
+    ),
+    "private-subprocess-call": (
+        "import subprocess\n"
+        "subprocess._fork_exec(command)\n"
+    ),
+    "private-subprocess-call-alias": (
+        "from subprocess import _fork_exec as launch\n"
+        "launch(command)\n"
     ),
     "subprocess-getoutput": (
         "import subprocess\n"
         "subprocess.getoutput(command)\n"
     ),
+    "wildcard-process-import": (
+        "from subprocess import *\n"
+        "run(command, shell=True)\n"
+    ),
+    "dynamic-process-lookup": (
+        "import os\n"
+        "getattr(os, 'system')(command)\n"
+    ),
+    "module-dictionary-process-lookup": (
+        "import os\n"
+        "os.__dict__['system'](command)\n"
+    ),
+    "dynamic-process-import": "__import__('os').system(command)\n",
+    "importlib-process-import": (
+        "import importlib\n"
+        "importlib.import_module('os').system(command)\n"
+    ),
+    "blocking-wait": "import time\ntime.sleep(1)\n",
     "explicit-shell-dispatch": (
         "import subprocess\n"
         "subprocess.run(['/bin/bash', '-c', command])\n"
@@ -417,10 +679,31 @@ for fixture_name, fixture_source in negative_fixtures.items():
     if not unsafe_calls(fixture_source, fixture_name):
         raise SystemExit(f"policy negative fixture was not detected: {fixture_name}")
 
+polling_negative_fixtures = {
+    "async-polling-loop": (
+        "async def poll(stream):\n"
+        "    async for item in stream:\n"
+        "        refresh()\n"
+    ),
+    "conditional-polling-loop": "while pending:\n    refresh()\n",
+    "sentinel-polling-loop": (
+        "for state in iter(refresh, 'complete'):\n"
+        "    consume(state)\n"
+    ),
+    "unbounded-polling-loop": "while True:\n    refresh()\n",
+    "range-polling-loop": "for attempt in range(3):\n    refresh()\n",
+}
+for fixture_name, fixture_source in polling_negative_fixtures.items():
+    if not unsafe_calls(
+        fixture_source,
+        fixture_name,
+        prohibit_while=True,
+    ):
+        raise SystemExit(f"policy negative fixture was not detected: {fixture_name}")
+
 safe_fixture = (
     "import subprocess\n"
     "subprocess.run(command)\n"
-    "subprocess.Popen(command, shell=False)\n"
     "from subprocess import run as execute\n"
     "execute(command, shell=False)\n"
     "subprocess.run(command, executable=None)\n"
@@ -429,16 +712,33 @@ safe_fixture = (
 if unsafe_calls(safe_fixture, "safe-fixture"):
     raise SystemExit("policy safe fixture was rejected")
 
+bounded_pagination_fixture = (
+    "def read_target_thread(budget):\n"
+    "    for page in range(budget.remaining_api_calls):\n"
+    "        fetch(page)\n"
+)
+if unsafe_calls(
+    bounded_pagination_fixture,
+    "bounded-pagination-fixture",
+    prohibit_while=True,
+):
+    raise SystemExit("bounded pagination policy fixture was rejected")
+
 violations: list[str] = []
+simple_resolver = pathlib.Path(sys.argv[-1]).resolve()
 for source_path in sys.argv[1:]:
     path = pathlib.Path(source_path)
-    violations.extend(unsafe_calls(path.read_text(encoding="utf-8"), str(path)))
+    violations.extend(
+        unsafe_calls(
+            path.read_text(encoding="utf-8"),
+            str(path),
+            prohibit_while=path.resolve() == simple_resolver,
+        )
+    )
 if violations:
     raise SystemExit("\n".join(violations))
 PY
 
-grep -Eq "$resolver_polling_pattern" <<< 'while True:' \
-  || fail 'polling policy negative fixture was not detected'
 grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \
   || fail 'authority policy negative fixture was not detected'
 
@@ -453,6 +753,8 @@ simple_skill_section="$(sed -n '/^## Simple fixed-thread resolution$/,/^## /p' "
 test -n "$simple_skill_section" || fail 'skill simple-resolution route is missing'
 grep -Fq 'scripts/secpal-resolve-fixed-threads.py' <<<"$simple_skill_section" \
   || fail 'skill does not route fixed-and-pushed requests through the simple resolver'
+grep -Fq -- '--apply' <<<"$simple_skill_section" \
+  || fail 'skill fixed-thread resolution route does not require apply mode'
 if grep -Fq 'resolve-batch' <<<"$simple_skill_section"; then
   fail 'skill simple-resolution route still invokes the readiness batch'
 fi
