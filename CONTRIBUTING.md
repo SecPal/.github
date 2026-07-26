@@ -95,37 +95,18 @@ This script runs automatically before every `git push` via the pre-push hook.
 - PHP linting and tests (if applicable)
 - Node.js linting and tests (if applicable)
 - OpenAPI validation (if applicable)
-- PR size (< 600 lines recommended, excluding lock files and license files)
+- PR size reporting (600 changed lines recommended, excluding lock files and license files)
 
 If you want a manual local workflow lint pass, prefer `pre-commit run actionlint --all-files` — this avoids the environment-specific hangs that can occur with a direct `actionlint` invocation. If you must run `actionlint` directly, wrap it with a timeout (e.g. `timeout 30 actionlint`). The local preflight script intentionally does not invoke `actionlint` directly.
 
 **Excluded from PR size calculation:**
 
-The following files are automatically excluded from the 600-line limit because they are auto-generated or boilerplate:
+The following files are automatically excluded from the changed-line report because they are auto-generated or boilerplate:
 
 - `package-lock.json`, `composer.lock`, `yarn.lock`, `pnpm-lock.yaml` (dependency lock files)
 - `LICENSES/*.txt` (license boilerplate files)
 
 These exclusions are configured in `.preflight-exclude` and match the GitHub CI workflow. You can add project-specific patterns by editing this file.
-
-**Bypassing the PR size check locally:**
-
-If you need to work on a large PR that is justified (see exceptions below), you can temporarily bypass the 600-line limit:
-
-```bash
-# Create override file to allow large PR
-touch .preflight-allow-large-pr
-
-# Work on your changes
-git add .
-git commit -m "Your changes"
-git push
-
-# Clean up after merge
-rm .preflight-allow-large-pr
-```
-
-⚠️ **Important:** The override file is automatically ignored by git and should only be used for exceptional cases that match the criteria below.
 
 ## How to Contribute
 
@@ -173,25 +154,18 @@ All pull requests will be reviewed by a maintainer and by GitHub Copilot.
 
 **If tempted to add "just one more thing":** Stop, create a separate branch and PR.
 
-### PR Size Limit
+### PR Size Recommendation
 
-Keep PRs **≤ 600 changed lines** for maintainability. If larger, split into sequential PRs:
+600 changed lines is a reviewability recommendation, not a correctness boundary
+or hard maximum. Local preflight and hosted CI report insertions, deletions, and
+the total after exclusions. They emit an advisory warning above the configured
+threshold but do not fail solely because of the line count.
 
-1. Infrastructure/types/interfaces
-2. Core implementation
-3. Tests and documentation
-
-**Exceptions:**
-
-Large PRs (> 600 lines) are acceptable for:
-
-- **Dependency updates** (e.g., `package-lock.json`, `Cargo.lock`)
-- **Generated code** (e.g., OpenAPI clients, database migrations)
-- **Boilerplate/templates** that cannot be reasonably split
-
-**On GitHub:** Add the `large-pr-approved` label to bypass the size check. See [Organization Label Standards](https://github.com/SecPal/.github/blob/main/docs/labels.md) for details.
-
-**Locally:** Create a `.preflight-allow-large-pr` file in the repository root to bypass the preflight check (see "Bypassing the PR size check locally" above).
+Split work when it contains independently reviewable topics. Keep a coherent
+implementation together with its tests and documentation when separating them
+would make review or validation less reliable. Regardless of size, the strict
+one-PR-one-topic rule, reviewability expectations, validation, and testing
+requirements remain in force.
 
 ## Branch Naming Convention
 
@@ -388,7 +362,7 @@ gpg --armor --export <YOUR_KEY_ID>
 
 ## Pull Request Guidelines
 
-- **Keep PRs small:** Aim for < 600 lines of changes. Large PRs are harder to review.
+- **Keep PRs reviewable:** Aim for about 600 changed lines or fewer where a coherent change can be split without separating its implementation, tests, or documentation.
 - **Write clear descriptions:** Use the PR template and fill out all relevant sections.
 - **Link related issues:** Reference issues with `Closes #123` or `Fixes #456`.
 - **Ensure CI passes:** All checks must pass before merging.

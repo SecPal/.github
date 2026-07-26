@@ -64,11 +64,10 @@ Labels that describe the **current state** of an issue or PR.
 
 Labels used by automated tools and workflows.
 
-| Label               | Color   | Description                                                    | Usage      |
-| ------------------- | ------- | -------------------------------------------------------------- | ---------- |
-| `dependabot`        | #0366d6 | Pull requests created by Dependabot                            | PRs (auto) |
-| `github-actions`    | #0366d6 | Pull requests that update GitHub Actions workflows             | PRs (auto) |
-| `large-pr-approved` | #FFA500 | Approved large PR (boilerplate/templates that cannot be split) | PRs        |
+| Label            | Color   | Description                                        | Usage      |
+| ---------------- | ------- | -------------------------------------------------- | ---------- |
+| `dependabot`     | #0366d6 | Pull requests created by Dependabot                | PRs (auto) |
+| `github-actions` | #0366d6 | Pull requests that update GitHub Actions workflows | PRs (auto) |
 
 ## Label Usage Guidelines
 
@@ -99,7 +98,6 @@ Labels: bug, security, priority: high
 **Optional:**
 
 - `breaking-change` if backward incompatible
-- `large-pr-approved` if > 600 lines and legitimate (see [CONTRIBUTING.md](../CONTRIBUTING.md#pr-size-limit))
 - `dependencies` (usually auto-added by Dependabot)
 - `github-actions` for GitHub Actions dependency updates
 
@@ -151,7 +149,6 @@ We follow a consistent color scheme:
 - **Blue (#0075ca, #0366d6)**: Documentation/Dependencies
 - **Green (#008672)**: Help/Community
 - **Purple (#7057ff, #d876e3)**: Newcomers/Questions
-- **Orange (#FFA500)**: Special approvals
 - **Gray (#ededed, #cfd3d7)**: Neutral/Infrastructure
 - **Yellow (#e4e669)**: Invalid/Warning
 - **White (#ffffff)**: Won't fix
@@ -183,7 +180,6 @@ Common label combinations:
 - `breaking-change` + `documentation`
 - `enhancement` (new endpoints)
 - `bug` (spec errors)
-- `large-pr-approved` (template updates)
 
 ## FAQ
 
@@ -211,6 +207,10 @@ Choose the **primary** type. If a PR is both `enhancement` and `documentation`, 
 
 ## Change Log
 
+### 2026-07-26
+
+- Removed the obsolete PR-size override label from the managed baseline
+
 ### 2026-03-22
 
 - Added `github-actions` to the automation label baseline
@@ -219,7 +219,6 @@ Choose the **primary** type. If a PR is both `enhancement` and `documentation`, 
 
 - Initial label standards documentation
 - Defined the standard label baseline across 4 categories
-- Created `large-pr-approved` for legitimate large PRs
 - Added label sync script
 
 ---
