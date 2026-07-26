@@ -802,6 +802,21 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(run.call_args.kwargs["env"], trusted_environment)
         self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
+    def test_graphql_explicitly_pins_github_host(self) -> None:
+        fake = FakeGh([{"data": {}}])
+        budget = MODULE.InvocationBudget(
+            maximum_api_calls=1,
+            maximum_threads=1,
+            maximum_comments=1,
+        )
+
+        self.assertEqual(MODULE._graphql("query {}", {}, fake, budget), {})
+
+        self.assertEqual(
+            fake.calls[0][:4],
+            ["api", "--hostname", "github.com", "graphql"],
+        )
+
     def test_run_gh_translates_process_launch_failure(self) -> None:
         with (
             mock.patch.object(

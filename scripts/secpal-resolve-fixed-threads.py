@@ -257,7 +257,14 @@ def _graphql(
     runner: Callable[[Sequence[str]], dict[str, Any]],
     budget: InvocationBudget,
 ) -> dict[str, Any]:
-    arguments: list[str] = ["api", "graphql", "-f", f"query={query}"]
+    arguments: list[str] = [
+        "api",
+        "--hostname",
+        "github.com",
+        "graphql",
+        "-f",
+        f"query={query}",
+    ]
     for key, value in variables.items():
         flag = "-F" if isinstance(value, int) else "-f"
         arguments.extend([flag, f"{key}={value}"])
