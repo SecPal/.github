@@ -58,7 +58,6 @@ done
 polling_pattern='sleep\(|time\.sleep|while[[:space:]]+true|retrying'
 resolver_polling_pattern="$polling_pattern|while[[:space:]]+True"
 prohibited_authority_pattern='gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue'
-shell_execution_pattern='subprocess\.(run|Popen).*shell[[:space:]]*=[[:space:]]*True|(^|[^[:alnum:]_])eval\('
 
 if grep -En "$polling_pattern" "$ACTIONS" "$FAST_PATH"; then
   fail 'mutation helper contains polling behavior'
@@ -71,16 +70,215 @@ if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RES
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
-if grep -En "$shell_execution_pattern" "$ACTIONS" "$SIMPLE_RESOLVER"; then
-  fail 'mutation helper permits shell execution'
-fi
+# Parse Python calls structurally because shell-related keywords may span lines.
+python3 - "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" <<'PY'
+import ast
+import pathlib
+import sys
+
+
+def unsafe_calls(source: str, label: str) -> list[str]:
+    tree = ast.parse(source, filename=label)
+    subprocess_modules: set[str] = set()
+    subprocess_functions: set[str] = set()
+    subprocess_shell_functions: set[str] = set()
+    os_modules: set[str] = set()
+    os_shell_functions: set[str] = set()
+    asyncio_modules: set[str] = set()
+    asyncio_shell_functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess":
+                    subprocess_modules.add(alias.asname or alias.name)
+                elif alias.name == "os":
+                    os_modules.add(alias.asname or alias.name)
+                elif alias.name == "asyncio":
+                    asyncio_modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "subprocess":
+                for alias in node.names:
+                    if alias.name in {
+                        "run",
+                        "Popen",
+                        "call",
+                        "check_call",
+                        "check_output",
+                    }:
+                        subprocess_functions.add(alias.asname or alias.name)
+                    elif alias.name in {"getoutput", "getstatusoutput"}:
+                        subprocess_shell_functions.add(alias.asname or alias.name)
+            elif node.module == "os":
+                for alias in node.names:
+                    if alias.name in {"system", "popen"}:
+                        os_shell_functions.add(alias.asname or alias.name)
+            elif node.module == "asyncio":
+                for alias in node.names:
+                    if alias.name == "create_subprocess_shell":
+                        asyncio_shell_functions.add(alias.asname or alias.name)
+
+    findings: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec"}:
+            findings.append(
+                f"{label}:{node.lineno}: dynamic code execution is prohibited"
+            )
+            continue
+        os_shell_call = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in os_modules
+            and node.func.attr in {"system", "popen"}
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in os_shell_functions
+        )
+        asyncio_shell_call = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in asyncio_modules
+            and node.func.attr == "create_subprocess_shell"
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in asyncio_shell_functions
+        )
+        if os_shell_call or asyncio_shell_call:
+            findings.append(
+                f"{label}:{node.lineno}: shell process creation is prohibited"
+            )
+            continue
+        subprocess_shell_call = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in subprocess_modules
+            and node.func.attr in {"getoutput", "getstatusoutput"}
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in subprocess_shell_functions
+        )
+        if subprocess_shell_call:
+            findings.append(
+                f"{label}:{node.lineno}: implicit shell execution is prohibited"
+            )
+            continue
+        subprocess_call = (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in subprocess_modules
+            and node.func.attr
+            in {"run", "Popen", "call", "check_call", "check_output"}
+        ) or (
+            isinstance(node.func, ast.Name)
+            and node.func.id in subprocess_functions
+        )
+        if not subprocess_call:
+            continue
+        if node.args:
+            command = node.args[0]
+            executable: str | None = None
+            if isinstance(command, ast.Constant) and isinstance(command.value, str):
+                executable = command.value
+            elif (
+                isinstance(command, (ast.List, ast.Tuple))
+                and command.elts
+                and isinstance(command.elts[0], ast.Constant)
+                and isinstance(command.elts[0].value, str)
+            ):
+                executable = command.elts[0].value
+            if executable is not None:
+                command_name = executable.replace("\\", "/").rsplit("/", 1)[-1].lower()
+                if command_name in {
+                    "sh",
+                    "bash",
+                    "dash",
+                    "fish",
+                    "ksh",
+                    "zsh",
+                    "cmd",
+                    "cmd.exe",
+                    "powershell",
+                    "powershell.exe",
+                    "pwsh",
+                    "pwsh.exe",
+                }:
+                    findings.append(
+                        f"{label}:{node.lineno}: explicit shell dispatch is prohibited"
+                    )
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                findings.append(
+                    f"{label}:{node.lineno}: subprocess kwargs cannot prove shell=False"
+                )
+            elif keyword.arg == "shell" and not (
+                isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+            ):
+                findings.append(
+                    f"{label}:{node.lineno}: subprocess shell execution is prohibited"
+                )
+    return findings
+
+
+negative_fixtures = {
+    "single-line": "import subprocess\nsubprocess.run(command, shell=True)\n",
+    "multiline": (
+        "import subprocess\nsubprocess.run(\n"
+        "    command,\n"
+        "    shell=True,\n"
+        ")\n"
+    ),
+    "module-alias": "import subprocess as sp\nsp.Popen(command, shell=True)\n",
+    "direct-import": (
+        "from subprocess import run as execute\n"
+        "execute(command, shell=True)\n"
+    ),
+    "dynamic-kwargs": "import subprocess\nsubprocess.run(command, **options)\n",
+    "eval": "eval(source)\n",
+    "exec": "exec(source)\n",
+    "os-system": "import os\nos.system(command)\n",
+    "asyncio-shell": (
+        "import asyncio\n"
+        "asyncio.create_subprocess_shell(command)\n"
+    ),
+    "subprocess-call": (
+        "import subprocess\n"
+        "subprocess.call(command, shell=True)\n"
+    ),
+    "subprocess-getoutput": (
+        "import subprocess\n"
+        "subprocess.getoutput(command)\n"
+    ),
+    "explicit-shell-dispatch": (
+        "import subprocess\n"
+        "subprocess.run(['/bin/bash', '-c', command])\n"
+    ),
+}
+for fixture_name, fixture_source in negative_fixtures.items():
+    if not unsafe_calls(fixture_source, fixture_name):
+        raise SystemExit(f"policy negative fixture was not detected: {fixture_name}")
+
+safe_fixture = (
+    "import subprocess\n"
+    "subprocess.run(command)\n"
+    "subprocess.Popen(command, shell=False)\n"
+)
+if unsafe_calls(safe_fixture, "safe-fixture"):
+    raise SystemExit("policy safe fixture was rejected")
+
+violations: list[str] = []
+for source_path in sys.argv[1:]:
+    path = pathlib.Path(source_path)
+    violations.extend(unsafe_calls(path.read_text(encoding="utf-8"), str(path)))
+if violations:
+    raise SystemExit("\n".join(violations))
+PY
 
 grep -Eq "$resolver_polling_pattern" <<< 'while True:' \
   || fail 'polling policy negative fixture was not detected'
 grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \
   || fail 'authority policy negative fixture was not detected'
-grep -Eq "$shell_execution_pattern" <<< 'subprocess.run(command, shell=True)' \
-  || fail 'shell policy negative fixture was not detected'
 
 grep -Fq 'secpal-pr-review.py' "$SKILL" || fail 'skill does not route reads through P2.1 helper'
 grep -Fq 'secpal-pr-review-actions.py' "$SKILL" || fail 'skill does not route bounded writes through action helper'

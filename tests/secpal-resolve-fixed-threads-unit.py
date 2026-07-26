@@ -8,6 +8,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -137,6 +138,32 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
         self.assertEqual(fake.calls, [])
+
+    def test_repository_registry_must_match_authoritative_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = Path(directory) / "repositories.json"
+            registry.write_text(
+                json.dumps(
+                    {
+                        "repositories": [
+                            {
+                                "repository": "SecPal/api",
+                                "maximum_api_calls": 200,
+                                "maximum_threads": 500,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(MODULE, "REGISTRY_PATH", registry),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "registry is invalid",
+                ),
+            ):
+                MODULE.load_repository_limits("SecPal/api")
 
     def test_dry_run_reads_once_and_does_not_mutate(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -477,6 +504,115 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(run.call_args.args[0], ["/usr/bin/gh", "api", "graphql"])
         self.assertEqual(run.call_args.kwargs["env"], trusted_environment)
         self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_run_gh_translates_process_launch_failure(self) -> None:
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value={"PATH": "/usr/bin:/bin"},
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                side_effect=OSError("executable disappeared"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "process launch failed",
+            ):
+                MODULE._run_gh(["api", "graphql"])
+
+    def test_run_gh_redacts_failure_diagnostic(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="token=supersecret",
+        )
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value={"PATH": "/usr/bin:/bin"},
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                return_value=completed,
+            ),
+        ):
+            with self.assertRaises(MODULE.ResolutionError) as raised:
+                MODULE._run_gh(["api", "graphql"])
+
+        self.assertIn("[REDACTED]", str(raised.exception))
+        self.assertNotIn("supersecret", str(raised.exception))
+
+    def test_process_launch_failure_after_resolution_preserves_report(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        third = "PRRT_exampleThree"
+
+        def completed(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+
+        process_results: list[object] = [
+            completed(
+                read_response(
+                    threads=[(first, False), (second, False), (third, False)]
+                )
+            ),
+            completed(read_response(threads=[(first, False)])),
+            completed(resolve_response(first)),
+            OSError("executable disappeared"),
+        ]
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value={"PATH": "/usr/bin:/bin"},
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                side_effect=process_results,
+            ),
+        ):
+            result = MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [first, second, third],
+                apply=True,
+            )
+
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(result["failed"][0]["thread_id"], second)
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["failed"][0]["write_result"], "not_attempted")
+        self.assertEqual(result["unattempted"], [third])
+        self.assertEqual(result["status"], "failed")
 
 
 if __name__ == "__main__":

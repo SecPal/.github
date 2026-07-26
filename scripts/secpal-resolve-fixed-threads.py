@@ -28,6 +28,10 @@ REGISTRY_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
+REGISTRY_SCHEMA_PATH = (
+    REPOSITORY_ROOT
+    / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
+)
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
@@ -127,6 +131,14 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
         registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ResolutionError("repository registry is unavailable or malformed") from exc
+    try:
+        evidence.validate_against_authoritative_schema(
+            registry,
+            REGISTRY_SCHEMA_PATH,
+            "workflow repository registry",
+        )
+    except evidence.ContractError as exc:
+        raise ResolutionError("repository registry is invalid") from exc
     repositories = registry.get("repositories") if isinstance(registry, dict) else None
     if not isinstance(repositories, list):
         raise ResolutionError("repository registry is malformed")
@@ -171,11 +183,13 @@ def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
         )
     except evidence.CommandPolicyError as exc:
         raise ResolutionError("trusted GitHub CLI is unavailable") from exc
+    except OSError as exc:
+        raise ResolutionError("gh process launch failed") from exc
     except subprocess.TimeoutExpired as exc:
         raise ResolutionError("gh command timed out") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "gh failed").strip()
-        raise ResolutionError(detail)
+        raise ResolutionError(evidence.redact_diagnostic(detail))
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
