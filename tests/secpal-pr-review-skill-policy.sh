@@ -93,6 +93,16 @@ def unsafe_calls(source: str, label: str) -> list[str]:
         "pwsh",
         "pwsh.exe",
     }
+    subprocess_call_names = {
+        "run",
+        "Popen",
+        "call",
+        "check_call",
+        "check_output",
+    }
+    subprocess_shell_names = {"getoutput", "getstatusoutput"}
+    os_shell_names = {"system", "popen"}
+    asyncio_shell_names = {"create_subprocess_shell"}
     subprocess_modules: set[str] = set()
     subprocess_functions: set[str] = set()
     subprocess_shell_functions: set[str] = set()
@@ -112,26 +122,68 @@ def unsafe_calls(source: str, label: str) -> list[str]:
         elif isinstance(node, ast.ImportFrom):
             if node.module == "subprocess":
                 for alias in node.names:
-                    if alias.name in {
-                        "run",
-                        "Popen",
-                        "call",
-                        "check_call",
-                        "check_output",
-                    }:
+                    if alias.name in subprocess_call_names:
                         subprocess_functions.add(alias.asname or alias.name)
-                    elif alias.name in {"getoutput", "getstatusoutput"}:
+                    elif alias.name in subprocess_shell_names:
                         subprocess_shell_functions.add(alias.asname or alias.name)
             elif node.module == "os":
                 for alias in node.names:
-                    if alias.name in {"system", "popen"}:
+                    if alias.name in os_shell_names:
                         os_shell_functions.add(alias.asname or alias.name)
             elif node.module == "asyncio":
                 for alias in node.names:
-                    if alias.name == "create_subprocess_shell":
+                    if alias.name in asyncio_shell_names:
                         asyncio_shell_functions.add(alias.asname or alias.name)
 
+    assignment_values: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            assignment_values.append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            assignment_values.append(node.value)
+        elif isinstance(node, ast.NamedExpr):
+            assignment_values.append(node.value)
+
+    def aliases_name(value: ast.AST, names: set[str]) -> bool:
+        return isinstance(value, ast.Name) and value.id in names
+
+    def aliases_attribute(
+        value: ast.AST,
+        modules: set[str],
+        attributes: set[str],
+    ) -> bool:
+        return (
+            isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id in modules
+            and value.attr in attributes
+        )
+
     findings: list[str] = []
+    for value in assignment_values:
+        if (
+            aliases_name(
+                value,
+                subprocess_modules
+                | subprocess_functions
+                | subprocess_shell_functions
+                | os_modules
+                | os_shell_functions
+                | asyncio_modules
+                | asyncio_shell_functions,
+            )
+            or aliases_attribute(
+                value,
+                subprocess_modules,
+                subprocess_call_names | subprocess_shell_names,
+            )
+            or aliases_attribute(value, os_modules, os_shell_names)
+            or aliases_attribute(value, asyncio_modules, asyncio_shell_names)
+        ):
+            findings.append(
+                f"{label}:{value.lineno}: process-call assignment aliases are prohibited"
+            )
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -144,7 +196,7 @@ def unsafe_calls(source: str, label: str) -> list[str]:
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in os_modules
-            and node.func.attr in {"system", "popen"}
+            and node.func.attr in os_shell_names
         ) or (
             isinstance(node.func, ast.Name)
             and node.func.id in os_shell_functions
@@ -153,7 +205,7 @@ def unsafe_calls(source: str, label: str) -> list[str]:
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in asyncio_modules
-            and node.func.attr == "create_subprocess_shell"
+            and node.func.attr in asyncio_shell_names
         ) or (
             isinstance(node.func, ast.Name)
             and node.func.id in asyncio_shell_functions
@@ -167,7 +219,7 @@ def unsafe_calls(source: str, label: str) -> list[str]:
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in subprocess_modules
-            and node.func.attr in {"getoutput", "getstatusoutput"}
+            and node.func.attr in subprocess_shell_names
         ) or (
             isinstance(node.func, ast.Name)
             and node.func.id in subprocess_shell_functions
@@ -181,8 +233,7 @@ def unsafe_calls(source: str, label: str) -> list[str]:
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in subprocess_modules
-            and node.func.attr
-            in {"run", "Popen", "call", "check_call", "check_output"}
+            and node.func.attr in subprocess_call_names
         ) or (
             isinstance(node.func, ast.Name)
             and node.func.id in subprocess_functions
@@ -284,6 +335,42 @@ negative_fixtures = {
         "from subprocess import run as execute\n"
         "execute(command, shell=True)\n"
     ),
+    "assigned-subprocess-call": (
+        "import subprocess\n"
+        "launch = subprocess.run\n"
+        "launch(command, shell=True)\n"
+    ),
+    "assigned-subprocess-module": (
+        "import subprocess\n"
+        "processes = subprocess\n"
+        "processes.run(command, shell=True)\n"
+    ),
+    "assigned-subprocess-attribute": (
+        "import subprocess\n"
+        "holder.launch = subprocess.run\n"
+        "holder.launch(command, shell=True)\n"
+    ),
+    "chained-subprocess-call-alias": (
+        "import subprocess\n"
+        "launch = subprocess.run\n"
+        "execute = launch\n"
+        "execute(command, shell=True)\n"
+    ),
+    "assigned-os-shell-call": (
+        "import os\n"
+        "launch = os.system\n"
+        "launch(command)\n"
+    ),
+    "assigned-asyncio-shell-call": (
+        "import asyncio\n"
+        "launch = asyncio.create_subprocess_shell\n"
+        "launch(command)\n"
+    ),
+    "assigned-implicit-shell-call": (
+        "import subprocess\n"
+        "launch = subprocess.getoutput\n"
+        "launch(command)\n"
+    ),
     "dynamic-kwargs": "import subprocess\nsubprocess.run(command, **options)\n",
     "eval": "eval(source)\n",
     "exec": "exec(source)\n",
@@ -334,6 +421,8 @@ safe_fixture = (
     "import subprocess\n"
     "subprocess.run(command)\n"
     "subprocess.Popen(command, shell=False)\n"
+    "from subprocess import run as execute\n"
+    "execute(command, shell=False)\n"
     "subprocess.run(command, executable=None)\n"
     "subprocess.run(command, executable='/usr/bin/git')\n"
 )
