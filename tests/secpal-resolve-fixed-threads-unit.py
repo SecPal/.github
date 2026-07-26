@@ -264,6 +264,60 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 1)
 
+    def test_preflight_uses_observed_sparse_page_counts_before_first_write(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        fake = FakeGh(
+            [
+                target_response(
+                    first,
+                    comments=[("PRRC_first", "first", None)],
+                    has_next_page=True,
+                    end_cursor="initial-first-page",
+                ),
+                target_response(first),
+                target_response(second),
+                target_response(
+                    first,
+                    comments=[("PRRC_first", "first", None)],
+                    has_next_page=True,
+                    end_cursor="recheck-first-page",
+                ),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+            ]
+        )
+        limits = mock.Mock(
+            maximum_api_calls=7,
+            maximum_threads=20,
+            maximum_comments=20,
+        )
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_repository_limits",
+                return_value=limits,
+            ),
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "API call limit cannot cover",
+            ),
+        ):
+            MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [first, second],
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(len(fake.calls), 3)
+
     def test_target_comment_pagination_is_stable_across_recheck(self) -> None:
         thread_id = "PRRT_exampleOne"
         first_page = [

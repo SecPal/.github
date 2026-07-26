@@ -128,6 +128,7 @@ class TargetRead:
     pull_request_number: int
     state: str
     head_sha: str
+    api_pages: int
     thread: ThreadState
 
 
@@ -312,12 +313,14 @@ def read_target_thread(
     is_outdated: bool | None = None
     seen_cursors: set[str] = set()
     pagination_complete = False
+    api_pages = 0
 
     for _page in range(budget.remaining_api_calls):
         variables: dict[str, str | int] = {"threadId": thread_id}
         if after is not None:
             variables["commentsAfter"] = after
         data = _graphql(TARGET_QUERY, variables, runner, budget)
+        api_pages += 1
         node = data.get("node")
         if not isinstance(node, dict) or node.get("__typename") != (
             "PullRequestReviewThread"
@@ -443,6 +446,7 @@ def read_target_thread(
         pull_request_number=observed_number,
         state=state,
         head_sha=head_sha,
+        api_pages=api_pages,
         thread=ThreadState(
             thread_id=thread_id,
             is_resolved=is_resolved,
@@ -515,7 +519,7 @@ def resolve_threads(
         limits.maximum_threads,
         limits.maximum_comments,
     )
-    initial_targets: dict[str, ThreadState] = {}
+    initial_targets: dict[str, TargetRead] = {}
     for thread_id in thread_ids:
         target = read_target_thread(
             repository,
@@ -525,27 +529,28 @@ def resolve_threads(
             runner,
         )
         require_expected_target(target, repository, number, expected_head)
-        initial_targets[thread_id] = target.thread
+        initial_targets[thread_id] = target
 
     already_resolved = sorted(
         thread_id
         for thread_id in thread_ids
-        if initial_targets[thread_id].is_resolved
+        if initial_targets[thread_id].thread.is_resolved
     )
     pending = [
         thread_id
         for thread_id in thread_ids
-        if not initial_targets[thread_id].is_resolved
+        if not initial_targets[thread_id].thread.is_resolved
     ]
     applied: list[str] = []
 
     if apply:
         minimum_recheck_pages = sum(
-            max(1, (len(initial_targets[thread_id].comments) + 99) // 100)
+            initial_targets[thread_id].api_pages
             for thread_id in pending
         )
         minimum_recheck_comments = sum(
-            len(initial_targets[thread_id].comments) for thread_id in pending
+            len(initial_targets[thread_id].thread.comments)
+            for thread_id in pending
         )
         if budget.remaining_api_calls < minimum_recheck_pages + len(pending):
             raise ResolutionError(
@@ -575,7 +580,7 @@ def resolve_threads(
                     number,
                     expected_head,
                 )
-                if current.thread != initial_targets[thread_id]:
+                if current.thread != initial_targets[thread_id].thread:
                     raise ResolutionError(
                         f"target thread changed before resolution: {thread_id}"
                     )
