@@ -1,0 +1,1507 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from typing import Any, Sequence
+from unittest import TestCase, main, mock
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts/secpal-resolve-fixed-threads.py"
+SPEC = importlib.util.spec_from_file_location("secpal_resolve_fixed_threads", SCRIPT)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"Cannot load {SCRIPT}")
+MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+
+class FakeGh:
+    def __init__(self, responses: list[dict[str, Any]]) -> None:
+        self.responses = list(responses)
+        self.calls: list[list[str]] = []
+
+    def __call__(self, arguments: Sequence[str]) -> dict[str, Any]:
+        self.calls.append(list(arguments))
+        if not self.responses:
+            raise AssertionError("unexpected gh call")
+        return self.responses.pop(0)
+
+
+def resolve_response(thread_id: str) -> dict[str, Any]:
+    return {
+        "data": {
+            "resolveReviewThread": {
+                "thread": {"id": thread_id, "isResolved": True}
+            }
+        }
+    }
+
+
+def target_response(
+    thread_id: str,
+    *,
+    head: str = "a" * 40,
+    repository: str = "SecPal/api",
+    number: int = 123,
+    state: str = "OPEN",
+    resolved: bool = False,
+    outdated: bool = False,
+    comments: list[tuple[str, str, str | None]] | None = None,
+    has_next_page: bool = False,
+    end_cursor: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "data": {
+            "node": {
+                "__typename": "PullRequestReviewThread",
+                "id": thread_id,
+                "isResolved": resolved,
+                "isOutdated": outdated,
+                "pullRequest": {
+                    "number": number,
+                    "state": state,
+                    "headRefOid": head,
+                    "repository": {"nameWithOwner": repository},
+                },
+                "comments": {
+                    "nodes": [
+                        {
+                            "id": comment_id,
+                            "body": body,
+                            "replyTo": (
+                                {"id": reply_to_id}
+                                if reply_to_id is not None
+                                else None
+                            ),
+                        }
+                        for comment_id, body, reply_to_id in (comments or [])
+                    ],
+                    "pageInfo": {
+                        "hasNextPage": has_next_page,
+                        "endCursor": end_cursor,
+                    },
+                },
+            }
+        }
+    }
+
+
+def expected_thread_state(
+    thread_id: str,
+    comments: list[tuple[str, str, str | None]] | None = None,
+    *,
+    resolved: bool = False,
+) -> Any:
+    states = [
+        MODULE.ThreadCommentState(
+            comment_id=comment_id,
+            body_digest=MODULE._body_digest(body),
+            reply_to_id=reply_to_id,
+        )
+        for comment_id, body, reply_to_id in (comments or [])
+    ]
+    return MODULE.ExpectedThreadState(
+        thread_id=thread_id,
+        is_resolved=resolved,
+        comments=tuple(sorted(states, key=lambda item: item.comment_id)),
+    )
+
+
+def resolve_threads(
+    repository: str,
+    number: int,
+    expected_head: str,
+    thread_ids: list[str],
+    *,
+    apply: bool,
+    runner: Any = MODULE._run_gh,
+    reviewed_comments: dict[str, list[tuple[str, str, str | None]]] | None = None,
+    expected_targets: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    immutable_thread_ids = tuple(thread_ids)
+    if expected_targets is None:
+        comments_by_thread = reviewed_comments or {}
+        expected_targets = {
+            thread_id: expected_thread_state(
+                thread_id,
+                comments_by_thread.get(thread_id),
+            )
+            for thread_id in immutable_thread_ids
+        }
+    return MODULE.resolve_threads(
+        repository,
+        number,
+        expected_head,
+        immutable_thread_ids,
+        apply=apply,
+        expected_targets=expected_targets,
+        runner=runner,
+    )
+
+
+def reviewed_state_payload(
+    thread_id: str,
+    comments: list[tuple[str, str, str | None]],
+    *,
+    resolved: bool = False,
+    outdated: bool = False,
+) -> dict[str, Any]:
+    feedback = {
+        "pull_request_reactions": [],
+        "reviews": [],
+        "conversation_comments": [],
+        "threads": [
+            {
+                "node_id": thread_id,
+                "is_resolved": resolved,
+                "is_outdated": outdated,
+                "comments": [
+                    {
+                        "node_id": comment_id,
+                        "body_digest": MODULE._body_digest(body),
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "USER_reviewer",
+                            "database_id": 7,
+                        },
+                        "reply_to_id": reply_to_id,
+                        "reactions": [],
+                    }
+                    for comment_id, body, reply_to_id in comments
+                ],
+            }
+        ],
+    }
+    identity = {
+        "repository": "SecPal/api",
+        "pull_request_number": 123,
+        "head_sha": "a" * 40,
+        "base_ref": "main",
+        "base_sha": "b" * 40,
+        "pr_state": "OPEN",
+    }
+    return {
+        "schema_version": "1.0",
+        **identity,
+        **feedback,
+        "feedback_digest": MODULE._digest_json(feedback),
+        "state_digest": MODULE._digest_json({**identity, "feedback": feedback}),
+    }
+
+
+class ResolveFixedThreadsTests(TestCase):
+    def test_preflight_rejects_insufficient_thread_budget_before_first_write(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        fake = FakeGh([target_response(first), target_response(second)])
+        limits = mock.Mock(
+            maximum_api_calls=20,
+            maximum_threads=3,
+            maximum_comments=20,
+        )
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_repository_limits",
+                return_value=limits,
+            ),
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "thread limit cannot cover",
+            ),
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [first, second],
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_changed_target_comments_block_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        initial = [("PRRC_root", "original", None)]
+        changed_comment_sets = [
+            [("PRRC_root", "edited", None)],
+            [
+                ("PRRC_root", "original", None),
+                ("PRRC_reply", "new reply", "PRRC_root"),
+            ],
+            [("PRRC_root", "original", "PRRC_other")],
+            [],
+        ]
+
+        for changed in changed_comment_sets:
+            with self.subTest(changed=changed):
+                fake = FakeGh(
+                    [
+                        target_response(thread_id, comments=initial),
+                        target_response(thread_id, comments=changed),
+                        target_response(thread_id, comments=changed),
+                    ]
+                )
+
+                result = resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    [thread_id],
+                    apply=True,
+                    runner=fake,
+                    reviewed_comments={thread_id: initial},
+                )
+
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["resolved"], [])
+                self.assertEqual(result["failed"][0]["phase"], "recheck")
+                self.assertIn(
+                    "target thread changed",
+                    result["failed"][0]["error"],
+                )
+                self.assertEqual(len(fake.calls), 3)
+
+    def test_changed_outdated_state_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(thread_id, outdated=False),
+                target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertIn("target thread changed", result["failed"][0]["error"])
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_preflight_rejects_insufficient_comment_budget_before_first_write(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        comments = [
+            ("PRRC_root", "root", None),
+            ("PRRC_reply", "reply", "PRRC_root"),
+        ]
+        fake = FakeGh([target_response(thread_id, comments=comments)])
+        limits = mock.Mock(
+            maximum_api_calls=20,
+            maximum_threads=20,
+            maximum_comments=3,
+        )
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_repository_limits",
+                return_value=limits,
+            ),
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "comment limit cannot cover",
+            ),
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+                reviewed_comments={thread_id: comments},
+            )
+
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_preflight_rejects_insufficient_api_budget_before_first_write(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id)])
+        limits = mock.Mock(
+            maximum_api_calls=2,
+            maximum_threads=20,
+            maximum_comments=20,
+        )
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_repository_limits",
+                return_value=limits,
+            ),
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "API call limit cannot cover",
+            ),
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_preflight_uses_observed_sparse_page_counts_before_first_write(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        fake = FakeGh(
+            [
+                target_response(
+                    first,
+                    comments=[("PRRC_first", "first", None)],
+                    has_next_page=True,
+                    end_cursor="initial-first-page",
+                ),
+                target_response(first),
+                target_response(second),
+                target_response(
+                    first,
+                    comments=[("PRRC_first", "first", None)],
+                    has_next_page=True,
+                    end_cursor="recheck-first-page",
+                ),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+            ]
+        )
+        limits = mock.Mock(
+            maximum_api_calls=7,
+            maximum_threads=20,
+            maximum_comments=20,
+        )
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_repository_limits",
+                return_value=limits,
+            ),
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "API call limit cannot cover",
+            ),
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [first, second],
+                apply=True,
+                runner=fake,
+                reviewed_comments={
+                    first: [("PRRC_first", "first", None)],
+                },
+            )
+
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_target_comment_pagination_is_stable_across_recheck(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        first_page = [
+            (f"PRRC_comment{index}", f"body {index}", None)
+            for index in range(100)
+        ]
+        second_page = [("PRRC_comment100", "body 100", "PRRC_comment0")]
+        fake = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    comments=first_page,
+                    has_next_page=True,
+                    end_cursor="initial-1",
+                ),
+                target_response(thread_id, comments=second_page),
+                target_response(
+                    thread_id,
+                    comments=first_page,
+                    has_next_page=True,
+                    end_cursor="recheck-1",
+                ),
+                target_response(thread_id, comments=second_page),
+                target_response(
+                    thread_id,
+                    comments=first_page,
+                    has_next_page=True,
+                    end_cursor="recheck-2",
+                ),
+                target_response(thread_id, comments=second_page),
+                resolve_response(thread_id),
+            ]
+        )
+        limits = mock.Mock(
+            maximum_api_calls=20,
+            maximum_threads=10,
+            maximum_comments=400,
+        )
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=limits,
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+                reviewed_comments={thread_id: [*first_page, *second_page]},
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(len(fake.calls), 7)
+        self.assertIn("commentsAfter=initial-1", fake.calls[1])
+        self.assertIn("commentsAfter=recheck-1", fake.calls[3])
+        self.assertIn("commentsAfter=recheck-2", fake.calls[5])
+
+    def test_second_recheck_projection_detects_earlier_page_edit(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        first_page = [
+            (f"PRRC_comment{index}", f"body {index}", None)
+            for index in range(100)
+        ]
+        second_page = [("PRRC_comment100", "body 100", "PRRC_comment0")]
+        edited_first_page = [
+            (
+                comment_id,
+                "edited during pagination" if index == 0 else body,
+                reply_to_id,
+            )
+            for index, (comment_id, body, reply_to_id) in enumerate(first_page)
+        ]
+        fake = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    comments=first_page,
+                    has_next_page=True,
+                    end_cursor="initial",
+                ),
+                target_response(thread_id, comments=second_page),
+                target_response(
+                    thread_id,
+                    comments=first_page,
+                    has_next_page=True,
+                    end_cursor="recheck-first-pass",
+                ),
+                target_response(thread_id, comments=second_page),
+                target_response(
+                    thread_id,
+                    comments=edited_first_page,
+                    has_next_page=True,
+                    end_cursor="recheck-second-pass",
+                ),
+                target_response(thread_id, comments=second_page),
+            ]
+        )
+        limits = mock.Mock(
+            maximum_api_calls=20,
+            maximum_threads=20,
+            maximum_comments=500,
+        )
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=limits,
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+                reviewed_comments={thread_id: [*first_page, *second_page]},
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertIn("changed while rechecking", result["failed"][0]["error"])
+        self.assertEqual(len(fake.calls), 6)
+
+    def test_reviewed_comment_state_mismatch_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = [("PRRC_root", "reviewed body", None)]
+        changed = [("PRRC_root", "new unseen body", None)]
+        fake = FakeGh([target_response(thread_id, comments=changed)])
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "differs from reviewed feedback",
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                expected_targets={
+                    thread_id: expected_thread_state(thread_id, reviewed),
+                },
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_callable_rejects_duplicate_thread_ids_before_reading(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "must be unique"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id, thread_id],
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+
+    def test_request_requires_immutable_thread_id_tuple(self) -> None:
+        with self.assertRaisesRegex(MODULE.ResolutionError, "immutable tuple"):
+            MODULE.validate_request(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                ["PRRT_exampleOne"],
+                False,
+            )
+
+    def test_callable_rejects_malformed_request_before_reading(self) -> None:
+        fake = FakeGh([])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "positive"):
+            resolve_threads(
+                "SecPal/api",
+                0,
+                "not-an-oid",
+                ["not-a-thread"],
+                apply=False,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+
+    def test_callable_rejects_non_boolean_apply_before_reading(self) -> None:
+        fake = FakeGh([])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "apply must be boolean"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                ["PRRT_exampleOne"],
+                apply="yes",
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+
+    def test_unregistered_repository_is_rejected_before_reading(self) -> None:
+        fake = FakeGh([])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "unsupported repository"):
+            resolve_threads(
+                "Example/unregistered",
+                123,
+                "a" * 40,
+                ["PRRT_exampleOne"],
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+
+    def test_repository_registry_must_match_authoritative_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = Path(directory) / "repositories.json"
+            registry.write_text(
+                json.dumps(
+                    {
+                        "repositories": [
+                            {
+                                "repository": "SecPal/api",
+                                "maximum_api_calls": 200,
+                                "maximum_threads": 500,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(MODULE, "REGISTRY_PATH", registry),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "registry is invalid",
+                ),
+            ):
+                MODULE.load_repository_limits("SecPal/api")
+
+    def test_dry_run_reads_once_and_does_not_mutate(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id)])
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=False,
+            runner=fake,
+        )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(len(fake.calls), 1)
+        query_argument = next(
+            argument
+            for argument in fake.calls[0]
+            if argument.startswith("query=")
+        )
+        for expected_fragment in (
+            "pullRequest",
+            "isOutdated",
+            "comments(first: 100",
+            "body",
+            "replyTo",
+        ):
+            self.assertIn(expected_fragment, query_argument)
+
+    def test_apply_resolves_each_open_target_once(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+                target_response(second),
+                resolve_response(second),
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [first, second],
+            apply=True,
+            runner=fake,
+        )
+
+        self.assertEqual(result["resolved"], [first, second])
+        self.assertEqual(len(fake.calls), 8)
+
+    def test_already_resolved_target_is_idempotent(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(thread_id, resolved=True),
+                target_response(thread_id, resolved=True),
+                target_response(thread_id, resolved=True),
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+            expected_targets={
+                thread_id: expected_thread_state(thread_id, resolved=True),
+            },
+        )
+
+        self.assertEqual(result["already_resolved"], [thread_id])
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_initially_resolved_target_is_rechecked_before_success(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(thread_id, resolved=True),
+                target_response(thread_id, resolved=False),
+                target_response(thread_id, resolved=False),
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+            expected_targets={
+                thread_id: expected_thread_state(thread_id, resolved=True),
+            },
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["already_resolved"], [])
+        self.assertEqual(result["failed"][0]["thread_id"], thread_id)
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_cli_requires_reviewed_state(self) -> None:
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(
+                [
+                    "--repo",
+                    "SecPal/api",
+                    "--pr",
+                    "123",
+                    "--expected-head",
+                    "a" * 40,
+                    "--thread-id",
+                    "PRRT_exampleOne",
+                ]
+            )
+
+    def test_callable_requires_reviewed_target_state_before_reading(self) -> None:
+        fake = FakeGh([])
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "reviewed target state must cover",
+        ):
+            MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                ("PRRT_exampleOne",),
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+
+    def test_reviewed_state_loader_binds_target_comment_digests(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        comments = [("PRRC_root", "reviewed body", None)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(
+                json.dumps(reviewed_state_payload(thread_id, comments)),
+                encoding="utf-8",
+            )
+
+            targets = MODULE.load_expected_targets(
+                path,
+                "SecPal/api",
+                123,
+                [thread_id],
+            )
+
+        self.assertEqual(targets[thread_id], expected_thread_state(thread_id, comments))
+
+    def test_reviewed_state_loader_binds_resolution_state(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(
+            thread_id,
+            [("PRRC_root", "reviewed body", None)],
+            resolved=True,
+            outdated=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            targets = MODULE.load_expected_targets(
+                path,
+                "SecPal/api",
+                123,
+                [thread_id],
+            )
+
+        self.assertEqual(
+            targets[thread_id],
+            expected_thread_state(
+                thread_id,
+                [("PRRC_root", "reviewed body", None)],
+                resolved=True,
+            ),
+        )
+
+    def test_reopened_thread_after_reviewed_capture_blocks_before_mutation(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, resolved=False)])
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "differs from reviewed feedback",
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+                expected_targets={
+                    thread_id: expected_thread_state(thread_id, resolved=True),
+                },
+            )
+
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_outdated_change_after_reviewed_capture_remains_allowed(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, outdated=True)])
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=False,
+            runner=fake,
+        )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_nonfinite_reviewed_state_is_reported_without_traceback(self) -> None:
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with (
+                self.subTest(constant=constant),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "reviewed.json"
+                path.write_text(
+                    f'{{"pull_request_number": {constant}}}',
+                    encoding="utf-8",
+                )
+                stderr = StringIO()
+
+                with (
+                    mock.patch("sys.stderr", stderr),
+                    mock.patch.object(MODULE, "resolve_threads") as resolver,
+                ):
+                    exit_code = MODULE.main(
+                        [
+                            "--repo",
+                            "SecPal/api",
+                            "--pr",
+                            "123",
+                            "--expected-head",
+                            "a" * 40,
+                            "--reviewed-state",
+                            str(path),
+                            "--thread-id",
+                            "PRRT_exampleOne",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(
+                    "ERROR: reviewed feedback state is unavailable or malformed",
+                    stderr.getvalue(),
+                )
+                self.assertNotIn("Traceback", stderr.getvalue())
+                resolver.assert_not_called()
+
+    def test_reviewed_state_loader_rejects_tampered_feedback(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(
+            thread_id,
+            [("PRRC_root", "reviewed body", None)],
+        )
+        payload["threads"][0]["comments"][0]["body_digest"] = "0" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "digest is invalid",
+            ):
+                MODULE.load_expected_targets(
+                    path,
+                    "SecPal/api",
+                    123,
+                    [thread_id],
+                )
+
+    def test_head_mismatch_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, head="b" * 40)])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "head changed"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_head_change_after_initial_read_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(thread_id, head="a" * 40),
+                target_response(thread_id, head="b" * 40),
+                target_response(thread_id, head="b" * 40),
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["failed"][0]["thread_id"], thread_id)
+        self.assertIn("head changed", result["failed"][0]["error"])
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_missing_target_blocks_before_mutation(self) -> None:
+        fake = FakeGh([{"data": {"node": None}}])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "does not belong"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                ["PRRT_missingThread"],
+                apply=True,
+                runner=fake,
+            )
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_target_from_another_pull_request_is_rejected(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, number=124)])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "does not belong"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
+
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_closed_pull_request_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, state="CLOSED")])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "not open"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_reads_only_requested_target_nodes(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        fake = FakeGh([target_response(first), target_response(second)])
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [first, second],
+            apply=False,
+            runner=fake,
+        )
+
+        self.assertEqual(result["pending"], [first, second])
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIn(f"threadId={first}", fake.calls[0])
+        self.assertIn(f"threadId={second}", fake.calls[1])
+
+    def test_comment_budget_is_shared_across_target_reads(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    comments=[
+                        ("PRRC_one", "one", None),
+                        ("PRRC_two", "two", None),
+                        ("PRRC_three", "three", None),
+                    ],
+                )
+            ]
+        )
+        limits = mock.Mock(
+            maximum_api_calls=20,
+            maximum_threads=20,
+            maximum_comments=2,
+        )
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_repository_limits",
+                return_value=limits,
+            ),
+            self.assertRaisesRegex(MODULE.ResolutionError, "comment limit"),
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=False,
+                runner=fake,
+                reviewed_comments={
+                    thread_id: [
+                        ("PRRC_one", "one", None),
+                        ("PRRC_two", "two", None),
+                        ("PRRC_three", "three", None),
+                    ],
+                },
+            )
+
+    def test_repeated_comment_identity_across_pages_fails_closed(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    comments=[("PRRC_repeated", "first", None)],
+                    has_next_page=True,
+                    end_cursor="cursor-1",
+                ),
+                target_response(
+                    thread_id,
+                    comments=[("PRRC_repeated", "second", None)],
+                ),
+            ]
+        )
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "repeated comment"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=False,
+                runner=fake,
+            )
+
+    def test_repeated_comment_cursor_fails_closed(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    comments=[("PRRC_one", "one", None)],
+                    has_next_page=True,
+                    end_cursor="cursor-1",
+                ),
+                target_response(
+                    thread_id,
+                    comments=[("PRRC_two", "two", None)],
+                    has_next_page=True,
+                    end_cursor="cursor-1",
+                ),
+            ]
+        )
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "did not advance"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=False,
+                runner=fake,
+            )
+
+    def test_missing_page_info_fails_closed_even_when_target_is_found(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        response = target_response(thread_id)
+        del response["data"]["node"]["comments"]["pageInfo"]
+        fake = FakeGh([response])
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "pagination is missing"):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=False,
+                runner=fake,
+            )
+
+    def test_partial_failure_reports_applied_failed_and_unattempted(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        third = "PRRT_exampleThree"
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(third),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+                target_response(second),
+                {"errors": [{"message": "mutation failed"}]},
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [first, second, third],
+            apply=True,
+            runner=fake,
+        )
+
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(
+            result["failed"],
+            [
+                {
+                    "thread_id": second,
+                    "phase": "mutation",
+                    "write_result": "unknown",
+                    "error": "GitHub GraphQL request failed",
+                }
+            ],
+        )
+        self.assertEqual(result["unattempted"], [third])
+        self.assertEqual(result["status"], "failed")
+
+    def test_main_emits_partial_report_and_returns_nonzero(self) -> None:
+        report = {
+            "repository": "SecPal/api",
+            "pull_request_number": 123,
+            "head_sha": "a" * 40,
+            "mode": "apply",
+            "status": "failed",
+            "already_resolved": [],
+            "pending": [],
+            "resolved": ["PRRT_exampleOne"],
+            "failed": [
+                {
+                    "thread_id": "PRRT_exampleTwo",
+                    "error": "GitHub GraphQL request failed",
+                }
+            ],
+            "unattempted": [],
+        }
+        output = StringIO()
+        with (
+            mock.patch.object(
+                MODULE,
+                "load_expected_targets",
+                return_value={
+                    "PRRT_exampleOne": expected_thread_state("PRRT_exampleOne"),
+                },
+            ),
+            mock.patch.object(MODULE, "resolve_threads", return_value=report),
+            redirect_stdout(output),
+        ):
+            returncode = MODULE.main(
+                [
+                    "--repo",
+                    "SecPal/api",
+                    "--pr",
+                    "123",
+                    "--expected-head",
+                    "a" * 40,
+                    "--reviewed-state",
+                    "reviewed.json",
+                    "--thread-id",
+                    "PRRT_exampleOne",
+                ]
+            )
+
+        self.assertEqual(returncode, 1)
+        self.assertEqual(json.loads(output.getvalue()), report)
+
+    def test_run_gh_uses_trusted_absolute_executable_and_environment(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="{}",
+            stderr="",
+        )
+        trusted_environment = {
+            "PATH": "/usr/bin:/bin",
+            "GH_HOST": "github.com",
+            "GH_PAGER": "cat",
+        }
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value=trusted_environment,
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                return_value=completed,
+            ) as run,
+        ):
+            arguments = [
+                *MODULE.GH_GRAPHQL_PREFIX,
+                "-f",
+                f"query={MODULE.TARGET_QUERY}",
+            ]
+            self.assertEqual(MODULE._run_gh(arguments), {})
+
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/usr/bin/gh", *arguments],
+        )
+        self.assertEqual(run.call_args.kwargs["env"], trusted_environment)
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_graphql_explicitly_pins_github_host(self) -> None:
+        fake = FakeGh([{"data": {}}])
+        budget = MODULE.InvocationBudget(
+            maximum_api_calls=1,
+            maximum_threads=1,
+            maximum_comments=1,
+        )
+
+        self.assertEqual(MODULE._graphql(MODULE.TARGET_QUERY, {}, fake, budget), {})
+
+        self.assertEqual(
+            fake.calls[0][:4],
+            ["api", "--hostname", "github.com", "graphql"],
+        )
+
+    def test_graphql_rejects_documents_outside_the_allowlist(self) -> None:
+        fake = FakeGh([])
+        budget = MODULE.InvocationBudget(
+            maximum_api_calls=1,
+            maximum_threads=1,
+            maximum_comments=1,
+        )
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "outside the GraphQL document allowlist",
+        ):
+            MODULE._graphql("mutation { mergePullRequest }", {}, fake, budget)
+
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(budget.api_calls, 0)
+
+    def test_run_gh_rejects_commands_outside_pinned_graphql_surface(self) -> None:
+        with mock.patch.object(MODULE.subprocess, "run") as run:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "outside the allowed GraphQL surface",
+            ):
+                MODULE._run_gh(["pr", "merge", "591"])
+
+        run.assert_not_called()
+
+    def test_run_gh_rejects_unapproved_graphql_documents(self) -> None:
+        with mock.patch.object(MODULE.subprocess, "run") as run:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "outside the GraphQL document allowlist",
+            ):
+                MODULE._run_gh(
+                    [
+                        *MODULE.GH_GRAPHQL_PREFIX,
+                        "-f",
+                        "query=mutation { mergePullRequest }",
+                    ]
+                )
+
+        run.assert_not_called()
+
+    def test_run_gh_translates_process_launch_failure(self) -> None:
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value={"PATH": "/usr/bin:/bin"},
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                side_effect=OSError("executable disappeared"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "process launch failed",
+            ):
+                MODULE._run_gh(
+                    [
+                        *MODULE.GH_GRAPHQL_PREFIX,
+                        "-f",
+                        f"query={MODULE.TARGET_QUERY}",
+                    ]
+                )
+
+    def test_run_gh_redacts_failure_diagnostic(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="token=supersecret",
+        )
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value={"PATH": "/usr/bin:/bin"},
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                return_value=completed,
+            ),
+        ):
+            with self.assertRaises(MODULE.ResolutionError) as raised:
+                MODULE._run_gh(
+                    [
+                        *MODULE.GH_GRAPHQL_PREFIX,
+                        "-f",
+                        f"query={MODULE.TARGET_QUERY}",
+                    ]
+                )
+
+        self.assertIn("[REDACTED]", str(raised.exception))
+        self.assertNotIn("supersecret", str(raised.exception))
+
+    def test_process_launch_failure_after_resolution_preserves_report(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        third = "PRRT_exampleThree"
+
+        def completed(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+
+        process_results: list[object] = [
+            completed(target_response(first)),
+            completed(target_response(second)),
+            completed(target_response(third)),
+            completed(target_response(first)),
+            completed(target_response(first)),
+            completed(resolve_response(first)),
+            OSError("executable disappeared"),
+        ]
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE.evidence,
+                "command_environment",
+                return_value={"PATH": "/usr/bin:/bin"},
+            ),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                side_effect=process_results,
+            ),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [first, second, third],
+                apply=True,
+            )
+
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(result["failed"][0]["thread_id"], second)
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["failed"][0]["write_result"], "not_attempted")
+        self.assertEqual(result["unattempted"], [third])
+        self.assertEqual(result["status"], "failed")
+
+
+if __name__ == "__main__":
+    main()

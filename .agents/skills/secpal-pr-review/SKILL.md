@@ -1,17 +1,55 @@
 ---
 name: secpal-pr-review
-description: Process completed review feedback for one named SecPal repository and pull request, only after an explicit PR-feedback remediation request. Do not use for generic review, PR creation, review requests, CI-only debugging, ordinary implementation, or merge-only work.
+description: Process completed review feedback for one named SecPal repository and pull request after an explicit remediation request, or handle explicitly named fixed-thread resolution-only requests after the findings were validated, committed, and pushed. Do not use for generic review, PR creation, review requests, CI-only debugging, ordinary implementation, or merge-only work.
 ---
 
 # SecPal PR Review
 
 Use this skill only when the user explicitly asks to process already-completed
-pull-request feedback for a specific repository and PR number. This skill is not a reviewer: it independently verifies reviewer leads and remediates only findings
-that source, tests, and repository context prove valid.
+pull-request feedback for a specific repository and PR number, or asks to
+resolve explicitly named threads whose findings have already been handled as
+defined below. This skill is not a reviewer: it independently verifies reviewer
+leads and remediates only findings that source, tests, and repository context
+prove valid.
+
+## Simple fixed-thread resolution
+
+When the user asks only to resolve explicitly named review threads whose
+findings have already been evaluated, fixed where necessary, validated,
+committed, and pushed, use the central source repository's
+`scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
+request number, expected current head OID, reviewed-state file, and thread IDs.
+The command first reads every target completely and requires its current
+comment identities, body digests, and resolution state to match that reviewed
+state. It then performs two complete stable target rechecks of the open PR,
+expected head, membership, resolved/outdated state, and canonical
+target-comment state immediately before each write or successful
+already-resolved report.
+
+Invoke the resolver in write mode; omitting `--apply` is only a dry run:
+
+```bash
+python3 scripts/secpal-resolve-fixed-threads.py \
+  --repo OWNER/REPOSITORY \
+  --pr PULL_REQUEST_NUMBER \
+  --expected-head FULL_40_CHARACTER_HEAD_OID \
+  --reviewed-state REVIEWED_STATE.json \
+  --thread-id REVIEW_THREAD_NODE_ID \
+  --apply
+```
+
+Repeat `--thread-id REVIEW_THREAD_NODE_ID` for each additional fixed thread.
+
+This resolution-only path does not capture or reclassify PR-wide feedback, run
+validation, inspect CI or readiness, create commits, push, or make a merge
+decision. Report the exact resolved and already-resolved targets, then stop.
+Use the full workflow below only when the user asks to process feedback,
+perform remediation, audit readiness, or evaluate merge authorization.
 
 ## Required inputs and boundaries
 
-Require all of the following before starting:
+For the full feedback-remediation workflow, require all of the following before
+starting:
 
 - an explicit PR-feedback remediation request;
 - the exact `owner/repository` and pull request number;
@@ -43,12 +81,17 @@ for development rules.
 Resolve this skill directory canonically. Its central source repository is three
 directories above it. Use that source repository's:
 
-- `scripts/secpal-pr-review-actions.py resolve-batch` for the normal stable
-  feedback capture and guarded batch-resolution path;
+- `scripts/secpal-pr-review-actions.py resolve-batch` for normal stable-feedback
+  capture only; its guarded readiness batch is available only when the current
+  user instruction explicitly requests readiness or merge evaluation;
 - `scripts/secpal-pr-review-actions.py attest-validation` for one deterministic
   complete-validation attestation bound to the finished local head; and
-- `scripts/secpal-pr-review.py` plus the legacy action commands only when the
-  user explicitly selects forensic/audit snapshot mode.
+- `scripts/secpal-resolve-fixed-threads.py` for default post-push resolution of
+  eligible fixed threads and for the resolution-only path defined above; and
+- `scripts/secpal-pr-review.py` plus evidence-only legacy action commands only
+  when the user explicitly selects forensic/audit snapshot mode. Any legacy
+  command that reads hosted-CI readiness additionally requires the current user
+  instruction to explicitly request readiness or merge evaluation.
 
 Never import or call the action helper from the evidence helper. Never add a
 mutation command to the evidence helper. Execute configured validation commands
@@ -56,17 +99,17 @@ as argument arrays in the target repository, without a shell.
 
 ## Run the finite invocation
 
+The following state machine applies only to the full feedback-remediation path.
+
 1. Create a mode-`0700` temporary session directory. Capture stable feedback
    once with `resolve-batch --capture-reviewed-state`; do not create a Package
    2.1 or Package 2.2 snapshot in normal mode.
 2. Split compound comments into stable logical findings and classify every item
-   from source, tests, and repository context. Bind each finding's typed source
+   from source, tests, and repository context. Preserve each finding's source
    identity/digest, optional unresolved thread, classification, disposition,
-   and evidence digest in the batch. Cover top-level reviews, conversation
-   comments and their reactions, stable pull-request reactions, and unresolved-
-   thread comments and their reactions. PR-level `EYES` activity markers are
-   volatile workflow state rather than review feedback. Never infer truth from
-   reviewer identity, keywords, or CI.
+   and evidence. Cover top-level reviews, conversation comments, and unresolved
+   thread comments. Reactions and unrelated feedback are not thread-resolution
+   preconditions. Never infer truth from reviewer identity, keywords, or CI.
 3. Reproduce every valid finding, add a failing test first, make the smallest
    coherent corrections, and use focused validation while editing.
 4. Perform the one holistic audit across correctness, security, privacy, data
@@ -77,34 +120,35 @@ as argument arrays in the target repository, without a shell.
    every registered manual gate. Preserve its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
    receipt.
-6. Create one signed commit containing exactly that staged tree, use
-   the receipt digest as its single `SecPal-Validation-Receipt` trailer, and use
-   `attest-validation --bind-commit` to verify that signed binding and its local
-   signature without rerunning validation. Recheck the remote head and push
-   once; the later live readiness check enforces required GitHub verification.
-7. Read applicable rules and Required Checks once as one bounded logical read.
-   Pending, failed, missing, or unknown required results block; never poll.
-8. Perform one lightweight stable-feedback freshness read. A same-head CI
-   transition is irrelevant to this comparison. The single attested remediation
-   head may cause GitHub's derived `isOutdated` state to change from false to
-   true; every other unexpected head, comment, reaction, or thread-state change
-   blocks before the first write.
-9. Resolve all eligible threads through one schema-bound `resolve-batch
---apply`. Verify readiness, attestation, checks, and stable feedback once;
-   between writes retain one bounded target check that verifies identity, head,
-   open PR/base state, thread state, comments, and reactions without rereading
-   complete PR feedback.
-10. Report the terminal outcome and evidence. Stop at
-    `WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION`. The user alone decides whether
-    another review round is requested and whether the PR may be merged.
+6. When remediation changed the staged tree, create one signed commit containing
+   exactly that tree, use the receipt digest as its single
+   `SecPal-Validation-Receipt` trailer, and use `attest-validation --bind-commit`
+   to verify that signed binding and its local signature without rerunning
+   validation. When remediation changes no tracked source file and every finding
+   is safely disposed, prove the local, remote, and PR heads still equal the
+   reviewed head and skip the commit and push states; never create an artificial
+   empty commit.
+7. For the changed-tree path only, recheck the remote predecessor, push once
+   without bypassing local hooks, and verify that local, remote, and PR heads
+   equal the signed commit. Do not inspect hosted CI as a consequence of the
+   push.
+8. Resolve every eligible fixed thread with
+   `scripts/secpal-resolve-fixed-threads.py --apply`, binding the exact
+   repository, PR, current head OID, reviewed-state file, and thread IDs. This
+   reads only the named targets, requires their comments to equal the reviewed
+   feedback, and does not reclassify or gate on unrelated PR state.
+9. Report the commit, branch, remote synchronization, local validation,
+   worktree state, PR identity, and resolution results, then stop. Merge remains
+   separately authorized by the current user instruction.
 
 Short-circuit immediately to the applicable terminal outcome when a blocker is
 detected. Green CI alone never establishes technical truth or merge readiness.
 
 ## Fast-path and forensic-plan discipline
 
-Validate fast-path batch inputs against
-`references/fast-path-batch.schema.json`. One batch may contain only
+Only when the current user instruction explicitly requests readiness or merge
+evaluation, validate fast-path batch inputs against
+`references/fast-path-batch.schema.json`. Such a batch may contain only
 `THREAD_RESOLUTION` operations and must bind repository, PR, expected head,
 reviewed base branch/SHA, authenticated actor, reviewed-state and feedback digests, and eligible
 classified findings. The reviewed state must originate from an open PR. Every
@@ -116,15 +160,16 @@ partial failure stops later writes, reports every applied/failed/blocked target,
 and never retries a write. Applied-target report entries are audit output, not
 reusable authorization. A manual rerun with an already-resolved or otherwise changed thread fails closed.
 
-The stable-feedback projection contains review identities, body digests,
+The normal stable-feedback projection contains review identities, body digests,
 thread/comment identities and state, stable reactions, actors, repository, PR,
 head, and the reviewed base branch/SHA. It excludes PR-level `EYES` activity
 markers and contains no Required Check results.
-Volatile readiness separately contains heads, the registered default/base
+Explicitly requested volatile readiness separately contains heads, the registered default/base
 repository boundary, Required Checks, mergeability and merge-state policy,
 worktree, signatures, the signed validation-receipt trailer, and the
-validation-attestation identity. Capture, freshness, checks, and target reads
-must use the one explicitly selected registry entry.
+validation-attestation identity. A readiness request performs one bounded
+current-state read, reports it, and stops without polling, waiting, sleeping, or
+automatic repetition. Merge remains separately user-authorized.
 
 The following immutable mutation-plan rules remain available only for explicit
 forensic/audit mode.
@@ -149,9 +194,10 @@ without retry.
 ## Reporting
 
 Report every finding's sources, classification, proof, disposition, and any
-authorized operation identity. Report counter use, stable-state or forensic
-snapshot anchors,
-validation attestation, signature-source classifications, CI, stable-feedback
-freshness, batch results, unresolved material items, and the exact terminal
-outcome. Do not post redundant “fixed,” “addressed,” SHA-status, or progress
-comments on the PR.
+authorized operation identity. For ordinary remediation, report only the
+commit, branch, remote synchronization, local validation, worktree state, PR
+identity, and resolution results. Report hosted-CI state only when the current
+user instruction explicitly requests one status or readiness read; report the
+observed state once and stop without suggesting monitoring or another run. Do
+not post redundant “fixed,” “addressed,” SHA-status, or progress comments on the
+PR.

@@ -15,7 +15,8 @@ Captures deterministic, thread-aware GitHub pull-request evidence and verifies
 immutable evidence and local Git state through a strict read-only command
 boundary. `verify-evidence` supports open, closed, and merged snapshots;
 `verify-gate` reuses that evidence path and additionally evaluates current
-open-PR merge readiness. Neither command authorizes merge. Canonical JSON is
+open-PR merge readiness only when the current user instruction explicitly asks
+for readiness or merge evaluation. Neither command authorizes merge. Canonical JSON is
 the authority; Markdown is an escaped derived view. The helper performs no
 review request, reaction, reply, thread resolution, push, or merge operation.
 
@@ -34,7 +35,9 @@ state, counters, and recorded mutation identities before a write. Its exact
 command and endpoint allowlists provide no review-request, Ready-transition,
 generic API, Git-write, label/issue, merge, or auto-merge capability, and failures
 are never retried. It independently verifies Package-2.1 evidence before every
-operation; resolutions additionally run all registered local validations and
+operation. Its legacy forensic/readiness resolutions are permitted only when
+the current user instruction explicitly requests readiness or merge evaluation;
+they additionally run all registered local validations and
 re-check the complete live thread comment set, applicable required-check rules,
 current base, effective check target, and required-check outcomes, then repeat
 the PR-wide feedback and exact target reads. Reply targets include their exact
@@ -47,6 +50,29 @@ canonical dispositions, actionable fixes without commit and test proof, and
 operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
+
+### `secpal-resolve-fixed-threads.py`
+
+Resolves only explicitly named review threads after their findings have already
+been evaluated, fixed where necessary, and validated. The supplied reviewed-state
+capture binds the operation to the caller-provided PR head and reviewed
+target-comment identities, digests, and resolution state. After one initial
+complete target read, it requires two more equal complete target projections
+immediately before each write or successful already-resolved report, and keeps
+thread resolution separate from CI and merge-readiness decisions. It accepts
+only canonical registry repositories, enforces their shared API, thread, and
+comment limits, preflights every known read/write cost, uses the trusted GitHub
+CLI boundary, and reports partial failure without retrying a write.
+
+This is the default resolver after review remediation pushes. A push, PR
+creation, prior request, repository convention, remediation request, or
+thread-resolution request never authorizes hosted-CI observation. Local
+validation and push hooks remain required. Hosted checks may be read only for a
+current explicit CI/readiness request, using one bounded current-state read with
+no polling, waiting, sleeping, or automatic repetition.
+
+See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
+the bounded safety contract and usage.
 
 ### `install-secpal-pr-review-skill.sh`
 

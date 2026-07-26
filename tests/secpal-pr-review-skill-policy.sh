@@ -8,12 +8,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL="$REPO_ROOT/.agents/skills/secpal-pr-review/SKILL.md"
 CONTRACT="$REPO_ROOT/.agents/skills/secpal-pr-review/references/contract.md"
-ACTIONS="$REPO_ROOT/scripts/secpal-pr-review-actions.py"
 EVIDENCE="$REPO_ROOT/scripts/secpal-pr-review.py"
+ACTIONS="$REPO_ROOT/scripts/secpal-pr-review-actions.py"
 REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.json"
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
 FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
+SIMPLE_RESOLVER="$REPO_ROOT/scripts/secpal-resolve-fixed-threads.py"
+STATIC_POLICY="$REPO_ROOT/tests/secpal-pr-review-static-policy.py"
+POLYSCOPE_TEMPLATE="$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
+WORKFLOW_DOC="$REPO_ROOT/docs/secpal-pr-review-workflow.md"
+SIMPLE_RESOLUTION_DOC="$REPO_ROOT/docs/simple-pr-thread-resolution.md"
+SCRIPT_README="$REPO_ROOT/scripts/README.md"
+POLYSCOPE_INSTALLER="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 GOVERNANCE_SUITE="$REPO_ROOT/tests/review-governance-suite.sh"
@@ -24,7 +31,38 @@ fail() {
   exit 1
 }
 
-for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$FAST_PATH" "$REGISTRY" "$PLAN_SCHEMA" "$FAST_SCHEMA"; do
+assert_polyscope_template_baseline() {
+  local template_path="$1"
+  local accepted_baseline
+  local protected_prefix
+
+  accepted_baseline="$(
+    git -C "$REPO_ROOT" show \
+      "$P21_BASELINE:templates/polyscope-codex-AGENTS.md"
+  )" || fail 'accepted Polyscope template baseline is unavailable'
+  protected_prefix="$(
+    sed '/^## Hosted CI isolation$/,$d' "$template_path"
+  )"
+  test "$protected_prefix" = "$accepted_baseline" \
+    || fail 'existing Polyscope global safety instructions changed'
+}
+
+for required in \
+  "$SKILL" \
+  "$CONTRACT" \
+  "$EVIDENCE" \
+  "$ACTIONS" \
+  "$FAST_PATH" \
+  "$SIMPLE_RESOLVER" \
+  "$STATIC_POLICY" \
+  "$POLYSCOPE_TEMPLATE" \
+  "$WORKFLOW_DOC" \
+  "$SIMPLE_RESOLUTION_DOC" \
+  "$SCRIPT_README" \
+  "$POLYSCOPE_INSTALLER" \
+  "$REGISTRY" \
+  "$PLAN_SCHEMA" \
+  "$FAST_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
 test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executable'
@@ -32,8 +70,8 @@ test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executab
 # Policy cases: exact fast-path counters, one audit, explicit checkpoint, one
 # bounded read retry, no polling, and zero review-request/merge authority.
 grep -Fq 'normal_complete_snapshots: 0' "$CONTRACT" || fail 'normal snapshot limit drifted'
-grep -Fq 'normal_stable_feedback_reads: 2' "$CONTRACT" || fail 'stable feedback read limit drifted'
-grep -Fq 'normal_required_check_reads_before_resolution: 1' "$CONTRACT" || fail 'required-check read limit drifted'
+grep -Fq 'normal_stable_feedback_reads: 1' "$CONTRACT" || fail 'stable feedback read limit drifted'
+grep -Fq 'normal_required_check_reads_before_resolution: 0' "$CONTRACT" || fail 'default remediation still reads Required Checks'
 grep -Fq 'normal_complete_validation_runs: 1' "$CONTRACT" || fail 'complete validation limit drifted'
 grep -Fq 'maximum_holistic_audits: 1' "$CONTRACT" || fail 'holistic audit limit drifted'
 grep -Fq 'normal_signed_remediation_commits: 1' "$CONTRACT" || fail 'commit limit drifted'
@@ -42,6 +80,102 @@ grep -Fq 'maximum_evidence_replies_total: 10' "$CONTRACT" || fail 'reply limit d
 grep -Fq 'WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION' "$CONTRACT" || fail 'user checkpoint missing'
 grep -Fq 'A normal invocation has one remediation pass.' "$CONTRACT" || fail 'single-pass rule missing'
 grep -Fq 'never appends unreviewed feedback' "$CONTRACT" || fail 'late-feedback rule missing'
+
+template_text="$(tr '\n' ' ' <"$POLYSCOPE_TEMPLATE" | tr -s '[:space:]' ' ')"
+grep -Fq \
+  'Do not read, monitor, poll, wait for, summarize, or gate work on GitHub-hosted CI unless the user explicitly requests CI inspection, check status, merge readiness, or merge authorization in the current instruction.' \
+  <<<"$template_text" \
+  || fail 'Polyscope hosted-CI authorization rule is missing'
+grep -Fq \
+  'A previous request, repository convention, push, PR creation, review-remediation request, or thread-resolution request is not sufficient authorization.' \
+  <<<"$template_text" \
+  || fail 'Polyscope hosted-CI authorization cannot be inherited'
+grep -Fq 'Local push hooks and local validation remain allowed.' <<<"$template_text" \
+  || fail 'Polyscope runtime no longer permits local validation and push hooks'
+grep -Fq 'They remain required where repository instructions require them.' <<<"$template_text" \
+  || fail 'Polyscope runtime no longer requires configured local validation and hooks'
+grep -Fq 'A push never authorizes hosted-CI inspection.' <<<"$template_text" \
+  || fail 'push incorrectly implies hosted-CI authorization'
+grep -Fq 'Draft PR creation never authorizes hosted-CI inspection.' <<<"$template_text" \
+  || fail 'Draft PR creation incorrectly implies hosted-CI authorization'
+grep -Fq 'verify its number, base, head branch, and head SHA, report local validation, and stop' <<<"$template_text" \
+  || fail 'Draft PR terminal behavior is not CI-isolated'
+grep -Fq 'Resolution of fixed review comments is independent of GitHub-hosted CI.' <<<"$template_text" \
+  || fail 'fixed-comment resolution is still coupled to hosted CI'
+grep -Fq 'Push and PR creation never imply CI-observation authorization.' <<<"$template_text" \
+  || fail 'push and PR creation authorization boundary is missing'
+assert_polyscope_template_baseline "$POLYSCOPE_TEMPLATE"
+if (
+  mutated_template="$(mktemp)"
+  trap 'rm -f "$mutated_template"' EXIT
+  sed \
+    's/Preserve a branch or worktree already provisioned by Polyscope/Discard the branch or worktree already provisioned by Polyscope/' \
+    "$POLYSCOPE_TEMPLATE" >"$mutated_template"
+  assert_polyscope_template_baseline "$mutated_template"
+) >/dev/null 2>&1; then
+  fail 'Polyscope template baseline negative fixture was not detected'
+fi
+grep -F 'CODEX_AGENTS_SOURCE=' "$POLYSCOPE_INSTALLER" \
+  | grep -Fq 'templates' \
+  || fail 'Polyscope rollout no longer sources the repository template'
+grep -Fq "ln -sfn \"\$CODEX_AGENTS_SOURCE\" \"\$CODEX_AGENTS_TARGET\"" "$POLYSCOPE_INSTALLER" \
+  || fail 'Polyscope rollout no longer installs the direct global instruction symlink'
+
+normal_contract_state="$(
+  sed -n '/^## Normal fast-path state machine$/,/^## /p' "$CONTRACT"
+)"
+test -n "$normal_contract_state" || fail 'normal remediation state machine is missing'
+if grep -Fq 'READ_REQUIRED_CHECKS_ONCE' <<<"$normal_contract_state"; then
+  fail 'default remediation state machine still reads Required Checks'
+fi
+grep -Fq 'RESOLVE_FIXED_THREADS' <<<"$normal_contract_state" \
+  || fail 'default remediation does not resolve through the simple fixed-thread path'
+
+readiness_contract="$(
+  sed -n '/^## Explicit CI and readiness path$/,/^## /p' "$CONTRACT" \
+    | tr '\n' ' ' \
+    | tr -s '[:space:]' ' '
+)"
+test -n "$readiness_contract" || fail 'explicit CI/readiness path is missing'
+grep -Fq 'current user instruction explicitly requests' <<<"$readiness_contract" \
+  || fail 'CI/readiness authorization is not bound to the current instruction'
+grep -Fq 'at most one bounded current-state read' <<<"$readiness_contract" \
+  || fail 'explicit readiness path is not limited to one current-state read'
+grep -Fq 'never polls, waits, sleeps, or repeats automatically' <<<"$readiness_contract" \
+  || fail 'explicit readiness path permits monitoring behavior'
+
+normal_skill_section="$(sed -n '/^## Run the finite invocation$/,/^## /p' "$SKILL")"
+test -n "$normal_skill_section" || fail 'normal skill workflow is missing'
+grep -Fq 'scripts/secpal-resolve-fixed-threads.py' <<<"$normal_skill_section" \
+  || fail 'review remediation does not use the simple fixed-thread resolver'
+if grep -Eq 'Required Checks|mergeability|branch-protection|pull-request reactions' <<<"$normal_skill_section"; then
+  fail 'default remediation still gates resolution on unrelated readiness state'
+fi
+
+if grep -Eqi \
+  'hosted checks are still running|wait (for|until) (CI|checks)|new invocation.*(CI|check|CodeQL)|CodeQL is still|thread cannot be resolved.*(PEST|check)' \
+  "$POLYSCOPE_TEMPLATE" "$SKILL" "$WORKFLOW_DOC" "$SIMPLE_RESOLUTION_DOC" "$SCRIPT_README"; then
+  fail 'default workflow text instructs CI waiting or a follow-up invocation'
+fi
+
+if grep -Fq 'required_ci_succeeded' "$ACTIONS"; then
+  fail 'thread-resolution preconditions still require hosted CI'
+fi
+grep -Fq '"required_ci_succeeded"' "$PLAN_SCHEMA" \
+  || fail 'version-1 forensic plans lost the optional Required Check compatibility field'
+if jq -e \
+  '.["$defs"].operation.properties.resolution_preconditions.required | index("required_ci_succeeded")' \
+  "$PLAN_SCHEMA" >/dev/null; then
+  fail 'legacy Required Check compatibility field became a resolution precondition again'
+fi
+grep -Fq -- '--reviewed-state REVIEWED_STATE' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation does not bind mutations to reviewed feedback'
+grep -Fq 'three complete target reads' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation undercounts stable target rechecks'
+grep -Fq 'When remediation changes no tracked source file' "$CONTRACT" \
+  || fail 'normal remediation lost the no-change resolution path'
+grep -Fq 'skip the commit and push states' "$SKILL" \
+  || fail 'skill still forces an artificial remediation commit'
 
 for phrase in \
   'zero review requests' \
@@ -54,22 +188,49 @@ for phrase in \
   grep -Fqi "$phrase" "$CONTRACT" || fail "missing contract phrase: $phrase"
 done
 
-if grep -En 'sleep\(|time\.sleep|while[[:space:]]+true|retrying' "$ACTIONS" "$FAST_PATH"; then
+prohibited_authority_pattern='gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue'
+
+if grep -En 'retrying' "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER"; then
   fail 'mutation helper contains polling behavior'
 fi
-
-if grep -En 'gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue' "$ACTIONS" "$FAST_PATH"; then
+if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER"; then
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
-if grep -En 'subprocess\.(run|Popen).*shell[[:space:]]*=[[:space:]]*True|(^|[^[:alnum:]_])eval\(' "$ACTIONS"; then
-  fail 'mutation helper permits shell execution'
-fi
+python3 \
+  "$STATIC_POLICY" \
+  "$EVIDENCE" \
+  "$ACTIONS" \
+  "$FAST_PATH" \
+  "$SIMPLE_RESOLVER"
+
+grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \
+  || fail 'authority policy negative fixture was not detected'
 
 grep -Fq 'secpal-pr-review.py' "$SKILL" || fail 'skill does not route reads through P2.1 helper'
 grep -Fq 'secpal-pr-review-actions.py' "$SKILL" || fail 'skill does not route bounded writes through action helper'
 grep -Fq 'explicit PR-feedback remediation request' "$SKILL" || fail 'skill trigger is not narrow'
+sed -n '/^description:/p' "$SKILL" \
+  | grep -Fq 'fixed-thread resolution-only requests' \
+  || fail 'skill trigger does not advertise fixed-thread resolution-only requests'
 grep -Fq 'not a reviewer' "$SKILL" || fail 'skill reviewer boundary is missing'
+simple_skill_section="$(sed -n '/^## Simple fixed-thread resolution$/,/^## /p' "$SKILL")"
+test -n "$simple_skill_section" || fail 'skill simple-resolution route is missing'
+grep -Fq 'scripts/secpal-resolve-fixed-threads.py' <<<"$simple_skill_section" \
+  || fail 'skill does not route fixed-and-pushed requests through the simple resolver'
+grep -Fq -- '--apply' <<<"$simple_skill_section" \
+  || fail 'skill fixed-thread resolution route does not require apply mode'
+if grep -Fq 'resolve-batch' <<<"$simple_skill_section"; then
+  fail 'skill simple-resolution route still invokes the readiness batch'
+fi
+grep -Fq 'Simple resolution-only path' "$CONTRACT" \
+  || fail 'contract does not define the simple resolution-only path'
+grep -Fq 'scripts/secpal-resolve-fixed-threads.py' "$CONTRACT" \
+  || fail 'contract does not bind the simple resolver'
+grep -Fq 'expected current head OID' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation is not head-bound'
+grep -Fq 'every requested thread belongs to that PR' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation is not target-bound'
 
 git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
   || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"
@@ -83,19 +244,22 @@ if grep -En '/home/secpal' "$INTEGRATION"; then
 fi
 grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'guarded-action unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'simple resolver unit tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill policy tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill integration tests are not enforced in CI'
 grep -Fq './tests/review-governance-suite.sh' "$REGISTRY" \
   || fail 'repository governance suite is not registered'
+grep -Fq 'tests/secpal-resolve-fixed-threads-unit.py' "$REGISTRY" \
+  || fail 'simple resolver unit tests are not registered'
 
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
   "$REPO_ROOT"/scripts/*-review-tool.sh
   "$REPO_ROOT"/docs/*-review-automation.md
   "$REPO_ROOT"/AGENTS.md
-  "$REPO_ROOT"/templates/*-AGENTS.md
 )
 relative_paths=()
 for path in "${protected_paths[@]}"; do

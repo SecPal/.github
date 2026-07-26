@@ -185,7 +185,6 @@ def operation(
             "pushed": True,
             "focused_validation_succeeded": True,
             "complete_validation_succeeded": True,
-            "required_ci_succeeded": True,
             "valid_signatures": True,
             "heads_match": True,
             "worktree_clean": True,
@@ -1078,6 +1077,41 @@ class ContractTests(TestCase):
             actions.validate_plan(
                 false_push_claim, evidence_snapshot(), repository_config()
             )
+
+    def test_version_one_resolution_plan_accepts_ignored_ci_compatibility_field(
+        self,
+    ) -> None:
+        resolution = operation(
+            "THREAD_RESOLUTION",
+            operation_id="resolve-001",
+            classification="INFORMATIONAL",
+            reaction=None,
+        )
+        resolution["resolution_preconditions"].update(
+            pushed=False,
+            required_ci_succeeded=False,
+        )
+        value = plan(
+            resolution,
+            current_state="RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE",
+        )
+        value["cycle_number"] = 0
+        value["session"].update(
+            remediation_cycles=0,
+            signed_commits=0,
+            fast_forward_pushes=0,
+        )
+        value["findings"][0].update(
+            classification="INFORMATIONAL",
+            disposition="NON_ACTIONABLE",
+            commit_sha=None,
+            test_evidence=[],
+        )
+
+        self.assertEqual(
+            actions.validate_plan(value, evidence_snapshot(), repository_config()),
+            value,
+        )
 
     def test_recorded_mutation_identity_belongs_to_only_one_operation(self) -> None:
         recorded_reaction = operation()

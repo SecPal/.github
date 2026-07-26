@@ -9,6 +9,11 @@
       "reviewer_identities": [],
       "focused_validation": [
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run simple fixed-thread resolver unit tests"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
           "working_directory": ".",
           "purpose": "Run guarded-action unit tests"
