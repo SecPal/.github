@@ -347,6 +347,68 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 5)
 
+    def test_thread_budget_is_shared_across_initial_read_and_target_rechecks(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+
+        def page(prefix: str, start: int, count: int, cursor: str) -> dict[str, Any]:
+            return read_response(
+                threads=[
+                    (f"PRRT_{prefix}{item}", False)
+                    for item in range(start, start + count)
+                ],
+                has_next_page=True,
+                end_cursor=cursor,
+            )
+
+        fake = FakeGh(
+            [
+                read_response(threads=[(first, False), (second, False)]),
+                page("first", 0, 100, "first-1"),
+                page("first", 100, 100, "first-2"),
+                read_response(
+                    threads=[
+                        *[
+                            (f"PRRT_first{item}", False)
+                            for item in range(200, 249)
+                        ],
+                        (first, False),
+                    ]
+                ),
+                resolve_response(first),
+                page("second", 0, 100, "second-1"),
+                page("second", 100, 100, "second-2"),
+                read_response(
+                    threads=[
+                        *[
+                            (f"PRRT_second{item}", False)
+                            for item in range(200, 248)
+                        ],
+                        (second, False),
+                    ]
+                ),
+            ]
+        )
+
+        result = MODULE.resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [first, second],
+            apply=True,
+            runner=fake,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(result["failed"][0]["thread_id"], second)
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertIn("thread limit", result["failed"][0]["error"])
+        self.assertEqual(result["unattempted"], [])
+        self.assertEqual(len(fake.calls), 8)
+
     def test_repeated_thread_identity_across_pages_fails_closed(self) -> None:
         repeated = "PRRT_repeatedThread"
         fake = FakeGh(

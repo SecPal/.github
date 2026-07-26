@@ -112,18 +112,29 @@ class RepositoryLimits:
 
 
 @dataclass
-class ApiBudget:
+class InvocationBudget:
     maximum_api_calls: int
-    calls: int = 0
+    maximum_threads: int
+    api_calls: int = 0
+    threads: int = 0
 
-    def consume(self) -> None:
-        if self.calls >= self.maximum_api_calls:
+    def consume_api_call(self) -> None:
+        if self.api_calls >= self.maximum_api_calls:
             raise ResolutionError("registered API call limit reached")
-        self.calls += 1
+        self.api_calls += 1
+
+    def consume_thread(self) -> None:
+        if self.threads >= self.maximum_threads:
+            raise ResolutionError("registered review thread limit reached")
+        self.threads += 1
 
     @property
-    def remaining(self) -> int:
-        return self.maximum_api_calls - self.calls
+    def remaining_api_calls(self) -> int:
+        return self.maximum_api_calls - self.api_calls
+
+    @property
+    def remaining_threads(self) -> int:
+        return self.maximum_threads - self.threads
 
 
 def load_repository_limits(repository: str) -> RepositoryLimits:
@@ -203,13 +214,13 @@ def _graphql(
     query: str,
     variables: dict[str, str | int],
     runner: Callable[[Sequence[str]], dict[str, Any]],
-    budget: ApiBudget,
+    budget: InvocationBudget,
 ) -> dict[str, Any]:
     arguments: list[str] = ["api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         flag = "-F" if isinstance(value, int) else "-f"
         arguments.extend([flag, f"{key}={value}"])
-    budget.consume()
+    budget.consume_api_call()
     payload = runner(arguments)
     if payload.get("errors"):
         raise ResolutionError("GitHub GraphQL request failed")
@@ -223,8 +234,7 @@ def read_pull_request(
     repository: str,
     number: int,
     required_thread_ids: set[str],
-    limits: RepositoryLimits,
-    budget: ApiBudget,
+    budget: InvocationBudget,
     runner: Callable[[Sequence[str]], dict[str, Any]],
 ) -> PullRequestState:
     owner, name = repository.split("/", 1)
@@ -232,10 +242,9 @@ def read_pull_request(
     after: str | None = None
     state: str | None = None
     head_sha: str | None = None
-    thread_count = 0
     pagination_complete = False
 
-    while budget.remaining > 0:
+    while budget.remaining_api_calls > 0:
         variables: dict[str, str | int] = {
             "owner": owner,
             "name": name,
@@ -286,9 +295,7 @@ def read_pull_request(
                 raise ResolutionError(
                     f"review thread pagination repeated thread: {thread_id}"
                 )
-            thread_count += 1
-            if thread_count > limits.maximum_threads:
-                raise ResolutionError("registered review thread limit reached")
+            budget.consume_thread()
             threads[thread_id] = ThreadState(thread_id, is_resolved)
 
         if required_thread_ids.issubset(threads):
@@ -297,7 +304,7 @@ def read_pull_request(
         if not has_next_page:
             pagination_complete = True
             break
-        if thread_count >= limits.maximum_threads:
+        if budget.remaining_threads == 0:
             raise ResolutionError("registered review thread limit reached")
         end_cursor = page_info.get("endCursor")
         if (
@@ -368,13 +375,15 @@ def resolve_threads(
 ) -> dict[str, Any]:
     validate_request(repository, number, expected_head, thread_ids, apply)
     limits = load_repository_limits(repository)
-    budget = ApiBudget(limits.maximum_api_calls)
+    budget = InvocationBudget(
+        limits.maximum_api_calls,
+        limits.maximum_threads,
+    )
     requested = set(thread_ids)
     pull_request = read_pull_request(
         repository,
         number,
         requested,
-        limits,
         budget,
         runner,
     )
@@ -393,7 +402,7 @@ def resolve_threads(
     applied: list[str] = []
 
     if apply:
-        if budget.remaining < len(pending) * 2:
+        if budget.remaining_api_calls < len(pending) * 2:
             raise ResolutionError(
                 "registered API call limit cannot cover all target rechecks and writes"
             )
@@ -404,7 +413,6 @@ def resolve_threads(
                     repository,
                     number,
                     {thread_id},
-                    limits,
                     budget,
                     runner,
                 )
