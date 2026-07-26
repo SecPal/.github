@@ -111,7 +111,7 @@ def read_pull_request(
 ) -> PullRequestState:
     owner, name = repository.split("/", 1)
     threads: dict[str, ThreadState] = {}
-    after = ""
+    after: str | None = None
     state: str | None = None
     head_sha: str | None = None
 
@@ -120,8 +120,9 @@ def read_pull_request(
             "owner": owner,
             "name": name,
             "number": number,
-            "after": after,
         }
+        if after is not None:
+            variables["after"] = after
         data = _graphql(READ_QUERY, variables, runner)
         repository_value = data.get("repository")
         pull_request = (
@@ -165,14 +166,20 @@ def read_pull_request(
         if not page_info.get("hasNextPage"):
             break
         end_cursor = page_info.get("endCursor")
-        if not isinstance(end_cursor, str) or not end_cursor or end_cursor == after:
+        if (
+            not isinstance(end_cursor, str)
+            or not end_cursor
+            or end_cursor == after
+        ):
             raise ResolutionError("review thread pagination did not advance")
         after = end_cursor
 
     assert state is not None and head_sha is not None
     missing = sorted(required_thread_ids.difference(threads))
     if missing:
-        raise ResolutionError(f"target threads do not belong to the pull request: {', '.join(missing)}")
+        raise ResolutionError(
+            f"target threads do not belong to the pull request: {', '.join(missing)}"
+        )
     return PullRequestState(state=state, head_sha=head_sha, threads=threads)
 
 
@@ -191,14 +198,19 @@ def resolve_threads(
         raise ResolutionError(f"pull request is {pull_request.state.lower()}, not open")
     if pull_request.head_sha != expected_head.lower():
         raise ResolutionError(
-            f"pull request head changed: expected {expected_head.lower()}, observed {pull_request.head_sha}"
+            f"pull request head changed: expected {expected_head.lower()}, "
+            f"observed {pull_request.head_sha}"
         )
 
     already_resolved = sorted(
-        thread_id for thread_id in thread_ids if pull_request.threads[thread_id].is_resolved
+        thread_id
+        for thread_id in thread_ids
+        if pull_request.threads[thread_id].is_resolved
     )
     pending = [
-        thread_id for thread_id in thread_ids if not pull_request.threads[thread_id].is_resolved
+        thread_id
+        for thread_id in thread_ids
+        if not pull_request.threads[thread_id].is_resolved
     ]
     applied: list[str] = []
 
@@ -208,9 +220,13 @@ def resolve_threads(
             mutation = data.get("resolveReviewThread")
             thread = mutation.get("thread") if isinstance(mutation, dict) else None
             if not isinstance(thread, dict):
-                raise ResolutionError(f"GitHub did not confirm resolution for {thread_id}")
+                raise ResolutionError(
+                    f"GitHub did not confirm resolution for {thread_id}"
+                )
             if thread.get("id") != thread_id or thread.get("isResolved") is not True:
-                raise ResolutionError(f"GitHub returned an invalid resolution result for {thread_id}")
+                raise ResolutionError(
+                    f"GitHub returned an invalid resolution result for {thread_id}"
+                )
             applied.append(thread_id)
 
     return {
@@ -240,7 +256,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("--expected-head must be a full 40-character commit OID")
     if len(arguments.thread_id) != len(set(arguments.thread_id)):
         parser.error("--thread-id values must be unique")
-    invalid = [value for value in arguments.thread_id if not THREAD_ID.fullmatch(value)]
+    invalid = [
+        value for value in arguments.thread_id if not THREAD_ID.fullmatch(value)
+    ]
     if invalid:
         parser.error("--thread-id must be a GitHub review-thread node ID")
     return arguments
