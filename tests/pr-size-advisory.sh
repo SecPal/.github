@@ -198,6 +198,14 @@ assert_not_contains \
   "$CALLER_WORKFLOW" \
   "pull-requests: read" \
   "the caller must not retain pull-request permission solely for a size override"
+assert_contains \
+  "$CALLER_WORKFLOW" \
+  "uses: ./.github/workflows/reusable-pr-size.yml" \
+  "the same-repository caller must resolve the changed reusable workflow from the same revision"
+assert_not_contains \
+  "$CALLER_WORKFLOW" \
+  "uses: SecPal/.github/.github/workflows/reusable-pr-size.yml@main" \
+  "the same-repository caller must not combine branch permissions with the reusable workflow from main"
 assert_not_contains \
   "$REUSABLE_WORKFLOW" \
   "GH_TOKEN" \
