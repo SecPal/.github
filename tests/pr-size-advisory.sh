@@ -92,19 +92,21 @@ EOF
 
 run_preflight_fixture() {
   local repository="$1"
-  local output="$2"
+  local stdout="$2"
+  local stderr="$3"
 
   set +e
   (
     cd "$repository"
     PATH="$repository/bin:/usr/bin:/bin" bash scripts/preflight.sh
-  ) >"$output" 2>&1
+  ) >"$stdout" 2>"$stderr"
   fixture_status=$?
   set -e
 }
 
 large_local_repo="$workspace/local-large"
-large_local_output="$workspace/local-large.out"
+large_local_stdout="$workspace/local-large.stdout"
+large_local_stderr="$workspace/local-large.stderr"
 create_preflight_fixture "$large_local_repo"
 make_lines 597 "$large_local_repo/source/large.txt"
 (
@@ -113,16 +115,16 @@ make_lines 597 "$large_local_repo/source/large.txt"
   git add source/large.txt
   git commit --quiet -m "test: create 601-line change"
 )
-run_preflight_fixture "$large_local_repo" "$large_local_output"
+run_preflight_fixture "$large_local_repo" "$large_local_stdout" "$large_local_stderr"
 if [ "$fixture_status" -ne 0 ]; then
   record_failure "local preflight must succeed when the advisory threshold is exceeded (status $fixture_status)"
 fi
 assert_contains \
-  "$large_local_output" \
+  "$large_local_stderr" \
   "PR size: 601 changed lines (597 insertions, 4 deletions; advisory threshold: 600)" \
   "local preflight must report insertion, deletion, total, and advisory-threshold counts above the threshold"
 assert_contains \
-  "$large_local_output" \
+  "$large_local_stderr" \
   "WARNING: PR size advisory threshold exceeded" \
   "local preflight must emit a visible advisory warning above the threshold"
 if [ -e "$large_local_repo/.preflight-allow-large-pr" ]; then
@@ -130,7 +132,8 @@ if [ -e "$large_local_repo/.preflight-allow-large-pr" ]; then
 fi
 
 threshold_local_repo="$workspace/local-threshold"
-threshold_local_output="$workspace/local-threshold.out"
+threshold_local_stdout="$workspace/local-threshold.stdout"
+threshold_local_stderr="$workspace/local-threshold.stderr"
 create_preflight_fixture "$threshold_local_repo"
 make_lines 600 "$threshold_local_repo/source/threshold.txt"
 (
@@ -138,21 +141,22 @@ make_lines 600 "$threshold_local_repo/source/threshold.txt"
   git add source/threshold.txt
   git commit --quiet -m "test: create threshold-sized change"
 )
-run_preflight_fixture "$threshold_local_repo" "$threshold_local_output"
+run_preflight_fixture "$threshold_local_repo" "$threshold_local_stdout" "$threshold_local_stderr"
 if [ "$fixture_status" -ne 0 ]; then
   record_failure "local preflight must succeed at the advisory threshold (status $fixture_status)"
 fi
 assert_contains \
-  "$threshold_local_output" \
+  "$threshold_local_stdout" \
   "Preflight OK · PR size: 600 changed lines (600 insertions, 0 deletions; advisory threshold: 600)" \
   "local preflight must report normal success and complete counts at the threshold"
 assert_not_contains \
-  "$threshold_local_output" \
+  "$threshold_local_stderr" \
   "WARNING: PR size advisory threshold exceeded" \
   "local preflight must not warn at the advisory threshold"
 
 excluded_local_repo="$workspace/local-excluded"
-excluded_local_output="$workspace/local-excluded.out"
+excluded_local_stdout="$workspace/local-excluded.stdout"
+excluded_local_stderr="$workspace/local-excluded.stderr"
 create_preflight_fixture "$excluded_local_repo"
 make_lines 700 "$excluded_local_repo/generated/client.txt"
 make_lines 5 "$excluded_local_repo/source/included.txt"
@@ -161,18 +165,48 @@ make_lines 5 "$excluded_local_repo/source/included.txt"
   git add generated/client.txt source/included.txt
   git commit --quiet -m "test: create excluded change"
 )
-run_preflight_fixture "$excluded_local_repo" "$excluded_local_output"
+run_preflight_fixture "$excluded_local_repo" "$excluded_local_stdout" "$excluded_local_stderr"
 if [ "$fixture_status" -ne 0 ]; then
   record_failure "local preflight must succeed when exclusions reduce the report below the threshold (status $fixture_status)"
 fi
 assert_contains \
-  "$excluded_local_output" \
+  "$excluded_local_stdout" \
   "Preflight OK · PR size: 5 changed lines (5 insertions, 0 deletions; advisory threshold: 600)" \
   "local preflight must preserve .preflight-exclude behavior"
 assert_not_contains \
-  "$excluded_local_output" \
+  "$excluded_local_stderr" \
   "WARNING: PR size advisory threshold exceeded" \
   "excluded changes must not trigger the advisory warning"
+
+all_excluded_local_repo="$workspace/local-all-excluded"
+all_excluded_local_stdout="$workspace/local-all-excluded.stdout"
+all_excluded_local_stderr="$workspace/local-all-excluded.stderr"
+create_preflight_fixture "$all_excluded_local_repo"
+make_lines 700 "$all_excluded_local_repo/generated/client.txt"
+(
+  cd "$all_excluded_local_repo"
+  git add generated/client.txt
+  git commit --quiet -m "test: create fully excluded change"
+)
+run_preflight_fixture \
+  "$all_excluded_local_repo" \
+  "$all_excluded_local_stdout" \
+  "$all_excluded_local_stderr"
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "local preflight must succeed when every changed file is excluded (status $fixture_status)"
+fi
+assert_contains \
+  "$all_excluded_local_stderr" \
+  "All changed files are excluded" \
+  "local preflight must emit the all-excluded advisory on stderr"
+assert_not_contains \
+  "$all_excluded_local_stdout" \
+  "All changed files are excluded" \
+  "local preflight must keep the all-excluded advisory out of stdout"
+assert_contains \
+  "$all_excluded_local_stdout" \
+  "Preflight OK · PR size: 0 changed lines (0 insertions, 0 deletions; advisory threshold: 600)" \
+  "local preflight must report zero counts normally when every changed file is excluded"
 
 assert_contains \
   "$REUSABLE_WORKFLOW" \
@@ -224,8 +258,8 @@ assert_not_contains \
   "the reusable workflow must not implement a label override"
 assert_not_contains \
   "$REUSABLE_WORKFLOW" \
-  "exit 1" \
-  "the reusable workflow must not fail solely because the advisory threshold was exceeded"
+  "::error::PR too large" \
+  "the reusable workflow must not emit the removed hard-failure error"
 assert_contains \
   "$CALLER_WORKFLOW" \
   "name: PR Size Check" \

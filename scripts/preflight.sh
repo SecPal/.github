@@ -531,7 +531,7 @@ else
 
     # Report when all files were excluded, then continue with zero counts.
     if [ -n "$RAW_DIFF_OUTPUT" ] && [ -z "$DIFF_OUTPUT" ]; then
-      echo "⚠️  All changed files are excluded (lock files, license files, etc.)"
+      echo "⚠️  All changed files are excluded (lock files, license files, etc.)" >&2
     fi
 
     # Use --numstat for locale-independent parsing.
