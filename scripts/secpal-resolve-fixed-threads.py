@@ -183,6 +183,19 @@ def read_pull_request(
     return PullRequestState(state=state, head_sha=head_sha, threads=threads)
 
 
+def require_expected_pull_request(
+    pull_request: PullRequestState,
+    expected_head: str,
+) -> None:
+    if pull_request.state != "OPEN":
+        raise ResolutionError(f"pull request is {pull_request.state.lower()}, not open")
+    if pull_request.head_sha != expected_head.lower():
+        raise ResolutionError(
+            f"pull request head changed: expected {expected_head.lower()}, "
+            f"observed {pull_request.head_sha}"
+        )
+
+
 def resolve_threads(
     repository: str,
     number: int,
@@ -194,13 +207,7 @@ def resolve_threads(
 ) -> dict[str, Any]:
     requested = set(thread_ids)
     pull_request = read_pull_request(repository, number, requested, runner)
-    if pull_request.state != "OPEN":
-        raise ResolutionError(f"pull request is {pull_request.state.lower()}, not open")
-    if pull_request.head_sha != expected_head.lower():
-        raise ResolutionError(
-            f"pull request head changed: expected {expected_head.lower()}, "
-            f"observed {pull_request.head_sha}"
-        )
+    require_expected_pull_request(pull_request, expected_head)
 
     already_resolved = sorted(
         thread_id
@@ -216,6 +223,12 @@ def resolve_threads(
 
     if apply:
         for thread_id in pending:
+            current = read_pull_request(repository, number, {thread_id}, runner)
+            require_expected_pull_request(current, expected_head)
+            if current.threads[thread_id].is_resolved:
+                raise ResolutionError(
+                    f"target thread changed before resolution: {thread_id} is resolved"
+                )
             data = _graphql(RESOLVE_MUTATION, {"threadId": thread_id}, runner)
             mutation = data.get("resolveReviewThread")
             thread = mutation.get("thread") if isinstance(mutation, dict) else None

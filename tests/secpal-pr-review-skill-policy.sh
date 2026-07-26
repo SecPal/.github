@@ -14,6 +14,7 @@ REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.jso
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
 FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
+SIMPLE_RESOLVER="$REPO_ROOT/scripts/secpal-resolve-fixed-threads.py"
 INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 GOVERNANCE_SUITE="$REPO_ROOT/tests/review-governance-suite.sh"
@@ -24,7 +25,7 @@ fail() {
   exit 1
 }
 
-for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$FAST_PATH" "$REGISTRY" "$PLAN_SCHEMA" "$FAST_SCHEMA"; do
+for required in "$SKILL" "$CONTRACT" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" "$REGISTRY" "$PLAN_SCHEMA" "$FAST_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
 test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executable'
@@ -70,6 +71,17 @@ grep -Fq 'secpal-pr-review.py' "$SKILL" || fail 'skill does not route reads thro
 grep -Fq 'secpal-pr-review-actions.py' "$SKILL" || fail 'skill does not route bounded writes through action helper'
 grep -Fq 'explicit PR-feedback remediation request' "$SKILL" || fail 'skill trigger is not narrow'
 grep -Fq 'not a reviewer' "$SKILL" || fail 'skill reviewer boundary is missing'
+simple_skill_section="$(sed -n '/^## Simple fixed-thread resolution$/,/^## /p' "$SKILL")"
+test -n "$simple_skill_section" || fail 'skill simple-resolution route is missing'
+grep -Fq 'scripts/secpal-resolve-fixed-threads.py' <<<"$simple_skill_section" \
+  || fail 'skill does not route fixed-and-pushed requests through the simple resolver'
+if grep -Fq 'resolve-batch' <<<"$simple_skill_section"; then
+  fail 'skill simple-resolution route still invokes the readiness batch'
+fi
+grep -Fq 'Simple resolution-only path' "$CONTRACT" \
+  || fail 'contract does not define the simple resolution-only path'
+grep -Fq 'scripts/secpal-resolve-fixed-threads.py' "$CONTRACT" \
+  || fail 'contract does not bind the simple resolver'
 
 git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
   || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"
@@ -83,12 +95,16 @@ if grep -En '/home/secpal' "$INTEGRATION"; then
 fi
 grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'guarded-action unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'simple resolver unit tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill policy tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill integration tests are not enforced in CI'
 grep -Fq './tests/review-governance-suite.sh' "$REGISTRY" \
   || fail 'repository governance suite is not registered'
+grep -Fq 'tests/secpal-resolve-fixed-threads-unit.py' "$REGISTRY" \
+  || fail 'simple resolver unit tests are not registered'
 
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml

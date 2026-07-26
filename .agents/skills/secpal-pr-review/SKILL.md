@@ -9,9 +9,26 @@ Use this skill only when the user explicitly asks to process already-completed
 pull-request feedback for a specific repository and PR number. This skill is not a reviewer: it independently verifies reviewer leads and remediates only findings
 that source, tests, and repository context prove valid.
 
+## Simple fixed-thread resolution
+
+When the user asks only to resolve explicitly named review threads whose
+findings have already been evaluated, fixed where necessary, validated,
+committed, and pushed, use the central source repository's
+`scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
+request number, expected current head OID, and thread IDs. The command rechecks
+the open PR, expected head, membership, and target state immediately before
+each write.
+
+This resolution-only path does not capture or reclassify PR-wide feedback, run
+validation, inspect CI or readiness, create commits, push, or make a merge
+decision. Report the exact resolved and already-resolved targets, then stop.
+Use the full workflow below only when the user asks to process feedback,
+perform remediation, audit readiness, or evaluate merge authorization.
+
 ## Required inputs and boundaries
 
-Require all of the following before starting:
+For the full feedback-remediation workflow, require all of the following before
+starting:
 
 - an explicit PR-feedback remediation request;
 - the exact `owner/repository` and pull request number;
@@ -47,6 +64,8 @@ directories above it. Use that source repository's:
   feedback capture and guarded batch-resolution path;
 - `scripts/secpal-pr-review-actions.py attest-validation` for one deterministic
   complete-validation attestation bound to the finished local head; and
+- `scripts/secpal-resolve-fixed-threads.py` only for the resolution-only path
+  defined above; and
 - `scripts/secpal-pr-review.py` plus the legacy action commands only when the
   user explicitly selects forensic/audit snapshot mode.
 
@@ -55,6 +74,8 @@ mutation command to the evidence helper. Execute configured validation commands
 as argument arrays in the target repository, without a shell.
 
 ## Run the finite invocation
+
+The following state machine applies only to the full feedback-remediation path.
 
 1. Create a mode-`0700` temporary session directory. Capture stable feedback
    once with `resolve-batch --capture-reviewed-state`; do not create a Package

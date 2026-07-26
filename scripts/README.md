@@ -48,6 +48,17 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+### `secpal-resolve-fixed-threads.py`
+
+Resolves only explicitly named review threads after their findings have already
+been evaluated, fixed where necessary, validated, committed, and pushed. It
+binds the operation to the caller-provided PR head, rechecks the open PR, head,
+membership, and exact target state immediately before each write, and keeps
+thread resolution separate from CI and merge-readiness decisions.
+
+See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
+the bounded safety contract and usage.
+
 ### `install-secpal-pr-review-skill.sh`
 
 After Package 2.2 is merged, installs the repository-owned skill as a direct

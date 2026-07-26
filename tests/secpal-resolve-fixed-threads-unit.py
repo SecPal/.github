@@ -96,7 +96,9 @@ class ResolveFixedThreadsTests(TestCase):
         fake = FakeGh(
             [
                 read_response(threads=[(first, False), (second, False)]),
+                read_response(threads=[(first, False)]),
                 resolve_response(first),
+                read_response(threads=[(second, False)]),
                 resolve_response(second),
             ]
         )
@@ -111,7 +113,7 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
         self.assertEqual(result["resolved"], [first, second])
-        self.assertEqual(len(fake.calls), 3)
+        self.assertEqual(len(fake.calls), 5)
 
     def test_already_resolved_target_is_idempotent(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -144,6 +146,26 @@ class ResolveFixedThreadsTests(TestCase):
                 runner=fake,
             )
         self.assertEqual(len(fake.calls), 1)
+
+    def test_head_change_after_initial_read_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                read_response(head="a" * 40, threads=[(thread_id, False)]),
+                read_response(head="b" * 40, threads=[(thread_id, False)]),
+            ]
+        )
+
+        with self.assertRaisesRegex(MODULE.ResolutionError, "head changed"):
+            MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
+        self.assertEqual(len(fake.calls), 2)
 
     def test_missing_target_blocks_before_mutation(self) -> None:
         fake = FakeGh([read_response(threads=[])])

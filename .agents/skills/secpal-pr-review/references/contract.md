@@ -46,6 +46,25 @@ in the same invocation and reruns only its affected focused command. A
 read-only transport or pagination failure may receive one bounded retry. A
 mutation failure or unknown write result is never retried.
 
+## Simple resolution-only path
+
+An explicit request only to resolve named review threads that have already been
+evaluated, fixed where necessary, validated, committed, and pushed uses
+`scripts/secpal-resolve-fixed-threads.py` instead of the normal remediation
+state machine.
+
+This path requires the exact repository, pull request number, expected current
+head OID, and thread IDs. It verifies the open PR, expected head, and thread
+membership in one bounded initial read. Immediately before each write, it
+rechecks the open PR, expected head, and exact target state, then verifies that
+the mutation response identifies the requested resolved thread. A changed head,
+closed PR, missing target, or externally changed target blocks the next write.
+
+The resolution-only path performs no feedback classification, validation,
+attestation, commit, push, Required Check read, readiness audit, review request,
+or merge operation. It is not selected when the user asks to process feedback,
+perform remediation, audit readiness, or evaluate merge authorization.
+
 ## Normal fast-path state machine
 
 ```text
