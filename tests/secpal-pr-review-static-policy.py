@@ -33,6 +33,14 @@ class LoopSite:
     iterator: str
 
 
+@dataclass(frozen=True)
+class ClassShape:
+    bases: tuple[str, ...]
+    keywords: tuple[tuple[str | None, str], ...]
+    decorators: tuple[str, ...]
+    type_parameters: tuple[str, ...]
+
+
 ACTION_CALLS = (
     ProcessCall(
         None,
@@ -498,6 +506,60 @@ SAFE_SYS_MODULES_STORES = {
         ),
     },
 }
+RESOLVER_TOP_LEVEL_FUNCTIONS = {
+    "_body_digest",
+    "_consume_api_call",
+    "_consume_comment",
+    "_consume_thread",
+    "_digest_json",
+    "_graphql",
+    "_load_evidence_helper",
+    "_reject_nonfinite_json_constant",
+    "_run_gh",
+    "load_expected_targets",
+    "load_repository_limits",
+    "main",
+    "parse_args",
+    "read_stable_target_thread",
+    "read_target_thread",
+    "require_expected_target",
+    "resolve_threads",
+    "validate_expected_targets",
+    "validate_request",
+}
+RESOLVER_CLASS_SHAPES = {
+    "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",), ()),
+    "InvocationBudget": ClassShape((), (), ("dataclass",), ()),
+    "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",), ()),
+    "ResolutionError": ClassShape(("RuntimeError",), (), (), ()),
+    "TargetRead": ClassShape((), (), ("dataclass(frozen=True)",), ()),
+    "ThreadCommentState": ClassShape((), (), ("dataclass(frozen=True)",), ()),
+    "ThreadState": ClassShape((), (), ("dataclass(frozen=True)",), ()),
+}
+SAFE_RESOLVER_FUNCTION_REFERENCES = {
+    DynamicImportCall(
+        ("load_expected_targets",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("resolve_threads",),
+        "_run_gh",
+    ),
+}
+SAFE_RESOLVER_LAMBDAS = {
+    DynamicImportCall(
+        ("load_expected_targets",),
+        "lambda item: item.comment_id",
+    ),
+    DynamicImportCall(
+        ("read_target_thread",),
+        "lambda item: item.comment_id",
+    ),
+    DynamicImportCall(
+        ("validate_expected_targets",),
+        "lambda item: item.comment_id",
+    ),
+}
 RESOLVER_LOOP_SITES = {
     LoopSite("for", ("_graphql",), "variables.items()"),
     LoopSite("for", ("load_expected_targets",), "threads"),
@@ -506,7 +568,7 @@ RESOLVER_LOOP_SITES = {
     LoopSite(
         "for",
         ("read_target_thread",),
-        "range(budget.remaining_api_calls)",
+        "range(budget.maximum_api_calls - budget.api_calls)",
     ),
     LoopSite("for", ("read_target_thread",), "nodes"),
     LoopSite(
@@ -613,13 +675,70 @@ class PolicyVisitor(ast.NodeVisitor):
         )
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        if self.bounded_resolver:
+            observed_shape = ClassShape(
+                tuple(ast.unparse(base) for base in node.bases),
+                tuple(
+                    (keyword.arg, ast.unparse(keyword.value))
+                    for keyword in node.keywords
+                ),
+                tuple(ast.unparse(value) for value in node.decorator_list),
+                tuple(ast.unparse(value) for value in node.type_params),
+            )
+            if (
+                self.classes
+                or self.functions
+                or RESOLVER_CLASS_SHAPES.get(node.name) != observed_shape
+            ):
+                self.finding(
+                    node,
+                    "resolver class shape is outside the closed allowlist",
+                )
+            for statement in node.body:
+                safe_docstring = (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                )
+                safe_field = (
+                    isinstance(statement, ast.AnnAssign)
+                    and isinstance(statement.target, ast.Name)
+                    and statement.simple == 1
+                    and (
+                        statement.value is None
+                        or isinstance(statement.value, ast.Constant)
+                    )
+                )
+                if not safe_docstring and not safe_field:
+                    self.finding(
+                        statement,
+                        "resolver class body is outside the data-only allowlist",
+                    )
         self.classes.append(node.name)
         self.generic_visit(node)
         self.classes.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        if self.bounded_resolver and node.name in {"__iter__", "__next__"}:
-            self.finding(node, "resolver-defined iterators are prohibited")
+        if self.bounded_resolver:
+            if isinstance(node, ast.AsyncFunctionDef):
+                self.finding(node, "async resolver functions are prohibited")
+            if node.decorator_list or node.type_params:
+                self.finding(
+                    node,
+                    "decorated or generic resolver functions are prohibited",
+                )
+            if self.functions:
+                self.finding(node, "nested resolver functions are prohibited")
+            elif self.classes:
+                self.finding(
+                    node,
+                    "resolver methods are prohibited",
+                )
+            elif node.name not in RESOLVER_TOP_LEVEL_FUNCTIONS:
+                self.finding(
+                    node,
+                    "resolver function is outside the closed allowlist",
+                )
         self.functions.append(node.name)
         self.generic_visit(node)
         self.functions.pop()
@@ -664,6 +783,22 @@ class PolicyVisitor(ast.NodeVisitor):
             parent = self.parents.get(node)
             if not isinstance(parent, ast.Attribute) or parent.value is not node:
                 self.finding(node, f"bare {node.id} module reference is prohibited")
+        if (
+            self.bounded_resolver
+            and node.id in self.top_level_functions
+            and isinstance(node.ctx, ast.Load)
+        ):
+            parent = self.parents.get(node)
+            direct_call = isinstance(parent, ast.Call) and parent.func is node
+            reference = DynamicImportCall(tuple(self.functions), node.id)
+            if (
+                not direct_call
+                and reference not in SAFE_RESOLVER_FUNCTION_REFERENCES
+            ):
+                self.finding(
+                    node,
+                    "resolver function reference is outside the closed allowlist",
+                )
         if node.id in {
             "__builtins__",
             "__import__",
@@ -789,6 +924,7 @@ class PolicyVisitor(ast.NodeVisitor):
         if (
             self.bounded_resolver
             and len(self.functions) == 1
+            and not self.classes
             and isinstance(node.func, ast.Name)
             and node.func.id in self.top_level_functions
         ):
@@ -840,6 +976,16 @@ class PolicyVisitor(ast.NodeVisitor):
                 node,
                 f"prohibited process-capable call: {node.func.attr}",
             )
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        if self.bounded_resolver:
+            expression = DynamicImportCall(
+                tuple(self.functions),
+                ast.unparse(node),
+            )
+            if expression not in SAFE_RESOLVER_LAMBDAS:
+                self.finding(node, "resolver lambda is outside the closed allowlist")
         self.generic_visit(node)
 
     def _inspect_process_call(self, node: ast.Call) -> None:
@@ -1099,25 +1245,126 @@ def self_test() -> None:
             "launch(arguments)\n"
         ),
         "direct-recursion": (
-            "def poll():\n"
-            "    return poll()\n"
+            "def resolve_threads():\n"
+            "    return resolve_threads()\n"
         ),
         "mutual-recursion": (
-            "def first():\n"
-            "    return second()\n"
-            "def second():\n"
-            "    return first()\n"
+            "def resolve_threads():\n"
+            "    return read_target_thread()\n"
+            "def read_target_thread():\n"
+            "    return resolve_threads()\n"
+        ),
+        "method-recursion": (
+            "@dataclass\n"
+            "class InvocationBudget:\n"
+            "    def consume_api_call(self):\n"
+            "        return self.consume_api_call()\n"
+        ),
+        "method-alias-recursion": (
+            "@dataclass\n"
+            "class InvocationBudget:\n"
+            "    def consume_api_call(self):\n"
+            "        callback = self.consume_api_call\n"
+            "        return callback()\n"
+        ),
+        "method-type-dispatch-recursion": (
+            "@dataclass\n"
+            "class InvocationBudget:\n"
+            "    def consume_api_call(self):\n"
+            "        return type(self).consume_api_call(self)\n"
+        ),
+        "inherited-dispatch-surface": (
+            "@dataclass\n"
+            "class InvocationBudget(Path):\n"
+            "    maximum_api_calls: int\n"
+        ),
+        "metaclass-dispatch-surface": (
+            "@dataclass\n"
+            "class InvocationBudget(metaclass=type):\n"
+            "    maximum_api_calls: int\n"
+        ),
+        "generic-dispatch-surface": (
+            "@dataclass\n"
+            "class InvocationBudget[T]:\n"
+            "    maximum_api_calls: int\n"
+        ),
+        "executable-class-body": (
+            "@dataclass\n"
+            "class InvocationBudget:\n"
+            "    callback = resolve_threads()\n"
+        ),
+        "decorated-function-dispatch": (
+            "@dataclass\n"
+            "def resolve_threads():\n"
+            "    pass\n"
+        ),
+        "async-function-dispatch": (
+            "async def resolve_threads():\n"
+            "    pass\n"
+        ),
+        "top-level-alias-recursion": (
+            "def resolve_threads():\n"
+            "    callback = resolve_threads\n"
+            "    return callback()\n"
+        ),
+        "nested-function-recursion": (
+            "def resolve_threads():\n"
+            "    def poll():\n"
+            "        return poll()\n"
+            "    return poll()\n"
+        ),
+        "lambda-recursion": (
+            "def resolve_threads():\n"
+            "    poll = lambda: poll()\n"
+            "    return poll()\n"
         ),
     }
+    resolver_specific_messages = {
+        "direct-recursion": "recursive resolver call graph is prohibited",
+        "mutual-recursion": "recursive resolver call graph is prohibited",
+        "method-recursion": "resolver methods are prohibited",
+        "method-alias-recursion": "resolver methods are prohibited",
+        "method-type-dispatch-recursion": "resolver methods are prohibited",
+        "inherited-dispatch-surface": (
+            "resolver class shape is outside the closed allowlist"
+        ),
+        "metaclass-dispatch-surface": (
+            "resolver class shape is outside the closed allowlist"
+        ),
+        "generic-dispatch-surface": (
+            "resolver class shape is outside the closed allowlist"
+        ),
+        "executable-class-body": (
+            "resolver class body is outside the data-only allowlist"
+        ),
+        "decorated-function-dispatch": (
+            "decorated or generic resolver functions are prohibited"
+        ),
+        "async-function-dispatch": "async resolver functions are prohibited",
+        "top-level-alias-recursion": (
+            "resolver function reference is outside the closed allowlist"
+        ),
+        "nested-function-recursion": "nested resolver functions are prohibited",
+        "lambda-recursion": "resolver lambda is outside the closed allowlist",
+    }
     for name, source in resolver_specific_unsafe.items():
-        if not inspect_source(
+        findings = inspect_source(
             source,
             "secpal-resolve-fixed-threads.py",
             (),
             bounded_resolver=True,
-        ):
+        )
+        if not findings:
             raise SystemExit(
                 f"static policy resolver fixture was not detected: {name}"
+            )
+        expected_message = resolver_specific_messages.get(name)
+        if expected_message is not None and not any(
+            expected_message in finding for finding in findings
+        ):
+            raise SystemExit(
+                "static policy resolver fixture was detected for the wrong reason: "
+                f"{name}: {findings}"
             )
 
     source_specific_unsafe = (

@@ -159,32 +159,23 @@ class InvocationBudget:
     threads: int = 0
     comments: int = 0
 
-    def consume_api_call(self) -> None:
-        if self.api_calls >= self.maximum_api_calls:
-            raise ResolutionError("registered API call limit reached")
-        self.api_calls += 1
 
-    def consume_thread(self) -> None:
-        if self.threads >= self.maximum_threads:
-            raise ResolutionError("registered review thread limit reached")
-        self.threads += 1
+def _consume_api_call(budget: InvocationBudget) -> None:
+    if budget.api_calls >= budget.maximum_api_calls:
+        raise ResolutionError("registered API call limit reached")
+    budget.api_calls += 1
 
-    def consume_comment(self) -> None:
-        if self.comments >= self.maximum_comments:
-            raise ResolutionError("registered review comment limit reached")
-        self.comments += 1
 
-    @property
-    def remaining_api_calls(self) -> int:
-        return self.maximum_api_calls - self.api_calls
+def _consume_thread(budget: InvocationBudget) -> None:
+    if budget.threads >= budget.maximum_threads:
+        raise ResolutionError("registered review thread limit reached")
+    budget.threads += 1
 
-    @property
-    def remaining_threads(self) -> int:
-        return self.maximum_threads - self.threads
 
-    @property
-    def remaining_comments(self) -> int:
-        return self.maximum_comments - self.comments
+def _consume_comment(budget: InvocationBudget) -> None:
+    if budget.comments >= budget.maximum_comments:
+        raise ResolutionError("registered review comment limit reached")
+    budget.comments += 1
 
 
 def load_repository_limits(repository: str) -> RepositoryLimits:
@@ -293,7 +284,7 @@ def _graphql(
     for key, value in variables.items():
         flag = "-F" if isinstance(value, int) else "-f"
         arguments.extend([flag, f"{key}={value}"])
-    budget.consume_api_call()
+    _consume_api_call(budget)
     payload = runner(arguments)
     if payload.get("errors"):
         raise ResolutionError("GitHub GraphQL request failed")
@@ -479,7 +470,7 @@ def read_target_thread(
     pagination_complete = False
     api_pages = 0
 
-    for _page in range(budget.remaining_api_calls):
+    for _page in range(budget.maximum_api_calls - budget.api_calls):
         variables: dict[str, str | int] = {"threadId": thread_id}
         if after is not None:
             variables["commentsAfter"] = after
@@ -492,7 +483,7 @@ def read_target_thread(
             raise ResolutionError(
                 f"target thread does not belong to the pull request: {thread_id}"
             )
-        budget.consume_thread()
+        _consume_thread(budget)
         pull_request = node.get("pullRequest")
         if not isinstance(pull_request, dict):
             raise ResolutionError("target thread pull request is missing")
@@ -575,7 +566,7 @@ def read_target_thread(
                 raise ResolutionError(
                     f"target thread pagination repeated comment: {comment_id}"
                 )
-            budget.consume_comment()
+            _consume_comment(budget)
             comments[comment_id] = ThreadCommentState(
                 comment_id=comment_id,
                 body_digest=_body_digest(body),
@@ -779,15 +770,18 @@ def resolve_threads(
             len(initial_targets[thread_id].thread.comments) * 2
             for thread_id in thread_ids
         )
-        if budget.remaining_api_calls < minimum_recheck_pages + len(pending):
+        if (
+            budget.maximum_api_calls - budget.api_calls
+            < minimum_recheck_pages + len(pending)
+        ):
             raise ResolutionError(
                 "registered API call limit cannot cover all target rechecks and writes"
             )
-        if budget.remaining_threads < minimum_recheck_pages:
+        if budget.maximum_threads - budget.threads < minimum_recheck_pages:
             raise ResolutionError(
                 "registered review thread limit cannot cover all target rechecks"
             )
-        if budget.remaining_comments < minimum_recheck_comments:
+        if budget.maximum_comments - budget.comments < minimum_recheck_comments:
             raise ResolutionError(
                 "registered review comment limit cannot cover all target rechecks"
             )
