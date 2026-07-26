@@ -69,7 +69,7 @@ body:
         - [ ] Code follows project style guidelines (Pint, PHPStan, etc.)
         - [ ] Test coverage maintained or improved
         - [ ] No breaking changes (or documented if necessary)
-        - [ ] LOC count ≤ 600 (excluding tests, or marked with `large-pr-approved` label)
+        - [ ] PR addresses one logical topic and remains reviewable; line-count warnings are advisory
     validations:
       required: true
 

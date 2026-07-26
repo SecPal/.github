@@ -173,7 +173,7 @@ The hooks are installed as symlinks in `.git/hooks/`, ensuring they automaticall
   - **PHP/Laravel**: Pint, PHPStan, tests
   - **Node.js**: ESLint, TypeScript, tests, npm audit
   - **OpenAPI**: Spectral/Redocly linting
-- PR size limit (600 lines, configurable with `.preflight-allow-large-pr`)
+- PR size reporting with a 600-line advisory threshold and repository exclusions
 
 **Manual Usage:**
 

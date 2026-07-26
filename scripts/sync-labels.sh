@@ -55,7 +55,6 @@ declare -a LABELS=(
   # Automation labels
   "dependabot|0366d6|Pull requests created by Dependabot"
   "github-actions|0366d6|Pull requests that update GitHub Actions workflows"
-  "large-pr-approved|FFA500|Approved large PR (boilerplate/templates that cannot be split)"
 )
 
 # Check if gh CLI is installed
