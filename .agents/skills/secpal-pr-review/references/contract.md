@@ -59,6 +59,15 @@ membership in one bounded initial read. Immediately before each write, it
 rechecks the open PR, expected head, and exact target state, then verifies that
 the mutation response identifies the requested resolved thread. A changed head,
 closed PR, missing target, or externally changed target blocks the next write.
+Only repositories in the canonical production registry are accepted. The
+registry's API-call and review-thread limits bound the complete invocation, and
+the helper resolves `gh` through the accepted trusted executable and environment
+boundary.
+
+Duplicate or malformed direct-call inputs fail before the first read. If a
+later target fails after an earlier resolution succeeded, the helper stops
+without retry, emits one structured report naming resolved, failed, and
+unattempted targets, and exits nonzero.
 
 The resolution-only path performs no feedback classification, validation,
 attestation, commit, push, Required Check read, readiness audit, review request,

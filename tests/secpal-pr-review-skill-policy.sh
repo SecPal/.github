@@ -55,21 +55,39 @@ for phrase in \
   grep -Fqi "$phrase" "$CONTRACT" || fail "missing contract phrase: $phrase"
 done
 
-if grep -En 'sleep\(|time\.sleep|while[[:space:]]+true|retrying' "$ACTIONS" "$FAST_PATH"; then
+polling_pattern='sleep\(|time\.sleep|while[[:space:]]+true|retrying'
+resolver_polling_pattern="$polling_pattern|while[[:space:]]+True"
+prohibited_authority_pattern='gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue'
+shell_execution_pattern='subprocess\.(run|Popen).*shell[[:space:]]*=[[:space:]]*True|(^|[^[:alnum:]_])eval\('
+
+if grep -En "$polling_pattern" "$ACTIONS" "$FAST_PATH"; then
+  fail 'mutation helper contains polling behavior'
+fi
+if grep -En "$resolver_polling_pattern" "$SIMPLE_RESOLVER"; then
   fail 'mutation helper contains polling behavior'
 fi
 
-if grep -En 'gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue' "$ACTIONS" "$FAST_PATH"; then
+if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER"; then
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
-if grep -En 'subprocess\.(run|Popen).*shell[[:space:]]*=[[:space:]]*True|(^|[^[:alnum:]_])eval\(' "$ACTIONS"; then
+if grep -En "$shell_execution_pattern" "$ACTIONS" "$SIMPLE_RESOLVER"; then
   fail 'mutation helper permits shell execution'
 fi
+
+grep -Eq "$resolver_polling_pattern" <<< 'while True:' \
+  || fail 'polling policy negative fixture was not detected'
+grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \
+  || fail 'authority policy negative fixture was not detected'
+grep -Eq "$shell_execution_pattern" <<< 'subprocess.run(command, shell=True)' \
+  || fail 'shell policy negative fixture was not detected'
 
 grep -Fq 'secpal-pr-review.py' "$SKILL" || fail 'skill does not route reads through P2.1 helper'
 grep -Fq 'secpal-pr-review-actions.py' "$SKILL" || fail 'skill does not route bounded writes through action helper'
 grep -Fq 'explicit PR-feedback remediation request' "$SKILL" || fail 'skill trigger is not narrow'
+sed -n '/^description:/p' "$SKILL" \
+  | grep -Fq 'fixed-thread resolution-only requests' \
+  || fail 'skill trigger does not advertise fixed-thread resolution-only requests'
 grep -Fq 'not a reviewer' "$SKILL" || fail 'skill reviewer boundary is missing'
 simple_skill_section="$(sed -n '/^## Simple fixed-thread resolution$/,/^## /p' "$SKILL")"
 test -n "$simple_skill_section" || fail 'skill simple-resolution route is missing'

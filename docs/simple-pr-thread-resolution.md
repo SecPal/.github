@@ -32,19 +32,26 @@ For a pull request with at most 100 review threads:
 
 Already-resolved targets are treated idempotently and require no write. A PR
 with more than 100 threads is paginated only until the required targets are
-found in each bounded read.
+found in each bounded read, subject to the canonical repository registry's
+review-thread and total API-call limits.
 
 ## Safety boundary
 
 The command verifies only the invariants required for this operation:
 
 - repository and PR exist;
+- repository is an exact entry in the canonical production registry;
 - PR is open;
 - current PR head equals the caller-provided expected head;
 - every requested thread belongs to that PR;
 - PR state, head, and exact target state are rechecked immediately before each
   mutation;
 - each mutation response confirms the exact requested thread as resolved.
+- the trusted `gh` executable and sanitized command environment are used.
+
+If a later target fails after an earlier resolution succeeds, the command stops
+without retry, prints a structured report naming resolved, failed, and
+unattempted targets, and exits nonzero.
 
 It intentionally does **not** block resolution because of:
 

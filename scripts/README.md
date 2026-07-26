@@ -54,7 +54,10 @@ Resolves only explicitly named review threads after their findings have already
 been evaluated, fixed where necessary, validated, committed, and pushed. It
 binds the operation to the caller-provided PR head, rechecks the open PR, head,
 membership, and exact target state immediately before each write, and keeps
-thread resolution separate from CI and merge-readiness decisions.
+thread resolution separate from CI and merge-readiness decisions. It accepts
+only canonical registry repositories, enforces their API and thread limits,
+uses the trusted GitHub CLI boundary, and reports partial failure without
+retrying a write.
 
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.

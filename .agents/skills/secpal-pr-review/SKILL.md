@@ -1,13 +1,16 @@
 ---
 name: secpal-pr-review
-description: Process completed review feedback for one named SecPal repository and pull request, only after an explicit PR-feedback remediation request. Do not use for generic review, PR creation, review requests, CI-only debugging, ordinary implementation, or merge-only work.
+description: Process completed review feedback for one named SecPal repository and pull request after an explicit remediation request, or handle explicitly named fixed-thread resolution-only requests after the findings were validated, committed, and pushed. Do not use for generic review, PR creation, review requests, CI-only debugging, ordinary implementation, or merge-only work.
 ---
 
 # SecPal PR Review
 
 Use this skill only when the user explicitly asks to process already-completed
-pull-request feedback for a specific repository and PR number. This skill is not a reviewer: it independently verifies reviewer leads and remediates only findings
-that source, tests, and repository context prove valid.
+pull-request feedback for a specific repository and PR number, or asks to
+resolve explicitly named threads whose findings have already been handled as
+defined below. This skill is not a reviewer: it independently verifies reviewer
+leads and remediates only findings that source, tests, and repository context
+prove valid.
 
 ## Simple fixed-thread resolution
 
