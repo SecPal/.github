@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-26 - Make Pull Request Size Reporting Advisory
+
+**Changed:**
+
+- replaced the local and reusable-workflow 600-line hard failure with
+  insertion, deletion, and total reporting plus a visible advisory warning
+- removed the local override file, hosted approval-label lookup, and the
+  pull-request token permissions used only for those bypasses
+- retained repository and caller-provided exclusion patterns, stable required
+  check identities, and the strict one-PR-one-topic rule without weakening any
+  formatting, test, security, signature, domain, REUSE, or conflict gate
+- added temporary-repository regression coverage for above-threshold,
+  at-threshold, excluded, caller-exclusion, permission, and policy behavior
+
+---
+
 ## 2026-07-23 - Supersede Retired Android Provisioning Documentation
 
 **Changed:**
@@ -1832,7 +1848,9 @@ The key insight: `require_ci_to_pass: false` allows Dependabot PRs to proceed wh
 - **Critical Rule #6: Issue Management Protocol** - ZERO TOLERANCE enforcement for immediate issue creation
 
   - MANDATORY: Create GitHub issue immediately when bug/issue found in old code that cannot be fixed now
-  - MANDATORY: EPIC + sub-issues structure for ALL features requiring >1 PR (>600 lines, multi-module, >1 day work)
+  - HISTORICAL: EPIC + sub-issues were mandatory for features requiring >1 PR
+    (>600 lines, multi-module, >1 day work); the fixed line-count trigger was
+    superseded by the 2026-07-26 advisory reporting policy
   - Top-level `issue_management` section in `copilot-config.yaml` (200+ lines) with complete protocol, workflows, examples
   - Pre-commit checklist item: "Issue Creation Protocol" validates all findings documented as GitHub issues
   - AI Execution Protocol updated with prominent reminder: "Found bug → CREATE GITHUB ISSUE NOW"

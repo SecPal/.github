@@ -279,6 +279,15 @@ if [ -f tests/preflight-check-system-requirements.sh ]; then
   }
 fi
 
+if [ -f tests/pr-size-advisory.sh ]; then
+  bash tests/pr-size-advisory.sh || {
+    echo "" >&2
+    echo "❌ Advisory PR-size reporting regression test failed!" >&2
+    echo "Keep local and hosted changed-line reporting advisory while preserving exclusions and stable check names." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/markdownlint-precommit-config.sh ]; then
   bash tests/markdownlint-precommit-config.sh || {
     echo "" >&2
@@ -518,48 +527,25 @@ else
       fi
     fi
 
-    # Check if all files were excluded
+    PR_SIZE_ADVISORY_THRESHOLD=600
+
+    # Report when all files were excluded, then continue with zero counts.
     if [ -n "$RAW_DIFF_OUTPUT" ] && [ -z "$DIFF_OUTPUT" ]; then
       echo "⚠️  All changed files are excluded (lock files, license files, etc.)"
-      echo "Preflight OK · Changed lines: 0 (after exclusions)"
-      exit 0
-    else
-      # Use --numstat for locale-independent parsing
-      INSERTIONS=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1} END {print ins+0}')
-      DELETIONS=$(echo "$DIFF_OUTPUT" | awk '{del+=$2} END {print del+0}')
-      CHANGED=$((INSERTIONS + DELETIONS))
+    fi
 
-      if [ "$CHANGED" -gt 600 ]; then
-        # Check for override file (similar to GitHub label for exceptional cases)
-        if [ -f "$ROOT_DIR/.preflight-allow-large-pr" ]; then
-          echo "⚠️  Large PR override active ($CHANGED > 600 lines). Remove .preflight-allow-large-pr when done." >&2
-        else
-          echo "" >&2
-          echo "═══════════════════════════════════════════════════════════════" >&2
-          echo "❌ PRE-PUSH CHECK FAILED: PR TOO LARGE" >&2
-          echo "═══════════════════════════════════════════════════════════════" >&2
-          echo "" >&2
-          echo "Your changes: $CHANGED lines ($INSERTIONS insertions, $DELETIONS deletions)" >&2
-          echo "Maximum allowed: 600 lines per PR" >&2
-          echo "" >&2
-          echo "Action required: Split changes into smaller, focused PRs" >&2
-          echo "" >&2
-          echo "💡 Available options:" >&2
-          echo "  1. Split PR: Recommended approach" >&2
-          echo "  2. Override check: touch .preflight-allow-large-pr" >&2
-          echo "" >&2
-          echo "Note: Lock files and license files are already excluded" >&2
-          echo "      See .preflight-exclude for custom exclusion patterns" >&2
-          echo "" >&2
-          echo "═══════════════════════════════════════════════════════════════" >&2
-          echo "Push aborted. Fix the issue above and try again." >&2
-          echo "═══════════════════════════════════════════════════════════════" >&2
-          echo "" >&2
-          exit 2
-        fi
-      else
-        echo "Preflight OK · Changed lines: $CHANGED"
-      fi
+    # Use --numstat for locale-independent parsing.
+    INSERTIONS=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1} END {print ins+0}')
+    DELETIONS=$(echo "$DIFF_OUTPUT" | awk '{del+=$2} END {print del+0}')
+    CHANGED=$((INSERTIONS + DELETIONS))
+    SIZE_REPORT="PR size: $CHANGED changed lines ($INSERTIONS insertions, $DELETIONS deletions; advisory threshold: $PR_SIZE_ADVISORY_THRESHOLD)"
+
+    if [ "$CHANGED" -gt "$PR_SIZE_ADVISORY_THRESHOLD" ]; then
+      echo "$SIZE_REPORT" >&2
+      echo "⚠️  WARNING: PR size advisory threshold exceeded ($CHANGED > $PR_SIZE_ADVISORY_THRESHOLD)." >&2
+      echo "Keep this pull request focused on one logical topic and make the review plan explicit." >&2
+    else
+      echo "Preflight OK · $SIZE_REPORT"
     fi
   fi
 fi

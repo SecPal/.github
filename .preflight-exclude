@@ -6,7 +6,7 @@
 
 # ==========================================
 
-# Files matching these patterns are excluded from the 600-line PR size check.
+# Files matching these patterns are excluded from the 600-line advisory threshold.
 
 # Each line is a grep-compatible regex pattern.
 
