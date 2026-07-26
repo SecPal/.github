@@ -94,17 +94,19 @@ INITIALIZE
   → FOCUSED_VALIDATION_WHILE_EDITING
   → HOLISTIC_AUDIT
   → COMPLETE_LOCAL_VALIDATION_ONCE
-  → SIGNED_COMMIT
-  → PUSH_ONCE
+  → IF_TRACKED_TREE_CHANGED
+      → SIGNED_COMMIT
+      → PUSH_ONCE
+    ELSE_VERIFY_UNCHANGED_HEAD
   → RESOLVE_FIXED_THREADS
   → STOP
 ```
 
 One normal invocation uses zero full snapshots, one stable-feedback read, zero
 hosted-CI or Required Check reads, one complete local validation, one holistic
-audit, one signed remediation commit, one ordinary push, and one target-bound
-simple resolution pass. Package-2.1/2.2 snapshots remain available only in
-explicit forensic mode.
+audit, at most one signed remediation commit and ordinary push, and one
+target-bound simple resolution pass. Package-2.1/2.2 snapshots remain available
+only in explicit forensic mode.
 
 There is no polling, waiting, sleep-and-retry, recursive review loop, automatic
 late-feedback incorporation, review request, Ready transition, merge, or
@@ -205,6 +207,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --repo SecPal/api \
   --pr 123 \
   --expected-head HEAD \
+  --reviewed-state SESSION/reviewed-feedback.json \
   --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
@@ -215,18 +218,23 @@ per registered gate. Evidence containing a token prefix, bearer authorization,
 or private-key marker is rejected rather than copied into the receipt. The
 capture reads one canonical projection containing feedback identities,
 digests, states, reactions, actors, the current head, and the reviewed base
-branch/SHA. It excludes Required
-Checks. The complete run produces a staged-tree receipt that includes the
-manual-gate evidence. After the signed commit, the same command binds that
-receipt only when the commit's sole parent, tree, signature, and receipt trailer
-match exactly; this does not rerun validation. The final attestation binds the
-repository, finished head, registry digest, command-set digest, successful
-result, validated tree, signed receipt, manual gates, and reviewed-feedback
-digests. Before the commit exists on GitHub, binding checks its local signature
-and configured format only. After the push, the simple resolver verifies the
-exact PR head and target identity without reading checks, rules, reactions,
-unrelated feedback, mergeability, or branch protection. Each target is read
-once initially and once immediately before its mutation; every mutation
+branch/SHA. It excludes Required Checks. The complete run produces a staged-tree
+receipt that includes the manual-gate evidence. When the tracked tree changed,
+the same command binds that receipt after the signed commit only when the
+commit's sole parent, tree, signature, and receipt trailer match exactly; this
+does not rerun validation. The final attestation binds the repository, finished
+head, registry digest, command-set digest, successful result, validated tree,
+signed receipt, manual gates, and reviewed-feedback digests. Before the commit
+exists on GitHub, binding checks its local signature and configured format only.
+When remediation changes no tracked source file and every finding is safely
+disposed, verify unchanged local, remote, and PR heads and skip the commit and
+push; never create an artificial empty commit.
+
+The simple resolver verifies the exact PR head and target identity without
+reading checks, rules, reactions, unrelated feedback, mergeability, or branch
+protection. It requires target comments to match the reviewed-state identities
+and digests. Immediately before each mutation or successful already-resolved
+report, it requires two equal complete target projections; every mutation
 response must confirm the exact resolved thread.
 
 The schema-bound `resolve-batch --apply` path remains available only when the

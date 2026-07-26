@@ -71,18 +71,21 @@ evaluated, fixed where necessary, validated, committed, and pushed uses
 state machine.
 
 This path requires the exact repository, pull request number, expected current
-head OID, and thread IDs. It directly reads every named target in one bounded
-logical initial read, verifies its PR membership, and records resolved/outdated
-state plus canonical comment identities, body digests, and reply relationships.
-Immediately before each write, it rechecks the open PR, expected head, and exact
-target state, then verifies that the mutation response identifies the requested
-resolved thread. A changed head, closed PR, missing target, or externally changed
+head OID, reviewed-state file, and thread IDs. It verifies the reviewed-state
+digests and requires every named target's comment identities, body digests, and
+reply relationships to match the feedback that was actually classified. It
+then verifies PR membership and records resolved/outdated state. Immediately
+before each write or successful already-resolved report, it performs two equal
+complete target projections, rechecks the open PR and expected head, and
+verifies the exact target state. It then verifies that a mutation response
+identifies the requested resolved thread. A changed head, closed PR, missing
+target, reviewed-state mismatch, unstable projection, or externally changed
 target blocks the next write. Only repositories in the canonical production
 registry are accepted. The registry's API-call, review-thread, and comment
 limits bound the complete invocation, and the helper resolves `gh` through the
 accepted trusted executable and environment boundary. Before the first write,
 it verifies that the remaining budgets cover the minimum known cost of every
-target recheck and mutation.
+stable target recheck and mutation.
 
 Duplicate or malformed direct-call inputs fail before the first read. If a
 later target fails after an earlier resolution succeeded, the helper stops
@@ -104,16 +107,20 @@ INITIALIZE
   → FOCUSED_VALIDATION_WHILE_EDITING
   → HOLISTIC_AUDIT
   → COMPLETE_LOCAL_VALIDATION_ONCE
-  → SIGNED_COMMIT
-  → PUSH_ONCE
+  → IF_TRACKED_TREE_CHANGED
+      → SIGNED_COMMIT
+      → PUSH_ONCE
+    ELSE_VERIFY_UNCHANGED_HEAD
   → RESOLVE_FIXED_THREADS
   → STOP
 ```
 
 A security blocker terminates at the state that detects it. A recoverable local
-error does not advance the state or consume a remediation cycle. If
-classification proves that no actionable work exists, the invocation reports
-`NO_ACTIONABLE_FINDINGS` without creating a remediation commit.
+error does not advance the state or consume a remediation cycle. When
+remediation changes no tracked source file and every finding is safely disposed,
+the invocation does not create an artificial commit: it verifies the unchanged
+local, remote, and PR head, resolves eligible reviewed threads against that
+head, and reports `NO_ACTIONABLE_FINDINGS`.
 
 ### State rules
 
@@ -138,6 +145,11 @@ staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
 manual gate. Time is informational only and cannot determine validity.
 
+`IF_TRACKED_TREE_CHANGED` selects only between the proven staged tree and the
+reviewed tree. When remediation changes no tracked source file, it takes
+`ELSE_VERIFY_UNCHANGED_HEAD`, proves local, remote, and PR heads still equal the
+reviewed head, and skips `SIGNED_COMMIT` and `PUSH_ONCE`.
+
 `SIGNED_COMMIT` creates one cryptographically
 signed commit with the receipt digest as its single
 `SecPal-Validation-Receipt` trailer and proves that its sole parent, tree, and
@@ -150,11 +162,12 @@ hooks, or uses administrator authority. After the push it verifies only local,
 remote, and PR head equality.
 
 `RESOLVE_FIXED_THREADS` invokes `scripts/secpal-resolve-fixed-threads.py` for
-the exact eligible thread IDs and pushed head. Resolution depends only on the
-open PR, exact head, target membership, stable target-comment state, and exact
-mutation response. It does not read or depend on hosted CI, Required Checks,
-CodeQL, mergeability, branch protection, PR reactions, unrelated feedback,
-validation attestations, or worktree state.
+the exact eligible thread IDs, current head, and reviewed-state file. Resolution
+depends only on the open PR, exact head, target membership, equality with the
+reviewed target-comment identities and digests, two equal complete current
+target projections, and exact mutation response. It does not read or depend on
+hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
+reactions, unrelated feedback, validation attestations, or worktree state.
 
 `STOP` reports the commit, branch, remote synchronization, local validation,
 worktree state, PR identity, and resolution results. The workflow never merges;

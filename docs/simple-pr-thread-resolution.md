@@ -53,8 +53,11 @@ The command verifies only the invariants required for this operation:
 - PR is open;
 - current PR head equals the caller-provided expected current head OID;
 - every requested thread belongs to that PR;
+- every requested thread and its comment identities, body digests, and reply
+  relationships match the supplied reviewed-state capture;
 - PR state, head, resolved/outdated state, and canonical target-comment state
-  are rechecked immediately before each mutation;
+  produce two equal complete projections immediately before each mutation or
+  successful already-resolved report;
 - new, edited, deleted, repeated, or incompletely paginated target comments
   block the mutation;
 - each mutation response confirms the exact requested thread as resolved;
@@ -86,6 +89,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --repo SecPal/api \
   --pr 123 \
   --expected-head 0123456789abcdef0123456789abcdef01234567 \
+  --reviewed-state REVIEWED_STATE.json \
   --thread-id PRRT_example
 ```
 
@@ -96,6 +100,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --repo SecPal/api \
   --pr 123 \
   --expected-head 0123456789abcdef0123456789abcdef01234567 \
+  --reviewed-state REVIEWED_STATE.json \
   --thread-id PRRT_example \
   --apply
 ```
@@ -105,8 +110,10 @@ Repeat `--thread-id` to resolve several fixed threads in one invocation.
 ## Operational rule
 
 When the user explicitly asks to resolve comments that have been fixed and
-pushed, use this simple path. Full review remediation also uses this path after
-its one signed push. Do not route resolution through the readiness or forensic
-workflow unless the current user instruction explicitly asks for CI inspection,
-readiness, or merge authorization. Even then, the CI observation is one bounded
-current-state read with no polling, waiting, sleeping, or automatic repetition.
+pushed, use this simple path with the reviewed-state capture for those findings.
+Full review remediation also uses this path after its signed push or after
+proving that a no-change remediation retained the already-pushed head. Do not
+route resolution through the readiness or forensic workflow unless the current
+user instruction explicitly asks for CI inspection, readiness, or merge
+authorization. Even then, the CI observation is one bounded current-state read
+with no polling, waiting, sleeping, or automatic repetition.

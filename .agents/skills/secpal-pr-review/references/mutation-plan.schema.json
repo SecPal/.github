@@ -262,6 +262,11 @@
             "pushed": { "type": "boolean" },
             "focused_validation_succeeded": { "type": "boolean" },
             "complete_validation_succeeded": { "type": "boolean" },
+            "required_ci_succeeded": {
+              "type": "boolean",
+              "deprecated": true,
+              "$comment": "Optional ignored compatibility field for persisted schema-version-1 plans; never a resolution precondition."
+            },
             "valid_signatures": { "type": "boolean" },
             "heads_match": { "type": "boolean" },
             "worktree_clean": { "type": "boolean" },

@@ -439,15 +439,30 @@ SAFE_GETATTR_CALLS = {
 }
 RESOLVER_LOOP_SITES = {
     LoopSite("for", ("_graphql",), "variables.items()"),
+    LoopSite("for", ("load_expected_targets",), "threads"),
+    LoopSite("for", ("load_expected_targets",), "thread_ids"),
+    LoopSite("for", ("load_expected_targets",), "thread['comments']"),
     LoopSite(
         "for",
         ("read_target_thread",),
         "range(budget.remaining_api_calls)",
     ),
     LoopSite("for", ("read_target_thread",), "nodes"),
+    LoopSite(
+        "for",
+        ("validate_expected_targets",),
+        "expected_targets.items()",
+    ),
+    LoopSite("for", ("validate_expected_targets",), "target.comments"),
     LoopSite("for", ("resolve_threads",), "thread_ids"),
-    LoopSite("for", ("resolve_threads",), "enumerate(pending)"),
+    LoopSite("for", ("resolve_threads",), "enumerate(thread_ids)"),
     LoopSite("comprehension", ("load_repository_limits",), "repositories"),
+    LoopSite("comprehension", ("load_expected_targets",), "feedback.values()"),
+    LoopSite(
+        "comprehension",
+        ("validate_expected_targets",),
+        "target.comments",
+    ),
     LoopSite(
         "comprehension",
         ("_run_gh",),

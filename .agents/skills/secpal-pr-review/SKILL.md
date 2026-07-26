@@ -18,9 +18,11 @@ When the user asks only to resolve explicitly named review threads whose
 findings have already been evaluated, fixed where necessary, validated,
 committed, and pushed, use the central source repository's
 `scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
-request number, expected current head OID, and thread IDs. The command rechecks
-the open PR, expected head, membership, resolved/outdated state, and canonical
-target-comment state immediately before each write.
+request number, expected current head OID, reviewed-state file, and thread IDs.
+The command requires every target's current comment identities and body digests
+to match that reviewed state, then rechecks the open PR, expected head,
+membership, resolved/outdated state, and canonical target-comment state
+immediately before each write.
 
 Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 
@@ -29,6 +31,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --repo OWNER/REPOSITORY \
   --pr PULL_REQUEST_NUMBER \
   --expected-head FULL_40_CHARACTER_HEAD_OID \
+  --reviewed-state REVIEWED_STATE.json \
   --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
@@ -115,17 +118,23 @@ The following state machine applies only to the full feedback-remediation path.
    every registered manual gate. Preserve its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
    receipt.
-6. Create one signed commit containing exactly that staged tree, use
-   the receipt digest as its single `SecPal-Validation-Receipt` trailer, and use
-   `attest-validation --bind-commit` to verify that signed binding and its local
-   signature without rerunning validation.
-7. Recheck the remote predecessor, push once without bypassing local hooks, and
-   verify that local, remote, and PR heads equal the signed commit. Do not inspect
-   hosted CI as a consequence of the push.
+6. When remediation changed the staged tree, create one signed commit containing
+   exactly that tree, use the receipt digest as its single
+   `SecPal-Validation-Receipt` trailer, and use `attest-validation --bind-commit`
+   to verify that signed binding and its local signature without rerunning
+   validation. When remediation changes no tracked source file and every finding
+   is safely disposed, prove the local, remote, and PR heads still equal the
+   reviewed head and skip the commit and push states; never create an artificial
+   empty commit.
+7. For the changed-tree path only, recheck the remote predecessor, push once
+   without bypassing local hooks, and verify that local, remote, and PR heads
+   equal the signed commit. Do not inspect hosted CI as a consequence of the
+   push.
 8. Resolve every eligible fixed thread with
    `scripts/secpal-resolve-fixed-threads.py --apply`, binding the exact
-   repository, PR, current head OID, and thread IDs. This reads only the named
-   targets and does not reclassify or gate on unrelated PR state.
+   repository, PR, current head OID, reviewed-state file, and thread IDs. This
+   reads only the named targets, requires their comments to equal the reviewed
+   feedback, and does not reclassify or gate on unrelated PR state.
 9. Report the commit, branch, remote synchronization, local validation,
    worktree state, PR identity, and resolution results, then stop. Merge remains
    separately authorized by the current user instruction.

@@ -54,14 +54,15 @@ signed push, or no commit movement for a no-push session.
 ### `secpal-resolve-fixed-threads.py`
 
 Resolves only explicitly named review threads after their findings have already
-been evaluated, fixed where necessary, validated, committed, and pushed. It
-binds the operation to the caller-provided PR head, rechecks the open PR, head,
-membership, resolved/outdated state, and canonical target-comment state
-immediately before each write, and keeps thread resolution separate from CI and
-merge-readiness decisions. It accepts only canonical registry repositories,
-enforces their shared API, thread, and comment limits, preflights every known
-read/write cost, uses the trusted GitHub CLI boundary, and reports partial
-failure without retrying a write.
+been evaluated, fixed where necessary, and validated. The supplied reviewed-state
+capture binds the operation to the caller-provided PR head and reviewed
+target-comment identities and digests. It requires two equal complete target
+projections immediately before each write or successful already-resolved
+report, and keeps thread resolution separate from CI and merge-readiness
+decisions. It accepts only canonical registry repositories, enforces their
+shared API, thread, and comment limits, preflights every known read/write cost,
+uses the trusted GitHub CLI boundary, and reports partial failure without
+retrying a write.
 
 This is the default resolver after review remediation pushes. A push, PR
 creation, prior request, repository convention, remediation request, or

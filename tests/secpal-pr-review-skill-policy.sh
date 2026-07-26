@@ -91,7 +91,7 @@ grep -Fq 'Push and PR creation never imply CI-observation authorization.' <<<"$t
 grep -F 'CODEX_AGENTS_SOURCE=' "$POLYSCOPE_INSTALLER" \
   | grep -Fq 'templates' \
   || fail 'Polyscope rollout no longer sources the repository template'
-grep -Fq 'ln -sfn "$CODEX_AGENTS_SOURCE" "$CODEX_AGENTS_TARGET"' "$POLYSCOPE_INSTALLER" \
+grep -Fq "ln -sfn \"\$CODEX_AGENTS_SOURCE\" \"\$CODEX_AGENTS_TARGET\"" "$POLYSCOPE_INSTALLER" \
   || fail 'Polyscope rollout no longer installs the direct global instruction symlink'
 
 normal_contract_state="$(
@@ -131,9 +131,22 @@ if grep -Eqi \
   fail 'default workflow text instructs CI waiting or a follow-up invocation'
 fi
 
-if grep -Fq 'required_ci_succeeded' "$PLAN_SCHEMA" "$ACTIONS"; then
+if grep -Fq 'required_ci_succeeded' "$ACTIONS"; then
   fail 'thread-resolution preconditions still require hosted CI'
 fi
+grep -Fq '"required_ci_succeeded"' "$PLAN_SCHEMA" \
+  || fail 'version-1 forensic plans lost the optional Required Check compatibility field'
+if jq -e \
+  '.["$defs"].operation.properties.resolution_preconditions.required | index("required_ci_succeeded")' \
+  "$PLAN_SCHEMA" >/dev/null; then
+  fail 'legacy Required Check compatibility field became a resolution precondition again'
+fi
+grep -Fq -- '--reviewed-state REVIEWED_STATE' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation does not bind mutations to reviewed feedback'
+grep -Fq 'When remediation changes no tracked source file' "$CONTRACT" \
+  || fail 'normal remediation lost the no-change resolution path'
+grep -Fq 'skip the commit and push states' "$SKILL" \
+  || fail 'skill still forces an artificial remediation commit'
 
 for phrase in \
   'zero review requests' \

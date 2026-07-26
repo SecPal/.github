@@ -5,9 +5,10 @@
 """Resolve explicitly named, already-fixed pull-request review threads.
 
 This command deliberately separates thread resolution from merge readiness.
-It verifies the pull request, expected head, and exact target thread identities,
-then resolves each still-open target once. It does not inspect CI, reactions,
-unrelated feedback, signatures, local validation receipts, or mergeability.
+It verifies the pull request, expected head, exact target thread identities, and
+the target-comment state captured when feedback was reviewed, then resolves each
+still-open target once. It does not inspect CI, reactions, unrelated feedback,
+signatures, local validation receipts, or mergeability.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ REGISTRY_SCHEMA_PATH = (
 )
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
 THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
 GH_GRAPHQL_PREFIX = ("api", "--hostname", "github.com", "graphql")
 
@@ -119,6 +121,12 @@ class ThreadState:
     thread_id: str
     is_resolved: bool
     is_outdated: bool
+    comments: tuple[ThreadCommentState, ...]
+
+
+@dataclass(frozen=True)
+class ExpectedThreadState:
+    thread_id: str
     comments: tuple[ThreadCommentState, ...]
 
 
@@ -296,6 +304,149 @@ def _body_digest(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _digest_json(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def load_expected_targets(
+    path: Path,
+    repository: str,
+    number: int,
+    thread_ids: list[str],
+) -> dict[str, ExpectedThreadState]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ResolutionError("reviewed feedback state is unavailable or malformed") from exc
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "head_sha",
+        "base_ref",
+        "base_sha",
+        "pr_state",
+        "pull_request_reactions",
+        "reviews",
+        "conversation_comments",
+        "threads",
+        "feedback_digest",
+        "state_digest",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ResolutionError("reviewed feedback state has an unsupported shape")
+    if (
+        payload.get("schema_version") != "1.0"
+        or payload.get("repository") != repository
+        or not isinstance(payload.get("pull_request_number"), int)
+        or isinstance(payload.get("pull_request_number"), bool)
+        or payload.get("pull_request_number") != number
+        or not isinstance(payload.get("head_sha"), str)
+        or not OID.fullmatch(payload["head_sha"])
+        or not isinstance(payload.get("base_ref"), str)
+        or not payload["base_ref"]
+        or not isinstance(payload.get("base_sha"), str)
+        or not OID.fullmatch(payload["base_sha"])
+        or payload.get("pr_state") != "OPEN"
+    ):
+        raise ResolutionError("reviewed feedback state identity does not match the request")
+    feedback = {
+        "pull_request_reactions": payload.get("pull_request_reactions"),
+        "reviews": payload.get("reviews"),
+        "conversation_comments": payload.get("conversation_comments"),
+        "threads": payload.get("threads"),
+    }
+    if any(not isinstance(value, list) for value in feedback.values()):
+        raise ResolutionError("reviewed feedback state is malformed")
+    feedback_digest = payload.get("feedback_digest")
+    state_digest = payload.get("state_digest")
+    if (
+        not isinstance(feedback_digest, str)
+        or not DIGEST.fullmatch(feedback_digest)
+        or feedback_digest != _digest_json(feedback)
+        or not isinstance(state_digest, str)
+        or not DIGEST.fullmatch(state_digest)
+        or state_digest
+        != _digest_json(
+            {
+                "repository": payload.get("repository"),
+                "pull_request_number": payload.get("pull_request_number"),
+                "head_sha": payload.get("head_sha"),
+                "base_ref": payload.get("base_ref"),
+                "base_sha": payload.get("base_sha"),
+                "pr_state": payload.get("pr_state"),
+                "feedback": feedback,
+            }
+        )
+    ):
+        raise ResolutionError("reviewed feedback state digest is invalid")
+
+    threads = payload["threads"]
+    indexed_threads: dict[str, dict[str, Any]] = {}
+    for thread in threads:
+        if (
+            not isinstance(thread, dict)
+            or set(thread) != {
+                "node_id",
+                "is_resolved",
+                "is_outdated",
+                "comments",
+            }
+            or not isinstance(thread.get("node_id"), str)
+            or not THREAD_ID.fullmatch(thread["node_id"])
+            or not isinstance(thread.get("is_resolved"), bool)
+            or not isinstance(thread.get("is_outdated"), bool)
+            or not isinstance(thread.get("comments"), list)
+            or thread["node_id"] in indexed_threads
+        ):
+            raise ResolutionError("reviewed feedback thread state is malformed")
+        indexed_threads[thread["node_id"]] = thread
+
+    expected_targets: dict[str, ExpectedThreadState] = {}
+    for thread_id in thread_ids:
+        thread = indexed_threads.get(thread_id)
+        if thread is None:
+            raise ResolutionError(
+                f"target thread is absent from reviewed feedback: {thread_id}"
+            )
+        comments: dict[str, ThreadCommentState] = {}
+        for comment in thread["comments"]:
+            if not isinstance(comment, dict):
+                raise ResolutionError("reviewed target comment state is malformed")
+            comment_id = comment.get("node_id")
+            body_digest = comment.get("body_digest")
+            reply_to_id = comment.get("reply_to_id")
+            if (
+                not isinstance(comment_id, str)
+                or not comment_id
+                or not isinstance(body_digest, str)
+                or not DIGEST.fullmatch(body_digest)
+                or (
+                    reply_to_id is not None
+                    and (not isinstance(reply_to_id, str) or not reply_to_id)
+                )
+                or comment_id in comments
+            ):
+                raise ResolutionError("reviewed target comment state is malformed")
+            comments[comment_id] = ThreadCommentState(
+                comment_id=comment_id,
+                body_digest=body_digest,
+                reply_to_id=reply_to_id,
+            )
+        expected_targets[thread_id] = ExpectedThreadState(
+            thread_id=thread_id,
+            comments=tuple(sorted(comments.values(), key=lambda item: item.comment_id)),
+        )
+    return expected_targets
+
+
 def read_target_thread(
     repository: str,
     number: int,
@@ -456,6 +607,22 @@ def read_target_thread(
     )
 
 
+def read_stable_target_thread(
+    repository: str,
+    number: int,
+    thread_id: str,
+    budget: InvocationBudget,
+    runner: Callable[[Sequence[str]], dict[str, Any]],
+) -> TargetRead:
+    first = read_target_thread(repository, number, thread_id, budget, runner)
+    second = read_target_thread(repository, number, thread_id, budget, runner)
+    if first != second:
+        raise ResolutionError(
+            f"target thread changed while rechecking comments: {thread_id}"
+        )
+    return second
+
+
 def require_expected_target(
     target: TargetRead,
     repository: str,
@@ -503,6 +670,46 @@ def validate_request(
         raise ResolutionError("apply must be boolean")
 
 
+def validate_expected_targets(
+    thread_ids: list[str],
+    expected_targets: dict[str, ExpectedThreadState] | None,
+) -> dict[str, ExpectedThreadState]:
+    if (
+        not isinstance(expected_targets, dict)
+        or set(expected_targets) != set(thread_ids)
+    ):
+        raise ResolutionError(
+            "reviewed target state must cover every requested thread exactly"
+        )
+    for thread_id, target in expected_targets.items():
+        if (
+            not isinstance(target, ExpectedThreadState)
+            or target.thread_id != thread_id
+            or tuple(sorted(target.comments, key=lambda item: item.comment_id))
+            != target.comments
+            or len({item.comment_id for item in target.comments})
+            != len(target.comments)
+        ):
+            raise ResolutionError("reviewed target state is malformed")
+        for comment in target.comments:
+            if (
+                not isinstance(comment, ThreadCommentState)
+                or not isinstance(comment.comment_id, str)
+                or not comment.comment_id
+                or not isinstance(comment.body_digest, str)
+                or not DIGEST.fullmatch(comment.body_digest)
+                or (
+                    comment.reply_to_id is not None
+                    and (
+                        not isinstance(comment.reply_to_id, str)
+                        or not comment.reply_to_id
+                    )
+                )
+            ):
+                raise ResolutionError("reviewed target comment state is malformed")
+    return expected_targets
+
+
 def resolve_threads(
     repository: str,
     number: int,
@@ -510,9 +717,11 @@ def resolve_threads(
     thread_ids: list[str],
     *,
     apply: bool,
+    expected_targets: dict[str, ExpectedThreadState] | None = None,
     runner: Callable[[Sequence[str]], dict[str, Any]] = _run_gh,
 ) -> dict[str, Any]:
     validate_request(repository, number, expected_head, thread_ids, apply)
+    reviewed_targets = validate_expected_targets(thread_ids, expected_targets)
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
         limits.maximum_api_calls,
@@ -529,13 +738,13 @@ def resolve_threads(
             runner,
         )
         require_expected_target(target, repository, number, expected_head)
+        if target.thread.comments != reviewed_targets[thread_id].comments:
+            raise ResolutionError(
+                f"target thread differs from reviewed feedback: {thread_id}"
+            )
         initial_targets[thread_id] = target
 
-    already_resolved = sorted(
-        thread_id
-        for thread_id in thread_ids
-        if initial_targets[thread_id].thread.is_resolved
-    )
+    already_resolved: list[str] = []
     pending = [
         thread_id
         for thread_id in thread_ids
@@ -545,12 +754,12 @@ def resolve_threads(
 
     if apply:
         minimum_recheck_pages = sum(
-            initial_targets[thread_id].api_pages
-            for thread_id in pending
+            initial_targets[thread_id].api_pages * 2
+            for thread_id in thread_ids
         )
         minimum_recheck_comments = sum(
-            len(initial_targets[thread_id].thread.comments)
-            for thread_id in pending
+            len(initial_targets[thread_id].thread.comments) * 2
+            for thread_id in thread_ids
         )
         if budget.remaining_api_calls < minimum_recheck_pages + len(pending):
             raise ResolutionError(
@@ -564,10 +773,10 @@ def resolve_threads(
             raise ResolutionError(
                 "registered review comment limit cannot cover all target rechecks"
             )
-        for index, thread_id in enumerate(pending):
+        for index, thread_id in enumerate(thread_ids):
             phase = "recheck"
             try:
-                current = read_target_thread(
+                current = read_stable_target_thread(
                     repository,
                     number,
                     thread_id,
@@ -584,6 +793,9 @@ def resolve_threads(
                     raise ResolutionError(
                         f"target thread changed before resolution: {thread_id}"
                     )
+                if initial_targets[thread_id].thread.is_resolved:
+                    already_resolved.append(thread_id)
+                    continue
                 phase = "mutation"
                 data = _graphql(
                     RESOLVE_MUTATION,
@@ -629,9 +841,15 @@ def resolve_threads(
                             "error": str(exc),
                         }
                     ],
-                    "unattempted": pending[index + 1 :],
+                    "unattempted": thread_ids[index + 1 :],
                 }
             applied.append(thread_id)
+    else:
+        already_resolved = sorted(
+            thread_id
+            for thread_id in thread_ids
+            if initial_targets[thread_id].thread.is_resolved
+        )
 
     return {
         "repository": repository,
@@ -652,6 +870,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--expected-head", required=True)
+    parser.add_argument("--reviewed-state", required=True)
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -671,12 +890,19 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        expected_targets = load_expected_targets(
+            Path(arguments.reviewed_state),
+            arguments.repo,
+            arguments.pr,
+            arguments.thread_id,
+        )
         result = resolve_threads(
             arguments.repo,
             arguments.pr,
             arguments.expected_head,
             arguments.thread_id,
             apply=arguments.apply,
+            expected_targets=expected_targets,
         )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
