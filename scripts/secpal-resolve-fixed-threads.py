@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import operator
 import re
 import subprocess
 import sys
@@ -317,7 +318,7 @@ def load_expected_targets(
     path: Path,
     repository: str,
     number: int,
-    thread_ids: list[str],
+    thread_ids: tuple[str, ...],
 ) -> dict[str, ExpectedThreadState]:
     try:
         payload = json.loads(
@@ -446,7 +447,9 @@ def load_expected_targets(
         expected_targets[thread_id] = ExpectedThreadState(
             thread_id=thread_id,
             is_resolved=thread["is_resolved"],
-            comments=tuple(sorted(comments.values(), key=lambda item: item.comment_id)),
+            comments=tuple(
+                sorted(comments.values(), key=operator.attrgetter("comment_id"))
+            ),
         )
     return expected_targets
 
@@ -606,7 +609,9 @@ def read_target_thread(
             thread_id=thread_id,
             is_resolved=is_resolved,
             is_outdated=is_outdated,
-            comments=tuple(sorted(comments.values(), key=lambda item: item.comment_id)),
+            comments=tuple(
+                sorted(comments.values(), key=operator.attrgetter("comment_id"))
+            ),
         ),
     )
 
@@ -653,7 +658,7 @@ def validate_request(
     repository: str,
     number: int,
     expected_head: str,
-    thread_ids: list[str],
+    thread_ids: tuple[str, ...],
     apply: bool,
 ) -> None:
     if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
@@ -662,7 +667,9 @@ def validate_request(
         raise ResolutionError("pull request number must be positive")
     if not isinstance(expected_head, str) or not OID.fullmatch(expected_head):
         raise ResolutionError("expected head must be a full 40-character commit OID")
-    if not isinstance(thread_ids, list) or not thread_ids:
+    if type(thread_ids) is not tuple:
+        raise ResolutionError("thread IDs must be supplied as an immutable tuple")
+    if not thread_ids:
         raise ResolutionError("at least one thread ID is required")
     if any(not isinstance(value, str) for value in thread_ids):
         raise ResolutionError("thread IDs must be GitHub review-thread node IDs")
@@ -675,7 +682,7 @@ def validate_request(
 
 
 def validate_expected_targets(
-    thread_ids: list[str],
+    thread_ids: tuple[str, ...],
     expected_targets: dict[str, ExpectedThreadState] | None,
 ) -> dict[str, ExpectedThreadState]:
     if (
@@ -690,7 +697,9 @@ def validate_expected_targets(
             not isinstance(target, ExpectedThreadState)
             or target.thread_id != thread_id
             or not isinstance(target.is_resolved, bool)
-            or tuple(sorted(target.comments, key=lambda item: item.comment_id))
+            or tuple(
+                sorted(target.comments, key=operator.attrgetter("comment_id"))
+            )
             != target.comments
             or len({item.comment_id for item in target.comments})
             != len(target.comments)
@@ -719,7 +728,7 @@ def resolve_threads(
     repository: str,
     number: int,
     expected_head: str,
-    thread_ids: list[str],
+    thread_ids: tuple[str, ...],
     *,
     apply: bool,
     expected_targets: dict[str, ExpectedThreadState] | None = None,
@@ -853,7 +862,7 @@ def resolve_threads(
                             "error": str(exc),
                         }
                     ],
-                    "unattempted": thread_ids[index + 1 :],
+                    "unattempted": list(thread_ids[index + 1 :]),
                 }
             applied.append(thread_id)
     else:
@@ -886,6 +895,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
+    arguments.thread_id = tuple(arguments.thread_id)
     try:
         validate_request(
             arguments.repo,

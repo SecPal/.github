@@ -128,6 +128,7 @@ def resolve_threads(
     reviewed_comments: dict[str, list[tuple[str, str, str | None]]] | None = None,
     expected_targets: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    immutable_thread_ids = tuple(thread_ids)
     if expected_targets is None:
         comments_by_thread = reviewed_comments or {}
         expected_targets = {
@@ -135,13 +136,13 @@ def resolve_threads(
                 thread_id,
                 comments_by_thread.get(thread_id),
             )
-            for thread_id in thread_ids
+            for thread_id in immutable_thread_ids
         }
     return MODULE.resolve_threads(
         repository,
         number,
         expected_head,
-        thread_ids,
+        immutable_thread_ids,
         apply=apply,
         expected_targets=expected_targets,
         runner=runner,
@@ -595,6 +596,16 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(fake.calls, [])
 
+    def test_request_requires_immutable_thread_id_tuple(self) -> None:
+        with self.assertRaisesRegex(MODULE.ResolutionError, "immutable tuple"):
+            MODULE.validate_request(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                ["PRRT_exampleOne"],
+                False,
+            )
+
     def test_callable_rejects_malformed_request_before_reading(self) -> None:
         fake = FakeGh([])
 
@@ -804,7 +815,7 @@ class ResolveFixedThreadsTests(TestCase):
                 "SecPal/api",
                 123,
                 "a" * 40,
-                ["PRRT_exampleOne"],
+                ("PRRT_exampleOne",),
                 apply=True,
                 runner=fake,
             )

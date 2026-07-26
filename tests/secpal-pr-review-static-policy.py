@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
+import symtable
 import sys
 
 
@@ -38,7 +39,6 @@ class ClassShape:
     bases: tuple[str, ...]
     keywords: tuple[tuple[str | None, str], ...]
     decorators: tuple[str, ...]
-    type_parameters: tuple[str, ...]
 
 
 ACTION_CALLS = (
@@ -185,6 +185,7 @@ ALLOWED_IMPORT_ROOTS = {
     "hashlib",
     "importlib",
     "json",
+    "operator",
     "os",
     "pathlib",
     "pwd",
@@ -253,6 +254,7 @@ ALLOWED_IMPORTS = {
         "import hashlib",
         "import importlib.util",
         "import json",
+        "import operator",
         "import re",
         "import subprocess",
         "import sys",
@@ -336,6 +338,7 @@ DIRECT_MODULE_ATTRIBUTES = {
     },
     "secpal-resolve-fixed-threads.py": {
         "importlib": {"util"},
+        "operator": {"attrgetter"},
         "sys": {"argv", "modules", "stderr"},
     },
 }
@@ -528,13 +531,13 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "validate_request",
 }
 RESOLVER_CLASS_SHAPES = {
-    "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",), ()),
-    "InvocationBudget": ClassShape((), (), ("dataclass",), ()),
-    "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",), ()),
-    "ResolutionError": ClassShape(("RuntimeError",), (), (), ()),
-    "TargetRead": ClassShape((), (), ("dataclass(frozen=True)",), ()),
-    "ThreadCommentState": ClassShape((), (), ("dataclass(frozen=True)",), ()),
-    "ThreadState": ClassShape((), (), ("dataclass(frozen=True)",), ()),
+    "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "InvocationBudget": ClassShape((), (), ("dataclass",)),
+    "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "ResolutionError": ClassShape(("RuntimeError",), (), ()),
+    "TargetRead": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "ThreadCommentState": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "ThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
 }
 SAFE_RESOLVER_FUNCTION_REFERENCES = {
     DynamicImportCall(
@@ -544,20 +547,6 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     DynamicImportCall(
         ("resolve_threads",),
         "_run_gh",
-    ),
-}
-SAFE_RESOLVER_LAMBDAS = {
-    DynamicImportCall(
-        ("load_expected_targets",),
-        "lambda item: item.comment_id",
-    ),
-    DynamicImportCall(
-        ("read_target_thread",),
-        "lambda item: item.comment_id",
-    ),
-    DynamicImportCall(
-        ("validate_expected_targets",),
-        "lambda item: item.comment_id",
     ),
 }
 RESOLVER_LOOP_SITES = {
@@ -683,7 +672,6 @@ class PolicyVisitor(ast.NodeVisitor):
                     for keyword in node.keywords
                 ),
                 tuple(ast.unparse(value) for value in node.decorator_list),
-                tuple(ast.unparse(value) for value in node.type_params),
             )
             if (
                 self.classes
@@ -722,10 +710,10 @@ class PolicyVisitor(ast.NodeVisitor):
         if self.bounded_resolver:
             if isinstance(node, ast.AsyncFunctionDef):
                 self.finding(node, "async resolver functions are prohibited")
-            if node.decorator_list or node.type_params:
+            if node.decorator_list:
                 self.finding(
                     node,
-                    "decorated or generic resolver functions are prohibited",
+                    "decorated resolver functions are prohibited",
                 )
             if self.functions:
                 self.finding(node, "nested resolver functions are prohibited")
@@ -980,12 +968,7 @@ class PolicyVisitor(ast.NodeVisitor):
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         if self.bounded_resolver:
-            expression = DynamicImportCall(
-                tuple(self.functions),
-                ast.unparse(node),
-            )
-            if expression not in SAFE_RESOLVER_LAMBDAS:
-                self.finding(node, "resolver lambda is outside the closed allowlist")
+            self.finding(node, "resolver lambdas are prohibited")
         self.generic_visit(node)
 
     def _inspect_process_call(self, node: ast.Call) -> None:
@@ -1089,11 +1072,26 @@ def inspect_source(
     bounded_resolver: bool = False,
 ) -> list[str]:
     tree = ast.parse(source, filename=label)
-    return PolicyVisitor(
+    findings = PolicyVisitor(
         label,
         expected_calls,
         bounded_resolver=bounded_resolver,
     ).inspect(tree)
+    if bounded_resolver:
+        tables = [symtable.symtable(source, label, "exec")]
+        while tables:
+            table = tables.pop()
+            tables.extend(table.get_children())
+            for identifier in table.get_identifiers():
+                symbol = table.lookup(identifier)
+                if symbol.is_parameter() and (
+                    symbol.is_assigned() or symbol.is_imported()
+                ):
+                    findings.append(
+                        f"{label}:{table.get_lineno()}: "
+                        f"resolver function parameters are immutable: {identifier}"
+                    )
+    return findings
 
 
 def self_test() -> None:
@@ -1111,6 +1109,21 @@ def self_test() -> None:
     )
     if inspect_source(safe, "safe-fixture", (safe_call,)):
         raise SystemExit("static policy safe fixture was rejected")
+
+    legacy_tree = ast.parse("def resolve_threads():\n    pass\n")
+    legacy_function = legacy_tree.body[0]
+    if hasattr(legacy_function, "type_params"):
+        del legacy_function.type_params
+    legacy_findings = PolicyVisitor(
+        "secpal-resolve-fixed-threads.py",
+        (),
+        bounded_resolver=True,
+    ).inspect(legacy_tree)
+    if legacy_findings:
+        raise SystemExit(
+            "static policy rejected a pre-PEP-695 function AST: "
+            f"{legacy_findings}"
+        )
 
     unsafe: dict[str, tuple[str, tuple[ProcessCall, ...]]] = {
         "shell-dispatch-through-env": (
@@ -1230,6 +1243,20 @@ def self_test() -> None:
             "    for thread_id in thread_ids:\n"
             "        pass\n"
         ),
+        "validated-parameter-rebound-to-file-iterator": (
+            "def resolve_threads(thread_ids):\n"
+            "    thread_ids = open('/dev/zero')\n"
+            "    for thread_id in thread_ids:\n"
+            "        pass\n"
+        ),
+        "validated-parameter-rebound-by-pattern": (
+            "def resolve_threads(thread_ids):\n"
+            "    match open('/dev/zero'):\n"
+            "        case thread_ids:\n"
+            "            pass\n"
+            "    for thread_id in thread_ids:\n"
+            "        pass\n"
+        ),
         "resolver-import-expansion": "import site\n",
         "aliased-dynamic-loader": (
             "import importlib.util\n"
@@ -1283,11 +1310,6 @@ def self_test() -> None:
             "class InvocationBudget(metaclass=type):\n"
             "    maximum_api_calls: int\n"
         ),
-        "generic-dispatch-surface": (
-            "@dataclass\n"
-            "class InvocationBudget[T]:\n"
-            "    maximum_api_calls: int\n"
-        ),
         "executable-class-body": (
             "@dataclass\n"
             "class InvocationBudget:\n"
@@ -1331,21 +1353,24 @@ def self_test() -> None:
         "metaclass-dispatch-surface": (
             "resolver class shape is outside the closed allowlist"
         ),
-        "generic-dispatch-surface": (
-            "resolver class shape is outside the closed allowlist"
-        ),
         "executable-class-body": (
             "resolver class body is outside the data-only allowlist"
         ),
         "decorated-function-dispatch": (
-            "decorated or generic resolver functions are prohibited"
+            "decorated resolver functions are prohibited"
         ),
         "async-function-dispatch": "async resolver functions are prohibited",
         "top-level-alias-recursion": (
             "resolver function reference is outside the closed allowlist"
         ),
         "nested-function-recursion": "nested resolver functions are prohibited",
-        "lambda-recursion": "resolver lambda is outside the closed allowlist",
+        "lambda-recursion": "resolver lambdas are prohibited",
+        "validated-parameter-rebound-to-file-iterator": (
+            "resolver function parameters are immutable"
+        ),
+        "validated-parameter-rebound-by-pattern": (
+            "resolver function parameters are immutable"
+        ),
     }
     for name, source in resolver_specific_unsafe.items():
         findings = inspect_source(
