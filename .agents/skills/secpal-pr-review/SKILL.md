@@ -19,8 +19,8 @@ findings have already been evaluated, fixed where necessary, validated,
 committed, and pushed, use the central source repository's
 `scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
 request number, expected current head OID, and thread IDs. The command rechecks
-the open PR, expected head, membership, and target state immediately before
-each write.
+the open PR, expected head, membership, resolved/outdated state, and canonical
+target-comment state immediately before each write.
 
 This resolution-only path does not capture or reclassify PR-wide feedback, run
 validation, inspect CI or readiness, create commits, push, or make a merge

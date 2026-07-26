@@ -23,17 +23,19 @@ make a merge decision.
 
 ## Normal cost
 
-For a pull request with at most 100 review threads:
+For each explicitly named review thread:
 
-1. one GraphQL read containing the PR state, head OID, and review-thread IDs;
-2. one last-moment PR, head, and target-thread read before each write;
+1. one direct GraphQL read containing its PR membership, PR state, head OID,
+   resolved/outdated state, and canonical comment state;
+2. one equivalent last-moment target read before each write;
 3. one GraphQL resolution mutation for each explicitly named thread that is
    still open after that read.
 
-Already-resolved targets are treated idempotently and require no write. A PR
-with more than 100 threads is paginated only until the required targets are
-found in each bounded read, subject to the canonical repository registry's
-review-thread and total API-call limits.
+Already-resolved targets are treated idempotently and require no write. Target
+comments are cursor-paginated as needed. The complete invocation shares the
+canonical repository registry's API-call, review-thread, and comment limits,
+and verifies before the first write that the remaining budgets cover every
+known target recheck and mutation.
 
 ## Safety boundary
 
@@ -44,9 +46,11 @@ The command verifies only the invariants required for this operation:
 - PR is open;
 - current PR head equals the caller-provided expected head;
 - every requested thread belongs to that PR;
-- PR state, head, and exact target state are rechecked immediately before each
-  mutation;
-- each mutation response confirms the exact requested thread as resolved.
+- PR state, head, resolved/outdated state, and canonical target-comment state
+  are rechecked immediately before each mutation;
+- new, edited, deleted, repeated, or incompletely paginated target comments
+  block the mutation;
+- each mutation response confirms the exact requested thread as resolved;
 - the trusted `gh` executable and sanitized command environment are used.
 
 If a later target fails after an earlier resolution succeeds, the command stops

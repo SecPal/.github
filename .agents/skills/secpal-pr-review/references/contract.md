@@ -54,15 +54,18 @@ evaluated, fixed where necessary, validated, committed, and pushed uses
 state machine.
 
 This path requires the exact repository, pull request number, expected current
-head OID, and thread IDs. It verifies the open PR, expected head, and thread
-membership in one bounded initial read. Immediately before each write, it
-rechecks the open PR, expected head, and exact target state, then verifies that
-the mutation response identifies the requested resolved thread. A changed head,
-closed PR, missing target, or externally changed target blocks the next write.
-Only repositories in the canonical production registry are accepted. The
-registry's API-call and review-thread limits bound the complete invocation, and
-the helper resolves `gh` through the accepted trusted executable and environment
-boundary.
+head OID, and thread IDs. It directly reads every named target in one bounded
+logical initial read, verifies its PR membership, and records resolved/outdated
+state plus canonical comment identities, body digests, and reply relationships.
+Immediately before each write, it rechecks the open PR, expected head, and exact
+target state, then verifies that the mutation response identifies the requested
+resolved thread. A changed head, closed PR, missing target, or externally changed
+target blocks the next write. Only repositories in the canonical production
+registry are accepted. The registry's API-call, review-thread, and comment
+limits bound the complete invocation, and the helper resolves `gh` through the
+accepted trusted executable and environment boundary. Before the first write,
+it verifies that the remaining budgets cover the minimum known cost of every
+target recheck and mutation.
 
 Duplicate or malformed direct-call inputs fail before the first read. If a
 later target fails after an earlier resolution succeeded, the helper stops

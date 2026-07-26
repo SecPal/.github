@@ -13,6 +13,7 @@ unrelated feedback, signatures, local validation receipts, or mergeability.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import re
@@ -36,14 +37,26 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
 
-READ_QUERY = """
-query($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      state
-      headRefOid
-      reviewThreads(first: 100, after: $after) {
-        nodes { id isResolved }
+TARGET_QUERY = """
+query($threadId: ID!, $commentsAfter: String) {
+  node(id: $threadId) {
+    __typename
+    ... on PullRequestReviewThread {
+      id
+      isResolved
+      isOutdated
+      pullRequest {
+        number
+        state
+        headRefOid
+        repository { nameWithOwner }
+      }
+      comments(first: 100, after: $commentsAfter) {
+        nodes {
+          id
+          body
+          replyTo { id }
+        }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -93,30 +106,44 @@ evidence = _load_evidence_helper()
 
 
 @dataclass(frozen=True)
-class ThreadState:
-    thread_id: str
-    is_resolved: bool
+class ThreadCommentState:
+    comment_id: str
+    body_digest: str
+    reply_to_id: str | None
 
 
 @dataclass(frozen=True)
-class PullRequestState:
+class ThreadState:
+    thread_id: str
+    is_resolved: bool
+    is_outdated: bool
+    comments: tuple[ThreadCommentState, ...]
+
+
+@dataclass(frozen=True)
+class TargetRead:
+    repository: str
+    pull_request_number: int
     state: str
     head_sha: str
-    threads: dict[str, ThreadState]
+    thread: ThreadState
 
 
 @dataclass(frozen=True)
 class RepositoryLimits:
     maximum_api_calls: int
     maximum_threads: int
+    maximum_comments: int
 
 
 @dataclass
 class InvocationBudget:
     maximum_api_calls: int
     maximum_threads: int
+    maximum_comments: int
     api_calls: int = 0
     threads: int = 0
+    comments: int = 0
 
     def consume_api_call(self) -> None:
         if self.api_calls >= self.maximum_api_calls:
@@ -128,6 +155,11 @@ class InvocationBudget:
             raise ResolutionError("registered review thread limit reached")
         self.threads += 1
 
+    def consume_comment(self) -> None:
+        if self.comments >= self.maximum_comments:
+            raise ResolutionError("registered review comment limit reached")
+        self.comments += 1
+
     @property
     def remaining_api_calls(self) -> int:
         return self.maximum_api_calls - self.api_calls
@@ -135,6 +167,10 @@ class InvocationBudget:
     @property
     def remaining_threads(self) -> int:
         return self.maximum_threads - self.threads
+
+    @property
+    def remaining_comments(self) -> int:
+        return self.maximum_comments - self.comments
 
 
 def load_repository_limits(repository: str) -> RepositoryLimits:
@@ -163,6 +199,7 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
     entry = matches[0]
     maximum_api_calls = entry.get("maximum_api_calls")
     maximum_threads = entry.get("maximum_threads")
+    maximum_comments = entry.get("maximum_comments")
     if (
         not isinstance(maximum_api_calls, int)
         or isinstance(maximum_api_calls, bool)
@@ -170,11 +207,15 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
         or not isinstance(maximum_threads, int)
         or isinstance(maximum_threads, bool)
         or maximum_threads < 1
+        or not isinstance(maximum_comments, int)
+        or isinstance(maximum_comments, bool)
+        or maximum_comments < 1
     ):
         raise ResolutionError("repository registry limits are malformed")
     return RepositoryLimits(
         maximum_api_calls=maximum_api_calls,
         maximum_threads=maximum_threads,
+        maximum_comments=maximum_comments,
     )
 
 
@@ -230,112 +271,186 @@ def _graphql(
     return data
 
 
-def read_pull_request(
+def _body_digest(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def read_target_thread(
     repository: str,
     number: int,
-    required_thread_ids: set[str],
+    thread_id: str,
     budget: InvocationBudget,
     runner: Callable[[Sequence[str]], dict[str, Any]],
-) -> PullRequestState:
-    owner, name = repository.split("/", 1)
-    threads: dict[str, ThreadState] = {}
+) -> TargetRead:
+    comments: dict[str, ThreadCommentState] = {}
     after: str | None = None
+    observed_repository: str | None = None
+    observed_number: int | None = None
     state: str | None = None
     head_sha: str | None = None
+    is_resolved: bool | None = None
+    is_outdated: bool | None = None
+    seen_cursors: set[str] = set()
     pagination_complete = False
 
     while budget.remaining_api_calls > 0:
-        variables: dict[str, str | int] = {
-            "owner": owner,
-            "name": name,
-            "number": number,
-        }
+        variables: dict[str, str | int] = {"threadId": thread_id}
         if after is not None:
-            variables["after"] = after
-        data = _graphql(READ_QUERY, variables, runner, budget)
-        repository_value = data.get("repository")
-        pull_request = (
-            repository_value.get("pullRequest")
+            variables["commentsAfter"] = after
+        data = _graphql(TARGET_QUERY, variables, runner, budget)
+        node = data.get("node")
+        if not isinstance(node, dict) or node.get("__typename") != (
+            "PullRequestReviewThread"
+        ):
+            raise ResolutionError(
+                f"target thread does not belong to the pull request: {thread_id}"
+            )
+        budget.consume_thread()
+        pull_request = node.get("pullRequest")
+        if not isinstance(pull_request, dict):
+            raise ResolutionError("target thread pull request is missing")
+        repository_value = pull_request.get("repository")
+        current_repository = (
+            repository_value.get("nameWithOwner")
             if isinstance(repository_value, dict)
             else None
         )
-        if not isinstance(pull_request, dict):
-            raise ResolutionError("pull request was not found")
+        current_number = pull_request.get("number")
 
         current_state = pull_request.get("state")
         current_head = pull_request.get("headRefOid")
-        if not isinstance(current_state, str) or not isinstance(current_head, str):
+        current_resolved = node.get("isResolved")
+        current_outdated = node.get("isOutdated")
+        if (
+            not isinstance(current_repository, str)
+            or not isinstance(current_number, int)
+            or isinstance(current_number, bool)
+            or not isinstance(current_state, str)
+            or not isinstance(current_head, str)
+            or node.get("id") != thread_id
+            or not isinstance(current_resolved, bool)
+            or not isinstance(current_outdated, bool)
+        ):
             raise ResolutionError("pull request identity is incomplete")
         if state is None:
+            observed_repository = current_repository
+            observed_number = current_number
             state = current_state
             head_sha = current_head.lower()
-        elif state != current_state or head_sha != current_head.lower():
-            raise ResolutionError("pull request changed while reading target threads")
+            is_resolved = current_resolved
+            is_outdated = current_outdated
+        elif (
+            observed_repository != current_repository
+            or observed_number != current_number
+            or state != current_state
+            or head_sha != current_head.lower()
+            or is_resolved != current_resolved
+            or is_outdated != current_outdated
+        ):
+            raise ResolutionError("target thread changed while reading comments")
 
-        connection = pull_request.get("reviewThreads")
+        connection = node.get("comments")
         if not isinstance(connection, dict):
-            raise ResolutionError("review thread connection is missing")
+            raise ResolutionError("target thread comment connection is missing")
         nodes = connection.get("nodes")
         if not isinstance(nodes, list):
-            raise ResolutionError("review thread list is malformed")
+            raise ResolutionError("target thread comment list is malformed")
         page_info = connection.get("pageInfo")
         if not isinstance(page_info, dict):
-            raise ResolutionError("review thread pagination is missing")
+            raise ResolutionError("target thread comment pagination is missing")
         has_next_page = page_info.get("hasNextPage")
         if not isinstance(has_next_page, bool):
-            raise ResolutionError("review thread pagination is malformed")
-        for node in nodes:
-            if not isinstance(node, dict):
-                raise ResolutionError("review thread entry is malformed")
-            thread_id = node.get("id")
-            is_resolved = node.get("isResolved")
-            if not isinstance(thread_id, str) or not isinstance(is_resolved, bool):
-                raise ResolutionError("review thread identity is incomplete")
-            if thread_id in threads:
-                raise ResolutionError(
-                    f"review thread pagination repeated thread: {thread_id}"
+            raise ResolutionError("target thread comment pagination is malformed")
+        for comment in nodes:
+            if not isinstance(comment, dict):
+                raise ResolutionError("target thread comment entry is malformed")
+            comment_id = comment.get("id")
+            body = comment.get("body")
+            reply_to = comment.get("replyTo")
+            reply_to_id = (
+                reply_to.get("id") if isinstance(reply_to, dict) else None
+            )
+            if (
+                not isinstance(comment_id, str)
+                or not comment_id
+                or not isinstance(body, str)
+                or (
+                    reply_to is not None
+                    and (
+                        not isinstance(reply_to, dict)
+                        or not isinstance(reply_to_id, str)
+                        or not reply_to_id
+                    )
                 )
-            budget.consume_thread()
-            threads[thread_id] = ThreadState(thread_id, is_resolved)
+            ):
+                raise ResolutionError("target thread comment identity is incomplete")
+            if comment_id in comments:
+                raise ResolutionError(
+                    f"target thread pagination repeated comment: {comment_id}"
+                )
+            budget.consume_comment()
+            comments[comment_id] = ThreadCommentState(
+                comment_id=comment_id,
+                body_digest=_body_digest(body),
+                reply_to_id=reply_to_id,
+            )
 
-        if required_thread_ids.issubset(threads):
-            pagination_complete = True
-            break
         if not has_next_page:
             pagination_complete = True
             break
-        if budget.remaining_threads == 0:
-            raise ResolutionError("registered review thread limit reached")
         end_cursor = page_info.get("endCursor")
         if (
             not isinstance(end_cursor, str)
             or not end_cursor
-            or end_cursor == after
+            or end_cursor in seen_cursors
         ):
-            raise ResolutionError("review thread pagination did not advance")
+            raise ResolutionError("target thread comment pagination did not advance")
+        seen_cursors.add(end_cursor)
         after = end_cursor
 
     if not pagination_complete:
         raise ResolutionError("registered API call limit reached")
-    assert state is not None and head_sha is not None
-    missing = sorted(required_thread_ids.difference(threads))
-    if missing:
-        raise ResolutionError(
-            f"target threads do not belong to the pull request: {', '.join(missing)}"
-        )
-    return PullRequestState(state=state, head_sha=head_sha, threads=threads)
+    assert (
+        observed_repository is not None
+        and observed_number is not None
+        and state is not None
+        and head_sha is not None
+        and is_resolved is not None
+        and is_outdated is not None
+    )
+    return TargetRead(
+        repository=observed_repository,
+        pull_request_number=observed_number,
+        state=state,
+        head_sha=head_sha,
+        thread=ThreadState(
+            thread_id=thread_id,
+            is_resolved=is_resolved,
+            is_outdated=is_outdated,
+            comments=tuple(sorted(comments.values(), key=lambda item: item.comment_id)),
+        ),
+    )
 
 
-def require_expected_pull_request(
-    pull_request: PullRequestState,
+def require_expected_target(
+    target: TargetRead,
+    repository: str,
+    number: int,
     expected_head: str,
 ) -> None:
-    if pull_request.state != "OPEN":
-        raise ResolutionError(f"pull request is {pull_request.state.lower()}, not open")
-    if pull_request.head_sha != expected_head.lower():
+    if (
+        target.repository != repository
+        or target.pull_request_number != number
+    ):
+        raise ResolutionError(
+            f"target thread does not belong to {repository}#{number}"
+        )
+    if target.state != "OPEN":
+        raise ResolutionError(f"pull request is {target.state.lower()}, not open")
+    if target.head_sha != expected_head.lower():
         raise ResolutionError(
             f"pull request head changed: expected {expected_head.lower()}, "
-            f"observed {pull_request.head_sha}"
+            f"observed {target.head_sha}"
         )
 
 
@@ -378,49 +493,71 @@ def resolve_threads(
     budget = InvocationBudget(
         limits.maximum_api_calls,
         limits.maximum_threads,
+        limits.maximum_comments,
     )
-    requested = set(thread_ids)
-    pull_request = read_pull_request(
-        repository,
-        number,
-        requested,
-        budget,
-        runner,
-    )
-    require_expected_pull_request(pull_request, expected_head)
+    initial_targets: dict[str, ThreadState] = {}
+    for thread_id in thread_ids:
+        target = read_target_thread(
+            repository,
+            number,
+            thread_id,
+            budget,
+            runner,
+        )
+        require_expected_target(target, repository, number, expected_head)
+        initial_targets[thread_id] = target.thread
 
     already_resolved = sorted(
         thread_id
         for thread_id in thread_ids
-        if pull_request.threads[thread_id].is_resolved
+        if initial_targets[thread_id].is_resolved
     )
     pending = [
         thread_id
         for thread_id in thread_ids
-        if not pull_request.threads[thread_id].is_resolved
+        if not initial_targets[thread_id].is_resolved
     ]
     applied: list[str] = []
 
     if apply:
-        if budget.remaining_api_calls < len(pending) * 2:
+        minimum_recheck_pages = sum(
+            max(1, (len(initial_targets[thread_id].comments) + 99) // 100)
+            for thread_id in pending
+        )
+        minimum_recheck_comments = sum(
+            len(initial_targets[thread_id].comments) for thread_id in pending
+        )
+        if budget.remaining_api_calls < minimum_recheck_pages + len(pending):
             raise ResolutionError(
                 "registered API call limit cannot cover all target rechecks and writes"
+            )
+        if budget.remaining_threads < minimum_recheck_pages:
+            raise ResolutionError(
+                "registered review thread limit cannot cover all target rechecks"
+            )
+        if budget.remaining_comments < minimum_recheck_comments:
+            raise ResolutionError(
+                "registered review comment limit cannot cover all target rechecks"
             )
         for index, thread_id in enumerate(pending):
             phase = "recheck"
             try:
-                current = read_pull_request(
+                current = read_target_thread(
                     repository,
                     number,
-                    {thread_id},
+                    thread_id,
                     budget,
                     runner,
                 )
-                require_expected_pull_request(current, expected_head)
-                if current.threads[thread_id].is_resolved:
+                require_expected_target(
+                    current,
+                    repository,
+                    number,
+                    expected_head,
+                )
+                if current.thread != initial_targets[thread_id]:
                     raise ResolutionError(
-                        "target thread changed before resolution: "
-                        f"{thread_id} is resolved"
+                        f"target thread changed before resolution: {thread_id}"
                     )
                 phase = "mutation"
                 data = _graphql(
@@ -449,7 +586,7 @@ def resolve_threads(
                 return {
                     "repository": repository,
                     "pull_request_number": number,
-                    "head_sha": pull_request.head_sha,
+                    "head_sha": expected_head.lower(),
                     "mode": "apply",
                     "status": "failed",
                     "already_resolved": already_resolved,
@@ -474,7 +611,7 @@ def resolve_threads(
     return {
         "repository": repository,
         "pull_request_number": number,
-        "head_sha": pull_request.head_sha,
+        "head_sha": expected_head.lower(),
         "mode": "apply" if apply else "dry-run",
         "status": "success",
         "already_resolved": already_resolved,
