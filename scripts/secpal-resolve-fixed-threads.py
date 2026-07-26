@@ -6,9 +6,9 @@
 
 This command deliberately separates thread resolution from merge readiness.
 It verifies the pull request, expected head, exact target thread identities, and
-the target-comment state captured when feedback was reviewed, then resolves each
-still-open target once. It does not inspect CI, reactions, unrelated feedback,
-signatures, local validation receipts, or mergeability.
+the target comments and resolution state captured when feedback was reviewed,
+then resolves each still-open target once. It does not inspect CI, reactions,
+unrelated feedback, signatures, local validation receipts, or mergeability.
 """
 
 from __future__ import annotations
@@ -127,6 +127,7 @@ class ThreadState:
 @dataclass(frozen=True)
 class ExpectedThreadState:
     thread_id: str
+    is_resolved: bool
     comments: tuple[ThreadCommentState, ...]
 
 
@@ -315,6 +316,10 @@ def _digest_json(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _reject_nonfinite_json_constant(value: str) -> Any:
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
 def load_expected_targets(
     path: Path,
     repository: str,
@@ -322,9 +327,14 @@ def load_expected_targets(
     thread_ids: list[str],
 ) -> dict[str, ExpectedThreadState]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ResolutionError("reviewed feedback state is unavailable or malformed") from exc
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except (OSError, ValueError) as exc:
+        raise ResolutionError(
+            "reviewed feedback state is unavailable or malformed"
+        ) from exc
     expected_keys = {
         "schema_version",
         "repository",
@@ -442,6 +452,7 @@ def load_expected_targets(
             )
         expected_targets[thread_id] = ExpectedThreadState(
             thread_id=thread_id,
+            is_resolved=thread["is_resolved"],
             comments=tuple(sorted(comments.values(), key=lambda item: item.comment_id)),
         )
     return expected_targets
@@ -685,6 +696,7 @@ def validate_expected_targets(
         if (
             not isinstance(target, ExpectedThreadState)
             or target.thread_id != thread_id
+            or not isinstance(target.is_resolved, bool)
             or tuple(sorted(target.comments, key=lambda item: item.comment_id))
             != target.comments
             or len({item.comment_id for item in target.comments})
@@ -738,7 +750,11 @@ def resolve_threads(
             runner,
         )
         require_expected_target(target, repository, number, expected_head)
-        if target.thread.comments != reviewed_targets[thread_id].comments:
+        reviewed_target = reviewed_targets[thread_id]
+        if (
+            target.thread.is_resolved != reviewed_target.is_resolved
+            or target.thread.comments != reviewed_target.comments
+        ):
             raise ResolutionError(
                 f"target thread differs from reviewed feedback: {thread_id}"
             )

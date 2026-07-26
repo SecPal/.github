@@ -19,10 +19,10 @@ findings have already been evaluated, fixed where necessary, validated,
 committed, and pushed, use the central source repository's
 `scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
 request number, expected current head OID, reviewed-state file, and thread IDs.
-The command requires every target's current comment identities and body digests
-to match that reviewed state, then rechecks the open PR, expected head,
-membership, resolved/outdated state, and canonical target-comment state
-immediately before each write.
+The command requires every target's current comment identities, body digests,
+and resolution state to match that reviewed state, then rechecks the open PR,
+expected head, membership, resolved/outdated state, and canonical
+target-comment state immediately before each write.
 
 Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 

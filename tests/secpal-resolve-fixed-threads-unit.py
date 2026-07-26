@@ -99,6 +99,8 @@ def target_response(
 def expected_thread_state(
     thread_id: str,
     comments: list[tuple[str, str, str | None]] | None = None,
+    *,
+    resolved: bool = False,
 ) -> Any:
     states = [
         MODULE.ThreadCommentState(
@@ -110,6 +112,7 @@ def expected_thread_state(
     ]
     return MODULE.ExpectedThreadState(
         thread_id=thread_id,
+        is_resolved=resolved,
         comments=tuple(sorted(states, key=lambda item: item.comment_id)),
     )
 
@@ -148,6 +151,9 @@ def resolve_threads(
 def reviewed_state_payload(
     thread_id: str,
     comments: list[tuple[str, str, str | None]],
+    *,
+    resolved: bool = False,
+    outdated: bool = False,
 ) -> dict[str, Any]:
     feedback = {
         "pull_request_reactions": [],
@@ -156,8 +162,8 @@ def reviewed_state_payload(
         "threads": [
             {
                 "node_id": thread_id,
-                "is_resolved": False,
-                "is_outdated": False,
+                "is_resolved": resolved,
+                "is_outdated": outdated,
                 "comments": [
                     {
                         "node_id": comment_id,
@@ -735,6 +741,9 @@ class ResolveFixedThreadsTests(TestCase):
             [thread_id],
             apply=True,
             runner=fake,
+            expected_targets={
+                thread_id: expected_thread_state(thread_id, resolved=True),
+            },
         )
 
         self.assertEqual(result["already_resolved"], [thread_id])
@@ -758,6 +767,9 @@ class ResolveFixedThreadsTests(TestCase):
             [thread_id],
             apply=True,
             runner=fake,
+            expected_targets={
+                thread_id: expected_thread_state(thread_id, resolved=True),
+            },
         )
 
         self.assertEqual(result["status"], "failed")
@@ -817,6 +829,114 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
         self.assertEqual(targets[thread_id], expected_thread_state(thread_id, comments))
+
+    def test_reviewed_state_loader_binds_resolution_state(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(
+            thread_id,
+            [("PRRC_root", "reviewed body", None)],
+            resolved=True,
+            outdated=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            targets = MODULE.load_expected_targets(
+                path,
+                "SecPal/api",
+                123,
+                [thread_id],
+            )
+
+        self.assertEqual(
+            targets[thread_id],
+            expected_thread_state(
+                thread_id,
+                [("PRRC_root", "reviewed body", None)],
+                resolved=True,
+            ),
+        )
+
+    def test_reopened_thread_after_reviewed_capture_blocks_before_mutation(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, resolved=False)])
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "differs from reviewed feedback",
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+                expected_targets={
+                    thread_id: expected_thread_state(thread_id, resolved=True),
+                },
+            )
+
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_outdated_change_after_reviewed_capture_remains_allowed(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, outdated=True)])
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=False,
+            runner=fake,
+        )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_nonfinite_reviewed_state_is_reported_without_traceback(self) -> None:
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with (
+                self.subTest(constant=constant),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "reviewed.json"
+                path.write_text(
+                    f'{{"pull_request_number": {constant}}}',
+                    encoding="utf-8",
+                )
+                stderr = StringIO()
+
+                with (
+                    mock.patch("sys.stderr", stderr),
+                    mock.patch.object(MODULE, "resolve_threads") as resolver,
+                ):
+                    exit_code = MODULE.main(
+                        [
+                            "--repo",
+                            "SecPal/api",
+                            "--pr",
+                            "123",
+                            "--expected-head",
+                            "a" * 40,
+                            "--reviewed-state",
+                            str(path),
+                            "--thread-id",
+                            "PRRT_exampleOne",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(
+                    "ERROR: reviewed feedback state is unavailable or malformed",
+                    stderr.getvalue(),
+                )
+                self.assertNotIn("Traceback", stderr.getvalue())
+                resolver.assert_not_called()
 
     def test_reviewed_state_loader_rejects_tampered_feedback(self) -> None:
         thread_id = "PRRT_exampleOne"

@@ -53,8 +53,9 @@ The command verifies only the invariants required for this operation:
 - PR is open;
 - current PR head equals the caller-provided expected current head OID;
 - every requested thread belongs to that PR;
-- every requested thread and its comment identities, body digests, and reply
-  relationships match the supplied reviewed-state capture;
+- every requested thread and its comment identities, body digests, reply
+  relationships, and resolution state match the supplied reviewed-state
+  capture;
 - PR state, head, resolved/outdated state, and canonical target-comment state
   produce two equal complete projections immediately before each mutation or
   successful already-resolved report;
