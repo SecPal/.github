@@ -79,6 +79,20 @@ import sys
 
 def unsafe_calls(source: str, label: str) -> list[str]:
     tree = ast.parse(source, filename=label)
+    shell_executable_names = {
+        "sh",
+        "bash",
+        "dash",
+        "fish",
+        "ksh",
+        "zsh",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+    }
     subprocess_modules: set[str] = set()
     subprocess_functions: set[str] = set()
     subprocess_shell_functions: set[str] = set()
@@ -175,8 +189,34 @@ def unsafe_calls(source: str, label: str) -> list[str]:
         )
         if not subprocess_call:
             continue
-        if node.args:
-            command = node.args[0]
+        command = node.args[0] if node.args else next(
+            (
+                keyword.value
+                for keyword in node.keywords
+                if keyword.arg == "args"
+            ),
+            None,
+        )
+        if isinstance(command, (ast.List, ast.Tuple)):
+            command_tokens = [
+                element.value
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+                else None
+                for element in command.elts
+            ]
+        else:
+            command_tokens = None
+        if command_tokens is not None:
+            if any(
+                command_tokens[index] == "pr"
+                and command_tokens[index + 1] in {"review", "ready", "merge"}
+                for index in range(len(command_tokens) - 1)
+            ):
+                findings.append(
+                    f"{label}:{node.lineno}: prohibited gh pr authority is exposed"
+                )
+        if command is not None:
             executable: str | None = None
             if isinstance(command, ast.Constant) and isinstance(command.value, str):
                 executable = command.value
@@ -189,20 +229,7 @@ def unsafe_calls(source: str, label: str) -> list[str]:
                 executable = command.elts[0].value
             if executable is not None:
                 command_name = executable.replace("\\", "/").rsplit("/", 1)[-1].lower()
-                if command_name in {
-                    "sh",
-                    "bash",
-                    "dash",
-                    "fish",
-                    "ksh",
-                    "zsh",
-                    "cmd",
-                    "cmd.exe",
-                    "powershell",
-                    "powershell.exe",
-                    "pwsh",
-                    "pwsh.exe",
-                }:
+                if command_name in shell_executable_names:
                     findings.append(
                         f"{label}:{node.lineno}: explicit shell dispatch is prohibited"
                     )
@@ -218,6 +245,29 @@ def unsafe_calls(source: str, label: str) -> list[str]:
                 findings.append(
                     f"{label}:{node.lineno}: subprocess shell execution is prohibited"
                 )
+            elif keyword.arg == "executable":
+                if (
+                    isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is None
+                ):
+                    continue
+                if (
+                    isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, str)
+                ):
+                    executable_name = (
+                        keyword.value.value.replace("\\", "/")
+                        .rsplit("/", 1)[-1]
+                        .lower()
+                    )
+                    if executable_name in shell_executable_names:
+                        findings.append(
+                            f"{label}:{node.lineno}: shell executable override is prohibited"
+                        )
+                else:
+                    findings.append(
+                        f"{label}:{node.lineno}: subprocess executable override cannot prove a non-shell target"
+                    )
     return findings
 
 
@@ -254,6 +304,27 @@ negative_fixtures = {
         "import subprocess\n"
         "subprocess.run(['/bin/bash', '-c', command])\n"
     ),
+    "array-gh-merge-authority": (
+        "import subprocess\n"
+        "gh = '/usr/bin/gh'\n"
+        "subprocess.run([gh, 'pr', 'merge', '123'])\n"
+    ),
+    "keyword-array-gh-ready-authority": (
+        "import subprocess\n"
+        "gh = '/usr/bin/gh'\n"
+        "subprocess.run(args=[gh, 'pr', 'ready', '123'])\n"
+    ),
+    "shell-executable-override": (
+        "import subprocess\n"
+        "subprocess.run(\n"
+        "    ['placeholder', '-c', command],\n"
+        "    executable='/bin/bash',\n"
+        ")\n"
+    ),
+    "dynamic-executable-override": (
+        "import subprocess\n"
+        "subprocess.run(command, executable=launcher)\n"
+    ),
 }
 for fixture_name, fixture_source in negative_fixtures.items():
     if not unsafe_calls(fixture_source, fixture_name):
@@ -263,6 +334,8 @@ safe_fixture = (
     "import subprocess\n"
     "subprocess.run(command)\n"
     "subprocess.Popen(command, shell=False)\n"
+    "subprocess.run(command, executable=None)\n"
+    "subprocess.run(command, executable='/usr/bin/git')\n"
 )
 if unsafe_calls(safe_fixture, "safe-fixture"):
     raise SystemExit("policy safe fixture was rejected")

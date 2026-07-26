@@ -36,6 +36,7 @@ REGISTRY_SCHEMA_PATH = (
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
+GH_GRAPHQL_PREFIX = ("api", "--hostname", "github.com", "graphql")
 
 TARGET_QUERY = """
 query($threadId: ID!, $commentsAfter: String) {
@@ -71,6 +72,7 @@ mutation($threadId: ID!) {
   }
 }
 """
+ALLOWED_GRAPHQL_DOCUMENTS = frozenset({TARGET_QUERY, RESOLVE_MUTATION})
 
 
 class ResolutionError(RuntimeError):
@@ -220,6 +222,18 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
 
 
 def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
+    if tuple(arguments[: len(GH_GRAPHQL_PREFIX)]) != GH_GRAPHQL_PREFIX:
+        raise ResolutionError("gh command is outside the allowed GraphQL surface")
+    query_documents = [
+        argument.removeprefix("query=")
+        for argument in arguments[len(GH_GRAPHQL_PREFIX) :]
+        if argument.startswith("query=")
+    ]
+    if (
+        len(query_documents) != 1
+        or query_documents[0] not in ALLOWED_GRAPHQL_DOCUMENTS
+    ):
+        raise ResolutionError("query is outside the GraphQL document allowlist")
     try:
         executable = evidence.resolve_trusted_executable("gh")
         completed = subprocess.run(
@@ -257,11 +271,10 @@ def _graphql(
     runner: Callable[[Sequence[str]], dict[str, Any]],
     budget: InvocationBudget,
 ) -> dict[str, Any]:
+    if query not in ALLOWED_GRAPHQL_DOCUMENTS:
+        raise ResolutionError("query is outside the GraphQL document allowlist")
     arguments: list[str] = [
-        "api",
-        "--hostname",
-        "github.com",
-        "graphql",
+        *GH_GRAPHQL_PREFIX,
         "-f",
         f"query={query}",
     ]

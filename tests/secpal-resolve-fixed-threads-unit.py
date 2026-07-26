@@ -796,9 +796,17 @@ class ResolveFixedThreadsTests(TestCase):
                 return_value=completed,
             ) as run,
         ):
-            self.assertEqual(MODULE._run_gh(["api", "graphql"]), {})
+            arguments = [
+                *MODULE.GH_GRAPHQL_PREFIX,
+                "-f",
+                f"query={MODULE.TARGET_QUERY}",
+            ]
+            self.assertEqual(MODULE._run_gh(arguments), {})
 
-        self.assertEqual(run.call_args.args[0], ["/usr/bin/gh", "api", "graphql"])
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/usr/bin/gh", *arguments],
+        )
         self.assertEqual(run.call_args.kwargs["env"], trusted_environment)
         self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
@@ -810,12 +818,55 @@ class ResolveFixedThreadsTests(TestCase):
             maximum_comments=1,
         )
 
-        self.assertEqual(MODULE._graphql("query {}", {}, fake, budget), {})
+        self.assertEqual(MODULE._graphql(MODULE.TARGET_QUERY, {}, fake, budget), {})
 
         self.assertEqual(
             fake.calls[0][:4],
             ["api", "--hostname", "github.com", "graphql"],
         )
+
+    def test_graphql_rejects_documents_outside_the_allowlist(self) -> None:
+        fake = FakeGh([])
+        budget = MODULE.InvocationBudget(
+            maximum_api_calls=1,
+            maximum_threads=1,
+            maximum_comments=1,
+        )
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "outside the GraphQL document allowlist",
+        ):
+            MODULE._graphql("mutation { mergePullRequest }", {}, fake, budget)
+
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(budget.api_calls, 0)
+
+    def test_run_gh_rejects_commands_outside_pinned_graphql_surface(self) -> None:
+        with mock.patch.object(MODULE.subprocess, "run") as run:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "outside the allowed GraphQL surface",
+            ):
+                MODULE._run_gh(["pr", "merge", "591"])
+
+        run.assert_not_called()
+
+    def test_run_gh_rejects_unapproved_graphql_documents(self) -> None:
+        with mock.patch.object(MODULE.subprocess, "run") as run:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "outside the GraphQL document allowlist",
+            ):
+                MODULE._run_gh(
+                    [
+                        *MODULE.GH_GRAPHQL_PREFIX,
+                        "-f",
+                        "query=mutation { mergePullRequest }",
+                    ]
+                )
+
+        run.assert_not_called()
 
     def test_run_gh_translates_process_launch_failure(self) -> None:
         with (
@@ -839,7 +890,13 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.ResolutionError,
                 "process launch failed",
             ):
-                MODULE._run_gh(["api", "graphql"])
+                MODULE._run_gh(
+                    [
+                        *MODULE.GH_GRAPHQL_PREFIX,
+                        "-f",
+                        f"query={MODULE.TARGET_QUERY}",
+                    ]
+                )
 
     def test_run_gh_redacts_failure_diagnostic(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -866,7 +923,13 @@ class ResolveFixedThreadsTests(TestCase):
             ),
         ):
             with self.assertRaises(MODULE.ResolutionError) as raised:
-                MODULE._run_gh(["api", "graphql"])
+                MODULE._run_gh(
+                    [
+                        *MODULE.GH_GRAPHQL_PREFIX,
+                        "-f",
+                        f"query={MODULE.TARGET_QUERY}",
+                    ]
+                )
 
         self.assertIn("[REDACTED]", str(raised.exception))
         self.assertNotIn("supersecret", str(raised.exception))
