@@ -9,6 +9,30 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-28 - Retire Changelog Polyscope Integration
+
+**Changed:**
+
+- removed the retired `SecPal/changelog` repository from managed Polyscope
+  validation, metadata links, generated local configuration, preview routing,
+  and systemd path watchers
+- retained only an inert `changelog` manifest tombstone so the unprivileged
+  rollout remains compatible with the already installed privileged helper
+- required that tombstone to match its exact fixed value and fail closed when
+  its legacy clone-root path exists, preventing an older installed renderer
+  from serving content through its retained compatibility route
+- kept the retired `changelog-` hostname prefix reserved as an explicit `404`
+  boundary so it cannot fall through to generic active-workspace routing
+- documented that rerunning the privileged system-component installer removes
+  the legacy changelog content mapping after a repository-set change while
+  retaining that fail-closed hostname boundary
+- kept stale Polyscope database rows unmanaged so an existing retired entry
+  cannot make the system server's post-start rollout fail and restart-loop
+- added regression coverage for workspaces and manifests without the retired
+  repository
+
+---
+
 ## 2026-07-26 - Make Pull Request Size Reporting Advisory
 
 **Changed:**

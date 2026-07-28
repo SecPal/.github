@@ -177,13 +177,6 @@ package_scripts = {
         "lint": "eslint .",
         "test": "node --test tests/**/*.mjs",
     },
-    "changelog": {
-        "build": "next build",
-        "check": "tsc --noEmit",
-        "lint": "eslint .",
-        "csp:check": "node scripts/generate-csp.mjs --check",
-        "preflight": "./scripts/preflight.sh",
-    },
     ".github": {
         "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
         "test": "npm run test:openapi-verified-presence",
@@ -718,42 +711,6 @@ applyTo: 'src/**/*.astro'
 - Run formatting, lint, typecheck, and build.
 "
 
-create_repo "changelog" "$common_header
-
-# Changelog Instructions
-
-## Always-On Rules
-
-- Run git status --short --branch before any write action.
-- Validate-first.
-
-## Issue And PR Discipline
-
-- The first PR state must be draft.
-
-## Required Validation
-
-- the smallest relevant validation passed for the touched area: formatting, lint, typecheck, and build when applicable
-- CHANGELOG.md was updated for real changes
-- no bypass was used
-
-## AI Findings Triage
-
-- Treat AI findings and AI-generated fix PRs as hints, not proof.
-- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant.
-- Green CI alone is not enough for AI-generated changes.
-" "nextjs-changelog.instructions.md" "---
-name: Next.js Changelog Rules
-applyTo: 'src/**/*.tsx'
----
-
-# Next.js Changelog Rules
-
-- Keep client-side JavaScript minimal.
-- Do not introduce server actions.
-- Run npm run build as the primary validation after source changes.
-"
-
 create_repo ".github" "$common_header
 
 # Org Instructions
@@ -862,6 +819,8 @@ repo_state = {
     'android': {'id': 'an123456', 'name': 'SecPal/android', 'path': str(workspace_root / 'android')},
     'secpal.app': {'id': 'sa123456', 'name': 'SecPal/secpal.app', 'path': str(workspace_root / 'secpal.app')},
     'guardguide.de': {'id': 'gd123456', 'name': 'SecPal/guardguide.de', 'path': str(workspace_root / 'guardguide.de')},
+    # Preserve a retired database row to prove rollout ignores repositories
+    # that are no longer part of the managed workspace.
     'changelog': {'id': 'ch123456', 'name': 'SecPal/changelog', 'path': str(workspace_root / 'changelog')},
     'GuardGuide': {'id': 'gg123456', 'name': 'SecPal/GuardGuide', 'path': str(workspace_root / 'GuardGuide')},
     '.github': {'id': 'gh123456', 'name': 'SecPal/.github', 'path': str(workspace_root / '.github')},
@@ -1930,7 +1889,6 @@ grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructi
 grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
 grep -q 'https://guardguide-de-{{worktree}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -q 'https://changelog-{{worktree}}.preview.secpal.dev' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
@@ -4182,11 +4140,6 @@ grep -qF '"label": "Build Watch"' "$workspace_root/guardguide.de/polyscope.local
 grep -qF 'Watching guardguide.de preview sources for changes...' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF 'public/og-default.svg' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF 'public/og-de.png' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF '"command": "npm run check && npm run lint && npm run csp:check && npm run build"' "$workspace_root/changelog/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/changelog/polyscope.local.json"
-grep -qF '"label": "Fix current findings"' "$workspace_root/changelog/polyscope.local.json"
-grep -qF '"label": "Build Watch"' "$workspace_root/changelog/polyscope.local.json"
-grep -qF 'Watching changelog preview sources for changes...' "$workspace_root/changelog/polyscope.local.json"
 grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 
@@ -4339,7 +4292,7 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 command = module.build_static_preview_build_watch_command(
-    "changelog",
+    "static-site",
     ["public", "src"],
     ignored_paths=["public/generated.svg"],
 )
@@ -4432,7 +4385,29 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output"
+if [ "$(grep -cF 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output")" -ne 2 ]; then
+    echo "preview nginx config must reserve the retired changelog hostname prefix in both servers" >&2
+    exit 1
+fi
+python3 -B - <<'PY' "$nginx_output"
+import pathlib
+import re
+import sys
+
+config = pathlib.Path(sys.argv[1]).read_text()
+retired_route = re.search(
+    r"if \(\$repo = changelog\) \{\s*(?P<body>.*?)\s*\}",
+    config,
+    re.DOTALL,
+)
+if retired_route is None or "return 404;" not in retired_route.group("body"):
+    raise SystemExit("retired changelog hostnames must fail closed with an explicit 404")
+tls_server = config.index("listen 443 ssl;")
+retired_guard = config.index("if ($repo = changelog)")
+first_docroot_probe = config.index("if (-f $api_public/index.php)")
+if not tls_server < retired_guard < first_docroot_probe:
+    raise SystemExit("retired changelog hostnames must fail closed before docroot probes")
+PY
 grep -qF "listen 443 ssl;" "$nginx_output"
 grep -qF "listen [::]:443 ssl;" "$nginx_output"
 grep -qF "http2 on;" "$nginx_output"
@@ -4763,16 +4738,14 @@ api_if_line="$(grep -nF "if (-f \$api_public/index.php) {" "$nginx_output" | hea
 frontend_if_line="$(grep -nF "if (-f \$frontend_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 secpal_app_if_line="$(grep -nF "if (-f \$secpal_app_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 guardguide_de_if_line="$(grep -nF "if (-f \$guardguide_de_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
-changelog_if_line="$(grep -nF "if (-f \$changelog_out/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 
 test -n "$api_if_line"
 test -n "$frontend_if_line"
 test -n "$secpal_app_if_line"
 test -n "$guardguide_de_if_line"
-test -n "$changelog_if_line"
 
-if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line || secpal_app_if_line >= guardguide_de_if_line || guardguide_de_if_line >= changelog_if_line )); then
-    echo "generic preview precedence must prefer changelog > guardguide.de > secpal.app > frontend > api" >&2
+if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line || secpal_app_if_line >= guardguide_de_if_line )); then
+    echo "generic preview precedence must prefer guardguide.de > secpal.app > frontend > api" >&2
     exit 1
 fi
 
@@ -4784,7 +4757,6 @@ fi
     "$workspace_root/GuardGuide/polyscope.local.json" \
     "$workspace_root/secpal.app/polyscope.local.json" \
     "$workspace_root/guardguide.de/polyscope.local.json" \
-    "$workspace_root/changelog/polyscope.local.json" \
     "$workspace_root/.github/polyscope.local.json" \
     >/dev/null
 
@@ -4807,8 +4779,12 @@ org_prompts = cur.execute(
     ('gh123456',),
 ).fetchone()
 prompt_rows = cur.execute(
-    'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories order by id'
+    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id != 'ch123456' order by id"
 ).fetchall()
+retired_prompts = cur.execute(
+    'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
+    ('ch123456',),
+).fetchone()
 links = cur.execute('select repo_id, linked_repo_id from repository_links order by repo_id, linked_repo_id').fetchall()
 
 assert 'api/AGENTS.md' in api_prompt
@@ -4840,7 +4816,9 @@ assert ('gg123456', 'an123456') in links
 assert ('gg123456', 'api12345') in links
 assert ('gg123456', 'co123456') in links
 assert ('gg123456', 'fe123456') in links
-assert ('sa123456', 'ch123456') in links
+assert ('sa123456', 'ch123456') not in links
+assert retired_prompts is not None
+assert all(prompt is None for prompt in retired_prompts)
 
 summary = json.loads(summary_path.read_text())
 assert summary['db_backup'] is not None
@@ -4849,7 +4827,7 @@ assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
 assert summary['repositories']['GuardGuide']['preview_prefix'] == 'guardguide'
 assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
 assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
-assert summary['repositories']['changelog']['preview_prefix'] == 'changelog'
+assert 'changelog' not in summary['repositories']
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['agent_instructions'].endswith('/api/AGENTS.md')
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
@@ -6780,6 +6758,10 @@ grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+if grep -q '/changelog/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
+    echo "rollout sync watcher must not retain the retired changelog repository" >&2
+    exit 1
+fi
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
@@ -6802,6 +6784,10 @@ if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polysco
 fi
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
+if grep -q '/changelog/' "$fake_unit_dir/polyscope-worktree-provision.path"; then
+    echo "worktree provision watcher must not retain the retired changelog repository" >&2
+    exit 1
+fi
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnStartupSec=30s$' "$fake_unit_dir/polyscope-worktree-provision.timer"
 grep -q '^OnUnitActiveSec=3min$' "$fake_unit_dir/polyscope-worktree-provision.timer"

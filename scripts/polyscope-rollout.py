@@ -2368,7 +2368,6 @@ def build_repo_all_checks_command(repo_name: str) -> str | None:
         "contracts": "npm run validate && npm run lint && npm run format:check",
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
-        "changelog": "npm run check && npm run lint && npm run csp:check && npm run build",
         "guardguide.de": "npm run check && npm run lint && npm run test && npm run build",
         ".github": "./scripts/preflight.sh",
     }
@@ -2671,7 +2670,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
         ],
         "preview_prefix": "secpal-app",
         "review_focus": "Astro static rendering, minimal client-side JavaScript, semantic HTML, accessible landmarks, and strict TypeScript on the public site.",
-        "link_names": ["changelog"],
+        "link_names": [],
         "local_config": {
             "copyGitignored": True,
             "runMode": "replace",
@@ -2757,50 +2756,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                 {
                     "label": "Triage failing Astro",
                     "prompt": "Reproduce the failing static-site behavior or Astro check, add or update the smallest relevant validation first, then implement the minimal fix and rerun the touched commands. Keep the change scoped to one issue.",
-                },
-            ],
-        },
-    },
-    "changelog": {
-        "display_name": "SecPal/changelog",
-        "base_branch": "main",
-        "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [
-            ".github/instructions/org-shared.instructions.md",
-            ".github/instructions/nextjs-changelog.instructions.md",
-        ],
-        "preview_prefix": "changelog",
-        "review_focus": "Next.js static-style changelog output, MDX content rules, Commit template conventions, CSP/feed safety, and no server-side runtime dependencies.",
-        "link_names": ["secpal.app"],
-        "local_config": {
-            "copyGitignored": True,
-            "runMode": "replace",
-            "preview": {"url": build_preview_url_template("changelog")},
-            "scripts": {
-                "setup": [build_verified_npm_ci_command(), "npm run build"],
-                "run": [
-                    {
-                        "label": "Build Watch",
-                        "command": build_static_preview_build_watch_command(
-                            "changelog",
-                            ["changelog", "mdx", "public", "scripts", "src"],
-                        ),
-                        "autostart": True,
-                        "runMode": "replace",
-                    },
-                    {"label": "Typecheck", "command": "npm run check", "runMode": "preserve"},
-                    {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
-                    {"label": "CSP Check", "command": "npm run csp:check", "runMode": "preserve"},
-                ],
-            },
-            "tasks": [
-                {
-                    "label": "Review changelog export",
-                    "prompt": "Review the changelog-site change for static export regressions, feed or CSP drift, MDX rendering issues, and missing lint or typecheck coverage. Keep the work scoped to the touched entry or component.",
-                },
-                {
-                    "label": "Triage failing Next build",
-                    "prompt": "Reproduce the failing changelog build or typecheck, update the smallest relevant input first, then implement the minimal fix and rerun the touched validation. Keep the change scoped to one issue.",
                 },
             ],
         },
@@ -4338,13 +4293,14 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
     guardguide_id = repo_state["GuardGuide"]["id"]
     secpal_app_id = repo_state["secpal.app"]["id"]
     guardguide_de_id = repo_state["guardguide.de"]["id"]
-    changelog_id = repo_state["changelog"]["id"]
     http2_listen_suffix = "" if nginx_http2_syntax == "modern" else " http2"
     http2_directive = "\n            http2 on;" if nginx_http2_syntax == "modern" else ""
-    # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-, secpal-app-, or changelog- are
-    # reserved for legacy per-repo routing (e.g. api-WORKSPACE.preview.secpal.dev).
-    # Generic workspaces must not use those prefixes; the regex will treat them as legacy
-    # hosts and route them to the wrong backend.
+    # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-,
+    # secpal-app-, or changelog- are reserved for legacy per-repo routing (e.g.
+    # api-WORKSPACE.preview.secpal.dev). The retired changelog prefix remains reserved
+    # solely so those hostnames can fail closed instead of becoming generic workspaces.
+    # Generic workspaces must not use the active prefixes because the regex will route
+    # them to a repository-specific backend; the retired prefix always returns 404.
     # `http2 on;` requires nginx >= 1.25.1, so install mode version-gates this render option.
     return textwrap.dedent(
         f"""
@@ -4386,14 +4342,16 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $secpal_app_dist $secpal_app_root/dist;
             set $guardguide_de_root /home/secpal/.polyscope/clones/{guardguide_de_id}/$workspace;
             set $guardguide_de_dist $guardguide_de_root/dist;
-            set $changelog_root /home/secpal/.polyscope/clones/{changelog_id}/$workspace;
-            set $changelog_out $changelog_root/out;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
             set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_csp $preview_relaxed_csp;
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
+
+            if ($repo = changelog) {{
+                return 404;
+            }}
 
             if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;
@@ -4414,18 +4372,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
 
             if (-f $guardguide_de_dist/index.html) {{
                 set $preview_docroot $guardguide_de_dist;
-                set $route_mode static;
-                set $secpal_csp $preview_relaxed_csp;
-            }}
-
-            if (-f $changelog_out/index.html) {{
-                set $preview_docroot $changelog_out;
-                set $route_mode static;
-                set $secpal_csp $preview_relaxed_csp;
-            }}
-
-            if ($repo = changelog) {{
-                set $preview_docroot $changelog_out;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
@@ -4938,6 +4884,7 @@ def main() -> int:
             repo_state,
             nginx_http2_syntax=nginx_http2_syntax,
         )
+        polyscope_nginx.ensure_retired_repository_roots_absent(nginx_manifest)
         write_nginx_manifest(
             args.nginx_manifest_output,
             nginx_manifest,

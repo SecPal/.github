@@ -106,8 +106,9 @@ grep -Fq 'Push and PR creation never imply CI-observation authorization.' <<<"$t
   || fail 'push and PR creation authorization boundary is missing'
 assert_polyscope_template_baseline "$POLYSCOPE_TEMPLATE"
 if (
-  mutated_template="$(mktemp)"
-  trap 'rm -f "$mutated_template"' EXIT
+  mutation_workspace="$(mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-skill-policy.XXXXXX")"
+  mutated_template="$mutation_workspace/polyscope-codex-AGENTS.md"
+  trap 'rm -rf -- "$mutation_workspace"' EXIT
   sed \
     's/Preserve a branch or worktree already provisioned by Polyscope/Discard the branch or worktree already provisioned by Polyscope/' \
     "$POLYSCOPE_TEMPLATE" >"$mutated_template"

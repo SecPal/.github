@@ -547,6 +547,16 @@ atomic; `nginx -t` precedes reload, and validation or reload failure restores
 the prior configuration. Root may invoke the helper directly; invocations
 carrying sudo identity are accepted only from `secpal` with its exact UID.
 
+When the managed repository set changes, rerun this privileged installer before
+the unprivileged rollout installer to replace the root-owned renderer contract.
+During a staged upgrade, an older installed renderer can retain a syntactic
+route for a retired repository. The live rollout supplies only the exact fixed
+tombstone required by that older contract and fails closed if the tombstone's
+clone-root path exists, so the compatibility route cannot serve content. The
+privileged reinstall removes the obsolete content mapping from generated nginx
+configuration. The retired hostname prefix remains reserved solely as an
+explicit `404` boundary so it cannot be reinterpreted as a generic workspace.
+
 After both installation steps, verify the steady state:
 
 ```bash
