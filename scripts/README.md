@@ -553,8 +553,9 @@ During a staged upgrade, an older installed renderer can retain a syntactic
 route for a retired repository. The live rollout supplies only the exact fixed
 tombstone required by that older contract and fails closed if the tombstone's
 clone-root path exists, so the compatibility route cannot serve content. The
-privileged reinstall removes the obsolete route from generated nginx
-configuration entirely.
+privileged reinstall removes the obsolete content mapping from generated nginx
+configuration. The retired hostname prefix remains reserved solely as an
+explicit `404` boundary so it cannot be reinterpreted as a generic workspace.
 
 After both installation steps, verify the steady state:
 

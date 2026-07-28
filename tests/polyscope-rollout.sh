@@ -4385,11 +4385,29 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-grep -q 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>' "$nginx_output"
-if grep -qF 'changelog' "$nginx_output"; then
-    echo "preview nginx config must not retain routing for the retired changelog repository" >&2
+if [ "$(grep -cF 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output")" -ne 2 ]; then
+    echo "preview nginx config must reserve the retired changelog hostname prefix in both servers" >&2
     exit 1
 fi
+python3 -B - <<'PY' "$nginx_output"
+import pathlib
+import re
+import sys
+
+config = pathlib.Path(sys.argv[1]).read_text()
+retired_route = re.search(
+    r"if \(\$repo = changelog\) \{\s*(?P<body>.*?)\s*\}",
+    config,
+    re.DOTALL,
+)
+if retired_route is None or "return 404;" not in retired_route.group("body"):
+    raise SystemExit("retired changelog hostnames must fail closed with an explicit 404")
+tls_server = config.index("listen 443 ssl;")
+retired_guard = config.index("if ($repo = changelog)")
+first_docroot_probe = config.index("if (-f $api_public/index.php)")
+if not tls_server < retired_guard < first_docroot_probe:
+    raise SystemExit("retired changelog hostnames must fail closed before docroot probes")
+PY
 grep -qF "listen 443 ssl;" "$nginx_output"
 grep -qF "listen [::]:443 ssl;" "$nginx_output"
 grep -qF "http2 on;" "$nginx_output"

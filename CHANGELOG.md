@@ -21,8 +21,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 - required that tombstone to match its exact fixed value and fail closed when
   its legacy clone-root path exists, preventing an older installed renderer
   from serving content through its retained compatibility route
+- kept the retired `changelog-` hostname prefix reserved as an explicit `404`
+  boundary so it cannot fall through to generic active-workspace routing
 - documented that rerunning the privileged system-component installer removes
-  the legacy changelog matcher itself after a repository-set change
+  the legacy changelog content mapping after a repository-set change while
+  retaining that fail-closed hostname boundary
 - kept stale Polyscope database rows unmanaged so an existing retired entry
   cannot make the system server's post-start rollout fail and restart-loop
 - added regression coverage for workspaces and manifests without the retired
