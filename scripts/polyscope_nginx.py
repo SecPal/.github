@@ -27,6 +27,7 @@ EXPECTED_REPOSITORIES = (
     "guardguide.de",
     "changelog",
 )
+RETIRED_REPOSITORY_IDS = {"changelog": "retired"}
 EXPECTED_UNIX_UPSTREAM = "/run/php/php8.4-fpm-secpal-preview.sock"
 TOP_LEVEL_KEYS = {
     "version",
@@ -139,7 +140,11 @@ def build_manifest(
         "preview_domain": EXPECTED_PREVIEW_DOMAIN,
         "clone_root": EXPECTED_CLONE_ROOT,
         "repositories": {
-            repo_name: str(repo_state[repo_name]["id"])
+            repo_name: (
+                RETIRED_REPOSITORY_IDS[repo_name]
+                if repo_name in RETIRED_REPOSITORY_IDS
+                else str(repo_state[repo_name]["id"])
+            )
             for repo_name in EXPECTED_REPOSITORIES
         },
         "php_upstream": {

@@ -90,7 +90,7 @@ manifest = {
         "GuardGuide": "8fadd2fb",
         "secpal.app": "c46a8454",
         "guardguide.de": "3d0fcf01",
-        "changelog": "0a40ecd7",
+        "changelog": "retired",
     },
     "php_upstream": {
         "kind": "unix",
@@ -98,6 +98,17 @@ manifest = {
     },
     "nginx_http2_syntax": "modern",
 }
+
+active_repo_state = {
+    repo_name: {"id": repo_id}
+    for repo_name, repo_id in manifest["repositories"].items()
+    if repo_name != "changelog"
+}
+built_manifest = library.build_manifest(
+    active_repo_state,
+    nginx_http2_syntax="modern",
+)
+assert built_manifest["repositories"]["changelog"] == "retired"
 
 
 def write_manifest(path: pathlib.Path, payload: object, mode: int = 0o600) -> None:

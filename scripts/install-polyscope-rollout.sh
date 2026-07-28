@@ -463,9 +463,6 @@ PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/instructions
 PathChanged=$WORKSPACE_ROOT/GuardGuide/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/instructions
-PathChanged=$WORKSPACE_ROOT/changelog/AGENTS.md
-PathChanged=$WORKSPACE_ROOT/changelog/.github/copilot-instructions.md
-PathChanged=$WORKSPACE_ROOT/changelog/.github/instructions
 PathChanged=$WORKSPACE_ROOT/.github/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/instructions
@@ -519,7 +516,6 @@ PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/android/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/secpal.app/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/guardguide.de/polyscope.local.json
-PathChanged=$WORKSPACE_ROOT/changelog/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/.github/polyscope.local.json
 
 [Install]
