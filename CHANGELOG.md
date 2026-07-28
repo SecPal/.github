@@ -18,6 +18,11 @@ Log of notable changes to SecPal organization defaults (newest first).
   and systemd path watchers
 - retained only an inert `changelog` manifest tombstone so the unprivileged
   rollout remains compatible with the already installed privileged helper
+- required that tombstone to match its exact fixed value and fail closed when
+  its legacy clone-root path exists, preventing an older installed renderer
+  from serving content through its retained compatibility route
+- documented that rerunning the privileged system-component installer removes
+  the legacy changelog matcher itself after a repository-set change
 - kept stale Polyscope database rows unmanaged so an existing retired entry
   cannot make the system server's post-start rollout fail and restart-loop
 - added regression coverage for workspaces and manifests without the retired

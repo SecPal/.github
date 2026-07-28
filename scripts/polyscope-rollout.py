@@ -4878,6 +4878,7 @@ def main() -> int:
             repo_state,
             nginx_http2_syntax=nginx_http2_syntax,
         )
+        polyscope_nginx.ensure_retired_repository_roots_absent(nginx_manifest)
         write_nginx_manifest(
             args.nginx_manifest_output,
             nginx_manifest,

@@ -27,7 +27,7 @@ EXPECTED_REPOSITORIES = (
     "guardguide.de",
     "changelog",
 )
-RETIRED_REPOSITORY_IDS = {"changelog": "retired"}
+RETIRED_REPOSITORY_IDS = {"changelog": "__retired_changelog__"}
 EXPECTED_UNIX_UPSTREAM = "/run/php/php8.4-fpm-secpal-preview.sock"
 TOP_LEVEL_KEYS = {
     "version",
@@ -74,6 +74,11 @@ def validate_manifest_data(payload: Any) -> dict[str, Any]:
     for repo_name, repo_id in repositories.items():
         if not isinstance(repo_id, str) or REPOSITORY_ID_PATTERN.fullmatch(repo_id) is None:
             raise ValueError(f"repository id for {repo_name} is unsafe")
+    for repo_name, retired_id in RETIRED_REPOSITORY_IDS.items():
+        if repositories[repo_name] != retired_id:
+            raise ValueError(
+                f"repository id for retired {repo_name} must be exactly {retired_id}"
+            )
 
     upstream = payload["php_upstream"]
     if not isinstance(upstream, dict):
@@ -94,6 +99,31 @@ def validate_manifest_data(payload: Any) -> dict[str, Any]:
         raise ValueError("php_upstream kind must be unix or tcp")
 
     return payload
+
+
+def ensure_retired_repository_roots_absent(
+    payload: dict[str, Any],
+    *,
+    filesystem_clone_root: pathlib.Path | None = None,
+) -> None:
+    """Keep compatibility tombstones inert for an older installed renderer."""
+    manifest = validate_manifest_data(payload)
+    clone_root = filesystem_clone_root or pathlib.Path(manifest["clone_root"])
+    for repo_name, retired_id in RETIRED_REPOSITORY_IDS.items():
+        retired_root = clone_root / retired_id
+        try:
+            retired_root.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ValueError(
+                f"unable to verify retired repository tombstone path for {repo_name}: "
+                f"{retired_root}: {error}"
+            ) from error
+        raise ValueError(
+            f"retired repository tombstone path must stay absent for {repo_name}: "
+            f"{retired_root}"
+        )
 
 
 def load_manifest(path: pathlib.Path, *, expected_uid: int) -> dict[str, Any]:
