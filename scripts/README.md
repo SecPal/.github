@@ -88,6 +88,27 @@ registry decisions, recovery, and post-merge rollout prerequisites.
 
 ## Validation Scripts
 
+### `validate-pr-size-policy.sh`
+
+Audits checked-out SecPal repositories for the organization-wide invariant that
+pull-request size is advisory only. Pass either the SecPal workspace root or
+explicit repository roots:
+
+```bash
+bash scripts/validate-pr-size-policy.sh /path/to/SecPal
+bash scripts/validate-pr-size-policy.sh /path/to/api /path/to/frontend
+```
+
+The validator reports one concise result per repository and rejects active
+size-triggered failures, override files or labels, size-based hook bypass
+instructions, unused size-override permissions, and mutable reusable-workflow
+references. It positively verifies advisory local reporting and the central
+reusable workflow contract where those implementations exist.
+
+Updating the central reusable workflow does not update repository-local
+preflight copies. Each repository keeps its own non-size validation
+responsibilities, so local copies must be audited and normalized separately.
+
 ### `check-domains.sh`
 
 Enforces the SecPal `secpal.*` namespace split. The script greps text files

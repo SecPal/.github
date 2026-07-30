@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-30 - Validate Organization-Wide Advisory PR Size Policy
+
+**Added:**
+
+- added a deterministic multi-repository validator for advisory-only local and
+  hosted PR-size policy, including positive reporting invariants and rejection
+  of hard failures, obsolete overrides, mutable workflow references, and
+  size-based hook bypass instructions
+- documented that central reusable-workflow updates do not automatically
+  update repository-local preflight implementations
+
 ## 2026-07-28 - Retire Changelog Polyscope Integration
 
 **Changed:**
