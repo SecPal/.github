@@ -9,6 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VALIDATOR_TOOLCHAIN_ROOT="${SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT:-$SCRIPT_DIR/..}"
 
 TOTAL_TESTS=0
 PASSED_TESTS=0
@@ -171,13 +172,13 @@ test_reuse_license() {
 }
 
 markdownlint_available() {
-    [ -x "$SCRIPT_DIR/../node_modules/.bin/markdownlint" ] \
+    [ -x "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ] \
         || command -v markdownlint >/dev/null 2>&1
 }
 
 markdownlint_runner() {
-    if [ -x "$SCRIPT_DIR/../node_modules/.bin/markdownlint" ]; then
-        "$SCRIPT_DIR/../node_modules/.bin/markdownlint" \
+    if [ -x "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ]; then
+        "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" \
             --config .markdownlint.json "$@"
         return
     fi
@@ -216,7 +217,7 @@ test_markdown_lint() {
 test_instruction_frontmatter() {
     local file
     local -a files=()
-    local yaml_package="$SCRIPT_DIR/../node_modules/js-yaml"
+    local yaml_package="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
     local yaml_module
 
     while IFS= read -r -d '' file; do

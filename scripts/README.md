@@ -483,8 +483,13 @@ complete source bundle: the script must be executable, have the constrained
 executable `validate-ai-instructions.sh` sibling plus the canonical js-yaml
 verifier with the committed npm validator dependencies installed. The installer
 loads the pinned parser and verifies its required API before any installation
-writes, then watches the runtime files and npm lock state for rollout changes
-and dependency-install recovery.
+writes. It then publishes the lockfile-addressed validator dependencies below
+`~/.local/share/polyscope/ai-instruction-validator/` and atomically moves the
+`current` symlink. Polyscope services use that immutable snapshot, so a
+concurrent `npm ci` in the governance checkout cannot temporarily remove
+Markdownlint or `js-yaml` from a workspace bootstrap. The rollout still watches
+the runtime files and npm lock state for rollout changes and dependency-install
+recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new

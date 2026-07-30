@@ -27,6 +27,8 @@ POLYSCOPE_EXPOSE_BIN="${POLYSCOPE_EXPOSE_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x
 POLYSCOPE_EXPOSE_REAL_BIN="${POLYSCOPE_EXPOSE_REAL_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64.real}"
 POLYSCOPE_GIT_BIN_DIR="${POLYSCOPE_GIT_BIN_DIR:-$HOME/.local/lib/polyscope/bin}"
 POLYSCOPE_GIT_WRAPPER_BIN="${POLYSCOPE_GIT_WRAPPER_BIN:-$POLYSCOPE_GIT_BIN_DIR/git}"
+VALIDATOR_RUNTIME_BASE="${SECPAL_AI_VALIDATOR_RUNTIME_BASE:-$HOME/.local/share/polyscope/ai-instruction-validator}"
+VALIDATOR_RUNTIME_CURRENT="$VALIDATOR_RUNTIME_BASE/current"
 POLYSCOPE_SERVER_SCOPE="${POLYSCOPE_SERVER_SCOPE:-auto}"
 POLYSCOPE_SYSTEM_SERVER_UNIT="${POLYSCOPE_SYSTEM_SERVER_UNIT:-polyscope-server.service}"
 POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/systemd/system/$POLYSCOPE_SYSTEM_SERVER_UNIT.d}"
@@ -176,7 +178,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN VALIDATOR_RUNTIME_BASE VALIDATOR_RUNTIME_CURRENT POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -227,7 +229,7 @@ VALIDATOR_INSTALLED_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.packag
 VALIDATOR_MARKDOWNLINT="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint"
 VALIDATOR_YAML_PACKAGE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
 
-for _validator_tool in bash basename dirname find grep head node python3 wc; do
+for _validator_tool in bash basename dirname find grep head node python3 sha256sum wc; do
     if ! PATH="$SERVICE_PATH" command -v "$_validator_tool" >/dev/null 2>&1; then
         echo "Error: rollout validator toolchain is incomplete: $_validator_tool is unavailable in the service PATH." >&2
         exit 1
@@ -247,8 +249,64 @@ if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     exit 1
 fi
 
+installed_validator_toolchain_usable() {
+    local toolchain_root="$1"
+
+    [[ -f "$toolchain_root/package-lock.json" \
+        && -f "$toolchain_root/node_modules/.package-lock.json" \
+        && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
+        && PATH="$SERVICE_PATH" node \
+            "$VALIDATOR_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1
+}
+
+install_validator_runtime_toolchain() {
+    local lock_digest snapshot_dir staging_dir temporary_link
+
+    read -r lock_digest _ < <(sha256sum "$VALIDATOR_PACKAGE_LOCK")
+    snapshot_dir="$VALIDATOR_RUNTIME_BASE/$lock_digest"
+
+    if [[ -e "$VALIDATOR_RUNTIME_CURRENT" && ! -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
+        echo "Error: validator runtime current pointer must be a symlink: $VALIDATOR_RUNTIME_CURRENT" >&2
+        exit 1
+    fi
+
+    mkdir -p "$VALIDATOR_RUNTIME_BASE"
+    if [[ -e "$snapshot_dir" || -L "$snapshot_dir" ]]; then
+        if [[ ! -d "$snapshot_dir" || -L "$snapshot_dir" ]]; then
+            echo "Error: installed validator runtime snapshot must be a regular directory: $snapshot_dir" >&2
+            exit 1
+        fi
+        if ! installed_validator_toolchain_usable "$snapshot_dir"; then
+            echo "Error: installed validator runtime snapshot is incomplete: $snapshot_dir" >&2
+            exit 1
+        fi
+    else
+        staging_dir="$(mktemp -d "$VALIDATOR_RUNTIME_BASE/.staging-$lock_digest.XXXXXX")"
+        cp -R --reflink=auto "$VALIDATOR_TOOLCHAIN_ROOT/node_modules" "$staging_dir/node_modules"
+        cp "$VALIDATOR_PACKAGE_LOCK" "$staging_dir/package-lock.json"
+        if ! installed_validator_toolchain_usable "$staging_dir"; then
+            rm -rf -- "$staging_dir"
+            echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
+            exit 1
+        fi
+        if ! mv "$staging_dir" "$snapshot_dir" 2>/dev/null; then
+            if installed_validator_toolchain_usable "$snapshot_dir"; then
+                rm -rf -- "$staging_dir"
+            else
+                rm -rf -- "$staging_dir"
+                echo "Error: failed to publish the validator runtime snapshot: $snapshot_dir" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    temporary_link="$VALIDATOR_RUNTIME_BASE/.current-$$"
+    ln -s "$lock_digest" "$temporary_link"
+    mv -Tf "$temporary_link" "$VALIDATOR_RUNTIME_CURRENT"
+}
+
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
-for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_PROVISION_LOCK INSTALL_TARGET VALIDATOR_RUNTIME_CURRENT; do
     _val="${!_var_name}"
     if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
         echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
@@ -346,7 +404,8 @@ if [[ "$server_scope" == "system" ]]; then
         "User=secpal" \
         "ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
         "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" \
-        "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git"; do
+        "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git" \
+        "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=/home/secpal/.local/share/polyscope/ai-instruction-validator/current"; do
         if ! grep -qxF "$_required_dropin_line" "$installed_server_target"; then
             echo "Error: reviewed system server drop-in is incomplete: $installed_server_target" >&2
             echo "Missing: $_required_dropin_line" >&2
@@ -366,6 +425,8 @@ if [[ "$server_scope" == "system" ]]; then
         exit 1
     fi
 fi
+
+install_validator_runtime_toolchain
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$CODEX_HOME_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
@@ -405,6 +466,7 @@ Type=simple
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
+Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$VALIDATOR_RUNTIME_CURRENT
 ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
 Restart=on-failure
@@ -430,6 +492,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
+Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$VALIDATOR_RUNTIME_CURRENT
 Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
 Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
 ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --install-nginx
@@ -496,6 +559,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
+Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$VALIDATOR_RUNTIME_CURRENT
 ExecStartPre=/usr/bin/sleep 3
 ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees
 EOF

@@ -363,6 +363,32 @@ if ! (
 fi
 grep -qF 'instruction overlays include valid frontmatter' "$installed_yaml_output"
 
+# An installed Polyscope runtime must be able to pin the validator tooling to
+# an isolated toolchain instead of depending on the mutable governance
+# checkout's node_modules directory.
+runtime_toolchain_root="$workspace/installed-validator-toolchain"
+runtime_toolchain_validator_root="$workspace/installed-validator-script"
+runtime_toolchain_validator="$runtime_toolchain_validator_root/scripts/validate-ai-instructions.sh"
+runtime_toolchain_repo="$runtime_toolchain_validator_root/repository"
+mkdir -p "$runtime_toolchain_root" "$runtime_toolchain_validator_root/scripts"
+ln -s "$REPO_ROOT/node_modules" "$runtime_toolchain_root/node_modules"
+cp "$VALIDATOR" "$runtime_toolchain_validator"
+copy_valid_repo "$valid_repo" "$runtime_toolchain_repo"
+
+runtime_toolchain_output="$workspace/installed-validator-toolchain.output"
+if ! (
+    cd "$runtime_toolchain_repo"
+    PATH="/usr/bin:/bin" \
+        SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT="$runtime_toolchain_root" \
+        REPO_TYPE=org /bin/bash "$runtime_toolchain_validator"
+) >"$runtime_toolchain_output" 2>&1; then
+    sed -n '1,240p' "$runtime_toolchain_output" >&2
+    echo "validator must use the isolated installed toolchain when configured" >&2
+    exit 1
+fi
+grep -qF 'instruction overlays include valid frontmatter' "$runtime_toolchain_output"
+grep -qF 'instruction Markdown passes lint' "$runtime_toolchain_output"
+
 # Focused frontmatter must fail closed when the repository-pinned YAML parser
 # is unavailable, even if Markdownlint itself is available globally.
 isolated_yaml_root="$workspace/no-frontmatter-yaml-toolchain"

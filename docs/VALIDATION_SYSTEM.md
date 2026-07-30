@@ -74,6 +74,15 @@ committed lockfile and is the authoritative lint environment. Focused-overlay
 frontmatter is parsed with the repository-pinned `js-yaml`. When focused
 overlays exist, a missing parser also fails closed.
 
+Polyscope does not use the mutable governance checkout's `node_modules`
+directly at runtime. Its installers copy the committed-lockfile installation to
+a content-addressed directory below
+`~/.local/share/polyscope/ai-instruction-validator/` and switch the `current`
+symlink atomically. `SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT` selects that installed
+snapshot. This keeps bootstrap validation available while a separate
+governance command replaces checkout-local dependencies, without adding a
+download or permissive fallback to the validator.
+
 Run the validator and its regression suite with:
 
 ```bash
@@ -100,6 +109,8 @@ Copilot review profile fails through the same canonical contract.
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;
+- an explicitly selected installed toolchain works independently of the
+  validator script's checkout;
 - mirror phrases, copied overlay content, and policy keywords are unnecessary;
 - repository-path arguments continue to work.
 

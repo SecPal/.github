@@ -14,6 +14,8 @@ RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
 RUNTIME_YAML_CHECK="$RUNTIME_SCRIPT_DIR/verify-js-yaml-package.cjs"
 RUNTIME_YAML_PACKAGE="$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml"
+RUNTIME_VALIDATOR_BASE="/home/secpal/.local/share/polyscope/ai-instruction-validator"
+RUNTIME_VALIDATOR_CURRENT="$RUNTIME_VALIDATOR_BASE/current"
 DESTDIR="${DESTDIR:-}"
 NODE_BIN=""
 STAGE_ONLY=0
@@ -130,6 +132,65 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     fi
 fi
 
+installed_validator_toolchain_usable() {
+    local toolchain_root="$1"
+
+    [[ -f "$toolchain_root/package-lock.json" \
+        && -f "$toolchain_root/node_modules/.package-lock.json" \
+        && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
+        && /usr/bin/sudo -u secpal -- \
+            "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1
+}
+
+install_validator_runtime_toolchain() {
+    local lock_digest snapshot_dir staging_dir temporary_link
+
+    read -r lock_digest _ < <(sha256sum "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json")
+    snapshot_dir="$RUNTIME_VALIDATOR_BASE/$lock_digest"
+
+    if [[ -e "$RUNTIME_VALIDATOR_CURRENT" && ! -L "$RUNTIME_VALIDATOR_CURRENT" ]]; then
+        echo "Error: validator runtime current pointer must be a symlink: $RUNTIME_VALIDATOR_CURRENT" >&2
+        exit 1
+    fi
+
+    /usr/bin/sudo -u secpal -- mkdir -p "$RUNTIME_VALIDATOR_BASE"
+    if [[ -e "$snapshot_dir" || -L "$snapshot_dir" ]]; then
+        if [[ ! -d "$snapshot_dir" || -L "$snapshot_dir" ]]; then
+            echo "Error: installed validator runtime snapshot must be a regular directory: $snapshot_dir" >&2
+            exit 1
+        fi
+        if ! installed_validator_toolchain_usable "$snapshot_dir"; then
+            echo "Error: installed validator runtime snapshot is incomplete: $snapshot_dir" >&2
+            exit 1
+        fi
+    else
+        staging_dir="$(/usr/bin/sudo -u secpal -- \
+            mktemp -d "$RUNTIME_VALIDATOR_BASE/.staging-$lock_digest.XXXXXX")"
+        /usr/bin/sudo -u secpal -- \
+            cp -R --reflink=auto "$RUNTIME_TOOLCHAIN_ROOT/node_modules" "$staging_dir/node_modules"
+        /usr/bin/sudo -u secpal -- \
+            cp "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" "$staging_dir/package-lock.json"
+        if ! installed_validator_toolchain_usable "$staging_dir"; then
+            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
+            echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
+            exit 1
+        fi
+        if ! /usr/bin/sudo -u secpal -- mv "$staging_dir" "$snapshot_dir" 2>/dev/null; then
+            if installed_validator_toolchain_usable "$snapshot_dir"; then
+                /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
+            else
+                /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
+                echo "Error: failed to publish the validator runtime snapshot: $snapshot_dir" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    temporary_link="$RUNTIME_VALIDATOR_BASE/.current-$$"
+    /usr/bin/sudo -u secpal -- ln -s "${snapshot_dir##*/}" "$temporary_link"
+    /usr/bin/sudo -u secpal -- mv -Tf "$temporary_link" "$RUNTIME_VALIDATOR_CURRENT"
+}
+
 prefix_path() {
     printf '%s%s\n' "$DESTDIR" "$1"
 }
@@ -163,6 +224,7 @@ ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do cur
 Environment=PATH=$SYSTEM_SERVICE_PATH
 Environment=SSH_AUTH_SOCK=/run/user/$SECPAL_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git
+Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$RUNTIME_VALIDATOR_CURRENT
 EOF
 chmod 0644 "$TEMP_DIR/zz-secpal-runtime.conf"
 
@@ -196,6 +258,8 @@ if [[ "$STAGE_ONLY" -eq 1 ]]; then
     echo "Staged Polyscope system components below $DESTDIR"
     exit 0
 fi
+
+install_validator_runtime_toolchain
 
 backup_target() {
     local target="$1"

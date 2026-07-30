@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-30 - Isolate Polyscope Instruction Validation Tooling
+
+**Changed:**
+
+- installed the pinned Markdownlint and `js-yaml` runtime as an atomic,
+  lockfile-addressed Polyscope snapshot instead of reading the mutable
+  governance checkout's `node_modules` during workspace setup
+- retained fail-closed instruction validation while preventing concurrent
+  dependency installation from transiently blocking unrelated workspaces
+
 ## 2026-07-30 - Validate Organization-Wide Advisory PR Size Policy
 
 **Added:**

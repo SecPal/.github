@@ -6584,6 +6584,14 @@ env HOME="$home_dir" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
 
+installed_validator_toolchain="$home_dir/.local/share/polyscope/ai-instruction-validator/current"
+test -L "$installed_validator_toolchain"
+installed_validator_toolchain="$(readlink -f "$installed_validator_toolchain")"
+test -d "$installed_validator_toolchain/node_modules"
+test ! -L "$installed_validator_toolchain/node_modules"
+test -x "$installed_validator_toolchain/node_modules/.bin/markdownlint"
+test -f "$installed_validator_toolchain/node_modules/js-yaml/package.json"
+
 # If the wrapped Expose path is replaced with the original real binary while .real already exists,
 # the installer must still repair it idempotently instead of failing.
 rm -f "$fake_polyscope_bin_dir/expose-linux-x64"
@@ -6717,6 +6725,7 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-run
 grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=/home/secpal/.local/share/polyscope/ai-instruction-validator/current' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
 if grep -Eq '^(daemon-reload|enable --now polyscope-server\.service|restart polyscope-server\.service)$' "$system_systemctl_log"; then
@@ -6744,6 +6753,7 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
+grep -q "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$home_dir/.local/share/polyscope/ai-instruction-validator/current" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
@@ -6753,6 +6763,7 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$home_dir/.local/share/polyscope/ai-instruction-validator/current" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
@@ -6807,6 +6818,7 @@ fi
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$home_dir/.local/share/polyscope/ai-instruction-validator/current" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathModified=.*/\.polyscope/polyscope\.db-wal$' "$fake_unit_dir/polyscope-worktree-provision.path"
 if grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"; then
