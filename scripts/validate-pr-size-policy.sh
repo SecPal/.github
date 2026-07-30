@@ -8,6 +8,7 @@ python3 - "$@" <<'PY'
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ MANAGED_REPOSITORIES = (
     "secpal.app",
 )
 SKIPPED_PARTS = {
+    ".context",
     ".git",
     "node_modules",
     "vendor",
@@ -48,11 +50,15 @@ SIZE_TERMS = re.compile(
     r"\b(?:changed|changes|total changed|lines?|PR size|threshold|max(?:imum)?|insertions?|deletions?)\b",
     re.IGNORECASE,
 )
-SIZE_COMPARISON = re.compile(r"\bif\b.*(?:-gt|>\s*)", re.IGNORECASE)
-SIZE_VARIABLE = re.compile(
-    r"(?:CHANGED|TOTAL_CHANGES|MAX_LINES|ADVISORY_THRESHOLD|PR_SIZE)"
+SIZE_COMPARISON = re.compile(
+    r"\bif\b.*(?:-(?:gt|ge|lt|le)\b|[<>]=?)", re.IGNORECASE
 )
-EXIT_FAILURE = re.compile(r"\bexit\s+[12]\b")
+SIZE_VARIABLE = re.compile(
+    r"(?:CHANGED|TOTAL_CHANGES|MAX_LINES|ADVISORY_THRESHOLD|PR_SIZE)",
+    re.IGNORECASE,
+)
+EXIT_OR_RETURN = re.compile(r"\b(?:exit|return)(?:\s+([^;\s]+))?")
+FALSE_COMMAND = re.compile(r"(?:^|[;&|]\s*)false(?:\s*(?:[;&|]|$))")
 
 
 def resolve_repositories(arguments: list[str]) -> list[Path]:
@@ -93,6 +99,29 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def tracked_context_paths(root: Path) -> list[str] | None:
+    if not (root / ".git").exists():
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", ".context"],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return [
+            value
+            for value in result.stdout.decode("utf-8").split("\0")
+            if value
+        ]
+    except UnicodeDecodeError:
+        return None
+
+
 def hard_size_exit(lines: list[str]) -> bool:
     for index, line in enumerate(lines):
         if not SIZE_COMPARISON.search(line) or not SIZE_VARIABLE.search(line):
@@ -103,8 +132,12 @@ def hard_size_exit(lines: list[str]) -> bool:
             stripped = candidate.strip()
             if re.match(r"^if\b.*(?:;\s*then|\bthen)$", stripped):
                 depth += 1
-            if EXIT_FAILURE.search(stripped):
+            if FALSE_COMMAND.search(stripped):
                 return True
+            for termination in EXIT_OR_RETURN.finditer(stripped):
+                status = termination.group(1)
+                if status != "0":
+                    return True
             if stripped == "fi":
                 depth -= 1
                 if depth == 0:
@@ -130,6 +163,14 @@ def validate_repository(root: Path) -> list[str]:
     failures: list[str] = []
     if not root.is_dir():
         return ["repository root is missing"]
+
+    tracked_context = tracked_context_paths(root)
+    if tracked_context is None:
+        failures.append(".context: unable to verify collaboration-data tracking state")
+    elif tracked_context:
+        failures.append(
+            f".context: collaboration data must remain untracked ({tracked_context[0]})"
+        )
 
     contents = {path: read_text(path) for path in active_files(root)}
 

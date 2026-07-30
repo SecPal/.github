@@ -105,6 +105,12 @@ instructions, unused size-override permissions, and mutable reusable-workflow
 references. It positively verifies advisory local reporting and the central
 reusable workflow contract where those implementations exist.
 
+The regression suite builds its multi-repository fixtures in temporary storage
+and validates the current repository independently, so a normal preflight does
+not require sibling checkouts. Gitignored Polyscope `.context` collaboration
+data is outside the policy scan, while a tracking-aware guard rejects any
+force-added `.context` path.
+
 Updating the central reusable workflow does not update repository-local
 preflight copies. Each repository keeps its own non-size validation
 responsibilities, so local copies must be audited and normalized separately.
@@ -487,9 +493,11 @@ writes. It then publishes the lockfile-addressed validator dependencies below
 `~/.local/share/polyscope/ai-instruction-validator/` and atomically moves the
 `current` symlink. Polyscope services use that immutable snapshot, so a
 concurrent `npm ci` in the governance checkout cannot temporarily remove
-Markdownlint or `js-yaml` from a workspace bootstrap. The rollout still watches
-the runtime files and npm lock state for rollout changes and dependency-install
-recovery.
+Markdownlint or `js-yaml` from a workspace bootstrap. Each published snapshot
+must execute both validator tools successfully, and concurrent publishers use
+an exact-target move so a losing staging directory cannot be nested inside the
+winning snapshot. The rollout still watches the runtime files and npm lock
+state for rollout changes and dependency-install recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new

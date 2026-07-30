@@ -6591,6 +6591,41 @@ test -d "$installed_validator_toolchain/node_modules"
 test ! -L "$installed_validator_toolchain/node_modules"
 test -x "$installed_validator_toolchain/node_modules/.bin/markdownlint"
 test -f "$installed_validator_toolchain/node_modules/js-yaml/package.json"
+"$installed_validator_toolchain/node_modules/.bin/markdownlint" --version >/dev/null
+
+# A cached snapshot with a merely executable but unusable Markdownlint must be
+# rejected instead of being retained as the service-wide current toolchain.
+installed_markdownlint="$installed_validator_toolchain/node_modules/.bin/markdownlint"
+installed_markdownlint_backup="$workspace/installed-markdownlint.backup"
+cp -a "$installed_markdownlint" "$installed_markdownlint_backup"
+rm -f "$installed_markdownlint"
+printf '#!/usr/bin/env bash\nexit 42\n' >"$installed_markdownlint"
+chmod +x "$installed_markdownlint"
+broken_snapshot_error="$workspace/broken-validator-snapshot.error"
+if env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" \
+    2>"$broken_snapshot_error"; then
+    echo "installer must reject an unusable cached Markdownlint snapshot" >&2
+    exit 1
+fi
+grep -qF 'installed validator runtime snapshot is incomplete' "$broken_snapshot_error"
+rm -f "$installed_markdownlint"
+mv "$installed_markdownlint_backup" "$installed_markdownlint"
+
+# Treat the snapshot destination as an exact target. Without -T, a concurrent
+# publisher moves its complete staging directory inside the winning snapshot.
+grep -Fq "mv -T \"\$staging_dir\" \"\$snapshot_dir\"" "$INSTALL_SCRIPT"
+grep -Fq \
+    "mv -T \"\$staging_dir\" \"\$snapshot_dir\"" \
+    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
 
 # If the wrapped Expose path is replaced with the original real binary while .real already exists,
 # the installer must still repair it idempotently instead of failing.

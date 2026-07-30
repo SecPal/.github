@@ -9,24 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-07-30 - Isolate Polyscope Instruction Validation Tooling
+## 2026-07-30 - Harden Governance Validation Reliability
 
 **Changed:**
 
+- made pull-request size reporting advisory-only and added deterministic,
+  checkout-portable validation of the organization-wide policy
 - installed the pinned Markdownlint and `js-yaml` runtime as an atomic,
   lockfile-addressed Polyscope snapshot instead of reading the mutable
   governance checkout's `node_modules` during workspace setup
 - retained fail-closed instruction validation while preventing concurrent
-  dependency installation from transiently blocking unrelated workspaces
-
-## 2026-07-30 - Validate Organization-Wide Advisory PR Size Policy
-
-**Added:**
-
-- added a deterministic multi-repository validator for advisory-only local and
-  hosted PR-size policy, including positive reporting invariants and rejection
-  of hard failures, obsolete overrides, mutable workflow references, and
-  size-based hook bypass instructions
+  dependency installation from transiently blocking unrelated workspaces,
+  including executable tool smoke checks and collision-safe snapshot publishing
 - documented that central reusable-workflow updates do not automatically
   update repository-local preflight implementations
 

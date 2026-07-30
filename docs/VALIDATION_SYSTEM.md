@@ -81,7 +81,10 @@ a content-addressed directory below
 symlink atomically. `SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT` selects that installed
 snapshot. This keeps bootstrap validation available while a separate
 governance command replaces checkout-local dependencies, without adding a
-download or permissive fallback to the validator.
+download or permissive fallback to the validator. Snapshot activation verifies
+that both pinned validator tools execute successfully, and concurrent
+publishers treat the content-addressed directory as one exact target rather
+than nesting a losing staging directory inside it.
 
 Run the validator and its regression suite with:
 

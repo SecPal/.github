@@ -73,11 +73,72 @@ jobs:
           fi
 EOF
 
-bash "$validator" "$workspace/advisory" "$workspace/no-gate" >"$workspace/pass.out"
+make_repo exit-three
+cat >"$workspace/exit-three/scripts/preflight.sh" <<'EOF'
+if [ "$CHANGED" -gt 600 ]; then
+  echo "PR exceeds the size limit"
+  exit 3
+fi
+EOF
+
+make_repo lowercase-variable
+cat >"$workspace/lowercase-variable/scripts/preflight.sh" <<'EOF'
+if [ "$changed" -gt 600 ]; then
+  echo "PR exceeds the size limit"
+  exit 1
+fi
+EOF
+
+make_repo dynamic-exit
+cat >"$workspace/dynamic-exit/scripts/preflight.sh" <<'EOF'
+if [ "$changed" -ge 600 ]; then
+  exit "$failure_status"
+fi
+EOF
+
+make_repo zero-exit
+cat >"$workspace/zero-exit/scripts/preflight.sh" <<'EOF'
+if [ "$CHANGED" -gt 600 ]; then
+  exit 0
+fi
+EOF
+
+make_repo ignored-context
+mkdir -p "$workspace/ignored-context/.context/review-fixture"
+cat >"$workspace/ignored-context/.context/review-fixture/preflight.sh" <<'EOF'
+if [ "$CHANGED" -gt 600 ]; then
+  exit 1
+fi
+EOF
+
+make_repo tracked-context
+mkdir -p "$workspace/tracked-context/.context"
+printf 'agent scratch\n' >"$workspace/tracked-context/.context/note.txt"
+(
+  cd "$workspace/tracked-context"
+  git init --quiet --initial-branch=main
+  git add -f .context/note.txt
+)
+
+bash "$validator" \
+  "$workspace/advisory" \
+  "$workspace/no-gate" \
+  "$workspace/zero-exit" \
+  "$workspace/ignored-context" >"$workspace/pass.out"
 grep -Fq "advisory: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
+grep -Fq "zero-exit: PASS" "$workspace/pass.out"
+grep -Fq "ignored-context: PASS" "$workspace/pass.out"
 
-for invalid in hard-exit override-file label-override workflow-failure; do
+for invalid in \
+  hard-exit \
+  override-file \
+  label-override \
+  workflow-failure \
+  exit-three \
+  lowercase-variable \
+  dynamic-exit \
+  tracked-context; do
   if bash "$validator" "$workspace/$invalid" >"$workspace/$invalid.out" 2>&1; then
     echo "Expected $invalid fixture to fail policy validation" >&2
     exit 1
@@ -85,15 +146,28 @@ for invalid in hard-exit override-file label-override workflow-failure; do
   grep -Fq "$invalid: FAIL" "$workspace/$invalid.out"
 done
 
-bash "$validator" \
-  "$repo_root" \
-  "$repo_root/../api" \
-  "$repo_root/../frontend" \
-  "$repo_root/../contracts" \
-  "$repo_root/../android" \
-  "$repo_root/../GuardGuide" \
-  "$repo_root/../guardguide.de" \
-  "$repo_root/../secpal.app"
+managed_workspace="$workspace/managed"
+managed_repositories=(
+  .github
+  api
+  frontend
+  contracts
+  android
+  GuardGuide
+  guardguide.de
+  secpal.app
+)
+for repository in "${managed_repositories[@]}"; do
+  mkdir -p "$managed_workspace/$repository"
+done
+bash "$validator" "$managed_workspace" >"$workspace/managed.out"
+for repository in "${managed_repositories[@]}"; do
+  grep -Fq "$repository: PASS" "$workspace/managed.out"
+done
+
+# A repository preflight must remain runnable from an isolated checkout. The
+# explicit multi-repository command above covers workspace-wide auditing.
+bash "$validator" "$repo_root"
 
 grep -Fq "bash tests/validate-pr-size-policy.sh" "$preflight"
 

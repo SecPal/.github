@@ -255,6 +255,8 @@ installed_validator_toolchain_usable() {
     [[ -f "$toolchain_root/package-lock.json" \
         && -f "$toolchain_root/node_modules/.package-lock.json" \
         && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
+        && PATH="$SERVICE_PATH" \
+            "$toolchain_root/node_modules/.bin/markdownlint" --version >/dev/null 2>&1 \
         && PATH="$SERVICE_PATH" node \
             "$VALIDATOR_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1
 }
@@ -289,7 +291,7 @@ install_validator_runtime_toolchain() {
             echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
             exit 1
         fi
-        if ! mv "$staging_dir" "$snapshot_dir" 2>/dev/null; then
+        if ! mv -T "$staging_dir" "$snapshot_dir" 2>/dev/null; then
             if installed_validator_toolchain_usable "$snapshot_dir"; then
                 rm -rf -- "$staging_dir"
             else

@@ -138,6 +138,9 @@ installed_validator_toolchain_usable() {
     [[ -f "$toolchain_root/package-lock.json" \
         && -f "$toolchain_root/node_modules/.package-lock.json" \
         && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
+        && /usr/bin/sudo -u secpal -- /usr/bin/env \
+            PATH="$SYSTEM_SERVICE_PATH" \
+            "$toolchain_root/node_modules/.bin/markdownlint" --version >/dev/null 2>&1 \
         && /usr/bin/sudo -u secpal -- \
             "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1
 }
@@ -175,7 +178,7 @@ install_validator_runtime_toolchain() {
             echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
             exit 1
         fi
-        if ! /usr/bin/sudo -u secpal -- mv "$staging_dir" "$snapshot_dir" 2>/dev/null; then
+        if ! /usr/bin/sudo -u secpal -- mv -T "$staging_dir" "$snapshot_dir" 2>/dev/null; then
             if installed_validator_toolchain_usable "$snapshot_dir"; then
                 /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
             else
