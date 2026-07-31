@@ -163,6 +163,24 @@ jobs:
         run: exit 1
 EOF
 
+make_repo workflow-job-if-hard-exit
+cat >"$workspace/workflow-job-if-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    if: needs.diff.outputs.changed > 600
+    steps:
+      - run: exit 1
+EOF
+
+make_repo workflow-job-if-advisory
+cat >"$workspace/workflow-job-if-advisory/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    if: needs.diff.outputs.changed > 600
+    steps:
+      - run: echo "::warning::PR size advisory threshold exceeded"
+EOF
+
 make_repo workflow-template-advisory
 mkdir -p "$workspace/workflow-template-advisory/workflow-templates"
 cat >"$workspace/workflow-template-advisory/workflow-templates/pr-size.yml" <<'EOF'
@@ -252,6 +270,12 @@ if changed_lines > 600:
     sys.exit(1)
 EOF
 
+make_repo python-raise
+cat >"$workspace/python-raise/scripts/check_pr_size.py" <<'EOF'
+if changed_lines > 600:
+    raise RuntimeError("PR is too large")
+EOF
+
 make_repo python-return-exit
 cat >"$workspace/python-return-exit/scripts/check_pr_size.py" <<'EOF'
 def main():
@@ -275,11 +299,76 @@ def report(changed_lines, max_lines):
 # raise SystemExit(report(changed_lines, max_lines))
 EOF
 
+make_repo python-zero-status
+cat >"$workspace/python-zero-status/scripts/report_pr_size.py" <<'EOF'
+def main():
+    if changed_lines > max_lines:
+        return False
+    return None
+
+
+raise SystemExit(main())
+EOF
+
 make_repo javascript-exit
 cat >"$workspace/javascript-exit/scripts/check-pr-size.mjs" <<'EOF'
 if (changedLines > 600) {
   process.exit(1);
 }
+EOF
+
+make_repo javascript-exit-code
+cat >"$workspace/javascript-exit-code/scripts/check-pr-size.mjs" <<'EOF'
+if (changedLines > 600) {
+  process.exitCode = 1;
+}
+EOF
+
+make_repo javascript-compound-exit-code
+cat >"$workspace/javascript-compound-exit-code/scripts/check-pr-size.mjs" <<'EOF'
+if (changedLines > 600) {
+  process.exitCode ||= 1;
+}
+EOF
+
+make_repo javascript-throw
+cat >"$workspace/javascript-throw/scripts/check-pr-size.mjs" <<'EOF'
+if (changedLines > 600) {
+  throw new Error("PR is too large");
+}
+EOF
+
+make_repo javascript-zero-exit-code
+cat >"$workspace/javascript-zero-exit-code/scripts/report-pr-size.mjs" <<'EOF'
+if (changedLines > 600) {
+  process.exitCode = 0;
+}
+EOF
+
+make_repo diff-size-alias
+cat >"$workspace/diff-size-alias/scripts/preflight.sh" <<'EOF'
+DIFF_SIZE="$(git diff --numstat "$BASE"...HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+if [ "$DIFF_SIZE" -gt 600 ]; then
+  exit 1
+fi
+EOF
+
+make_repo derived-size-alias
+cat >"$workspace/derived-size-alias/scripts/preflight.sh" <<'EOF'
+DELTA="$(
+  git diff --numstat "$BASE"...HEAD |
+    awk '{sum += $1 + $2} END {print sum + 0}'
+)"
+if [ "$DELTA" -gt 600 ]; then
+  exit 1
+fi
+EOF
+
+make_repo unrelated-size
+cat >"$workspace/unrelated-size/scripts/check-artifact.sh" <<'EOF'
+if [ "$ARTIFACT_SIZE" -gt 600 ]; then
+  exit 1
+fi
 EOF
 
 make_repo unreadable-policy
@@ -335,8 +424,12 @@ bash "$validator" \
   "$workspace/no-gate" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" \
+  "$workspace/javascript-zero-exit-code" \
   "$workspace/python-library-return" \
+  "$workspace/python-zero-status" \
   "$workspace/suffixless-binary" \
+  "$workspace/unrelated-size" \
+  "$workspace/workflow-job-if-advisory" \
   "$workspace/workflow-step-boundary" \
   "$workspace/workflow-nonblocking-job" \
   "$workspace/workflow-nonblocking-step" \
@@ -349,8 +442,12 @@ grep -Fq "errexit-disabled: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
+grep -Fq "javascript-zero-exit-code: PASS" "$workspace/pass.out"
 grep -Fq "python-library-return: PASS" "$workspace/pass.out"
+grep -Fq "python-zero-status: PASS" "$workspace/pass.out"
 grep -Fq "suffixless-binary: PASS" "$workspace/pass.out"
+grep -Fq "unrelated-size: PASS" "$workspace/pass.out"
+grep -Fq "workflow-job-if-advisory: PASS" "$workspace/pass.out"
 grep -Fq "workflow-step-boundary: PASS" "$workspace/pass.out"
 grep -Fq "workflow-nonblocking-job: PASS" "$workspace/pass.out"
 grep -Fq "workflow-nonblocking-step: PASS" "$workspace/pass.out"
@@ -361,16 +458,23 @@ for invalid in \
   compact-exit \
   conditional-list-exit \
   conditional-list-multiline \
+  derived-size-alias \
+  diff-size-alias \
   errexit-standalone \
   hard-pinned-revision \
+  javascript-compound-exit-code \
   javascript-exit \
+  javascript-exit-code \
+  javascript-throw \
   hard-exit \
   override-file \
   label-override \
   python-exit \
+  python-raise \
   python-return-exit \
   unreadable-policy \
   workflow-if-hard-exit \
+  workflow-job-if-hard-exit \
   workflow-blocking-step \
   workflow-failure \
   workflow-javascript-hard-exit \

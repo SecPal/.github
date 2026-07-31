@@ -58,8 +58,14 @@ SIZE_POLICY_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 SIZE_COMPARISON = re.compile(r"(?:-(?:gt|ge|lt|le)\b|[<>]=?)", re.IGNORECASE)
-SIZE_VARIABLE = re.compile(
-    r"(?:CHANGED|TOTAL_CHANGES|MAX_LINES|ADVISORY_THRESHOLD|PR_SIZE)",
+IDENTIFIER = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+ASSIGNMENT = re.compile(
+    r"^\s*(?:(?:export|local|readonly)\s+)?"
+    r"(?:(?:const|let|var)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)(.*)$"
+)
+SIZE_CALCULATION = re.compile(
+    r"(?:git\s+diff\b[\s\S]{0,400}?--numstat|"
+    r"--numstat[\s\S]{0,400}?\bgit\s+diff\b)",
     re.IGNORECASE,
 )
 EXIT_OR_RETURN = re.compile(r"\b(?:exit|return)(?:\s+([^;\s]+))?")
@@ -74,6 +80,10 @@ PYTHON_STATUS_CALL = re.compile(
 JAVASCRIPT_EXIT = re.compile(
     r"(?:process|Deno|Bun)\.exit\s*\(\s*([^)]*)\)"
 )
+JAVASCRIPT_EXIT_CODE = re.compile(
+    r"\bprocess\.exitCode\s*(?:\|\|=|\?\?=|=)\s*([^;\s]+)"
+)
+JAVASCRIPT_THROW = re.compile(r"(?:^\s*|[;{}]\s*)throw\b")
 POLICY_ROOTS = {".githooks", ".github", ".husky", "scripts"}
 SHELL_SHEBANG = re.compile(rb"^#![^\r\n]*\b(?:ba|da|k|z)?sh\b")
 SHELL_ERREXIT_ENABLE = re.compile(
@@ -164,10 +174,88 @@ def nonzero_status(status: str | None, *, empty_is_failure: bool) -> bool:
     return re.fullmatch(r"\+?0+", normalized) is None
 
 
-def size_comparison(value: str) -> bool:
-    return SIZE_COMPARISON.search(value) is not None and SIZE_VARIABLE.search(
-        value
+def python_nonzero_status(
+    status: str | None, *, empty_is_failure: bool
+) -> bool:
+    if status is None or not status.strip():
+        return empty_is_failure
+    if status.strip().strip("\"'") in {"0", "None", "False"}:
+        return False
+    return nonzero_status(status, empty_is_failure=empty_is_failure)
+
+
+def canonical_identifier(value: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value).lower()
+
+
+def semantic_size_identifier(value: str) -> bool:
+    normalized = canonical_identifier(value)
+    return re.fullmatch(
+        r"(?:changed(?:_lines?)?|changes?|total_changes?|"
+        r"diff_(?:size|lines?|count|changes?)|pr_size|"
+        r"insertions?|deletions?|advisory_threshold|max_lines?)",
+        normalized,
     ) is not None
+
+
+def assignment_expressions(lines: list[str]) -> list[tuple[str, str]]:
+    assignments: list[tuple[str, str]] = []
+    index = 0
+    while index < len(lines):
+        match = ASSIGNMENT.match(lines[index])
+        if match is None:
+            index += 1
+            continue
+        expression = match.group(2)
+        depth = expression.count("(") - expression.count(")")
+        while (
+            index + 1 < len(lines)
+            and len(expression.splitlines()) < 40
+            and (depth > 0 or expression.rstrip().endswith("\\"))
+        ):
+            index += 1
+            expression = f"{expression}\n{lines[index]}"
+            depth = expression.count("(") - expression.count(")")
+        assignments.append((match.group(1).lower(), expression))
+        index += 1
+    return assignments
+
+
+@dataclass(frozen=True)
+class SizeContext:
+    identifiers: frozenset[str]
+
+    @classmethod
+    def from_lines(cls, lines: list[str]) -> SizeContext:
+        assignments = assignment_expressions(lines)
+        identifiers = {
+            name.lower()
+            for line in lines
+            for name in IDENTIFIER.findall(line)
+            if semantic_size_identifier(name)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for target, expression in assignments:
+                references = {
+                    name.lower() for name in IDENTIFIER.findall(expression)
+                }
+                if (
+                    SIZE_CALCULATION.search(expression)
+                    or references.intersection(identifiers)
+                ) and target not in identifiers:
+                    identifiers.add(target)
+                    changed = True
+        return cls(frozenset(identifiers))
+
+    def is_comparison(self, value: str) -> bool:
+        if SIZE_COMPARISON.search(value) is None:
+            return False
+        return any(
+            name.lower() in self.identifiers
+            for name in IDENTIFIER.findall(value)
+        )
 
 
 def shell_failure_command(value: str) -> bool:
@@ -196,7 +284,7 @@ def shell_logical_command(lines: list[str], index: int) -> str:
 
 
 def shell_errexit_comparison(
-    value: str, enabled: bool
+    value: str, enabled: bool, context: SizeContext
 ) -> tuple[bool, bool]:
     for command in re.split(r"[;\n]", value):
         if SHELL_ERREXIT_DISABLE.search(command):
@@ -205,7 +293,7 @@ def shell_errexit_comparison(
             enabled = True
         if (
             enabled
-            and size_comparison(command)
+            and context.is_comparison(command)
             and SHELL_TEST_COMMAND.search(command)
             and "&&" not in command
             and "||" not in command
@@ -215,17 +303,21 @@ def shell_errexit_comparison(
 
 
 def shell_hard_size_exit(
-    lines: list[str], *, errexit_default: bool = False
+    lines: list[str],
+    *,
+    errexit_default: bool = False,
+    context: SizeContext | None = None,
 ) -> bool:
+    context = context or SizeContext.from_lines(lines)
     errexit_enabled = errexit_default
     for index, line in enumerate(lines):
         logical_command = shell_logical_command(lines, index)
         errexit_enabled, errexit_failure = shell_errexit_comparison(
-            logical_command, errexit_enabled
+            logical_command, errexit_enabled, context
         )
         if errexit_failure:
             return True
-        if not size_comparison(logical_command):
+        if not context.is_comparison(logical_command):
             continue
 
         if (
@@ -269,7 +361,34 @@ def indentation_block(lines: list[str], index: int) -> list[str]:
     return result
 
 
-def python_hard_size_exit(lines: list[str]) -> bool:
+def python_failure(lines: list[str]) -> bool:
+    source_without_comments = "\n".join(
+        re.sub(r"#.*$", "", line) for line in lines
+    )
+    for termination in PYTHON_EXIT.finditer(source_without_comments):
+        status = next(
+            (value for value in termination.groups() if value is not None),
+            None,
+        )
+        if python_nonzero_status(status, empty_is_failure=False):
+            return True
+    for line in source_without_comments.splitlines():
+        stripped = line.strip()
+        if not re.match(r"^raise\b", stripped):
+            continue
+        if re.fullmatch(
+            r"raise\s+SystemExit(?:\s*\(\s*(?:0|None)?\s*\))?",
+            stripped,
+        ):
+            continue
+        return True
+    return False
+
+
+def python_hard_size_exit(
+    lines: list[str], context: SizeContext | None = None
+) -> bool:
+    context = context or SizeContext.from_lines(lines)
     source_without_comments = "\n".join(
         re.sub(r"#.*$", "", line) for line in lines
     )
@@ -278,7 +397,7 @@ def python_hard_size_exit(lines: list[str]) -> bool:
         for match in PYTHON_STATUS_CALL.finditer(source_without_comments)
     }
     for index, line in enumerate(lines):
-        if not re.search(r"\bif\b", line) or not size_comparison(line):
+        if not re.search(r"\bif\b", line) or not context.is_comparison(line):
             continue
         condition_indent = len(line) - len(line.lstrip())
         containing_function: str | None = None
@@ -297,20 +416,11 @@ def python_hard_size_exit(lines: list[str]) -> bool:
             if indent == 0:
                 break
         for candidate in indentation_block(lines, index):
-            for termination in PYTHON_EXIT.finditer(candidate):
-                status = next(
-                    (
-                        value
-                        for value in termination.groups()
-                        if value is not None
-                    ),
-                    None,
-                )
-                if nonzero_status(status, empty_is_failure=False):
-                    return True
+            if python_failure([candidate]):
+                return True
             if containing_function in process_status_functions:
                 for termination in PYTHON_RETURN.finditer(candidate):
-                    if nonzero_status(
+                    if python_nonzero_status(
                         termination.group(1), empty_is_failure=False
                     ):
                         return True
@@ -331,14 +441,28 @@ def javascript_block(lines: list[str], index: int) -> list[str]:
     return result
 
 
-def javascript_hard_size_exit(lines: list[str]) -> bool:
+def javascript_failure(lines: list[str]) -> bool:
+    for line in lines:
+        if JAVASCRIPT_THROW.search(line):
+            return True
+        for termination in JAVASCRIPT_EXIT.finditer(line):
+            if nonzero_status(termination.group(1), empty_is_failure=False):
+                return True
+        for termination in JAVASCRIPT_EXIT_CODE.finditer(line):
+            if nonzero_status(termination.group(1), empty_is_failure=False):
+                return True
+    return False
+
+
+def javascript_hard_size_exit(
+    lines: list[str], context: SizeContext | None = None
+) -> bool:
+    context = context or SizeContext.from_lines(lines)
     for index, line in enumerate(lines):
-        if not re.search(r"\bif\b", line) or not size_comparison(line):
+        if not re.search(r"\bif\b", line) or not context.is_comparison(line):
             continue
-        for candidate in javascript_block(lines, index):
-            for termination in JAVASCRIPT_EXIT.finditer(candidate):
-                if nonzero_status(termination.group(1), empty_is_failure=False):
-                    return True
+        if javascript_failure(javascript_block(lines, index)):
+            return True
     return False
 
 
@@ -378,6 +502,7 @@ class WorkflowUnit:
     language: str
     lines: list[str]
     blocking: bool
+    conditions: tuple[str, ...]
 
 
 def workflow_jobs(lines: list[str]) -> list[list[str]]:
@@ -464,6 +589,21 @@ def workflow_literal_true(lines: list[str], key: str, indent: int) -> bool:
     )
 
 
+def workflow_property_values(
+    lines: list[str], key: str, indent: int
+) -> tuple[str, ...]:
+    return tuple(
+        match.group(1)
+        for line in lines
+        if len(line) - len(line.lstrip()) == indent
+        and (
+            match := re.match(
+                rf"^\s*{re.escape(key)}:\s*(.*?)\s*(?:#.*)?$", line
+            )
+        )
+    )
+
+
 def workflow_runner_language(step: list[str], property_indent: int) -> str:
     shell = next(
         (
@@ -488,19 +628,14 @@ def workflow_runner_language(step: list[str], property_indent: int) -> str:
 
 
 def workflow_step_units(
-    step: list[str], *, job_blocking: bool
+    step: list[str], *, job_blocking: bool, job_conditions: tuple[str, ...]
 ) -> list[WorkflowUnit]:
     property_indent = min(
         len(line) - len(line.lstrip()) for line in step if line.strip()
     )
-    size_conditions = [
-        match.group(1)
-        for line in step
-        if (
-            match := re.match(r"^\s*if:\s*(.*?)\s*(?:#.*)?$", line)
-        )
-        and size_comparison(match.group(1))
-    ]
+    conditions = job_conditions + workflow_property_values(
+        step, "if", property_indent
+    )
     language = workflow_runner_language(step, property_indent)
     blocking = job_blocking and not workflow_literal_true(
         step, "continue-on-error", property_indent
@@ -522,8 +657,7 @@ def workflow_step_units(
                 block.append(candidate)
         else:
             block = [scalar.strip("\"'")]
-        condition_lines = [f"if {condition}" for condition in size_conditions]
-        units.append(WorkflowUnit(language, condition_lines + block, blocking))
+        units.append(WorkflowUnit(language, block, blocking, conditions))
     return units
 
 
@@ -543,27 +677,55 @@ def workflow_units(text: str) -> list[WorkflowUnit]:
         job_blocking = not workflow_literal_true(
             job, "continue-on-error", property_indent
         )
+        job_conditions = workflow_property_values(
+            job, "if", property_indent
+        )
         for step in workflow_steps(job):
-            units.extend(workflow_step_units(step, job_blocking=job_blocking))
+            units.extend(
+                workflow_step_units(
+                    step,
+                    job_blocking=job_blocking,
+                    job_conditions=job_conditions,
+                )
+            )
     return units
+
+
+def workflow_process_failure(unit: WorkflowUnit) -> bool:
+    if unit.language == "shell":
+        return any(shell_failure_command(line) for line in unit.lines)
+    if unit.language == "python":
+        return python_failure(unit.lines)
+    if unit.language == "javascript":
+        return javascript_failure(unit.lines)
+    return (
+        any(shell_failure_command(line) for line in unit.lines)
+        or python_failure(unit.lines)
+        or javascript_failure(unit.lines)
+    )
 
 
 def workflow_unit_hard_size_exit(unit: WorkflowUnit) -> bool:
     if not unit.blocking:
         return False
+    context = SizeContext.from_lines([*unit.conditions, *unit.lines])
+    if any(context.is_comparison(condition) for condition in unit.conditions):
+        return workflow_process_failure(unit)
     if unit.language == "shell":
-        return shell_hard_size_exit(unit.lines, errexit_default=True)
-    if unit.language == "python":
-        return python_hard_size_exit(unit.lines)
-    if unit.language == "javascript":
-        return javascript_hard_size_exit(unit.lines)
-    return any(
-        detector(unit.lines)
-        for detector in (
-            python_hard_size_exit,
-            javascript_hard_size_exit,
+        return shell_hard_size_exit(
+            unit.lines, errexit_default=True, context=context
         )
-    ) or shell_hard_size_exit(unit.lines, errexit_default=True)
+    if unit.language == "python":
+        return python_hard_size_exit(unit.lines, context)
+    if unit.language == "javascript":
+        return javascript_hard_size_exit(unit.lines, context)
+    return (
+        python_hard_size_exit(unit.lines, context)
+        or javascript_hard_size_exit(unit.lines, context)
+        or shell_hard_size_exit(
+            unit.lines, errexit_default=True, context=context
+        )
+    )
 
 
 def hard_size_exit(root: Path, path: Path, text: str) -> bool:

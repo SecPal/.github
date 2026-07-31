@@ -38,8 +38,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - make user-scoped snapshot activation part of the complete installer
   transaction, restoring the prior pointer after a later service failure
 - audit workflow templates and language-specific workflow runners for hard
-  size gates while respecting explicit job- and step-level non-blocking policy
-  and Python return statuses propagated to the process
+  size gates while inheriting job and step conditions, respecting explicit
+  non-blocking policy, tracing locally derived size totals, and recognizing
+  language-specific unsuccessful process termination
 - documented that central reusable-workflow updates do not automatically
   update repository-local preflight implementations
 
