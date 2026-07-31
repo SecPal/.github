@@ -96,17 +96,22 @@ explicit repository roots:
 
 ```bash
 bash scripts/validate-pr-size-policy.sh /path/to/SecPal
-bash scripts/validate-pr-size-policy.sh /path/to/api /path/to/frontend
+bash scripts/validate-pr-size-policy.sh /path/to/.github /path/to/api /path/to/frontend
 ```
 
 The validator reports one concise result per repository and rejects active
 size-triggered failures, override files or labels, size-based hook bypass
 instructions, unused size-override permissions, and mutable reusable-workflow
 references in every workflow filename. It fails closed on unreadable or
-non-UTF-8 policy inputs, recognizes compact Shell gates plus Python and
-JavaScript policy entry points, and avoids treating ordinary application
-returns as process failures. It positively verifies advisory local reporting
-and the central reusable workflow contract where those implementations exist.
+non-UTF-8 policy inputs, recognizes compact and multi-line Shell conditional
+lists plus Python and JavaScript policy entry points, preserves workflow-step
+boundaries, and avoids treating ordinary application returns or suffixless
+binary helpers as policy failures. Immutable reusable-workflow references are
+loaded from the supplied governance Git checkout and checked against the
+advisory contract at that exact historical revision; callers with such a
+reference fail closed when no unique governance checkout is supplied. The
+validator also positively verifies advisory local reporting and the current
+central reusable workflow contract where those implementations exist.
 
 The regression suite builds its multi-repository fixtures in temporary storage
 and validates the current repository independently, so a normal preflight does
@@ -494,18 +499,21 @@ verifier with the committed npm validator dependencies installed. The installer
 loads the pinned parser and verifies its required API before any installation
 writes. It then publishes the lockfile-addressed validator dependencies below
 `~/.local/share/polyscope/ai-instruction-validator/` and atomically moves the
-`current` symlink. The snapshot is built with
+`current` symlink. The schema-2 snapshot uses a `v3-` target and is built with
 `npm ci --offline --ignore-scripts` from the committed package and lock files,
 not by copying the checkout's mutable `node_modules`. Polyscope services use
 that immutable snapshot, so a concurrent dependency replacement in the
 governance checkout cannot temporarily remove Markdownlint or `js-yaml` from a
 workspace bootstrap. A shared publisher lock covers lockfile selection,
 installation, exact-target publication, and `current` activation. Each
-published snapshot records and verifies its lockfile and normalized dependency
-tree digests and must execute both validator tools successfully. An explicitly
-selected snapshot never falls back to a global Markdownlint. The rollout still
-watches the runtime files and npm lock state for rollout changes and
-dependency-install recovery.
+published snapshot records and verifies its lockfile, normalized dependency
+tree, and clean source commit, and must execute both validator tools
+successfully. Before switching `current`, the installers prove that the
+candidate source commit descends from the active one; a delayed stale publisher
+or unrelated custom bundle fails closed. A legacy `v2-` snapshot migrates only
+when its lock digest matches the candidate. An explicitly selected snapshot
+never falls back to a global Markdownlint. The rollout still watches the runtime
+files and npm lock state for rollout changes and dependency-install recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new

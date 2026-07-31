@@ -125,6 +125,9 @@ grep -Fq '/usr/bin/flock "$validator_runtime_lock_fd"' "$INSTALLER"
 grep -Fq '/usr/bin/tar' "$INSTALLER"
 grep -Fq '| /usr/bin/sha256sum' "$INSTALLER"
 grep -Fq '| /usr/bin/awk ' "$INSTALLER"
+grep -Fq 'source_commit=' "$INSTALLER"
+grep -Fq 'merge-base --is-ancestor' "$INSTALLER"
+grep -Fq '/usr/bin/sudo -u secpal -- /usr/bin/git' "$INSTALLER"
 
 if command -v visudo >/dev/null 2>&1; then
     visudo -c -f "$sudoers" >/dev/null

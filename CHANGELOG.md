@@ -9,7 +9,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-07-30 - Harden Governance Validation Reliability
+## 2026-07-31 - Harden Governance Validation Reliability
 
 **Changed:**
 
@@ -23,6 +23,12 @@ Log of notable changes to SecPal organization defaults (newest first).
   dependency installation from transiently blocking unrelated workspaces,
   including strict selected-toolchain isolation, serialized publishers,
   dependency-tree integrity checks, and collision-safe snapshot publishing
+- bound validator snapshots to their source commits and permit activation only
+  along verified Git ancestry, so a stale or unrelated publisher cannot move
+  the shared `current` pointer back after a newer dependency snapshot wins
+- expanded the PR-size policy audit to recognize shell conditional lists,
+  preserve workflow step boundaries, validate pinned historical workflow
+  revisions against the advisory contract, and ignore suffixless binary helpers
 - documented that central reusable-workflow updates do not automatically
   update repository-local preflight implementations
 

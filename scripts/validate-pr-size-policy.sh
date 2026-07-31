@@ -34,7 +34,6 @@ SKIPPED_PARTS = {
 }
 SKIPPED_FILES = {"CHANGELOG.md", "package-lock.json"}
 TEXT_SUFFIXES = {
-    "",
     ".md",
     ".sh",
     ".bash",
@@ -57,9 +56,7 @@ SIZE_POLICY_CONTEXT = re.compile(
     r"\badvisory[- ]threshold\b|\b(?:CHANGED|TOTAL_CHANGES|MAX_LINES|PR_SIZE)\b)",
     re.IGNORECASE,
 )
-SIZE_COMPARISON = re.compile(
-    r"\bif\b.*(?:-(?:gt|ge|lt|le)\b|[<>]=?)", re.IGNORECASE
-)
+SIZE_COMPARISON = re.compile(r"(?:-(?:gt|ge|lt|le)\b|[<>]=?)", re.IGNORECASE)
 SIZE_VARIABLE = re.compile(
     r"(?:CHANGED|TOTAL_CHANGES|MAX_LINES|ADVISORY_THRESHOLD|PR_SIZE)",
     re.IGNORECASE,
@@ -72,6 +69,8 @@ PYTHON_EXIT = re.compile(
 JAVASCRIPT_EXIT = re.compile(
     r"(?:process|Deno|Bun)\.exit\s*\(\s*([^)]*)\)"
 )
+POLICY_ROOTS = {".githooks", ".github", ".husky", "scripts"}
+SHELL_SHEBANG = re.compile(rb"^#![^\r\n]*\b(?:ba|da|k|z)?sh\b")
 
 
 def resolve_repositories(arguments: list[str]) -> list[Path]:
@@ -87,6 +86,18 @@ def resolve_repositories(arguments: list[str]) -> list[Path]:
     return supplied
 
 
+def suffixless_shell_policy(root: Path, path: Path) -> bool:
+    relative = path.relative_to(root)
+    if not relative.parts or relative.parts[0] not in POLICY_ROOTS:
+        return False
+    try:
+        with path.open("rb") as stream:
+            first_line = stream.readline(512)
+    except OSError:
+        return True
+    return SHELL_SHEBANG.search(first_line) is not None
+
+
 def active_files(root: Path) -> list[Path]:
     result: list[Path] = []
     for path in root.rglob("*"):
@@ -99,7 +110,9 @@ def active_files(root: Path) -> list[Path]:
             continue
         if relative.as_posix() == "scripts/validate-pr-size-policy.sh":
             continue
-        if path.suffix.lower() not in TEXT_SUFFIXES:
+        if path.suffix.lower() not in TEXT_SUFFIXES and not (
+            path.suffix == "" and suffixless_shell_policy(root, path)
+        ):
             continue
         result.append(path)
     return sorted(result)
@@ -139,11 +152,50 @@ def nonzero_status(status: str | None, *, empty_is_failure: bool) -> bool:
     return re.fullmatch(r"\+?0+", normalized) is None
 
 
+def size_comparison(value: str) -> bool:
+    return SIZE_COMPARISON.search(value) is not None and SIZE_VARIABLE.search(
+        value
+    ) is not None
+
+
+def shell_failure_command(value: str) -> bool:
+    if FALSE_COMMAND.search(value):
+        return True
+    for termination in EXIT_OR_RETURN.finditer(value):
+        status = termination.group(1)
+        if status is None:
+            prefix = value[: termination.start()].rstrip()
+            if prefix.endswith("||"):
+                return True
+            continue
+        if nonzero_status(status, empty_is_failure=False):
+            return True
+    return False
+
+
+def shell_logical_command(lines: list[str], index: int) -> str:
+    command = lines[index].strip()
+    for candidate in lines[index + 1 : index + 8]:
+        if not re.search(r"(?:\\|&&|\|\|)\s*$", command):
+            break
+        command = re.sub(r"\\\s*$", "", command)
+        command = f"{command} {candidate.strip()}"
+    return command
+
+
 def shell_hard_size_exit(lines: list[str]) -> bool:
     for index, line in enumerate(lines):
-        if not SIZE_COMPARISON.search(line) or not SIZE_VARIABLE.search(line):
+        logical_command = shell_logical_command(lines, index)
+        if not size_comparison(logical_command):
             continue
 
+        if (
+            "&&" in logical_command or "||" in logical_command
+        ) and shell_failure_command(logical_command):
+            return True
+
+        if not re.search(r"\bif\b", logical_command, re.IGNORECASE):
+            continue
         depth = 0
         opened = False
         for candidate in lines[index : index + 80]:
@@ -154,11 +206,8 @@ def shell_hard_size_exit(lines: list[str]) -> bool:
             if openings:
                 depth += openings
                 opened = True
-            if FALSE_COMMAND.search(stripped):
+            if shell_failure_command(stripped):
                 return True
-            for termination in EXIT_OR_RETURN.finditer(stripped):
-                if nonzero_status(termination.group(1), empty_is_failure=True):
-                    return True
             if opened:
                 depth -= len(re.findall(r"\bfi\b", stripped))
                 if depth <= 0:
@@ -183,7 +232,7 @@ def indentation_block(lines: list[str], index: int) -> list[str]:
 
 def python_hard_size_exit(lines: list[str]) -> bool:
     for index, line in enumerate(lines):
-        if not SIZE_COMPARISON.search(line) or not SIZE_VARIABLE.search(line):
+        if not re.search(r"\bif\b", line) or not size_comparison(line):
             continue
         for candidate in indentation_block(lines, index):
             for termination in PYTHON_EXIT.finditer(candidate):
@@ -216,7 +265,7 @@ def javascript_block(lines: list[str], index: int) -> list[str]:
 
 def javascript_hard_size_exit(lines: list[str]) -> bool:
     for index, line in enumerate(lines):
-        if not SIZE_COMPARISON.search(line) or not SIZE_VARIABLE.search(line):
+        if not re.search(r"\bif\b", line) or not size_comparison(line):
             continue
         for candidate in javascript_block(lines, index):
             for termination in JAVASCRIPT_EXIT.finditer(candidate):
@@ -236,12 +285,7 @@ def policy_language(root: Path, path: Path, text: str) -> str | None:
     ):
         return "shell"
 
-    policy_root = bool(parts) and parts[0] in {
-        ".githooks",
-        ".github",
-        ".husky",
-        "scripts",
-    }
+    policy_root = bool(parts) and parts[0] in POLICY_ROOTS
     if not policy_root:
         return None
     if suffix in {".sh", ".bash", ".yml", ".yaml"}:
@@ -255,16 +299,159 @@ def policy_language(root: Path, path: Path, text: str) -> str | None:
     return None
 
 
+def workflow_steps(lines: list[str]) -> list[list[str]]:
+    steps: list[list[str]] = []
+    index = 0
+    while index < len(lines):
+        match = re.match(r"^(\s*)steps:\s*(?:#.*)?$", lines[index])
+        if match is None:
+            index += 1
+            continue
+        steps_indent = len(match.group(1))
+        index += 1
+        current: list[str] = []
+        item_indent: int | None = None
+        while index < len(lines):
+            line = lines[index]
+            if line.strip():
+                indent = len(line) - len(line.lstrip())
+                if indent <= steps_indent:
+                    break
+                item = re.match(r"^(\s*)-\s+(.*)$", line)
+                if item is not None and (
+                    item_indent is None or len(item.group(1)) == item_indent
+                ):
+                    if current:
+                        steps.append(current)
+                    item_indent = len(item.group(1))
+                    current = [" " * (item_indent + 2) + item.group(2)]
+                    index += 1
+                    continue
+            if current:
+                current.append(line)
+            index += 1
+        if current:
+            steps.append(current)
+    return steps
+
+
+def workflow_step_shell_units(step: list[str]) -> list[list[str]]:
+    size_conditions = [
+        match.group(1)
+        for line in step
+        if (
+            match := re.match(r"^\s*if:\s*(.*?)\s*(?:#.*)?$", line)
+        )
+        and size_comparison(match.group(1))
+    ]
+    units: list[list[str]] = []
+    for index, line in enumerate(step):
+        match = re.match(r"^(\s*)run:\s*(.*)$", line)
+        if match is None:
+            continue
+        run_indent = len(match.group(1))
+        scalar = match.group(2).strip()
+        if re.fullmatch(r"[|>][-+]?", scalar):
+            block: list[str] = []
+            for candidate in step[index + 1 :]:
+                if candidate.strip():
+                    indent = len(candidate) - len(candidate.lstrip())
+                    if indent <= run_indent:
+                        break
+                block.append(candidate)
+        else:
+            block = [scalar.strip("\"'")]
+        condition_lines = [f"if {condition}" for condition in size_conditions]
+        units.append(condition_lines + block)
+    return units
+
+
+def workflow_shell_units(text: str) -> list[list[str]]:
+    return [
+        unit
+        for step in workflow_steps(text.splitlines())
+        for unit in workflow_step_shell_units(step)
+    ]
+
+
 def hard_size_exit(root: Path, path: Path, text: str) -> bool:
     language = policy_language(root, path, text)
     lines = text.splitlines()
     if language == "shell":
+        relative = path.relative_to(root)
+        if (
+            len(relative.parts) >= 3
+            and relative.parts[:2] == (".github", "workflows")
+            and path.suffix.lower() in {".yml", ".yaml"}
+        ):
+            return any(
+                shell_hard_size_exit(unit) for unit in workflow_shell_units(text)
+            )
         return shell_hard_size_exit(lines)
     if language == "python":
         return python_hard_size_exit(lines)
     if language == "javascript":
         return javascript_hard_size_exit(lines)
     return False
+
+
+def reusable_workflow_contract_failures(text: str) -> list[str]:
+    failures: list[str] = []
+    required_fragments = {
+        "git diff --numstat": "locale-independent changed-line calculation",
+        "INSERTIONS": "insertion reporting",
+        "DELETIONS": "deletion reporting",
+        "::warning::": "advisory GitHub warning",
+        "Advisory changed-line threshold": "advisory max-lines contract",
+    }
+    for fragment, description in required_fragments.items():
+        if fragment not in text:
+            failures.append(f"missing {description}")
+    if "pull-requests: read" in text:
+        failures.append("unused pull-request permission")
+    if ".preflight-allow-large-pr" in text or "large-pr-approved" in text:
+        failures.append("obsolete size override")
+    if any(shell_hard_size_exit(unit) for unit in workflow_shell_units(text)):
+        failures.append("size-triggered nonzero exit")
+    return sorted(set(failures))
+
+
+def governance_root(repositories: list[Path]) -> Path | None:
+    candidates = [
+        root
+        for root in repositories
+        if (root / ".git").exists()
+        and (root / ".github/workflows/reusable-pr-size.yml").is_file()
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def pinned_workflow_contract_failures(
+    root: Path | None, revision: str
+) -> list[str]:
+    if root is None:
+        return ["reusable workflow advisory contract cannot be verified"]
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "show",
+                f"{revision}:.github/workflows/reusable-pr-size.yml",
+            ],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        return ["reusable workflow advisory contract cannot be verified"]
+    if result.returncode != 0:
+        return ["reusable workflow revision is unavailable for contract validation"]
+    try:
+        text = result.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return ["reusable workflow revision is not readable UTF-8"]
+    return reusable_workflow_contract_failures(text)
 
 
 def size_bypass_instruction(lines: list[str]) -> bool:
@@ -285,7 +472,11 @@ def size_bypass_instruction(lines: list[str]) -> bool:
     return False
 
 
-def validate_repository(root: Path) -> list[str]:
+def validate_repository(
+    root: Path,
+    workflow_source: Path | None,
+    workflow_contract_cache: dict[str, list[str]],
+) -> list[str]:
     failures: list[str] = []
     if not root.is_dir():
         return ["repository root is missing"]
@@ -366,30 +557,37 @@ def validate_repository(root: Path) -> list[str]:
                 failures.append(
                     f"{relative.as_posix()}: reusable workflow is not pinned to an immutable SHA"
                 )
+                continue
+            contract_failures = workflow_contract_cache.setdefault(
+                reference,
+                pinned_workflow_contract_failures(workflow_source, reference),
+            )
+            if contract_failures:
+                failures.append(
+                    f"{relative.as_posix()}: pinned reusable workflow violates the advisory contract "
+                    f"({', '.join(contract_failures)})"
+                )
 
     reusable = root / ".github/workflows/reusable-pr-size.yml"
     reusable_text = contents.get(reusable, "")
     if reusable_text:
-        required_fragments = {
-            "git diff --numstat": "locale-independent changed-line calculation",
-            "INSERTIONS": "insertion reporting",
-            "DELETIONS": "deletion reporting",
-            "::warning::": "advisory GitHub warning",
-            "Advisory changed-line threshold": "advisory max-lines contract",
-        }
-        for fragment, description in required_fragments.items():
-            if fragment not in reusable_text:
-                failures.append(
-                    f".github/workflows/reusable-pr-size.yml: missing {description}"
-                )
+        for description in reusable_workflow_contract_failures(reusable_text):
+            failures.append(
+                f".github/workflows/reusable-pr-size.yml: {description}"
+            )
 
     return sorted(set(failures))
 
 
 def main() -> int:
     failed = False
-    for root in resolve_repositories(sys.argv[1:]):
-        failures = validate_repository(root)
+    repositories = resolve_repositories(sys.argv[1:])
+    workflow_source = governance_root(repositories)
+    workflow_contract_cache: dict[str, list[str]] = {}
+    for root in repositories:
+        failures = validate_repository(
+            root, workflow_source, workflow_contract_cache
+        )
         if failures:
             failed = True
             print(f"{root.name}: FAIL - {'; '.join(failures)}")

@@ -85,11 +85,18 @@ governance command replaces checkout-local dependencies, without adding a
 download or permissive fallback to the validator. A shared publisher lock
 serializes user and system installers before they read the source lockfile, and
 each versioned snapshot records both the lockfile digest and a normalized digest
-of the installed dependency tree. Snapshot activation verifies those digests
-and smoke-tests both pinned validator tools. Concurrent publishers therefore
-cannot roll `current` back, publish mutable checkout contents, or nest a losing
-staging directory inside the winning target. An absent offline npm cache fails
-closed; run the repository's committed `npm ci` before retrying installation.
+of the installed dependency tree. Schema-2 snapshots use a `v3-` target and
+also record the clean Git commit that supplied the package metadata. Snapshot
+activation verifies those digests, smoke-tests both pinned validator tools, and
+requires the candidate source commit to descend from the active source commit.
+An existing `v2-` schema-1 snapshot can migrate only to a `v3-` snapshot with
+the same lock digest. Concurrent or delayed publishers therefore cannot roll
+`current` back, activate an unrelated history, publish mutable checkout
+contents, or nest a losing staging directory inside the winning target. The
+user installer executes validator tools through the same service `PATH` that it
+validated; the privileged installer runs Git ancestry checks as the `secpal`
+service user. An absent offline npm cache or incomparable source history fails
+closed.
 
 Run the validator and its regression suite with:
 

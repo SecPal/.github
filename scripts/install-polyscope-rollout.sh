@@ -231,7 +231,7 @@ VALIDATOR_INSTALLED_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.packag
 VALIDATOR_MARKDOWNLINT="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint"
 VALIDATOR_YAML_PACKAGE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
 
-for _validator_tool in awk bash basename dirname find flock grep head node npm python3 sha256sum tar wc; do
+for _validator_tool in awk bash basename dirname find flock grep head node npm python3 readlink sha256sum tar wc; do
     if ! PATH="$SERVICE_PATH" command -v "$_validator_tool" >/dev/null 2>&1; then
         echo "Error: rollout validator toolchain is incomplete: $_validator_tool is unavailable in the service PATH." >&2
         exit 1
@@ -268,12 +268,43 @@ validator_node_modules_digest() {
         | PATH="$SERVICE_PATH" awk '{print $1}'
 }
 
+validator_source_commit() {
+    local source_commit
+
+    if ! source_commit="$(
+        "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
+            log -1 --format=%H HEAD -- package.json package-lock.json 2>/dev/null
+    )" \
+        || [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "Error: validator runtime source must belong to a Git commit." >&2
+        return 1
+    fi
+    if ! "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
+        diff --quiet HEAD -- package.json package-lock.json; then
+        echo "Error: validator runtime package metadata must match its source commit." >&2
+        return 1
+    fi
+    printf '%s\n' "$source_commit"
+}
+
+validator_snapshot_source_commit() {
+    local toolchain_root="$1"
+
+    PATH="$SERVICE_PATH" awk -F= \
+        '$1 == "source_commit" { print substr($0, index($0, "=") + 1) }' \
+        "$toolchain_root/.secpal-validator-snapshot"
+}
+
 installed_validator_toolchain_usable() {
     local toolchain_root="$1"
     local expected_lock_digest="$2"
-    local installed_lock_digest installed_node_modules_digest
+    local expected_schema="${3:-2}"
+    local installed_lock_digest installed_node_modules_digest installed_source_commit
 
-    read -r installed_lock_digest _ < <(sha256sum "$toolchain_root/package-lock.json")
+    [[ -d "$toolchain_root" && ! -L "$toolchain_root" ]] || return 1
+    read -r installed_lock_digest _ < <(
+        PATH="$SERVICE_PATH" sha256sum "$toolchain_root/package-lock.json"
+    )
     if [[ "$installed_lock_digest" != "$expected_lock_digest" ]]; then
         return 1
     fi
@@ -286,21 +317,95 @@ installed_validator_toolchain_usable() {
         && -f "$toolchain_root/node_modules/.package-lock.json" \
         && -f "$toolchain_root/.secpal-validator-snapshot" \
         && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
-        && grep -qxF 'schema=1' "$toolchain_root/.secpal-validator-snapshot" \
-        && grep -qxF \
+        && PATH="$SERVICE_PATH" grep -qxF \
+            "schema=$expected_schema" \
+            "$toolchain_root/.secpal-validator-snapshot" \
+        && PATH="$SERVICE_PATH" grep -qxF \
             "lock_sha256=$expected_lock_digest" \
             "$toolchain_root/.secpal-validator-snapshot" \
-        && grep -qxF \
+        && PATH="$SERVICE_PATH" grep -qxF \
             "node_modules_sha256=$installed_node_modules_digest" \
             "$toolchain_root/.secpal-validator-snapshot" \
         && PATH="$SERVICE_PATH" \
             "$toolchain_root/node_modules/.bin/markdownlint" --version >/dev/null 2>&1 \
         && PATH="$SERVICE_PATH" node \
-            "$VALIDATOR_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1
+            "$VALIDATOR_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1 \
+        || return 1
+    if [[ "$expected_schema" -eq 2 ]]; then
+        installed_source_commit="$(validator_snapshot_source_commit "$toolchain_root")"
+        [[ "$installed_source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    fi
+}
+
+validator_snapshot_activation_allowed() {
+    local candidate_dir="$1"
+    local candidate_name="$2"
+    local candidate_lock_digest="$3"
+    local current_name current_dir current_lock_digest current_name_source_commit
+    local candidate_source_commit candidate_name_source_commit current_source_commit
+
+    candidate_source_commit="$(validator_snapshot_source_commit "$candidate_dir")"
+    if [[ ! "$candidate_name" =~ ^v3-([0-9a-f]{64})-([0-9a-f]{40})$ ]]; then
+        echo "Error: validator runtime candidate has an invalid target name: $candidate_name" >&2
+        return 1
+    fi
+    candidate_name_source_commit="${BASH_REMATCH[2]}"
+    if [[ "${BASH_REMATCH[1]}" != "$candidate_lock_digest" \
+        || "$candidate_name_source_commit" != "$candidate_source_commit" ]]; then
+        echo "Error: validator runtime candidate identity does not match its target name." >&2
+        return 1
+    fi
+
+    if [[ ! -e "$VALIDATOR_RUNTIME_CURRENT" && ! -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
+        return 0
+    fi
+    if ! current_name="$(PATH="$SERVICE_PATH" readlink "$VALIDATOR_RUNTIME_CURRENT")"; then
+        echo "Error: failed to read validator runtime current pointer." >&2
+        return 1
+    fi
+    if [[ "$current_name" == "$candidate_name" ]]; then
+        return 0
+    fi
+    if [[ "$current_name" =~ ^v2-([0-9a-f]{64})$ ]]; then
+        current_lock_digest="${BASH_REMATCH[1]}"
+        current_dir="$VALIDATOR_RUNTIME_BASE/$current_name"
+        if [[ "$current_lock_digest" != "$candidate_lock_digest" ]] \
+            || ! installed_validator_toolchain_usable \
+                "$current_dir" "$current_lock_digest" 1; then
+            echo "Error: legacy validator runtime snapshot cannot be migrated safely: $current_dir" >&2
+            return 1
+        fi
+        return 0
+    fi
+    if [[ ! "$current_name" =~ ^v3-([0-9a-f]{64})-([0-9a-f]{40})$ ]]; then
+        echo "Error: validator runtime current pointer has an invalid target: $current_name" >&2
+        return 1
+    fi
+    current_lock_digest="${BASH_REMATCH[1]}"
+    current_name_source_commit="${BASH_REMATCH[2]}"
+    current_dir="$VALIDATOR_RUNTIME_BASE/$current_name"
+    if ! installed_validator_toolchain_usable "$current_dir" "$current_lock_digest"; then
+        echo "Error: active validator runtime snapshot is incomplete: $current_dir" >&2
+        return 1
+    fi
+
+    current_source_commit="$(validator_snapshot_source_commit "$current_dir")"
+    if [[ "$current_source_commit" != "$current_name_source_commit" ]]; then
+        echo "Error: active validator runtime source identity does not match its target name." >&2
+        return 1
+    fi
+    if ! "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
+        cat-file -e "$current_source_commit^{commit}" 2>/dev/null \
+        || ! "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
+            merge-base --is-ancestor \
+            "$current_source_commit" "$candidate_source_commit"; then
+        echo "Error: refusing to reactivate stale validator runtime snapshot: $candidate_dir" >&2
+        return 1
+    fi
 }
 
 install_validator_runtime_toolchain() {
-    local lock_digest node_modules_digest snapshot_dir snapshot_name staging_dir temporary_link
+    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir temporary_link
     local validator_runtime_lock_file validator_runtime_lock_fd
 
     if [[ -e "$VALIDATOR_RUNTIME_CURRENT" && ! -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
@@ -311,10 +416,15 @@ install_validator_runtime_toolchain() {
     mkdir -p "$VALIDATOR_RUNTIME_BASE"
     validator_runtime_lock_file="$VALIDATOR_RUNTIME_BASE/.install.lock"
     exec {validator_runtime_lock_fd}>"$validator_runtime_lock_file"
-    flock "$validator_runtime_lock_fd"
+    PATH="$SERVICE_PATH" flock "$validator_runtime_lock_fd"
 
-    read -r lock_digest _ < <(sha256sum "$VALIDATOR_PACKAGE_LOCK")
-    snapshot_name="v2-$lock_digest"
+    read -r lock_digest _ < <(
+        PATH="$SERVICE_PATH" sha256sum "$VALIDATOR_PACKAGE_LOCK"
+    )
+    if ! source_commit="$(validator_source_commit)"; then
+        exit 1
+    fi
+    snapshot_name="v3-$lock_digest-$source_commit"
     snapshot_dir="$VALIDATOR_RUNTIME_BASE/$snapshot_name"
     if [[ -e "$snapshot_dir" || -L "$snapshot_dir" ]]; then
         if [[ ! -d "$snapshot_dir" || -L "$snapshot_dir" ]]; then
@@ -341,8 +451,8 @@ install_validator_runtime_toolchain() {
             echo "Error: failed to hash the isolated validator runtime toolchain." >&2
             exit 1
         fi
-        printf 'schema=1\nlock_sha256=%s\nnode_modules_sha256=%s\n' \
-            "$lock_digest" "$node_modules_digest" \
+        printf 'schema=2\nlock_sha256=%s\nnode_modules_sha256=%s\nsource_commit=%s\n' \
+            "$lock_digest" "$node_modules_digest" "$source_commit" \
             >"$staging_dir/.secpal-validator-snapshot"
         if ! installed_validator_toolchain_usable "$staging_dir" "$lock_digest"; then
             rm -rf -- "$staging_dir"
@@ -360,11 +470,15 @@ install_validator_runtime_toolchain() {
         fi
     fi
 
+    if ! validator_snapshot_activation_allowed \
+        "$snapshot_dir" "$snapshot_name" "$lock_digest"; then
+        exit 1
+    fi
     temporary_link="$VALIDATOR_RUNTIME_BASE/.current-$$"
     rm -f -- "$temporary_link"
     ln -s "$snapshot_name" "$temporary_link"
     mv -Tf "$temporary_link" "$VALIDATOR_RUNTIME_CURRENT"
-    flock -u "$validator_runtime_lock_fd"
+    PATH="$SERVICE_PATH" flock -u "$validator_runtime_lock_fd"
 }
 
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.

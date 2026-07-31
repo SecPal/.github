@@ -101,11 +101,53 @@ cat >"$workspace/compact-exit/scripts/preflight.sh" <<'EOF'
 if [ "$CHANGED" -gt 600 ]; then echo "PR exceeds the size limit"; exit 1; fi
 EOF
 
+make_repo conditional-list-exit
+cat >"$workspace/conditional-list-exit/scripts/preflight.sh" <<'EOF'
+[ "$CHANGED" -le 600 ] || exit 1
+EOF
+
+make_repo conditional-list-multiline
+cat >"$workspace/conditional-list-multiline/scripts/preflight.sh" <<'EOF'
+test "$CHANGED" -le 600 ||
+  exit 1
+EOF
+
+make_repo conditional-list-zero-exit
+cat >"$workspace/conditional-list-zero-exit/scripts/preflight.sh" <<'EOF'
+test "$CHANGED" -gt 600 && exit
+EOF
+
 make_repo alternate-workflow-name
 cat >"$workspace/alternate-workflow-name/.github/workflows/custom-pr-size.yaml" <<'EOF'
 jobs:
   size:
     uses: SecPal/.github/.github/workflows/reusable-pr-size.yml@main
+EOF
+
+make_repo hard-pinned-revision
+cat >"$workspace/hard-pinned-revision/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    uses: SecPal/.github/.github/workflows/reusable-pr-size.yml@57031ba8418e5febd39210a8bbcc7cb091b039a6
+EOF
+
+make_repo workflow-step-boundary
+cat >"$workspace/workflow-step-boundary/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        run: echo "::warning::PR size advisory threshold exceeded"
+      - run: exit 1
+EOF
+
+make_repo workflow-if-hard-exit
+cat >"$workspace/workflow-if-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        run: exit 1
 EOF
 
 make_repo python-exit
@@ -155,6 +197,10 @@ if [ "$CHANGED" -gt 600 ]; then
 fi
 EOF
 
+make_repo suffixless-binary
+printf '\177ELF\000\377\376\375' >"$workspace/suffixless-binary/scripts/helper"
+chmod +x "$workspace/suffixless-binary/scripts/helper"
+
 make_repo tracked-context
 mkdir -p "$workspace/tracked-context/.context"
 printf 'agent scratch\n' >"$workspace/tracked-context/.context/note.txt"
@@ -167,30 +213,41 @@ printf 'agent scratch\n' >"$workspace/tracked-context/.context/note.txt"
 bash "$validator" \
   "$workspace/advisory" \
   "$workspace/advisory-typescript" \
+  "$workspace/conditional-list-zero-exit" \
   "$workspace/no-gate" \
   "$workspace/zero-exit" \
-  "$workspace/ignored-context" >"$workspace/pass.out"
+  "$workspace/ignored-context" \
+  "$workspace/suffixless-binary" \
+  "$workspace/workflow-step-boundary" \
+  "$repo_root" >"$workspace/pass.out"
 grep -Fq "advisory: PASS" "$workspace/pass.out"
 grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
+grep -Fq "conditional-list-zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
+grep -Fq "suffixless-binary: PASS" "$workspace/pass.out"
+grep -Fq "workflow-step-boundary: PASS" "$workspace/pass.out"
 
 for invalid in \
   alternate-workflow-name \
   compact-exit \
+  conditional-list-exit \
+  conditional-list-multiline \
+  hard-pinned-revision \
   javascript-exit \
   hard-exit \
   override-file \
   label-override \
   python-exit \
   unreadable-policy \
+  workflow-if-hard-exit \
   workflow-failure \
   exit-three \
   lowercase-variable \
   dynamic-exit \
   tracked-context; do
-  if bash "$validator" "$workspace/$invalid" >"$workspace/$invalid.out" 2>&1; then
+  if bash "$validator" "$workspace/$invalid" "$repo_root" >"$workspace/$invalid.out" 2>&1; then
     echo "Expected $invalid fixture to fail policy validation" >&2
     exit 1
   fi
