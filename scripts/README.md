@@ -104,9 +104,10 @@ size-triggered failures, override files or labels, size-based hook bypass
 instructions, unused size-override permissions, and mutable reusable-workflow
 references in every workflow filename. It fails closed on unreadable or
 non-UTF-8 policy inputs, recognizes compact and multi-line Shell conditional
-lists plus Python and JavaScript policy entry points, preserves workflow-step
-boundaries, and avoids treating ordinary application returns or suffixless
-binary helpers as policy failures. Immutable reusable-workflow references are
+lists plus standalone Shell predicates under `errexit`, Python, and JavaScript
+policy entry points, preserves workflow-step boundaries, and avoids treating
+ordinary application returns or suffixless binary helpers as policy failures.
+Immutable reusable-workflow references are
 loaded from the supplied governance Git checkout and checked against the
 advisory contract at that exact historical revision; callers with such a
 reference fail closed when no unique governance checkout is supplied. The
@@ -511,9 +512,13 @@ tree, and clean source commit, and must execute both validator tools
 successfully. Before switching `current`, the installers prove that the
 candidate source commit descends from the active one; a delayed stale publisher
 or unrelated custom bundle fails closed. A legacy `v2-` snapshot migrates only
-when its lock digest matches the candidate. An explicitly selected snapshot
-never falls back to a global Markdownlint. The rollout still watches the runtime
-files and npm lock state for rollout changes and dependency-install recovery.
+when its lock digest matches the candidate. The privileged publisher opens its
+shared lock and reads service-owned snapshot data as `secpal`, and activates the
+prepared pointer inside the system-component rollback transaction. A custom
+`SECPAL_AI_VALIDATOR_RUNTIME_BASE` must be absolute and contain no whitespace.
+An explicitly selected snapshot never falls back to a global Markdownlint. The
+rollout still watches the runtime files and npm lock state for rollout changes
+and dependency-install recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new

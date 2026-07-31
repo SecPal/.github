@@ -376,9 +376,11 @@ cp "$VALIDATOR" "$runtime_toolchain_validator"
 copy_valid_repo "$valid_repo" "$runtime_toolchain_repo"
 
 runtime_toolchain_output="$workspace/installed-validator-toolchain.output"
+runtime_node_bin="$(command -v node)"
+runtime_node_dir="$(dirname -- "$runtime_node_bin")"
 if ! (
     cd "$runtime_toolchain_repo"
-    PATH="/usr/bin:/bin" \
+    PATH="$runtime_node_dir:/usr/bin:/bin" \
         SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT="$runtime_toolchain_root" \
         REPO_TYPE=org /bin/bash "$runtime_toolchain_validator"
 ) >"$runtime_toolchain_output" 2>&1; then

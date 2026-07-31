@@ -18,6 +18,10 @@ RUNTIME_PACKAGE_JSON="$RUNTIME_TOOLCHAIN_ROOT/package.json"
 RUNTIME_VALIDATOR_BASE="/home/secpal/.local/share/polyscope/ai-instruction-validator"
 RUNTIME_VALIDATOR_CURRENT="$RUNTIME_VALIDATOR_BASE/current"
 RUNTIME_NPM_CACHE="/home/secpal/.npm"
+VALIDATOR_RUNTIME_CANDIDATE_NAME=""
+VALIDATOR_RUNTIME_LOCK_PID=""
+VALIDATOR_RUNTIME_LOCK_INPUT_FD=""
+VALIDATOR_RUNTIME_LOCK_OUTPUT_FD=""
 DESTDIR="${DESTDIR:-}"
 NODE_BIN=""
 STAGE_ONLY=0
@@ -135,6 +139,7 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     fi
     for trusted_system_tool in \
         /usr/bin/awk \
+        /usr/bin/bash \
         /usr/bin/flock \
         /usr/bin/git \
         /usr/bin/grep \
@@ -157,7 +162,7 @@ fi
 validator_node_modules_digest() {
     local toolchain_root="$1"
 
-    /usr/bin/tar \
+    /usr/bin/sudo -u secpal -- /usr/bin/tar \
         --sort=name \
         --mtime='@0' \
         --owner=0 \
@@ -192,7 +197,7 @@ validator_source_commit() {
 validator_snapshot_source_commit() {
     local toolchain_root="$1"
 
-    /usr/bin/awk -F= \
+    /usr/bin/sudo -u secpal -- /usr/bin/awk -F= \
         '$1 == "source_commit" { print substr($0, index($0, "=") + 1) }' \
         "$toolchain_root/.secpal-validator-snapshot"
 }
@@ -205,7 +210,8 @@ installed_validator_toolchain_usable() {
 
     [[ -d "$toolchain_root" && ! -L "$toolchain_root" ]] || return 1
     read -r installed_lock_digest _ < <(
-        /usr/bin/sha256sum "$toolchain_root/package-lock.json"
+        /usr/bin/sudo -u secpal -- \
+            /usr/bin/sha256sum "$toolchain_root/package-lock.json"
     )
     if [[ "$installed_lock_digest" != "$expected_lock_digest" ]]; then
         return 1
@@ -219,13 +225,13 @@ installed_validator_toolchain_usable() {
         && -f "$toolchain_root/node_modules/.package-lock.json" \
         && -f "$toolchain_root/.secpal-validator-snapshot" \
         && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
-        && /usr/bin/grep -qxF \
+        && /usr/bin/sudo -u secpal -- /usr/bin/grep -qxF \
             "schema=$expected_schema" \
             "$toolchain_root/.secpal-validator-snapshot" \
-        && /usr/bin/grep -qxF \
+        && /usr/bin/sudo -u secpal -- /usr/bin/grep -qxF \
             "lock_sha256=$expected_lock_digest" \
             "$toolchain_root/.secpal-validator-snapshot" \
-        && /usr/bin/grep -qxF \
+        && /usr/bin/sudo -u secpal -- /usr/bin/grep -qxF \
             "node_modules_sha256=$installed_node_modules_digest" \
             "$toolchain_root/.secpal-validator-snapshot" \
         && /usr/bin/sudo -u secpal -- /usr/bin/env \
@@ -262,7 +268,9 @@ validator_snapshot_activation_allowed() {
     if [[ ! -e "$RUNTIME_VALIDATOR_CURRENT" && ! -L "$RUNTIME_VALIDATOR_CURRENT" ]]; then
         return 0
     fi
-    if ! current_name="$(/usr/bin/readlink "$RUNTIME_VALIDATOR_CURRENT")"; then
+    if ! current_name="$(
+        /usr/bin/sudo -u secpal -- /usr/bin/readlink "$RUNTIME_VALIDATOR_CURRENT"
+    )"; then
         echo "Error: failed to read validator runtime current pointer." >&2
         return 1
     fi
@@ -307,23 +315,54 @@ validator_snapshot_activation_allowed() {
     fi
 }
 
-install_validator_runtime_toolchain() {
-    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir temporary_link
-    local validator_runtime_lock_file validator_runtime_lock_fd
+acquire_validator_runtime_lock() {
+    local confirmation validator_runtime_lock_file
 
+    /usr/bin/sudo -u secpal -- mkdir -p "$RUNTIME_VALIDATOR_BASE"
+    validator_runtime_lock_file="$RUNTIME_VALIDATOR_BASE/.install.lock"
+    /usr/bin/sudo -u secpal -- touch "$validator_runtime_lock_file"
+    coproc VALIDATOR_RUNTIME_LOCK_HOLDER {
+        /usr/bin/sudo -u secpal -- /usr/bin/flock -x "$validator_runtime_lock_file" /usr/bin/bash -c \
+            'printf "locked\n"; IFS= read -r _'
+    }
+    VALIDATOR_RUNTIME_LOCK_PID="$VALIDATOR_RUNTIME_LOCK_HOLDER_PID"
+    VALIDATOR_RUNTIME_LOCK_OUTPUT_FD="${VALIDATOR_RUNTIME_LOCK_HOLDER[0]}"
+    VALIDATOR_RUNTIME_LOCK_INPUT_FD="${VALIDATOR_RUNTIME_LOCK_HOLDER[1]}"
+    if ! IFS= read -r confirmation <&"$VALIDATOR_RUNTIME_LOCK_OUTPUT_FD" \
+        || [[ "$confirmation" != "locked" ]]; then
+        echo "Error: failed to acquire the shared validator runtime lock." >&2
+        return 1
+    fi
+}
+
+release_validator_runtime_lock() {
+    if [[ -n "$VALIDATOR_RUNTIME_LOCK_INPUT_FD" ]]; then
+        printf '\n' >&"$VALIDATOR_RUNTIME_LOCK_INPUT_FD" || true
+        exec {VALIDATOR_RUNTIME_LOCK_INPUT_FD}>&-
+    fi
+    if [[ -n "$VALIDATOR_RUNTIME_LOCK_OUTPUT_FD" ]]; then
+        exec {VALIDATOR_RUNTIME_LOCK_OUTPUT_FD}<&-
+    fi
+    if [[ -n "$VALIDATOR_RUNTIME_LOCK_PID" ]]; then
+        wait "$VALIDATOR_RUNTIME_LOCK_PID" || true
+    fi
+    VALIDATOR_RUNTIME_LOCK_PID=""
+    VALIDATOR_RUNTIME_LOCK_INPUT_FD=""
+    VALIDATOR_RUNTIME_LOCK_OUTPUT_FD=""
+}
+
+prepare_validator_runtime_toolchain() {
+    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir
+
+    acquire_validator_runtime_lock
     if [[ -e "$RUNTIME_VALIDATOR_CURRENT" && ! -L "$RUNTIME_VALIDATOR_CURRENT" ]]; then
         echo "Error: validator runtime current pointer must be a symlink: $RUNTIME_VALIDATOR_CURRENT" >&2
         exit 1
     fi
 
-    /usr/bin/sudo -u secpal -- mkdir -p "$RUNTIME_VALIDATOR_BASE"
-    validator_runtime_lock_file="$RUNTIME_VALIDATOR_BASE/.install.lock"
-    /usr/bin/sudo -u secpal -- touch "$validator_runtime_lock_file"
-    exec {validator_runtime_lock_fd}>"$validator_runtime_lock_file"
-    /usr/bin/flock "$validator_runtime_lock_fd"
-
     read -r lock_digest _ < <(
-        /usr/bin/sha256sum "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json"
+        /usr/bin/sudo -u secpal -- \
+            /usr/bin/sha256sum "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json"
     )
     if ! source_commit="$(validator_source_commit)"; then
         exit 1
@@ -388,11 +427,21 @@ install_validator_runtime_toolchain() {
         "$snapshot_dir" "$snapshot_name" "$lock_digest"; then
         exit 1
     fi
+    VALIDATOR_RUNTIME_CANDIDATE_NAME="$snapshot_name"
+}
+
+activate_validator_runtime_toolchain() {
+    local temporary_link
+
+    if [[ ! "$VALIDATOR_RUNTIME_CANDIDATE_NAME" =~ ^v3-[0-9a-f]{64}-[0-9a-f]{40}$ ]]; then
+        echo "Error: validator runtime candidate was not prepared." >&2
+        return 1
+    fi
     temporary_link="$RUNTIME_VALIDATOR_BASE/.current-$$"
     /usr/bin/sudo -u secpal -- rm -f -- "$temporary_link"
-    /usr/bin/sudo -u secpal -- ln -s "$snapshot_name" "$temporary_link"
+    /usr/bin/sudo -u secpal -- \
+        ln -s "$VALIDATOR_RUNTIME_CANDIDATE_NAME" "$temporary_link"
     /usr/bin/sudo -u secpal -- mv -Tf "$temporary_link" "$RUNTIME_VALIDATOR_CURRENT"
-    /usr/bin/flock -u "$validator_runtime_lock_fd"
 }
 
 prefix_path() {
@@ -463,7 +512,7 @@ if [[ "$STAGE_ONLY" -eq 1 ]]; then
     exit 0
 fi
 
-install_validator_runtime_toolchain
+prepare_validator_runtime_toolchain
 
 backup_target() {
     local target="$1"
@@ -492,6 +541,7 @@ backup_target "$LIBRARY_TARGET" library
 backup_target "$ROLLOUT_TARGET" rollout
 backup_target "$SUDOERS_TARGET" sudoers
 backup_target "$DROPIN_TARGET" dropin
+backup_target "$RUNTIME_VALIDATOR_CURRENT" validator-current
 
 rollback() {
     local status=$?
@@ -501,8 +551,10 @@ rollback() {
     restore_target "$ROLLOUT_TARGET" rollout
     restore_target "$SUDOERS_TARGET" sudoers
     restore_target "$DROPIN_TARGET" dropin
+    restore_target "$RUNTIME_VALIDATOR_CURRENT" validator-current
     /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || true
     /usr/bin/systemctl restart polyscope-server.service >/dev/null 2>&1 || true
+    release_validator_runtime_lock
     exit "$status"
 }
 trap rollback ERR
@@ -516,7 +568,9 @@ install_atomic "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET" 0644
 /usr/sbin/visudo -c >/dev/null
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl enable polyscope-server.service
+activate_validator_runtime_toolchain
 /usr/bin/systemctl restart polyscope-server.service
 
 trap - ERR
+release_validator_runtime_lock
 echo "Installed Polyscope system components with a constrained nginx helper boundary."

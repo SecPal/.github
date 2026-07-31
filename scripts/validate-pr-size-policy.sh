@@ -71,6 +71,13 @@ JAVASCRIPT_EXIT = re.compile(
 )
 POLICY_ROOTS = {".githooks", ".github", ".husky", "scripts"}
 SHELL_SHEBANG = re.compile(rb"^#![^\r\n]*\b(?:ba|da|k|z)?sh\b")
+SHELL_ERREXIT_ENABLE = re.compile(
+    r"^\s*set\s+(?:-[A-Za-z]*e[A-Za-z]*|-o\s+errexit)(?:\s|$)"
+)
+SHELL_ERREXIT_DISABLE = re.compile(
+    r"^\s*set\s+(?:\+[A-Za-z]*e[A-Za-z]*|\+o\s+errexit)(?:\s|$)"
+)
+SHELL_TEST_COMMAND = re.compile(r"^\s*!?\s*(?:test\b|\[\[?(?:\s|$)|\(\()")
 
 
 def resolve_repositories(arguments: list[str]) -> list[Path]:
@@ -183,9 +190,36 @@ def shell_logical_command(lines: list[str], index: int) -> str:
     return command
 
 
-def shell_hard_size_exit(lines: list[str]) -> bool:
+def shell_errexit_comparison(
+    value: str, enabled: bool
+) -> tuple[bool, bool]:
+    for command in re.split(r"[;\n]", value):
+        if SHELL_ERREXIT_DISABLE.search(command):
+            enabled = False
+        elif SHELL_ERREXIT_ENABLE.search(command):
+            enabled = True
+        if (
+            enabled
+            and size_comparison(command)
+            and SHELL_TEST_COMMAND.search(command)
+            and "&&" not in command
+            and "||" not in command
+        ):
+            return enabled, True
+    return enabled, False
+
+
+def shell_hard_size_exit(
+    lines: list[str], *, errexit_default: bool = False
+) -> bool:
+    errexit_enabled = errexit_default
     for index, line in enumerate(lines):
         logical_command = shell_logical_command(lines, index)
+        errexit_enabled, errexit_failure = shell_errexit_comparison(
+            logical_command, errexit_enabled
+        )
+        if errexit_failure:
+            return True
         if not size_comparison(logical_command):
             continue
 
@@ -385,7 +419,8 @@ def hard_size_exit(root: Path, path: Path, text: str) -> bool:
             and path.suffix.lower() in {".yml", ".yaml"}
         ):
             return any(
-                shell_hard_size_exit(unit) for unit in workflow_shell_units(text)
+                shell_hard_size_exit(unit, errexit_default=True)
+                for unit in workflow_shell_units(text)
             )
         return shell_hard_size_exit(lines)
     if language == "python":
@@ -411,7 +446,10 @@ def reusable_workflow_contract_failures(text: str) -> list[str]:
         failures.append("unused pull-request permission")
     if ".preflight-allow-large-pr" in text or "large-pr-approved" in text:
         failures.append("obsolete size override")
-    if any(shell_hard_size_exit(unit) for unit in workflow_shell_units(text)):
+    if any(
+        shell_hard_size_exit(unit, errexit_default=True)
+        for unit in workflow_shell_units(text)
+    ):
         failures.append("size-triggered nonzero exit")
     return sorted(set(failures))
 

@@ -94,8 +94,13 @@ the same lock digest. Concurrent or delayed publishers therefore cannot roll
 `current` back, activate an unrelated history, publish mutable checkout
 contents, or nest a losing staging directory inside the winning target. The
 user installer executes validator tools through the same service `PATH` that it
-validated; the privileged installer runs Git ancestry checks as the `secpal`
-service user. An absent offline npm cache or incomparable source history fails
+validated. The privileged installer opens the shared publication lock and reads
+service-owned snapshot contents as the `secpal` user. It prepares the candidate
+while holding that lock but moves `current` only inside the system-component
+rollback transaction, so a failed component install restores the prior pointer
+with the prior files. User-scoped runtime-root overrides must be absolute
+because the generated services have independent working directories. An absent
+offline npm cache, incomparable source history, or unsafe runtime root fails
 closed.
 
 Run the validator and its regression suite with:

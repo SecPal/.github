@@ -117,6 +117,19 @@ cat >"$workspace/conditional-list-zero-exit/scripts/preflight.sh" <<'EOF'
 test "$CHANGED" -gt 600 && exit
 EOF
 
+make_repo errexit-standalone
+cat >"$workspace/errexit-standalone/scripts/preflight.sh" <<'EOF'
+set -euo pipefail
+[ "$CHANGED" -le 600 ]
+EOF
+
+make_repo errexit-disabled
+cat >"$workspace/errexit-disabled/scripts/preflight.sh" <<'EOF'
+set -e
+set +e
+[ "$CHANGED" -le 600 ]
+EOF
+
 make_repo alternate-workflow-name
 cat >"$workspace/alternate-workflow-name/.github/workflows/custom-pr-size.yaml" <<'EOF'
 jobs:
@@ -214,6 +227,7 @@ bash "$validator" \
   "$workspace/advisory" \
   "$workspace/advisory-typescript" \
   "$workspace/conditional-list-zero-exit" \
+  "$workspace/errexit-disabled" \
   "$workspace/no-gate" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" \
@@ -223,6 +237,7 @@ bash "$validator" \
 grep -Fq "advisory: PASS" "$workspace/pass.out"
 grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
 grep -Fq "conditional-list-zero-exit: PASS" "$workspace/pass.out"
+grep -Fq "errexit-disabled: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
@@ -234,6 +249,7 @@ for invalid in \
   compact-exit \
   conditional-list-exit \
   conditional-list-multiline \
+  errexit-standalone \
   hard-pinned-revision \
   javascript-exit \
   hard-exit \

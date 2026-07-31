@@ -29,6 +29,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 - expanded the PR-size policy audit to recognize shell conditional lists,
   preserve workflow step boundaries, validate pinned historical workflow
   revisions against the advisory contract, and ignore suffixless binary helpers
+- detect standalone size predicates that become hard gates under Shell
+  `errexit`, and keep isolated validator fixtures portable when Node is outside
+  the operating-system binary directories
+- make privileged validator publication open and hold its shared lock as the
+  `secpal` service user, activate the prepared snapshot inside the
+  system-component rollback transaction, and reject relative runtime roots
 - documented that central reusable-workflow updates do not automatically
   update repository-local preflight implementations
 

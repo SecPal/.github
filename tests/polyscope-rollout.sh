@@ -6445,6 +6445,44 @@ grep -qF 'nginx manifest path is fixed' "$custom_manifest_error"
 test ! -e "$custom_manifest_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$custom_manifest_unit_dir/polyscope-rollout-sync.service"
 
+# Service units resolve the selected validator snapshot from different working
+# directories, so a relative runtime base must fail before any installation.
+relative_runtime_home="$workspace/relative-runtime-home"
+relative_runtime_bin_dir="$workspace/relative-runtime-bin"
+relative_runtime_unit_dir="$workspace/relative-runtime-units"
+relative_runtime_error="$workspace/relative-runtime.error"
+relative_runtime_exit=0
+mkdir -p "$relative_runtime_home/.polyscope/bin"
+cat >"$relative_runtime_home/.polyscope/bin/expose-linux-x64" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$relative_runtime_home/.polyscope/bin/expose-linux-x64"
+(
+    cd "$workspace"
+    env HOME="$relative_runtime_home" \
+        CODEX_HOME="$relative_runtime_home/.codex" \
+        WORKSPACE_ROOT="$workspace_root" \
+        SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+        SYSTEMCTL_LOG="$fake_systemctl_log" \
+        SUDO_BIN="$fake_sudo_dir/sudo" \
+        SUDO_LOG="$workspace/relative-runtime-sudo.log" \
+        SECPAL_AI_VALIDATOR_RUNTIME_BASE=relative-validator-runtime \
+        PATH="$fake_systemctl_dir:$PATH" \
+        bash "$INSTALL_SCRIPT" \
+            --bin-dir "$relative_runtime_bin_dir" \
+            --unit-dir "$relative_runtime_unit_dir" \
+            --polyscope-server-bin "$fake_server_bin"
+) 2>"$relative_runtime_error" || relative_runtime_exit=$?
+if [[ "$relative_runtime_exit" -eq 0 ]]; then
+    echo "installer must reject a relative validator runtime base" >&2
+    exit 1
+fi
+grep -qF 'validator runtime base must be an absolute path' "$relative_runtime_error"
+test ! -e "$relative_runtime_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$relative_runtime_unit_dir/polyscope-rollout-sync.service"
+test ! -e "$workspace/relative-validator-runtime"
+
 env HOME="$home_dir" \
     CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
@@ -6651,7 +6689,8 @@ grep -Fq 'PATH="$SERVICE_PATH" flock "$validator_runtime_lock_fd"' "$INSTALL_SCR
 # shellcheck disable=SC2016 # Installer variables are literal source assertions.
 grep -Fq 'PATH="$SERVICE_PATH" sha256sum "$VALIDATOR_PACKAGE_LOCK"' "$INSTALL_SCRIPT"
 # shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq 'flock "$validator_runtime_lock_fd"' \
+grep -Fq \
+    '/usr/bin/sudo -u secpal -- /usr/bin/flock -x "$validator_runtime_lock_file"' \
     "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
 # shellcheck disable=SC2016 # Installer variables are literal source assertions.
 if grep -Fq \
