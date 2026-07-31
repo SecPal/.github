@@ -27,13 +27,6 @@ POLYSCOPE_EXPOSE_BIN="${POLYSCOPE_EXPOSE_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x
 POLYSCOPE_EXPOSE_REAL_BIN="${POLYSCOPE_EXPOSE_REAL_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64.real}"
 POLYSCOPE_GIT_BIN_DIR="${POLYSCOPE_GIT_BIN_DIR:-$HOME/.local/lib/polyscope/bin}"
 POLYSCOPE_GIT_WRAPPER_BIN="${POLYSCOPE_GIT_WRAPPER_BIN:-$POLYSCOPE_GIT_BIN_DIR/git}"
-VALIDATOR_RUNTIME_BASE="${SECPAL_AI_VALIDATOR_RUNTIME_BASE:-$HOME/.local/share/polyscope/ai-instruction-validator}"
-VALIDATOR_RUNTIME_CURRENT="$VALIDATOR_RUNTIME_BASE/current"
-VALIDATOR_NPM_CACHE="${SECPAL_AI_VALIDATOR_NPM_CACHE:-$HOME/.npm}"
-if [[ "$VALIDATOR_RUNTIME_BASE" != /* || "$VALIDATOR_RUNTIME_BASE" =~ [[:space:]] ]]; then
-    echo "Error: validator runtime base must be an absolute path without whitespace." >&2
-    exit 1
-fi
 POLYSCOPE_SERVER_SCOPE="${POLYSCOPE_SERVER_SCOPE:-auto}"
 POLYSCOPE_SYSTEM_SERVER_UNIT="${POLYSCOPE_SYSTEM_SERVER_UNIT:-polyscope-server.service}"
 POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/systemd/system/$POLYSCOPE_SYSTEM_SERVER_UNIT.d}"
@@ -183,7 +176,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN VALIDATOR_RUNTIME_BASE VALIDATOR_RUNTIME_CURRENT VALIDATOR_NPM_CACHE POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -229,13 +222,12 @@ if [[ ! -f "$NGINX_LIBRARY_SOURCE" || ! -x "$NGINX_HELPER_SOURCE" ]]; then
 fi
 
 VALIDATOR_TOOLCHAIN_ROOT="$(cd -- "$(dirname -- "$SOURCE_SCRIPT")/.." && pwd)"
-VALIDATOR_PACKAGE_JSON="$VALIDATOR_TOOLCHAIN_ROOT/package.json"
 VALIDATOR_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/package-lock.json"
 VALIDATOR_INSTALLED_PACKAGE_LOCK="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.package-lock.json"
 VALIDATOR_MARKDOWNLINT="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint"
 VALIDATOR_YAML_PACKAGE="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
 
-for _validator_tool in awk bash basename dirname find flock grep head node npm python3 readlink sha256sum tar wc; do
+for _validator_tool in bash basename dirname find grep head node python3 wc; do
     if ! PATH="$SERVICE_PATH" command -v "$_validator_tool" >/dev/null 2>&1; then
         echo "Error: rollout validator toolchain is incomplete: $_validator_tool is unavailable in the service PATH." >&2
         exit 1
@@ -247,8 +239,7 @@ validator_yaml_usable() {
         "$VALIDATOR_YAML_CHECK" "$VALIDATOR_YAML_PACKAGE" >/dev/null 2>&1
 }
 
-if [[ ! -f "$VALIDATOR_PACKAGE_JSON" \
-    || ! -f "$VALIDATOR_PACKAGE_LOCK" \
+if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     || ! -f "$VALIDATOR_INSTALLED_PACKAGE_LOCK" \
     || ! -x "$VALIDATOR_MARKDOWNLINT" ]] \
     || ! validator_yaml_usable; then
@@ -256,299 +247,8 @@ if [[ ! -f "$VALIDATOR_PACKAGE_JSON" \
     exit 1
 fi
 
-validator_node_modules_digest() {
-    local toolchain_root="$1"
-
-    PATH="$SERVICE_PATH" tar \
-        --sort=name \
-        --mtime='@0' \
-        --owner=0 \
-        --group=0 \
-        --numeric-owner \
-        --format=gnu \
-        -cf - \
-        -C "$toolchain_root" node_modules \
-        | PATH="$SERVICE_PATH" sha256sum \
-        | PATH="$SERVICE_PATH" awk '{print $1}'
-}
-
-validator_source_commit() {
-    local source_commit
-
-    if ! source_commit="$(
-        "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
-            log -1 --format=%H HEAD -- package.json package-lock.json 2>/dev/null
-    )" \
-        || [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "Error: validator runtime source must belong to a Git commit." >&2
-        return 1
-    fi
-    if ! "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
-        diff --quiet HEAD -- package.json package-lock.json; then
-        echo "Error: validator runtime package metadata must match its source commit." >&2
-        return 1
-    fi
-    printf '%s\n' "$source_commit"
-}
-
-validator_snapshot_source_commit() {
-    local toolchain_root="$1"
-
-    PATH="$SERVICE_PATH" awk -F= \
-        '$1 == "source_commit" { print substr($0, index($0, "=") + 1) }' \
-        "$toolchain_root/.secpal-validator-snapshot"
-}
-
-installed_validator_toolchain_usable() {
-    local toolchain_root="$1"
-    local expected_lock_digest="$2"
-    local expected_schema="${3:-2}"
-    local installed_lock_digest installed_node_modules_digest installed_source_commit
-
-    [[ -d "$toolchain_root" && ! -L "$toolchain_root" ]] || return 1
-    read -r installed_lock_digest _ < <(
-        PATH="$SERVICE_PATH" sha256sum "$toolchain_root/package-lock.json"
-    )
-    if [[ "$installed_lock_digest" != "$expected_lock_digest" ]]; then
-        return 1
-    fi
-    if ! installed_node_modules_digest="$(validator_node_modules_digest "$toolchain_root")"; then
-        return 1
-    fi
-
-    [[ -f "$toolchain_root/package.json" \
-        && -f "$toolchain_root/package-lock.json" \
-        && -f "$toolchain_root/node_modules/.package-lock.json" \
-        && -f "$toolchain_root/.secpal-validator-snapshot" \
-        && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
-        && PATH="$SERVICE_PATH" grep -qxF \
-            "schema=$expected_schema" \
-            "$toolchain_root/.secpal-validator-snapshot" \
-        && PATH="$SERVICE_PATH" grep -qxF \
-            "lock_sha256=$expected_lock_digest" \
-            "$toolchain_root/.secpal-validator-snapshot" \
-        && PATH="$SERVICE_PATH" grep -qxF \
-            "node_modules_sha256=$installed_node_modules_digest" \
-            "$toolchain_root/.secpal-validator-snapshot" \
-        && PATH="$SERVICE_PATH" \
-            "$toolchain_root/node_modules/.bin/markdownlint" --version >/dev/null 2>&1 \
-        && PATH="$SERVICE_PATH" node \
-            "$VALIDATOR_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1 \
-        || return 1
-    if [[ "$expected_schema" -eq 2 ]]; then
-        installed_source_commit="$(validator_snapshot_source_commit "$toolchain_root")"
-        [[ "$installed_source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
-    fi
-}
-
-validator_snapshot_activation_allowed() {
-    local candidate_dir="$1"
-    local candidate_name="$2"
-    local candidate_lock_digest="$3"
-    local current_name current_dir current_lock_digest current_name_source_commit
-    local candidate_source_commit candidate_name_source_commit current_source_commit
-
-    candidate_source_commit="$(validator_snapshot_source_commit "$candidate_dir")"
-    if [[ ! "$candidate_name" =~ ^v3-([0-9a-f]{64})-([0-9a-f]{40})$ ]]; then
-        echo "Error: validator runtime candidate has an invalid target name: $candidate_name" >&2
-        return 1
-    fi
-    candidate_name_source_commit="${BASH_REMATCH[2]}"
-    if [[ "${BASH_REMATCH[1]}" != "$candidate_lock_digest" \
-        || "$candidate_name_source_commit" != "$candidate_source_commit" ]]; then
-        echo "Error: validator runtime candidate identity does not match its target name." >&2
-        return 1
-    fi
-
-    if [[ ! -e "$VALIDATOR_RUNTIME_CURRENT" && ! -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
-        return 0
-    fi
-    if ! current_name="$(PATH="$SERVICE_PATH" readlink "$VALIDATOR_RUNTIME_CURRENT")"; then
-        echo "Error: failed to read validator runtime current pointer." >&2
-        return 1
-    fi
-    if [[ "$current_name" == "$candidate_name" ]]; then
-        return 0
-    fi
-    if [[ "$current_name" =~ ^v2-([0-9a-f]{64})$ ]]; then
-        current_lock_digest="${BASH_REMATCH[1]}"
-        current_dir="$VALIDATOR_RUNTIME_BASE/$current_name"
-        if [[ "$current_lock_digest" != "$candidate_lock_digest" ]] \
-            || ! installed_validator_toolchain_usable \
-                "$current_dir" "$current_lock_digest" 1; then
-            echo "Error: legacy validator runtime snapshot cannot be migrated safely: $current_dir" >&2
-            return 1
-        fi
-        return 0
-    fi
-    if [[ ! "$current_name" =~ ^v3-([0-9a-f]{64})-([0-9a-f]{40})$ ]]; then
-        echo "Error: validator runtime current pointer has an invalid target: $current_name" >&2
-        return 1
-    fi
-    current_lock_digest="${BASH_REMATCH[1]}"
-    current_name_source_commit="${BASH_REMATCH[2]}"
-    current_dir="$VALIDATOR_RUNTIME_BASE/$current_name"
-    if ! installed_validator_toolchain_usable "$current_dir" "$current_lock_digest"; then
-        echo "Error: active validator runtime snapshot is incomplete: $current_dir" >&2
-        return 1
-    fi
-
-    current_source_commit="$(validator_snapshot_source_commit "$current_dir")"
-    if [[ "$current_source_commit" != "$current_name_source_commit" ]]; then
-        echo "Error: active validator runtime source identity does not match its target name." >&2
-        return 1
-    fi
-    if ! "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
-        cat-file -e "$current_source_commit^{commit}" 2>/dev/null \
-        || ! "$POLYSCOPE_REAL_GIT_BIN" -C "$VALIDATOR_TOOLCHAIN_ROOT" \
-            merge-base --is-ancestor \
-            "$current_source_commit" "$candidate_source_commit"; then
-        echo "Error: refusing to reactivate stale validator runtime snapshot: $candidate_dir" >&2
-        return 1
-    fi
-}
-
-VALIDATOR_RUNTIME_CANDIDATE_NAME=""
-VALIDATOR_RUNTIME_PREVIOUS_NAME=""
-VALIDATOR_RUNTIME_HAD_PREVIOUS=0
-VALIDATOR_RUNTIME_ACTIVATED=0
-VALIDATOR_RUNTIME_LOCK_FD=""
-
-prepare_validator_runtime_toolchain() {
-    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir
-    local validator_runtime_lock_file
-
-    if [[ -e "$VALIDATOR_RUNTIME_CURRENT" && ! -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
-        echo "Error: validator runtime current pointer must be a symlink: $VALIDATOR_RUNTIME_CURRENT" >&2
-        exit 1
-    fi
-
-    mkdir -p "$VALIDATOR_RUNTIME_BASE"
-    validator_runtime_lock_file="$VALIDATOR_RUNTIME_BASE/.install.lock"
-    exec {VALIDATOR_RUNTIME_LOCK_FD}>"$validator_runtime_lock_file"
-    PATH="$SERVICE_PATH" flock "$VALIDATOR_RUNTIME_LOCK_FD"
-
-    read -r lock_digest _ < <(
-        PATH="$SERVICE_PATH" sha256sum "$VALIDATOR_PACKAGE_LOCK"
-    )
-    if ! source_commit="$(validator_source_commit)"; then
-        exit 1
-    fi
-    snapshot_name="v3-$lock_digest-$source_commit"
-    snapshot_dir="$VALIDATOR_RUNTIME_BASE/$snapshot_name"
-    if [[ -e "$snapshot_dir" || -L "$snapshot_dir" ]]; then
-        if [[ ! -d "$snapshot_dir" || -L "$snapshot_dir" ]]; then
-            echo "Error: installed validator runtime snapshot must be a regular directory: $snapshot_dir" >&2
-            exit 1
-        fi
-        if ! installed_validator_toolchain_usable "$snapshot_dir" "$lock_digest"; then
-            echo "Error: installed validator runtime snapshot is incomplete: $snapshot_dir" >&2
-            exit 1
-        fi
-    else
-        staging_dir="$(mktemp -d "$VALIDATOR_RUNTIME_BASE/.staging-$lock_digest.XXXXXX")"
-        cp "$VALIDATOR_PACKAGE_JSON" "$staging_dir/package.json"
-        cp "$VALIDATOR_PACKAGE_LOCK" "$staging_dir/package-lock.json"
-        if ! PATH="$SERVICE_PATH" \
-            NPM_CONFIG_CACHE="$VALIDATOR_NPM_CACHE" \
-            npm ci --prefix "$staging_dir" --offline --ignore-scripts --no-audit --no-fund; then
-            rm -rf -- "$staging_dir"
-            echo "Error: failed to install the isolated validator runtime from the committed lockfile and local npm cache." >&2
-            exit 1
-        fi
-        if ! node_modules_digest="$(validator_node_modules_digest "$staging_dir")"; then
-            rm -rf -- "$staging_dir"
-            echo "Error: failed to hash the isolated validator runtime toolchain." >&2
-            exit 1
-        fi
-        printf 'schema=2\nlock_sha256=%s\nnode_modules_sha256=%s\nsource_commit=%s\n' \
-            "$lock_digest" "$node_modules_digest" "$source_commit" \
-            >"$staging_dir/.secpal-validator-snapshot"
-        if ! installed_validator_toolchain_usable "$staging_dir" "$lock_digest"; then
-            rm -rf -- "$staging_dir"
-            echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
-            exit 1
-        fi
-        if ! mv -T "$staging_dir" "$snapshot_dir" 2>/dev/null; then
-            if installed_validator_toolchain_usable "$snapshot_dir" "$lock_digest"; then
-                rm -rf -- "$staging_dir"
-            else
-                rm -rf -- "$staging_dir"
-                echo "Error: failed to publish the validator runtime snapshot: $snapshot_dir" >&2
-                exit 1
-            fi
-        fi
-    fi
-
-    if ! validator_snapshot_activation_allowed \
-        "$snapshot_dir" "$snapshot_name" "$lock_digest"; then
-        exit 1
-    fi
-
-    VALIDATOR_RUNTIME_CANDIDATE_NAME="$snapshot_name"
-    if [[ -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
-        VALIDATOR_RUNTIME_PREVIOUS_NAME="$(
-            PATH="$SERVICE_PATH" readlink "$VALIDATOR_RUNTIME_CURRENT"
-        )"
-        VALIDATOR_RUNTIME_HAD_PREVIOUS=1
-    fi
-}
-
-activate_validator_runtime_toolchain() {
-    local temporary_link="$VALIDATOR_RUNTIME_BASE/.current-$$"
-
-    if [[ ! "$VALIDATOR_RUNTIME_CANDIDATE_NAME" =~ ^v3-[0-9a-f]{64}-[0-9a-f]{40}$ ]]; then
-        echo "Error: validator runtime candidate was not prepared." >&2
-        return 1
-    fi
-    rm -f -- "$temporary_link"
-    ln -s "$VALIDATOR_RUNTIME_CANDIDATE_NAME" "$temporary_link"
-    mv -Tf "$temporary_link" "$VALIDATOR_RUNTIME_CURRENT"
-    VALIDATOR_RUNTIME_ACTIVATED=1
-}
-
-release_validator_runtime_lock() {
-    if [[ -n "$VALIDATOR_RUNTIME_LOCK_FD" ]]; then
-        PATH="$SERVICE_PATH" flock -u "$VALIDATOR_RUNTIME_LOCK_FD" || true
-        exec {VALIDATOR_RUNTIME_LOCK_FD}>&-
-        VALIDATOR_RUNTIME_LOCK_FD=""
-    fi
-}
-
-rollback_validator_runtime_install() {
-    local status="$?"
-    local temporary_link="$VALIDATOR_RUNTIME_BASE/.rollback-current-$$"
-    local rollback_failed=0
-
-    trap - ERR
-    set +e
-    if [[ "$VALIDATOR_RUNTIME_ACTIVATED" -eq 1 ]]; then
-        if [[ "$VALIDATOR_RUNTIME_HAD_PREVIOUS" -eq 1 ]]; then
-            rm -f -- "$temporary_link"
-            if ! ln -s "$VALIDATOR_RUNTIME_PREVIOUS_NAME" "$temporary_link" \
-                || ! mv -Tf "$temporary_link" "$VALIDATOR_RUNTIME_CURRENT"; then
-                echo "Error: failed to restore the previous validator runtime pointer." >&2
-                rollback_failed=1
-            fi
-        elif ! rm -f -- "$VALIDATOR_RUNTIME_CURRENT"; then
-            echo "Error: failed to remove the validator runtime pointer during rollback." >&2
-            rollback_failed=1
-        fi
-        "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || true
-        if [[ "$server_scope" == "user" ]]; then
-            "$SYSTEMCTL_BIN" --user restart polyscope-server.service \
-                >/dev/null 2>&1 || true
-        fi
-    fi
-    release_validator_runtime_lock
-    if [[ "$rollback_failed" -ne 0 ]]; then
-        echo "Error: validator runtime rollback was incomplete." >&2
-    fi
-    exit "$status"
-}
-
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
-for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_PROVISION_LOCK INSTALL_TARGET VALIDATOR_RUNTIME_CURRENT; do
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
     _val="${!_var_name}"
     if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
         echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
@@ -646,8 +346,7 @@ if [[ "$server_scope" == "system" ]]; then
         "User=secpal" \
         "ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
         "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" \
-        "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git" \
-        "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=/home/secpal/.local/share/polyscope/ai-instruction-validator/current"; do
+        "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git"; do
         if ! grep -qxF "$_required_dropin_line" "$installed_server_target"; then
             echo "Error: reviewed system server drop-in is incomplete: $installed_server_target" >&2
             echo "Missing: $_required_dropin_line" >&2
@@ -667,9 +366,6 @@ if [[ "$server_scope" == "system" ]]; then
         exit 1
     fi
 fi
-
-prepare_validator_runtime_toolchain
-trap rollback_validator_runtime_install ERR
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$CODEX_HOME_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
@@ -709,7 +405,6 @@ Type=simple
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$VALIDATOR_RUNTIME_CURRENT
 ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
 Restart=on-failure
@@ -735,7 +430,6 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$VALIDATOR_RUNTIME_CURRENT
 Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
 Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
 ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --install-nginx
@@ -802,7 +496,6 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$VALIDATOR_RUNTIME_CURRENT
 ExecStartPre=/usr/bin/sleep 3
 ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees
 EOF
@@ -874,7 +567,6 @@ WantedBy=timers.target
 EOF
 
 "$SYSTEMCTL_BIN" --user daemon-reload
-activate_validator_runtime_toolchain
 
 if [[ "$server_scope" == "user" ]]; then
     "$SYSTEMCTL_BIN" --user enable --now polyscope-server.service
@@ -892,9 +584,6 @@ fi
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 "$SYSTEMCTL_BIN" --user enable --now polyscope-clone-reaper.timer
-
-trap - ERR
-release_validator_runtime_lock
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $EXPOSE_WRAPPER_TARGET"

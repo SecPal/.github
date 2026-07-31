@@ -74,37 +74,6 @@ committed lockfile and is the authoritative lint environment. Focused-overlay
 frontmatter is parsed with the repository-pinned `js-yaml`. When focused
 overlays exist, a missing parser also fails closed.
 
-Polyscope does not use the mutable governance checkout's `node_modules`
-directly at runtime. Its installers run `npm ci --offline --ignore-scripts`
-against the committed package and lock files, using only the service user's
-local npm cache, and publish the result below
-`~/.local/share/polyscope/ai-instruction-validator/` and switch the `current`
-symlink atomically. `SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT` selects that installed
-snapshot. This keeps bootstrap validation available while a separate
-governance command replaces checkout-local dependencies, without adding a
-download or permissive fallback to the validator. A shared publisher lock
-serializes user and system installers before they read the source lockfile, and
-each versioned snapshot records both the lockfile digest and a normalized digest
-of the installed dependency tree. Schema-2 snapshots use a `v3-` target and
-also record the clean Git commit that supplied the package metadata. Snapshot
-activation verifies those digests, smoke-tests both pinned validator tools, and
-requires the candidate source commit to descend from the active source commit.
-An existing `v2-` schema-1 snapshot can migrate only to a `v3-` snapshot with
-the same lock digest. Concurrent or delayed publishers therefore cannot roll
-`current` back, activate an unrelated history, publish mutable checkout
-contents, or nest a losing staging directory inside the winning target. The
-user installer executes validator tools through the same service `PATH` that it
-validated. The privileged installer opens the shared publication lock and reads
-service-owned snapshot contents as the `secpal` user. It prepares the candidate
-while holding that lock but moves `current` only inside the corresponding
-installer transaction. Both installers retain the lock through activation and
-restore the prior pointer when a later service operation fails; the privileged
-installer also restores its prior component files. User-scoped runtime-root
-overrides must be absolute
-because the generated services have independent working directories. An absent
-offline npm cache, incomparable source history, or unsafe runtime root fails
-closed.
-
 Run the validator and its regression suite with:
 
 ```bash
@@ -131,8 +100,6 @@ Copilot review profile fails through the same canonical contract.
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;
-- an explicitly selected installed toolchain works independently of the
-  validator script's checkout and never falls back to a global Markdownlint;
 - mirror phrases, copied overlay content, and policy keywords are unnecessary;
 - repository-path arguments continue to work.
 

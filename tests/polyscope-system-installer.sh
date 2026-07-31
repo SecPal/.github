@@ -120,37 +120,6 @@ if grep -qF 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$dropin
     exit 1
 fi
 grep -q -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$dropin"
-# The privileged shell must never open the service-user-controlled lock path.
-# A service-user lock holder owns that open and keeps the shared lock until the
-# component transaction either commits or rolls back.
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq '/usr/bin/sudo -u secpal -- /usr/bin/flock -x "$validator_runtime_lock_file"' "$INSTALLER"
-# shellcheck disable=SC2016 # Unsafe former redirection is a literal source assertion.
-if grep -Fq 'exec {validator_runtime_lock_fd}>"$validator_runtime_lock_file"' "$INSTALLER"; then
-    echo "root installer must not follow the service-user-controlled lock path" >&2
-    exit 1
-fi
-# shellcheck disable=SC2016 # Installer command is a literal source assertion.
-grep -Fq '/usr/bin/sudo -u secpal -- /usr/bin/tar' "$INSTALLER"
-grep -Fq '| /usr/bin/sha256sum' "$INSTALLER"
-grep -Fq '| /usr/bin/awk ' "$INSTALLER"
-grep -Fq 'source_commit=' "$INSTALLER"
-grep -Fq 'merge-base --is-ancestor' "$INSTALLER"
-grep -Fq '/usr/bin/sudo -u secpal -- /usr/bin/git' "$INSTALLER"
-
-# Snapshot publication is preparation; switching current belongs inside the
-# same rollback transaction as the installed system components.
-# shellcheck disable=SC2016 # Installer variable is a literal source assertion.
-grep -Fq 'backup_target "$RUNTIME_VALIDATOR_CURRENT" validator-current' "$INSTALLER"
-# shellcheck disable=SC2016 # Installer variable is a literal source assertion.
-grep -Fq 'restore_target "$RUNTIME_VALIDATOR_CURRENT" validator-current' "$INSTALLER"
-transaction_trap_line="$(grep -n '^trap rollback ERR$' "$INSTALLER" | cut -d: -f1)"
-activation_line="$(grep -n '^activate_validator_runtime_toolchain$' "$INSTALLER" | cut -d: -f1)"
-restart_line="$(grep -n '^/usr/bin/systemctl restart polyscope-server.service$' "$INSTALLER" | cut -d: -f1)"
-if [[ "$activation_line" -le "$transaction_trap_line" || "$activation_line" -ge "$restart_line" ]]; then
-    echo "validator pointer activation must occur inside the component rollback transaction" >&2
-    exit 1
-fi
 
 if command -v visudo >/dev/null 2>&1; then
     visudo -c -f "$sudoers" >/dev/null

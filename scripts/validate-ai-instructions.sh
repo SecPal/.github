@@ -9,13 +9,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ "${SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT+x}" = "x" ]; then
-    VALIDATOR_TOOLCHAIN_ROOT="$SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT"
-    VALIDATOR_TOOLCHAIN_REQUIRED=1
-else
-    VALIDATOR_TOOLCHAIN_ROOT="$SCRIPT_DIR/.."
-    VALIDATOR_TOOLCHAIN_REQUIRED=0
-fi
 
 TOTAL_TESTS=0
 PASSED_TESTS=0
@@ -178,25 +171,17 @@ test_reuse_license() {
 }
 
 markdownlint_available() {
-    if [ -x "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ]; then
-        return 0
-    fi
-    if [ "$VALIDATOR_TOOLCHAIN_REQUIRED" -eq 1 ]; then
-        return 1
-    fi
-    command -v markdownlint >/dev/null 2>&1
+    [ -x "$SCRIPT_DIR/../node_modules/.bin/markdownlint" ] \
+        || command -v markdownlint >/dev/null 2>&1
 }
 
 markdownlint_runner() {
-    if [ -x "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ]; then
-        "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" \
+    if [ -x "$SCRIPT_DIR/../node_modules/.bin/markdownlint" ]; then
+        "$SCRIPT_DIR/../node_modules/.bin/markdownlint" \
             --config .markdownlint.json "$@"
         return
     fi
 
-    if [ "$VALIDATOR_TOOLCHAIN_REQUIRED" -eq 1 ]; then
-        return 1
-    fi
     markdownlint --config .markdownlint.json "$@"
 }
 
@@ -218,13 +203,8 @@ test_markdown_lint() {
         print_result "instruction Markdown passes lint" "FAIL" \
             "No instruction Markdown files found"
     elif ! markdownlint_available; then
-        if [ "$VALIDATOR_TOOLCHAIN_REQUIRED" -eq 1 ]; then
-            print_result "instruction Markdown passes lint" "FAIL" \
-                "selected validator toolchain is incomplete: Markdownlint is unavailable"
-        else
-            print_result "instruction Markdown passes lint" "FAIL" \
-                "Markdownlint is unavailable; provide it with the committed lockfile dependencies or a compatible global markdownlint"
-        fi
+        print_result "instruction Markdown passes lint" "FAIL" \
+            "Markdownlint is unavailable; provide it with the committed lockfile dependencies or a compatible global markdownlint"
     elif lint_output="$(markdownlint_runner "${targets[@]}" 2>&1)"; then
         print_result "instruction Markdown passes lint" "PASS"
     else
@@ -236,7 +216,7 @@ test_markdown_lint() {
 test_instruction_frontmatter() {
     local file
     local -a files=()
-    local yaml_package="$VALIDATOR_TOOLCHAIN_ROOT/node_modules/js-yaml"
+    local yaml_package="$SCRIPT_DIR/../node_modules/js-yaml"
     local yaml_module
 
     while IFS= read -r -d '' file; do

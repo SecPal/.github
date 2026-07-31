@@ -14,14 +14,6 @@ RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
 RUNTIME_YAML_CHECK="$RUNTIME_SCRIPT_DIR/verify-js-yaml-package.cjs"
 RUNTIME_YAML_PACKAGE="$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml"
-RUNTIME_PACKAGE_JSON="$RUNTIME_TOOLCHAIN_ROOT/package.json"
-RUNTIME_VALIDATOR_BASE="/home/secpal/.local/share/polyscope/ai-instruction-validator"
-RUNTIME_VALIDATOR_CURRENT="$RUNTIME_VALIDATOR_BASE/current"
-RUNTIME_NPM_CACHE="/home/secpal/.npm"
-VALIDATOR_RUNTIME_CANDIDATE_NAME=""
-VALIDATOR_RUNTIME_LOCK_PID=""
-VALIDATOR_RUNTIME_LOCK_INPUT_FD=""
-VALIDATOR_RUNTIME_LOCK_OUTPUT_FD=""
 DESTDIR="${DESTDIR:-}"
 NODE_BIN=""
 STAGE_ONLY=0
@@ -117,7 +109,6 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
         "$RUNTIME_YAML_CHECK" \
-        "$RUNTIME_PACKAGE_JSON" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml/package.json"; do
@@ -137,312 +128,7 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         echo "Error: canonical Polyscope runtime js-yaml package is unusable; reinstall the committed dependencies before activation." >&2
         exit 1
     fi
-    for trusted_system_tool in \
-        /usr/bin/awk \
-        /usr/bin/bash \
-        /usr/bin/flock \
-        /usr/bin/git \
-        /usr/bin/grep \
-        /usr/bin/readlink \
-        /usr/bin/sha256sum \
-        /usr/bin/tar; do
-        if [[ ! -x "$trusted_system_tool" ]]; then
-            echo "Error: trusted system runtime tool is unavailable: $trusted_system_tool" >&2
-            exit 1
-        fi
-    done
-    runtime_npm="$(PATH="$SYSTEM_SERVICE_PATH" command -v npm || true)"
-    if [[ -z "$runtime_npm" || "$runtime_npm" != /* ]] \
-        || ! /usr/bin/sudo -u secpal -- /usr/bin/test -x "$runtime_npm"; then
-        echo "Error: npm is unavailable to the secpal service user." >&2
-        exit 1
-    fi
 fi
-
-validator_node_modules_digest() {
-    local toolchain_root="$1"
-
-    /usr/bin/sudo -u secpal -- /usr/bin/tar \
-        --sort=name \
-        --mtime='@0' \
-        --owner=0 \
-        --group=0 \
-        --numeric-owner \
-        --format=gnu \
-        -cf - \
-        -C "$toolchain_root" node_modules \
-        | /usr/bin/sha256sum \
-        | /usr/bin/awk '{print $1}'
-}
-
-validator_source_commit() {
-    local source_commit
-
-    if ! source_commit="$(
-        /usr/bin/sudo -u secpal -- /usr/bin/git -C "$RUNTIME_TOOLCHAIN_ROOT" \
-            log -1 --format=%H HEAD -- package.json package-lock.json 2>/dev/null
-    )" \
-        || [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "Error: validator runtime source must belong to a Git commit." >&2
-        return 1
-    fi
-    if ! /usr/bin/sudo -u secpal -- /usr/bin/git -C "$RUNTIME_TOOLCHAIN_ROOT" \
-        diff --quiet HEAD -- package.json package-lock.json; then
-        echo "Error: validator runtime package metadata must match its source commit." >&2
-        return 1
-    fi
-    printf '%s\n' "$source_commit"
-}
-
-validator_snapshot_source_commit() {
-    local toolchain_root="$1"
-
-    /usr/bin/sudo -u secpal -- /usr/bin/awk -F= \
-        '$1 == "source_commit" { print substr($0, index($0, "=") + 1) }' \
-        "$toolchain_root/.secpal-validator-snapshot"
-}
-
-installed_validator_toolchain_usable() {
-    local toolchain_root="$1"
-    local expected_lock_digest="$2"
-    local expected_schema="${3:-2}"
-    local installed_lock_digest installed_node_modules_digest installed_source_commit
-
-    [[ -d "$toolchain_root" && ! -L "$toolchain_root" ]] || return 1
-    read -r installed_lock_digest _ < <(
-        /usr/bin/sudo -u secpal -- \
-            /usr/bin/sha256sum "$toolchain_root/package-lock.json"
-    )
-    if [[ "$installed_lock_digest" != "$expected_lock_digest" ]]; then
-        return 1
-    fi
-    if ! installed_node_modules_digest="$(validator_node_modules_digest "$toolchain_root")"; then
-        return 1
-    fi
-
-    [[ -f "$toolchain_root/package.json" \
-        && -f "$toolchain_root/package-lock.json" \
-        && -f "$toolchain_root/node_modules/.package-lock.json" \
-        && -f "$toolchain_root/.secpal-validator-snapshot" \
-        && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
-        && /usr/bin/sudo -u secpal -- /usr/bin/grep -qxF \
-            "schema=$expected_schema" \
-            "$toolchain_root/.secpal-validator-snapshot" \
-        && /usr/bin/sudo -u secpal -- /usr/bin/grep -qxF \
-            "lock_sha256=$expected_lock_digest" \
-            "$toolchain_root/.secpal-validator-snapshot" \
-        && /usr/bin/sudo -u secpal -- /usr/bin/grep -qxF \
-            "node_modules_sha256=$installed_node_modules_digest" \
-            "$toolchain_root/.secpal-validator-snapshot" \
-        && /usr/bin/sudo -u secpal -- /usr/bin/env \
-            PATH="$SYSTEM_SERVICE_PATH" \
-            "$toolchain_root/node_modules/.bin/markdownlint" --version >/dev/null 2>&1 \
-        && /usr/bin/sudo -u secpal -- \
-            "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$toolchain_root/node_modules/js-yaml" >/dev/null 2>&1 \
-        || return 1
-    if [[ "$expected_schema" -eq 2 ]]; then
-        installed_source_commit="$(validator_snapshot_source_commit "$toolchain_root")"
-        [[ "$installed_source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
-    fi
-}
-
-validator_snapshot_activation_allowed() {
-    local candidate_dir="$1"
-    local candidate_name="$2"
-    local candidate_lock_digest="$3"
-    local current_name current_dir current_lock_digest current_name_source_commit
-    local candidate_source_commit candidate_name_source_commit current_source_commit
-
-    candidate_source_commit="$(validator_snapshot_source_commit "$candidate_dir")"
-    if [[ ! "$candidate_name" =~ ^v3-([0-9a-f]{64})-([0-9a-f]{40})$ ]]; then
-        echo "Error: validator runtime candidate has an invalid target name: $candidate_name" >&2
-        return 1
-    fi
-    candidate_name_source_commit="${BASH_REMATCH[2]}"
-    if [[ "${BASH_REMATCH[1]}" != "$candidate_lock_digest" \
-        || "$candidate_name_source_commit" != "$candidate_source_commit" ]]; then
-        echo "Error: validator runtime candidate identity does not match its target name." >&2
-        return 1
-    fi
-
-    if [[ ! -e "$RUNTIME_VALIDATOR_CURRENT" && ! -L "$RUNTIME_VALIDATOR_CURRENT" ]]; then
-        return 0
-    fi
-    if ! current_name="$(
-        /usr/bin/sudo -u secpal -- /usr/bin/readlink "$RUNTIME_VALIDATOR_CURRENT"
-    )"; then
-        echo "Error: failed to read validator runtime current pointer." >&2
-        return 1
-    fi
-    if [[ "$current_name" == "$candidate_name" ]]; then
-        return 0
-    fi
-    if [[ "$current_name" =~ ^v2-([0-9a-f]{64})$ ]]; then
-        current_lock_digest="${BASH_REMATCH[1]}"
-        current_dir="$RUNTIME_VALIDATOR_BASE/$current_name"
-        if [[ "$current_lock_digest" != "$candidate_lock_digest" ]] \
-            || ! installed_validator_toolchain_usable \
-                "$current_dir" "$current_lock_digest" 1; then
-            echo "Error: legacy validator runtime snapshot cannot be migrated safely: $current_dir" >&2
-            return 1
-        fi
-        return 0
-    fi
-    if [[ ! "$current_name" =~ ^v3-([0-9a-f]{64})-([0-9a-f]{40})$ ]]; then
-        echo "Error: validator runtime current pointer has an invalid target: $current_name" >&2
-        return 1
-    fi
-    current_lock_digest="${BASH_REMATCH[1]}"
-    current_name_source_commit="${BASH_REMATCH[2]}"
-    current_dir="$RUNTIME_VALIDATOR_BASE/$current_name"
-    if ! installed_validator_toolchain_usable "$current_dir" "$current_lock_digest"; then
-        echo "Error: active validator runtime snapshot is incomplete: $current_dir" >&2
-        return 1
-    fi
-
-    current_source_commit="$(validator_snapshot_source_commit "$current_dir")"
-    if [[ "$current_source_commit" != "$current_name_source_commit" ]]; then
-        echo "Error: active validator runtime source identity does not match its target name." >&2
-        return 1
-    fi
-    if ! /usr/bin/sudo -u secpal -- /usr/bin/git -C "$RUNTIME_TOOLCHAIN_ROOT" \
-        cat-file -e "$current_source_commit^{commit}" 2>/dev/null \
-        || ! /usr/bin/sudo -u secpal -- /usr/bin/git -C "$RUNTIME_TOOLCHAIN_ROOT" \
-            merge-base --is-ancestor \
-            "$current_source_commit" "$candidate_source_commit"; then
-        echo "Error: refusing to reactivate stale validator runtime snapshot: $candidate_dir" >&2
-        return 1
-    fi
-}
-
-acquire_validator_runtime_lock() {
-    local confirmation validator_runtime_lock_file
-
-    /usr/bin/sudo -u secpal -- mkdir -p "$RUNTIME_VALIDATOR_BASE"
-    validator_runtime_lock_file="$RUNTIME_VALIDATOR_BASE/.install.lock"
-    /usr/bin/sudo -u secpal -- touch "$validator_runtime_lock_file"
-    coproc VALIDATOR_RUNTIME_LOCK_HOLDER {
-        /usr/bin/sudo -u secpal -- /usr/bin/flock -x "$validator_runtime_lock_file" /usr/bin/bash -c \
-            'printf "locked\n"; IFS= read -r _'
-    }
-    VALIDATOR_RUNTIME_LOCK_PID="$VALIDATOR_RUNTIME_LOCK_HOLDER_PID"
-    VALIDATOR_RUNTIME_LOCK_OUTPUT_FD="${VALIDATOR_RUNTIME_LOCK_HOLDER[0]}"
-    VALIDATOR_RUNTIME_LOCK_INPUT_FD="${VALIDATOR_RUNTIME_LOCK_HOLDER[1]}"
-    if ! IFS= read -r confirmation <&"$VALIDATOR_RUNTIME_LOCK_OUTPUT_FD" \
-        || [[ "$confirmation" != "locked" ]]; then
-        echo "Error: failed to acquire the shared validator runtime lock." >&2
-        return 1
-    fi
-}
-
-release_validator_runtime_lock() {
-    if [[ -n "$VALIDATOR_RUNTIME_LOCK_INPUT_FD" ]]; then
-        printf '\n' >&"$VALIDATOR_RUNTIME_LOCK_INPUT_FD" || true
-        exec {VALIDATOR_RUNTIME_LOCK_INPUT_FD}>&-
-    fi
-    if [[ -n "$VALIDATOR_RUNTIME_LOCK_OUTPUT_FD" ]]; then
-        exec {VALIDATOR_RUNTIME_LOCK_OUTPUT_FD}<&-
-    fi
-    if [[ -n "$VALIDATOR_RUNTIME_LOCK_PID" ]]; then
-        wait "$VALIDATOR_RUNTIME_LOCK_PID" || true
-    fi
-    VALIDATOR_RUNTIME_LOCK_PID=""
-    VALIDATOR_RUNTIME_LOCK_INPUT_FD=""
-    VALIDATOR_RUNTIME_LOCK_OUTPUT_FD=""
-}
-
-prepare_validator_runtime_toolchain() {
-    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir
-
-    acquire_validator_runtime_lock
-    if [[ -e "$RUNTIME_VALIDATOR_CURRENT" && ! -L "$RUNTIME_VALIDATOR_CURRENT" ]]; then
-        echo "Error: validator runtime current pointer must be a symlink: $RUNTIME_VALIDATOR_CURRENT" >&2
-        exit 1
-    fi
-
-    read -r lock_digest _ < <(
-        /usr/bin/sudo -u secpal -- \
-            /usr/bin/sha256sum "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json"
-    )
-    if ! source_commit="$(validator_source_commit)"; then
-        exit 1
-    fi
-    snapshot_name="v3-$lock_digest-$source_commit"
-    snapshot_dir="$RUNTIME_VALIDATOR_BASE/$snapshot_name"
-    if [[ -e "$snapshot_dir" || -L "$snapshot_dir" ]]; then
-        if [[ ! -d "$snapshot_dir" || -L "$snapshot_dir" ]]; then
-            echo "Error: installed validator runtime snapshot must be a regular directory: $snapshot_dir" >&2
-            exit 1
-        fi
-        if ! installed_validator_toolchain_usable "$snapshot_dir" "$lock_digest"; then
-            echo "Error: installed validator runtime snapshot is incomplete: $snapshot_dir" >&2
-            exit 1
-        fi
-    else
-        staging_dir="$(/usr/bin/sudo -u secpal -- \
-            mktemp -d "$RUNTIME_VALIDATOR_BASE/.staging-$lock_digest.XXXXXX")"
-        /usr/bin/sudo -u secpal -- \
-            cp "$RUNTIME_PACKAGE_JSON" "$staging_dir/package.json"
-        /usr/bin/sudo -u secpal -- \
-            cp "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" "$staging_dir/package-lock.json"
-        if ! /usr/bin/sudo -u secpal -- /usr/bin/env \
-            HOME=/home/secpal \
-            NPM_CONFIG_CACHE="$RUNTIME_NPM_CACHE" \
-            PATH="$SYSTEM_SERVICE_PATH" \
-            npm ci --prefix "$staging_dir" --offline --ignore-scripts --no-audit --no-fund; then
-            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
-            echo "Error: failed to install the isolated validator runtime from the committed lockfile and local npm cache." >&2
-            exit 1
-        fi
-        if ! node_modules_digest="$(validator_node_modules_digest "$staging_dir")"; then
-            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
-            echo "Error: failed to hash the isolated validator runtime toolchain." >&2
-            exit 1
-        fi
-        if ! printf 'schema=2\nlock_sha256=%s\nnode_modules_sha256=%s\nsource_commit=%s\n' \
-            "$lock_digest" "$node_modules_digest" "$source_commit" \
-            | /usr/bin/sudo -u secpal -- \
-                /usr/bin/tee "$staging_dir/.secpal-validator-snapshot" >/dev/null; then
-            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
-            echo "Error: failed to record validator runtime snapshot integrity." >&2
-            exit 1
-        fi
-        if ! installed_validator_toolchain_usable "$staging_dir" "$lock_digest"; then
-            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
-            echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
-            exit 1
-        fi
-        if ! /usr/bin/sudo -u secpal -- mv -T "$staging_dir" "$snapshot_dir" 2>/dev/null; then
-            if installed_validator_toolchain_usable "$snapshot_dir" "$lock_digest"; then
-                /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
-            else
-                /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
-                echo "Error: failed to publish the validator runtime snapshot: $snapshot_dir" >&2
-                exit 1
-            fi
-        fi
-    fi
-
-    if ! validator_snapshot_activation_allowed \
-        "$snapshot_dir" "$snapshot_name" "$lock_digest"; then
-        exit 1
-    fi
-    VALIDATOR_RUNTIME_CANDIDATE_NAME="$snapshot_name"
-}
-
-activate_validator_runtime_toolchain() {
-    local temporary_link
-
-    if [[ ! "$VALIDATOR_RUNTIME_CANDIDATE_NAME" =~ ^v3-[0-9a-f]{64}-[0-9a-f]{40}$ ]]; then
-        echo "Error: validator runtime candidate was not prepared." >&2
-        return 1
-    fi
-    temporary_link="$RUNTIME_VALIDATOR_BASE/.current-$$"
-    /usr/bin/sudo -u secpal -- rm -f -- "$temporary_link"
-    /usr/bin/sudo -u secpal -- \
-        ln -s "$VALIDATOR_RUNTIME_CANDIDATE_NAME" "$temporary_link"
-    /usr/bin/sudo -u secpal -- mv -Tf "$temporary_link" "$RUNTIME_VALIDATOR_CURRENT"
-}
 
 prefix_path() {
     printf '%s%s\n' "$DESTDIR" "$1"
@@ -477,7 +163,6 @@ ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do cur
 Environment=PATH=$SYSTEM_SERVICE_PATH
 Environment=SSH_AUTH_SOCK=/run/user/$SECPAL_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git
-Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$RUNTIME_VALIDATOR_CURRENT
 EOF
 chmod 0644 "$TEMP_DIR/zz-secpal-runtime.conf"
 
@@ -512,8 +197,6 @@ if [[ "$STAGE_ONLY" -eq 1 ]]; then
     exit 0
 fi
 
-prepare_validator_runtime_toolchain
-
 backup_target() {
     local target="$1"
     local key="$2"
@@ -541,7 +224,6 @@ backup_target "$LIBRARY_TARGET" library
 backup_target "$ROLLOUT_TARGET" rollout
 backup_target "$SUDOERS_TARGET" sudoers
 backup_target "$DROPIN_TARGET" dropin
-backup_target "$RUNTIME_VALIDATOR_CURRENT" validator-current
 
 rollback() {
     local status=$?
@@ -551,10 +233,8 @@ rollback() {
     restore_target "$ROLLOUT_TARGET" rollout
     restore_target "$SUDOERS_TARGET" sudoers
     restore_target "$DROPIN_TARGET" dropin
-    restore_target "$RUNTIME_VALIDATOR_CURRENT" validator-current
     /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || true
     /usr/bin/systemctl restart polyscope-server.service >/dev/null 2>&1 || true
-    release_validator_runtime_lock
     exit "$status"
 }
 trap rollback ERR
@@ -568,9 +248,7 @@ install_atomic "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET" 0644
 /usr/sbin/visudo -c >/dev/null
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl enable polyscope-server.service
-activate_validator_runtime_toolchain
 /usr/bin/systemctl restart polyscope-server.service
 
 trap - ERR
-release_validator_runtime_lock
 echo "Installed Polyscope system components with a constrained nginx helper boundary."

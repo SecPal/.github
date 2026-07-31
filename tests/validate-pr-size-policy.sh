@@ -89,6 +89,24 @@ if [ "$changed" -gt 600 ]; then
 fi
 EOF
 
+make_repo deferred-exit
+cat >"$workspace/deferred-exit/scripts/preflight.sh" <<'EOF'
+status=0
+if [ "$CHANGED" -gt "$MAX_LINES" ]; then
+  status=1
+fi
+exit "$status"
+EOF
+
+make_repo deferred-zero-status
+cat >"$workspace/deferred-zero-status/scripts/preflight.sh" <<'EOF'
+status=0
+if [ "$CHANGED" -gt "$MAX_LINES" ]; then
+  status=0 # Advisory reporting remains successful.
+fi
+exit "$status"
+EOF
+
 make_repo dynamic-exit
 cat >"$workspace/dynamic-exit/scripts/preflight.sh" <<'EOF'
 if [ "$changed" -ge 600 ]; then
@@ -137,6 +155,13 @@ jobs:
     uses: SecPal/.github/.github/workflows/reusable-pr-size.yml@main
 EOF
 
+make_repo lowercase-owner-reference
+cat >"$workspace/lowercase-owner-reference/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    uses: secpal/.github/.github/workflows/reusable-pr-size.yml@main
+EOF
+
 make_repo hard-pinned-revision
 cat >"$workspace/hard-pinned-revision/.github/workflows/pr-size.yml" <<'EOF'
 jobs:
@@ -153,6 +178,37 @@ jobs:
         run: echo "::warning::PR size advisory threshold exceeded"
       - run: exit 1
 EOF
+
+make_repo workflow-indentless-steps
+cat >"$workspace/workflow-indentless-steps/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+    - run: |
+        if [ "$CHANGED" -gt 600 ]; then
+          exit 1
+        fi
+EOF
+
+make_repo workflow-folded-condition
+cat >"$workspace/workflow-folded-condition/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: >-
+          env.CHANGED > 600
+        run: exit 1
+EOF
+
+make_repo workflow-flow-style-steps
+cat >"$workspace/workflow-flow-style-steps/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps: [{run: 'if [ "$CHANGED" -gt 600 ]; then exit 1; fi'}]
+EOF
+
+make_repo malformed-workflow-yaml
+printf 'jobs: [\n' >"$workspace/malformed-workflow-yaml/.github/workflows/pr-size.yml"
 
 make_repo workflow-if-hard-exit
 cat >"$workspace/workflow-if-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
@@ -179,6 +235,15 @@ jobs:
     if: needs.diff.outputs.changed > 600
     steps:
       - run: echo "::warning::PR size advisory threshold exceeded"
+EOF
+
+make_repo workflow-boolean-condition
+cat >"$workspace/workflow-boolean-condition/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    if: true
+    steps:
+      - run: echo "PR size policy remains advisory"
 EOF
 
 make_repo workflow-template-advisory
@@ -212,6 +277,31 @@ jobs:
           import sys
           if changed_lines > 600:
               sys.exit(1)
+EOF
+
+make_repo composite-python-hard-exit
+mkdir -p "$workspace/composite-python-hard-exit/.github/actions"
+cat >"$workspace/composite-python-hard-exit/.github/actions/action.yml" <<'EOF'
+runs:
+  using: composite
+  steps:
+    - shell: python
+      run: |
+        import sys
+        if changed_lines > 600:
+            sys.exit(1)
+EOF
+
+make_repo composite-python-advisory
+mkdir -p "$workspace/composite-python-advisory/.github/actions/pr-size"
+cat >"$workspace/composite-python-advisory/.github/actions/pr-size/action.yml" <<'EOF'
+runs:
+  using: composite
+  steps:
+    - shell: python
+      run: |
+        if changed_lines > 600:
+            print("PR size advisory threshold exceeded")
 EOF
 
 make_repo workflow-javascript-hard-exit
@@ -274,6 +364,38 @@ make_repo python-raise
 cat >"$workspace/python-raise/scripts/check_pr_size.py" <<'EOF'
 if changed_lines > 600:
     raise RuntimeError("PR is too large")
+EOF
+
+make_repo python-multiline-exit
+cat >"$workspace/python-multiline-exit/scripts/check_pr_size.py" <<'EOF'
+if (
+    changed_lines
+    > 600
+):
+    raise SystemExit(1)
+EOF
+
+make_repo python-assert
+cat >"$workspace/python-assert/scripts/check_pr_size.py" <<'EOF'
+assert changed_lines <= 600, "PR is too large"
+EOF
+
+make_repo python-caught-exception
+cat >"$workspace/python-caught-exception/scripts/check_pr_size.py" <<'EOF'
+try:
+    if changed_lines > 600:
+        raise ValueError("advisory threshold exceeded")
+except ValueError:
+    print("PR size advisory threshold exceeded")
+EOF
+
+make_repo python-caught-then-exit
+cat >"$workspace/python-caught-then-exit/scripts/check_pr_size.py" <<'EOF'
+try:
+    if changed_lines > 600:
+        raise ValueError("threshold exceeded")
+except ValueError:
+    raise SystemExit(1)
 EOF
 
 make_repo python-return-exit
@@ -371,6 +493,28 @@ if [ "$ARTIFACT_SIZE" -gt 600 ]; then
 fi
 EOF
 
+make_repo root-hook-advisory
+cat >"$workspace/root-hook-advisory/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: pr-size
+        name: Report PR size
+        language: system
+        entry: bash -c 'if [ "$changed_lines" -gt 600 ]; then echo "PR size advisory threshold exceeded"; fi'
+EOF
+
+make_repo root-hook-hard-exit
+cat >"$workspace/root-hook-hard-exit/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: pr-size
+        name: Enforce PR size
+        language: system
+        entry: bash -c 'if [ "$changed_lines" -gt 600 ]; then exit 1; fi'
+EOF
+
 make_repo unreadable-policy
 # shellcheck disable=SC2016 # Fixture variables must remain literal.
 printf '# invalid UTF-8 comment: \377\nif [ "$CHANGED" -gt 600 ]; then exit 23; fi\n' \
@@ -420,44 +564,56 @@ bash "$validator" \
   "$workspace/advisory" \
   "$workspace/advisory-typescript" \
   "$workspace/conditional-list-zero-exit" \
+  "$workspace/deferred-zero-status" \
   "$workspace/errexit-disabled" \
   "$workspace/no-gate" \
+  "$workspace/python-caught-exception" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" \
   "$workspace/javascript-zero-exit-code" \
   "$workspace/python-library-return" \
   "$workspace/python-zero-status" \
+  "$workspace/root-hook-advisory" \
   "$workspace/suffixless-binary" \
   "$workspace/unrelated-size" \
+  "$workspace/workflow-boolean-condition" \
   "$workspace/workflow-job-if-advisory" \
   "$workspace/workflow-step-boundary" \
   "$workspace/workflow-nonblocking-job" \
   "$workspace/workflow-nonblocking-step" \
   "$workspace/workflow-template-advisory" \
+  "$workspace/composite-python-advisory" \
   "$repo_root" >"$workspace/pass.out"
 grep -Fq "advisory: PASS" "$workspace/pass.out"
 grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
 grep -Fq "conditional-list-zero-exit: PASS" "$workspace/pass.out"
+grep -Fq "deferred-zero-status: PASS" "$workspace/pass.out"
 grep -Fq "errexit-disabled: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
+grep -Fq "python-caught-exception: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
 grep -Fq "javascript-zero-exit-code: PASS" "$workspace/pass.out"
 grep -Fq "python-library-return: PASS" "$workspace/pass.out"
 grep -Fq "python-zero-status: PASS" "$workspace/pass.out"
+grep -Fq "root-hook-advisory: PASS" "$workspace/pass.out"
 grep -Fq "suffixless-binary: PASS" "$workspace/pass.out"
 grep -Fq "unrelated-size: PASS" "$workspace/pass.out"
+grep -Fq "workflow-boolean-condition: PASS" "$workspace/pass.out"
 grep -Fq "workflow-job-if-advisory: PASS" "$workspace/pass.out"
 grep -Fq "workflow-step-boundary: PASS" "$workspace/pass.out"
 grep -Fq "workflow-nonblocking-job: PASS" "$workspace/pass.out"
 grep -Fq "workflow-nonblocking-step: PASS" "$workspace/pass.out"
 grep -Fq "workflow-template-advisory: PASS" "$workspace/pass.out"
+grep -Fq "composite-python-advisory: PASS" "$workspace/pass.out"
 
 for invalid in \
   alternate-workflow-name \
+  composite-python-hard-exit \
   compact-exit \
   conditional-list-exit \
   conditional-list-multiline \
+  deferred-exit \
   derived-size-alias \
   diff-size-alias \
   errexit-standalone \
@@ -467,13 +623,21 @@ for invalid in \
   javascript-exit-code \
   javascript-throw \
   hard-exit \
+  lowercase-owner-reference \
+  malformed-workflow-yaml \
   override-file \
   label-override \
   python-exit \
+  python-assert \
+  python-caught-then-exit \
+  python-multiline-exit \
   python-raise \
   python-return-exit \
   unreadable-policy \
   workflow-if-hard-exit \
+  workflow-folded-condition \
+  workflow-flow-style-steps \
+  workflow-indentless-steps \
   workflow-job-if-hard-exit \
   workflow-blocking-step \
   workflow-failure \
@@ -482,9 +646,14 @@ for invalid in \
   workflow-template-hard-exit \
   exit-three \
   lowercase-variable \
+  root-hook-hard-exit \
   dynamic-exit \
   tracked-context; do
-  if bash "$validator" "$workspace/$invalid" "$repo_root" >"$workspace/$invalid.out" 2>&1; then
+  validator_arguments=("$workspace/$invalid")
+  if [ "$invalid" = "hard-pinned-revision" ]; then
+    validator_arguments+=("$repo_root")
+  fi
+  if bash "$validator" "${validator_arguments[@]}" >"$workspace/$invalid.out" 2>&1; then
     echo "Expected $invalid fixture to fail policy validation" >&2
     exit 1
   fi

@@ -4,9 +4,13 @@
 
 set -euo pipefail
 
-python3 - "$@" <<'PY'
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+python3 - "$SCRIPT_DIR/parse-pr-size-workflow.cjs" "$@" <<'PY'
 from __future__ import annotations
 
+import json
+import ast
 import re
 import subprocess
 import sys
@@ -70,13 +74,6 @@ SIZE_CALCULATION = re.compile(
 )
 EXIT_OR_RETURN = re.compile(r"\b(?:exit|return)(?:\s+([^;\s]+))?")
 FALSE_COMMAND = re.compile(r"(?:^|[;&|]\s*)false(?:\s*(?:[;&|]|$))")
-PYTHON_EXIT = re.compile(
-    r"(?:sys\.exit\s*\(\s*([^)]*)\)|raise\s+SystemExit(?:\s*\(\s*([^)]*)\)|\s+([^;\s]+))?)"
-)
-PYTHON_RETURN = re.compile(r"\breturn(?:\s+([^#;\s]+))?")
-PYTHON_STATUS_CALL = re.compile(
-    r"(?:sys\.exit\s*\(|raise\s+SystemExit\s*\()\s*([A-Za-z_]\w*)\s*\("
-)
 JAVASCRIPT_EXIT = re.compile(
     r"(?:process|Deno|Bun)\.exit\s*\(\s*([^)]*)\)"
 )
@@ -93,6 +90,7 @@ SHELL_ERREXIT_DISABLE = re.compile(
     r"^\s*set\s+(?:\+[A-Za-z]*e[A-Za-z]*|\+o\s+errexit)(?:\s|$)"
 )
 SHELL_TEST_COMMAND = re.compile(r"^\s*!?\s*(?:test\b|\[\[?(?:\s|$)|\(\()")
+WORKFLOW_PARSER = Path(sys.argv[1]).resolve()
 
 
 def resolve_repositories(arguments: list[str]) -> list[Path]:
@@ -273,6 +271,37 @@ def shell_failure_command(value: str) -> bool:
     return False
 
 
+def shell_status_identifier(status: str | None) -> str | None:
+    if status is None:
+        return None
+    normalized = status.strip().strip("\"'")
+    match = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", normalized)
+    return match.group(1).lower() if match is not None else None
+
+
+def shell_assignment_nonzero(expression: str) -> bool:
+    if re.fullmatch(r"\s*[\"']?\+?0+[\"']?\s*(?:#.*)?", expression):
+        return False
+    return nonzero_status(expression, empty_is_failure=False)
+
+
+def shell_deferred_failure(
+    lines: list[str], start_index: int, identifiers: set[str]
+) -> bool:
+    active = set(identifiers)
+    for line in lines[start_index:]:
+        for command in re.split(r"[;\n]", line):
+            assignment = ASSIGNMENT.match(command)
+            if assignment is not None:
+                active.discard(assignment.group(1).lower())
+            for termination in EXIT_OR_RETURN.finditer(command):
+                if shell_status_identifier(termination.group(1)) in active:
+                    return True
+        if not active:
+            return False
+    return False
+
+
 def shell_logical_command(lines: list[str], index: int) -> str:
     command = lines[index].strip()
     for candidate in lines[index + 1 : index + 8]:
@@ -329,7 +358,12 @@ def shell_hard_size_exit(
             continue
         depth = 0
         opened = False
-        for candidate in lines[index : index + 80]:
+        deferred_failure_identifiers: set[str] = set()
+        block_end = index
+        for candidate_index, candidate in enumerate(
+            lines[index : index + 80], start=index
+        ):
+            block_end = candidate_index
             stripped = candidate.strip()
             openings = len(
                 re.findall(r"(?:^|;\s*)if\b.*?(?:;\s*then\b|\bthen\b)", stripped)
@@ -339,10 +373,19 @@ def shell_hard_size_exit(
                 opened = True
             if shell_failure_command(stripped):
                 return True
+            assignment = ASSIGNMENT.match(stripped)
+            if assignment is not None and shell_assignment_nonzero(
+                assignment.group(2)
+            ):
+                deferred_failure_identifiers.add(assignment.group(1).lower())
             if opened:
                 depth -= len(re.findall(r"\bfi\b", stripped))
                 if depth <= 0:
                     break
+        if deferred_failure_identifiers and shell_deferred_failure(
+            lines, block_end + 1, deferred_failure_identifiers
+        ):
+            return True
     return False
 
 
@@ -361,27 +404,265 @@ def indentation_block(lines: list[str], index: int) -> list[str]:
     return result
 
 
-def python_failure(lines: list[str]) -> bool:
-    source_without_comments = "\n".join(
-        re.sub(r"#.*$", "", line) for line in lines
+def python_name(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        owner = python_name(node.value)
+        return f"{owner}.{node.attr}" if owner else node.attr
+    return None
+
+
+def python_status(node: ast.AST | None) -> str | None:
+    if node is None:
+        return None
+    try:
+        return ast.unparse(node)
+    except ValueError:
+        return ""
+
+
+def python_exception(node: ast.Raise) -> str | None:
+    exception = node.exc
+    if isinstance(exception, ast.Call):
+        return python_name(exception.func)
+    return python_name(exception)
+
+
+def python_handler_catches(handler: ast.ExceptHandler, exception: str | None) -> bool:
+    if handler.type is None:
+        return True
+    caught = (
+        handler.type.elts
+        if isinstance(handler.type, ast.Tuple)
+        else [handler.type]
     )
-    for termination in PYTHON_EXIT.finditer(source_without_comments):
-        status = next(
-            (value for value in termination.groups() if value is not None),
+    names = {python_name(value) for value in caught}
+    if exception in names:
+        return True
+    if exception in {"SystemExit", "sys.exit"}:
+        return "BaseException" in names
+    return bool(names.intersection({"Exception", "BaseException"}))
+
+
+def python_caught_failure(
+    exception: str,
+    caught_by: tuple[tuple[ast.ExceptHandler, ...], ...],
+    *,
+    process_status_return: bool,
+) -> bool | None:
+    for index in range(len(caught_by) - 1, -1, -1):
+        matching_handler = next(
+            (
+                handler
+                for handler in caught_by[index]
+                if python_handler_catches(handler, exception)
+            ),
             None,
         )
-        if python_nonzero_status(status, empty_is_failure=False):
+        if matching_handler is not None:
+            return python_failure_nodes(
+                matching_handler.body,
+                process_status_return=process_status_return,
+                caught_by=caught_by[:index],
+            )
+    return None
+
+
+def python_failure_nodes(
+    nodes: list[ast.stmt],
+    *,
+    process_status_return: bool = False,
+    caught_by: tuple[tuple[ast.ExceptHandler, ...], ...] = (),
+) -> bool:
+    for node in nodes:
+        if isinstance(node, ast.Try):
+            handlers = tuple(node.handlers)
+            if python_failure_nodes(
+                node.body,
+                process_status_return=process_status_return,
+                caught_by=(*caught_by, handlers),
+            ):
+                return True
+            if any(
+                python_failure_nodes(
+                    handler.body,
+                    process_status_return=process_status_return,
+                    caught_by=caught_by,
+                )
+                for handler in node.handlers
+            ):
+                return True
+            if python_failure_nodes(
+                [*node.orelse, *node.finalbody],
+                process_status_return=process_status_return,
+                caught_by=caught_by,
+            ):
+                return True
+            continue
+        if isinstance(node, ast.Raise):
+            exception = python_exception(node)
+            caught_failure = python_caught_failure(
+                exception or "",
+                caught_by,
+                process_status_return=process_status_return,
+            )
+            if caught_failure is not None:
+                if caught_failure:
+                    return True
+                continue
+            if exception == "SystemExit":
+                call = node.exc if isinstance(node.exc, ast.Call) else None
+                status = python_status(call.args[0]) if call and call.args else None
+                if not python_nonzero_status(status, empty_is_failure=True):
+                    continue
             return True
-    for line in source_without_comments.splitlines():
-        stripped = line.strip()
-        if not re.match(r"^raise\b", stripped):
-            continue
-        if re.fullmatch(
-            r"raise\s+SystemExit(?:\s*\(\s*(?:0|None)?\s*\))?",
-            stripped,
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            if python_name(node.value.func) in {"sys.exit", "exit"}:
+                status = (
+                    python_status(node.value.args[0])
+                    if node.value.args
+                    else None
+                )
+                if python_nonzero_status(status, empty_is_failure=True):
+                    return True
+        if isinstance(node, ast.Return) and process_status_return:
+            if python_nonzero_status(
+                python_status(node.value), empty_is_failure=False
+            ):
+                return True
+        if isinstance(node, ast.Assert):
+            caught_failure = python_caught_failure(
+                "AssertionError",
+                caught_by,
+                process_status_return=process_status_return,
+            )
+            if caught_failure is None or caught_failure:
+                return True
+        nested = [
+            value
+            for value in ast.iter_child_nodes(node)
+            if isinstance(value, ast.stmt)
+            and not isinstance(value, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        if python_failure_nodes(
+            nested,
+            process_status_return=process_status_return,
+            caught_by=caught_by,
         ):
+            return True
+    return False
+
+
+def python_tree(lines: list[str]) -> ast.Module | None:
+    try:
+        return ast.parse("\n".join(lines))
+    except SyntaxError:
+        return None
+
+
+def python_failure(lines: list[str]) -> bool:
+    tree = python_tree(lines)
+    return tree is not None and python_failure_nodes(tree.body)
+
+
+def python_size_comparison(node: ast.AST, context: SizeContext) -> bool:
+    return isinstance(node, ast.Compare) and context.is_comparison(ast.unparse(node))
+
+
+def python_process_status_functions(tree: ast.Module) -> set[str]:
+    result: set[str] = set()
+    for node in ast.walk(tree):
+        call: ast.Call | None = None
+        if isinstance(node, ast.Call) and python_name(node.func) in {"sys.exit", "exit"}:
+            call = node
+        elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+            if python_name(node.exc.func) == "SystemExit":
+                call = node.exc
+        if call and call.args and isinstance(call.args[0], ast.Call):
+            name = python_name(call.args[0].func)
+            if name:
+                result.add(name)
+    return result
+
+
+def python_hard_size_nodes(
+    nodes: list[ast.stmt],
+    context: SizeContext,
+    process_status_functions: set[str],
+    *,
+    current_function: str | None = None,
+    caught_by: tuple[tuple[ast.ExceptHandler, ...], ...] = (),
+) -> bool:
+    for node in nodes:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if python_hard_size_nodes(
+                node.body,
+                context,
+                process_status_functions,
+                current_function=node.name,
+                caught_by=(),
+            ):
+                return True
             continue
-        return True
+        if isinstance(node, ast.Try):
+            handlers = tuple(node.handlers)
+            if python_hard_size_nodes(
+                node.body,
+                context,
+                process_status_functions,
+                current_function=current_function,
+                caught_by=(*caught_by, handlers),
+            ):
+                return True
+            branches = [
+                *node.orelse,
+                *node.finalbody,
+                *(statement for handler in node.handlers for statement in handler.body),
+            ]
+            if python_hard_size_nodes(
+                branches,
+                context,
+                process_status_functions,
+                current_function=current_function,
+                caught_by=caught_by,
+            ):
+                return True
+            continue
+        if isinstance(node, ast.Assert) and any(
+            python_size_comparison(candidate, context)
+            for candidate in ast.walk(node.test)
+        ):
+            caught_failure = python_caught_failure(
+                "AssertionError",
+                caught_by,
+                process_status_return=current_function in process_status_functions,
+            )
+            if caught_failure is None or caught_failure:
+                return True
+        if isinstance(node, ast.If) and any(
+            python_size_comparison(candidate, context)
+            for candidate in ast.walk(node.test)
+        ):
+            if python_failure_nodes(
+                [*node.body, *node.orelse],
+                process_status_return=current_function in process_status_functions,
+                caught_by=caught_by,
+            ):
+                return True
+        nested = [
+            value
+            for value in ast.iter_child_nodes(node)
+            if isinstance(value, ast.stmt)
+        ]
+        if python_hard_size_nodes(
+            nested,
+            context,
+            process_status_functions,
+            current_function=current_function,
+            caught_by=caught_by,
+        ):
+            return True
     return False
 
 
@@ -389,42 +670,13 @@ def python_hard_size_exit(
     lines: list[str], context: SizeContext | None = None
 ) -> bool:
     context = context or SizeContext.from_lines(lines)
-    source_without_comments = "\n".join(
-        re.sub(r"#.*$", "", line) for line in lines
+    tree = python_tree(lines)
+    if tree is None:
+        return False
+    process_status_functions = python_process_status_functions(tree)
+    return python_hard_size_nodes(
+        tree.body, context, process_status_functions
     )
-    process_status_functions = {
-        match.group(1)
-        for match in PYTHON_STATUS_CALL.finditer(source_without_comments)
-    }
-    for index, line in enumerate(lines):
-        if not re.search(r"\bif\b", line) or not context.is_comparison(line):
-            continue
-        condition_indent = len(line) - len(line.lstrip())
-        containing_function: str | None = None
-        for candidate in reversed(lines[:index]):
-            if not candidate.strip():
-                continue
-            indent = len(candidate) - len(candidate.lstrip())
-            if indent >= condition_indent:
-                continue
-            function = re.match(
-                r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(", candidate
-            )
-            if function is not None:
-                containing_function = function.group(1)
-                break
-            if indent == 0:
-                break
-        for candidate in indentation_block(lines, index):
-            if python_failure([candidate]):
-                return True
-            if containing_function in process_status_functions:
-                for termination in PYTHON_RETURN.finditer(candidate):
-                    if python_nonzero_status(
-                        termination.group(1), empty_is_failure=False
-                    ):
-                        return True
-    return False
 
 
 def javascript_block(lines: list[str], index: int) -> list[str]:
@@ -476,11 +728,29 @@ def is_workflow_policy(root: Path, path: Path) -> bool:
     )
 
 
+def is_composite_action(root: Path, path: Path) -> bool:
+    relative = path.relative_to(root)
+    parts = relative.parts
+    return path.suffix.lower() in {".yml", ".yaml"} and (
+        (len(parts) >= 3 and parts[:2] == (".github", "actions"))
+        or (len(parts) == 1 and path.stem == "action")
+    ) and path.stem == "action"
+
+
+def is_pre_commit_config(root: Path, path: Path) -> bool:
+    return path.relative_to(root).as_posix() in {
+        ".pre-commit-config.yaml",
+        ".pre-commit-config.yml",
+    }
+
+
 def policy_language(root: Path, path: Path, text: str) -> str | None:
     relative = path.relative_to(root)
     parts = relative.parts
     suffix = path.suffix.lower()
-    if is_workflow_policy(root, path):
+    if is_workflow_policy(root, path) or is_composite_action(root, path):
+        return "shell"
+    if is_pre_commit_config(root, path):
         return "shell"
 
     policy_root = bool(parts) and parts[0] in POLICY_ROOTS
@@ -505,190 +775,35 @@ class WorkflowUnit:
     conditions: tuple[str, ...]
 
 
-def workflow_jobs(lines: list[str]) -> list[list[str]]:
-    jobs: list[list[str]] = []
-    jobs_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if re.match(r"^(\s*)jobs:\s*(?:#.*)?$", line)
-        ),
-        None,
-    )
-    if jobs_index is None:
-        return jobs
-    jobs_indent = len(lines[jobs_index]) - len(lines[jobs_index].lstrip())
-    current: list[str] = []
-    job_indent: int | None = None
-    for line in lines[jobs_index + 1 :]:
-        if not line.strip():
-            if current:
-                current.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= jobs_indent:
-            break
-        job = re.match(r"^(\s*)[A-Za-z0-9_-]+:\s*(?:#.*)?$", line)
-        if job is not None and (job_indent is None or indent == job_indent):
-            if current:
-                jobs.append(current)
-            job_indent = indent
-            current = [line]
-            continue
-        if current:
-            current.append(line)
-    if current:
-        jobs.append(current)
-    return jobs
+class WorkflowParseError(RuntimeError):
+    pass
 
 
-def workflow_steps(job: list[str]) -> list[list[str]]:
-    steps: list[list[str]] = []
-    index = 0
-    while index < len(job):
-        match = re.match(r"^(\s*)steps:\s*(?:#.*)?$", job[index])
-        if match is None:
-            index += 1
-            continue
-        steps_indent = len(match.group(1))
-        index += 1
-        current: list[str] = []
-        item_indent: int | None = None
-        while index < len(job):
-            line = job[index]
-            if line.strip():
-                indent = len(line) - len(line.lstrip())
-                if indent <= steps_indent:
-                    break
-                item = re.match(r"^(\s*)-\s+(.*)$", line)
-                if item is not None and (
-                    item_indent is None or len(item.group(1)) == item_indent
-                ):
-                    if current:
-                        steps.append(current)
-                    item_indent = len(item.group(1))
-                    current = [" " * (item_indent + 2) + item.group(2)]
-                    index += 1
-                    continue
-            if current:
-                current.append(line)
-            index += 1
-        if current:
-            steps.append(current)
-    return steps
-
-
-def workflow_literal_true(lines: list[str], key: str, indent: int) -> bool:
-    return any(
-        len(line) - len(line.lstrip()) == indent
-        and re.match(
-            rf"^\s*{re.escape(key)}:\s*true\s*(?:#.*)?$", line, re.IGNORECASE
+def workflow_units(text: str, kind: str = "workflow") -> list[WorkflowUnit]:
+    try:
+        result = subprocess.run(
+            ["node", str(WORKFLOW_PARSER), kind],
+            input=text.encode("utf-8"),
+            check=False,
+            capture_output=True,
         )
-        is not None
-        for line in lines
-    )
-
-
-def workflow_property_values(
-    lines: list[str], key: str, indent: int
-) -> tuple[str, ...]:
-    return tuple(
-        match.group(1)
-        for line in lines
-        if len(line) - len(line.lstrip()) == indent
-        and (
-            match := re.match(
-                rf"^\s*{re.escape(key)}:\s*(.*?)\s*(?:#.*)?$", line
+    except OSError as error:
+        raise WorkflowParseError("workflow YAML parser is unavailable") from error
+    if result.returncode != 0:
+        raise WorkflowParseError("workflow YAML cannot be parsed safely")
+    try:
+        values = json.loads(result.stdout.decode("utf-8"))
+        return [
+            WorkflowUnit(
+                language=value["language"],
+                lines=value["lines"],
+                blocking=value["blocking"],
+                conditions=tuple(value["conditions"]),
             )
-        )
-    )
-
-
-def workflow_runner_language(step: list[str], property_indent: int) -> str:
-    shell = next(
-        (
-            match.group(1).strip().strip("\"'").lower()
-            for line in step
-            if len(line) - len(line.lstrip()) == property_indent
-            and (match := re.match(r"^\s*shell:\s*([^#]+?)\s*(?:#.*)?$", line))
-        ),
-        "bash",
-    )
-    shell_parts = shell.split()
-    if not shell_parts:
-        return "unknown"
-    executable = shell_parts[0]
-    if executable.startswith("python"):
-        return "python"
-    if executable in {"node", "deno", "bun"}:
-        return "javascript"
-    if re.search(r"(?:^|/)(?:ba|da|k|z)?sh$", executable):
-        return "shell"
-    return "unknown"
-
-
-def workflow_step_units(
-    step: list[str], *, job_blocking: bool, job_conditions: tuple[str, ...]
-) -> list[WorkflowUnit]:
-    property_indent = min(
-        len(line) - len(line.lstrip()) for line in step if line.strip()
-    )
-    conditions = job_conditions + workflow_property_values(
-        step, "if", property_indent
-    )
-    language = workflow_runner_language(step, property_indent)
-    blocking = job_blocking and not workflow_literal_true(
-        step, "continue-on-error", property_indent
-    )
-    units: list[WorkflowUnit] = []
-    for index, line in enumerate(step):
-        match = re.match(r"^(\s*)run:\s*(.*)$", line)
-        if match is None:
-            continue
-        run_indent = len(match.group(1))
-        scalar = match.group(2).strip()
-        if re.fullmatch(r"[|>][-+]?", scalar):
-            block: list[str] = []
-            for candidate in step[index + 1 :]:
-                if candidate.strip():
-                    indent = len(candidate) - len(candidate.lstrip())
-                    if indent <= run_indent:
-                        break
-                block.append(candidate)
-        else:
-            block = [scalar.strip("\"'")]
-        units.append(WorkflowUnit(language, block, blocking, conditions))
-    return units
-
-
-def workflow_units(text: str) -> list[WorkflowUnit]:
-    units: list[WorkflowUnit] = []
-    for job in workflow_jobs(text.splitlines()):
-        job_indent = len(job[0]) - len(job[0].lstrip())
-        property_indent = next(
-            (
-                len(line) - len(line.lstrip())
-                for line in job[1:]
-                if re.match(r"^\s*[A-Za-z][A-Za-z0-9_-]*:", line)
-                and len(line) - len(line.lstrip()) > job_indent
-            ),
-            job_indent + 2,
-        )
-        job_blocking = not workflow_literal_true(
-            job, "continue-on-error", property_indent
-        )
-        job_conditions = workflow_property_values(
-            job, "if", property_indent
-        )
-        for step in workflow_steps(job):
-            units.extend(
-                workflow_step_units(
-                    step,
-                    job_blocking=job_blocking,
-                    job_conditions=job_conditions,
-                )
-            )
-    return units
+            for value in values
+        ]
+    except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise WorkflowParseError("workflow YAML parser returned invalid data") from error
 
 
 def workflow_process_failure(unit: WorkflowUnit) -> bool:
@@ -736,6 +851,16 @@ def hard_size_exit(root: Path, path: Path, text: str) -> bool:
             return any(
                 workflow_unit_hard_size_exit(unit)
                 for unit in workflow_units(text)
+            )
+        if is_composite_action(root, path):
+            return any(
+                workflow_unit_hard_size_exit(unit)
+                for unit in workflow_units(text, "action")
+            )
+        if is_pre_commit_config(root, path):
+            return any(
+                workflow_unit_hard_size_exit(unit)
+                for unit in workflow_units(text, "pre-commit")
             )
         return shell_hard_size_exit(lines)
     if language == "python":
@@ -801,7 +926,10 @@ def pinned_workflow_contract_failures(
         text = result.stdout.decode("utf-8")
     except UnicodeDecodeError:
         return ["reusable workflow revision is not readable UTF-8"]
-    return reusable_workflow_contract_failures(text)
+    try:
+        return reusable_workflow_contract_failures(text)
+    except WorkflowParseError:
+        return ["reusable workflow revision cannot be parsed safely"]
 
 
 def size_bypass_instruction(lines: list[str]) -> bool:
@@ -861,8 +989,11 @@ def validate_repository(
             failures.append(f"{relative}: hard-failure banner")
         if re.search(r"Push aborted", text, re.IGNORECASE) and SIZE_TERMS.search(text):
             failures.append(f"{relative}: size-based push abortion")
-        if hard_size_exit(root, path, text):
-            failures.append(f"{relative}: size-triggered nonzero exit")
+        try:
+            if hard_size_exit(root, path, text):
+                failures.append(f"{relative}: size-triggered nonzero exit")
+        except WorkflowParseError:
+            failures.append(f"{relative}: workflow YAML cannot be parsed safely")
         if size_bypass_instruction(lines):
             failures.append(f"{relative}: size-policy hook bypass instruction")
 
@@ -893,6 +1024,7 @@ def validate_repository(
         references = re.findall(
             r"SecPal/\.github/\.github/workflows/reusable-pr-size\.yml@([^\s\"']+)",
             workflow_text,
+            re.IGNORECASE,
         )
         is_size_workflow = bool(references) or (
             "git diff --numstat" in workflow_text
@@ -921,7 +1053,11 @@ def validate_repository(
     reusable = root / ".github/workflows/reusable-pr-size.yml"
     reusable_text = contents.get(reusable, "")
     if reusable_text:
-        for description in reusable_workflow_contract_failures(reusable_text):
+        try:
+            contract_failures = reusable_workflow_contract_failures(reusable_text)
+        except WorkflowParseError:
+            contract_failures = ["workflow YAML cannot be parsed safely"]
+        for description in contract_failures:
             failures.append(
                 f".github/workflows/reusable-pr-size.yml: {description}"
             )
@@ -931,7 +1067,7 @@ def validate_repository(
 
 def main() -> int:
     failed = False
-    repositories = resolve_repositories(sys.argv[1:])
+    repositories = resolve_repositories(sys.argv[2:])
     workflow_source = governance_root(repositories)
     workflow_contract_cache: dict[str, list[str]] = {}
     for root in repositories:

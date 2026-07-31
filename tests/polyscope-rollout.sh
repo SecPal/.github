@@ -9,7 +9,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
-VALIDATOR_NPM_CACHE="$(npm config get cache)"
 
 if [[ ! -x "$PRETTIER_BIN" ]]; then
     (cd "$REPO_ROOT" && npm ci)
@@ -39,7 +38,6 @@ trap 'rm -rf "$workspace"' EXIT
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"
 mkdir -p "$workspace_root" "$home_dir"
-export SECPAL_AI_VALIDATOR_NPM_CACHE="$VALIDATOR_NPM_CACHE"
 export HOME="$home_dir"
 
 create_repo() {
@@ -6139,9 +6137,6 @@ fi
 if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "User" && "${4:-}" == "--value" && "${5:-}" == "polyscope-server.service" ]]; then
     printf '%s\n' "${FAKE_SYSTEM_POLYSCOPE_SERVER_USER:-}"
 fi
-if [[ -n "${SYSTEMCTL_FAIL_MATCH:-}" && "$*" == *"$SYSTEMCTL_FAIL_MATCH"* ]]; then
-    exit 71
-fi
 exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
@@ -6448,44 +6443,6 @@ grep -qF 'nginx manifest path is fixed' "$custom_manifest_error"
 test ! -e "$custom_manifest_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$custom_manifest_unit_dir/polyscope-rollout-sync.service"
 
-# Service units resolve the selected validator snapshot from different working
-# directories, so a relative runtime base must fail before any installation.
-relative_runtime_home="$workspace/relative-runtime-home"
-relative_runtime_bin_dir="$workspace/relative-runtime-bin"
-relative_runtime_unit_dir="$workspace/relative-runtime-units"
-relative_runtime_error="$workspace/relative-runtime.error"
-relative_runtime_exit=0
-mkdir -p "$relative_runtime_home/.polyscope/bin"
-cat >"$relative_runtime_home/.polyscope/bin/expose-linux-x64" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
-chmod +x "$relative_runtime_home/.polyscope/bin/expose-linux-x64"
-(
-    cd "$workspace"
-    env HOME="$relative_runtime_home" \
-        CODEX_HOME="$relative_runtime_home/.codex" \
-        WORKSPACE_ROOT="$workspace_root" \
-        SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-        SYSTEMCTL_LOG="$fake_systemctl_log" \
-        SUDO_BIN="$fake_sudo_dir/sudo" \
-        SUDO_LOG="$workspace/relative-runtime-sudo.log" \
-        SECPAL_AI_VALIDATOR_RUNTIME_BASE=relative-validator-runtime \
-        PATH="$fake_systemctl_dir:$PATH" \
-        bash "$INSTALL_SCRIPT" \
-            --bin-dir "$relative_runtime_bin_dir" \
-            --unit-dir "$relative_runtime_unit_dir" \
-            --polyscope-server-bin "$fake_server_bin"
-) 2>"$relative_runtime_error" || relative_runtime_exit=$?
-if [[ "$relative_runtime_exit" -eq 0 ]]; then
-    echo "installer must reject a relative validator runtime base" >&2
-    exit 1
-fi
-grep -qF 'validator runtime base must be an absolute path' "$relative_runtime_error"
-test ! -e "$relative_runtime_bin_dir/polyscope-secpal-rollout.py"
-test ! -e "$relative_runtime_unit_dir/polyscope-rollout-sync.service"
-test ! -e "$workspace/relative-validator-runtime"
-
 env HOME="$home_dir" \
     CODEX_HOME="$fake_codex_home" \
     WORKSPACE_ROOT="$workspace_root" \
@@ -6627,89 +6584,6 @@ env HOME="$home_dir" \
     PATH="$fake_systemctl_dir:$PATH" \
     bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin"
 
-installed_validator_toolchain="$home_dir/.local/share/polyscope/ai-instruction-validator/current"
-test -L "$installed_validator_toolchain"
-if [[ ! "$(readlink "$installed_validator_toolchain")" =~ ^v3-[0-9a-f]{64}-[0-9a-f]{40}$ ]]; then
-    echo "validator current must select a versioned lockfile snapshot" >&2
-    exit 1
-fi
-installed_validator_toolchain="$(readlink -f "$installed_validator_toolchain")"
-test -d "$installed_validator_toolchain/node_modules"
-test ! -L "$installed_validator_toolchain/node_modules"
-test -f "$installed_validator_toolchain/package.json"
-test -f "$installed_validator_toolchain/.secpal-validator-snapshot"
-test -x "$installed_validator_toolchain/node_modules/.bin/markdownlint"
-test -f "$installed_validator_toolchain/node_modules/js-yaml/package.json"
-"$installed_validator_toolchain/node_modules/.bin/markdownlint" --version >/dev/null
-grep -q '^schema=2$' \
-    "$installed_validator_toolchain/.secpal-validator-snapshot"
-grep -q '^lock_sha256=[0-9a-f]\{64\}$' \
-    "$installed_validator_toolchain/.secpal-validator-snapshot"
-grep -q '^node_modules_sha256=[0-9a-f]\{64\}$' \
-    "$installed_validator_toolchain/.secpal-validator-snapshot"
-
-# A cached snapshot with a merely executable but unusable Markdownlint must be
-# rejected instead of being retained as the service-wide current toolchain.
-installed_markdownlint="$installed_validator_toolchain/node_modules/.bin/markdownlint"
-installed_markdownlint_backup="$workspace/installed-markdownlint.backup"
-cp -a "$installed_markdownlint" "$installed_markdownlint_backup"
-rm -f "$installed_markdownlint"
-printf '#!/usr/bin/env bash\nexit 42\n' >"$installed_markdownlint"
-chmod +x "$installed_markdownlint"
-broken_snapshot_error="$workspace/broken-validator-snapshot.error"
-if env HOME="$home_dir" \
-    CODEX_HOME="$fake_codex_home" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$fake_systemctl_log" \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$workspace/user-sudo.log" \
-    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" --bin-dir "$fake_bin_dir" --unit-dir "$fake_unit_dir" --polyscope-server-bin "$fake_server_bin" \
-    2>"$broken_snapshot_error"; then
-    echo "installer must reject an unusable cached Markdownlint snapshot" >&2
-    exit 1
-fi
-grep -qF 'installed validator runtime snapshot is incomplete' "$broken_snapshot_error"
-rm -f "$installed_markdownlint"
-mv "$installed_markdownlint_backup" "$installed_markdownlint"
-
-# Treat the snapshot destination as an exact target. Without -T, a concurrent
-# publisher moves its complete staging directory inside the winning snapshot.
-grep -Fq "mv -T \"\$staging_dir\" \"\$snapshot_dir\"" "$INSTALL_SCRIPT"
-grep -Fq \
-    "mv -T \"\$staging_dir\" \"\$snapshot_dir\"" \
-    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq 'npm ci --prefix "$staging_dir" --offline --ignore-scripts' \
-    "$INSTALL_SCRIPT"
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq 'npm ci --prefix "$staging_dir" --offline --ignore-scripts' \
-    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq 'PATH="$SERVICE_PATH" flock "$VALIDATOR_RUNTIME_LOCK_FD"' "$INSTALL_SCRIPT"
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq 'PATH="$SERVICE_PATH" sha256sum "$VALIDATOR_PACKAGE_LOCK"' "$INSTALL_SCRIPT"
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq \
-    '/usr/bin/sudo -u secpal -- /usr/bin/flock -x "$validator_runtime_lock_file"' \
-    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-if grep -Fq \
-    'cp -R --reflink=auto "$VALIDATOR_TOOLCHAIN_ROOT/node_modules"' \
-    "$INSTALL_SCRIPT"; then
-    echo "validator snapshots must not copy mutable checkout dependencies" >&2
-    exit 1
-fi
-# shellcheck disable=SC2016 # Installer variables are literal source assertions.
-if grep -Fq \
-    'cp -R --reflink=auto "$RUNTIME_TOOLCHAIN_ROOT/node_modules"' \
-    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"; then
-    echo "system validator snapshots must not copy mutable checkout dependencies" >&2
-    exit 1
-fi
-
 # If the wrapped Expose path is replaced with the original real binary while .real already exists,
 # the installer must still repair it idempotently instead of failing.
 rm -f "$fake_polyscope_bin_dir/expose-linux-x64"
@@ -6843,7 +6717,6 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-run
 grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q 'Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=/home/secpal/.local/share/polyscope/ai-instruction-validator/current' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
 if grep -Eq '^(daemon-reload|enable --now polyscope-server\.service|restart polyscope-server\.service)$' "$system_systemctl_log"; then
@@ -6871,7 +6744,6 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
-grep -q "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$home_dir/.local/share/polyscope/ai-instruction-validator/current" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
@@ -6881,7 +6753,6 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$home_dir/.local/share/polyscope/ai-instruction-validator/current" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
@@ -6936,7 +6807,6 @@ fi
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
-grep -q "Environment=SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT=$home_dir/.local/share/polyscope/ai-instruction-validator/current" "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
 grep -qE '^PathModified=.*/\.polyscope/polyscope\.db-wal$' "$fake_unit_dir/polyscope-worktree-provision.path"
 if grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"; then
@@ -7077,151 +6947,6 @@ if [[ "$no_unit_exit" -eq 0 ]]; then
     exit 1
 fi
 test ! -e "$no_sudo_unit_dir/polyscope-server.service"
-
-# A newer dependency snapshot may replace an ancestor, but a stale publisher
-# must not reactivate that ancestor after acquiring the shared install lock.
-freshness_source_root="$workspace/validator-freshness-source"
-git clone --quiet --shared "$REPO_ROOT" "$freshness_source_root"
-ln -s "$REPO_ROOT/node_modules" "$freshness_source_root/node_modules"
-git -C "$freshness_source_root" config user.name "SecPal test fixture"
-git -C "$freshness_source_root" config user.email "fixture@example.invalid"
-printf '\n' >>"$freshness_source_root/package-lock.json"
-git -C "$freshness_source_root" add package-lock.json
-git -C "$freshness_source_root" commit --quiet -m "fixture: advance validator dependencies"
-newer_source_commit="$(git -C "$freshness_source_root" rev-parse HEAD)"
-
-env HOME="$home_dir" \
-    CODEX_HOME="$fake_codex_home" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$fake_systemctl_log" \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$workspace/user-sudo.log" \
-    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" \
-        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
-        --bin-dir "$fake_bin_dir" \
-        --unit-dir "$fake_unit_dir" \
-        --polyscope-server-bin "$fake_server_bin"
-
-freshness_current="$home_dir/.local/share/polyscope/ai-instruction-validator/current"
-newer_snapshot_target="$(readlink "$freshness_current")"
-grep -qxF "source_commit=$newer_source_commit" \
-    "$freshness_current/.secpal-validator-snapshot"
-
-# Publishing a candidate is not activation. A later installer failure must
-# leave existing services on the previously committed snapshot.
-printf '\n' >>"$freshness_source_root/package-lock.json"
-git -C "$freshness_source_root" add package-lock.json
-git -C "$freshness_source_root" commit --quiet -m "fixture: prepare failed validator activation"
-failed_candidate_commit="$(git -C "$freshness_source_root" rev-parse HEAD)"
-blocked_bin_parent="$workspace/blocked-validator-bin-parent"
-printf 'not a directory\n' >"$blocked_bin_parent"
-failed_activation_error="$workspace/failed-validator-activation.error"
-failed_activation_exit=0
-env HOME="$home_dir" \
-    CODEX_HOME="$fake_codex_home" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$fake_systemctl_log" \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$workspace/user-sudo.log" \
-    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" \
-        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
-        --bin-dir "$blocked_bin_parent/bin" \
-        --unit-dir "$fake_unit_dir" \
-        --polyscope-server-bin "$fake_server_bin" \
-        2>"$failed_activation_error" \
-    || failed_activation_exit=$?
-if [[ "$failed_activation_exit" -eq 0 ]]; then
-    echo "failed user installation must not activate its validator candidate" >&2
-    exit 1
-fi
-grep -qF "$failed_candidate_commit" \
-    "$home_dir/.local/share/polyscope/ai-instruction-validator/v3-"*"-$failed_candidate_commit/.secpal-validator-snapshot"
-test "$(readlink "$freshness_current")" = "$newer_snapshot_target"
-
-# A service failure after activation must roll the current pointer back too.
-failed_service_activation_exit=0
-env HOME="$home_dir" \
-    CODEX_HOME="$fake_codex_home" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$fake_systemctl_log" \
-    SYSTEMCTL_FAIL_MATCH='enable --now polyscope-rollout-sync.path' \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$workspace/user-sudo.log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" \
-        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
-        --bin-dir "$fake_bin_dir" \
-        --unit-dir "$fake_unit_dir" \
-        --polyscope-server-bin "$fake_server_bin" \
-    || failed_service_activation_exit=$?
-if [[ "$failed_service_activation_exit" -eq 0 ]]; then
-    echo "failed service activation must roll back its validator candidate" >&2
-    exit 1
-fi
-test "$(readlink "$freshness_current")" = "$newer_snapshot_target"
-
-git -C "$freshness_source_root" checkout --quiet "$newer_source_commit^"
-stale_source_error="$workspace/stale-validator-source.error"
-stale_source_exit=0
-env HOME="$home_dir" \
-    CODEX_HOME="$fake_codex_home" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$fake_systemctl_log" \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$workspace/user-sudo.log" \
-    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" \
-        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
-        --bin-dir "$fake_bin_dir" \
-        --unit-dir "$fake_unit_dir" \
-        --polyscope-server-bin "$fake_server_bin" \
-        2>"$stale_source_error" \
-    || stale_source_exit=$?
-if [[ "$stale_source_exit" -eq 0 ]]; then
-    echo "stale validator publisher must not reactivate an ancestor snapshot" >&2
-    exit 1
-fi
-grep -qF 'refusing to reactivate stale validator runtime snapshot' \
-    "$stale_source_error"
-test "$(readlink "$freshness_current")" = "$newer_snapshot_target"
-
-# A later descendant may intentionally restore an older lockfile. Its source
-# identity keeps that valid forward activation distinct from the stale
-# ancestor snapshot even though both dependency digests match.
-git -C "$freshness_source_root" checkout --quiet "$newer_source_commit"
-git -C "$freshness_source_root" checkout --quiet "$newer_source_commit^" -- package-lock.json
-git -C "$freshness_source_root" commit --quiet -m "fixture: intentionally restore validator dependencies"
-restored_source_commit="$(git -C "$freshness_source_root" rev-parse HEAD)"
-
-env HOME="$home_dir" \
-    CODEX_HOME="$fake_codex_home" \
-    WORKSPACE_ROOT="$workspace_root" \
-    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
-    SYSTEMCTL_LOG="$fake_systemctl_log" \
-    SUDO_BIN="$fake_sudo_dir/sudo" \
-    SUDO_LOG="$workspace/user-sudo.log" \
-    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
-    PATH="$fake_systemctl_dir:$PATH" \
-    bash "$INSTALL_SCRIPT" \
-        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
-        --bin-dir "$fake_bin_dir" \
-        --unit-dir "$fake_unit_dir" \
-        --polyscope-server-bin "$fake_server_bin"
-
-restored_snapshot_target="$(readlink "$freshness_current")"
-test "$restored_snapshot_target" != "$newer_snapshot_target"
-[[ "$restored_snapshot_target" == *-"$restored_source_commit" ]]
-grep -qxF "source_commit=$restored_source_commit" \
-    "$freshness_current/.secpal-validator-snapshot"
 
 fake_real_git_bin="$workspace/fake-tools/git-real"
 cat >"$fake_real_git_bin" <<'STUB'

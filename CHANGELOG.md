@@ -9,38 +9,28 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-07-31 - Harden Governance Validation Reliability
+## 2026-07-31 - Harden Pull Request Size Policy Validation
 
 **Changed:**
 
-- made pull-request size reporting advisory-only and added deterministic,
-  checkout-portable validation of the organization-wide policy
-- installed the pinned Markdownlint and `js-yaml` runtime as an atomic,
-  integrity-recorded Polyscope snapshot built offline from the committed
-  lockfile instead of copying or reading the mutable governance checkout's
-  `node_modules` during workspace setup
-- retained fail-closed instruction validation while preventing concurrent
-  dependency installation from transiently blocking unrelated workspaces,
-  including strict selected-toolchain isolation, serialized publishers,
-  dependency-tree integrity checks, and collision-safe snapshot publishing
-- bound validator snapshots to their source commits and permit activation only
-  along verified Git ancestry, so a stale or unrelated publisher cannot move
-  the shared `current` pointer back after a newer dependency snapshot wins
+- added deterministic, checkout-portable validation of the organization-wide
+  advisory-only pull-request size policy
+- parsed hosted workflow structure with the pinned YAML implementation so valid
+  indentless, folded-scalar, and flow-style representations cannot bypass the
+  policy audit, and fail closed when workflow YAML cannot be parsed
+- extended structured policy inspection to composite-action steps and root
+  pre-commit hooks, dispatching embedded commands by their configured runtime
+- replaced line-oriented Python gate matching with syntax-tree analysis so
+  multiline conditions and assertions are detected without treating caught
+  advisory exceptions as process failures
 - expanded the PR-size policy audit to recognize shell conditional lists,
-  preserve workflow step boundaries, validate pinned historical workflow
+  deferred failure statuses, case-insensitive GitHub repository identifiers,
+  language-specific workflow runners, and standalone predicates under Shell
+  `errexit`
+- preserved workflow step boundaries, validated pinned historical workflow
   revisions against the advisory contract, and ignore suffixless binary helpers
-- detect standalone size predicates that become hard gates under Shell
-  `errexit`, and keep isolated validator fixtures portable when Node is outside
-  the operating-system binary directories
-- make privileged validator publication open and hold its shared lock as the
-  `secpal` service user, activate the prepared snapshot inside the
-  system-component rollback transaction, and reject relative runtime roots
-- make user-scoped snapshot activation part of the complete installer
-  transaction, restoring the prior pointer after a later service failure
-- audit workflow templates and language-specific workflow runners for hard
-  size gates while inheriting job and step conditions, respecting explicit
-  non-blocking policy, tracing locally derived size totals, and recognizing
-  language-specific unsuccessful process termination
+- fixed invalid `.preflight-exclude` expressions so they remain advisory and
+  cannot hide changed lines from local or hosted size reporting
 - documented that central reusable-workflow updates do not automatically
   update repository-local preflight implementations
 
