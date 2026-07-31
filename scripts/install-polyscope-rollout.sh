@@ -408,9 +408,15 @@ validator_snapshot_activation_allowed() {
     fi
 }
 
-install_validator_runtime_toolchain() {
-    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir temporary_link
-    local validator_runtime_lock_file validator_runtime_lock_fd
+VALIDATOR_RUNTIME_CANDIDATE_NAME=""
+VALIDATOR_RUNTIME_PREVIOUS_NAME=""
+VALIDATOR_RUNTIME_HAD_PREVIOUS=0
+VALIDATOR_RUNTIME_ACTIVATED=0
+VALIDATOR_RUNTIME_LOCK_FD=""
+
+prepare_validator_runtime_toolchain() {
+    local lock_digest node_modules_digest snapshot_dir snapshot_name source_commit staging_dir
+    local validator_runtime_lock_file
 
     if [[ -e "$VALIDATOR_RUNTIME_CURRENT" && ! -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
         echo "Error: validator runtime current pointer must be a symlink: $VALIDATOR_RUNTIME_CURRENT" >&2
@@ -419,8 +425,8 @@ install_validator_runtime_toolchain() {
 
     mkdir -p "$VALIDATOR_RUNTIME_BASE"
     validator_runtime_lock_file="$VALIDATOR_RUNTIME_BASE/.install.lock"
-    exec {validator_runtime_lock_fd}>"$validator_runtime_lock_file"
-    PATH="$SERVICE_PATH" flock "$validator_runtime_lock_fd"
+    exec {VALIDATOR_RUNTIME_LOCK_FD}>"$validator_runtime_lock_file"
+    PATH="$SERVICE_PATH" flock "$VALIDATOR_RUNTIME_LOCK_FD"
 
     read -r lock_digest _ < <(
         PATH="$SERVICE_PATH" sha256sum "$VALIDATOR_PACKAGE_LOCK"
@@ -478,11 +484,67 @@ install_validator_runtime_toolchain() {
         "$snapshot_dir" "$snapshot_name" "$lock_digest"; then
         exit 1
     fi
-    temporary_link="$VALIDATOR_RUNTIME_BASE/.current-$$"
+
+    VALIDATOR_RUNTIME_CANDIDATE_NAME="$snapshot_name"
+    if [[ -L "$VALIDATOR_RUNTIME_CURRENT" ]]; then
+        VALIDATOR_RUNTIME_PREVIOUS_NAME="$(
+            PATH="$SERVICE_PATH" readlink "$VALIDATOR_RUNTIME_CURRENT"
+        )"
+        VALIDATOR_RUNTIME_HAD_PREVIOUS=1
+    fi
+}
+
+activate_validator_runtime_toolchain() {
+    local temporary_link="$VALIDATOR_RUNTIME_BASE/.current-$$"
+
+    if [[ ! "$VALIDATOR_RUNTIME_CANDIDATE_NAME" =~ ^v3-[0-9a-f]{64}-[0-9a-f]{40}$ ]]; then
+        echo "Error: validator runtime candidate was not prepared." >&2
+        return 1
+    fi
     rm -f -- "$temporary_link"
-    ln -s "$snapshot_name" "$temporary_link"
+    ln -s "$VALIDATOR_RUNTIME_CANDIDATE_NAME" "$temporary_link"
     mv -Tf "$temporary_link" "$VALIDATOR_RUNTIME_CURRENT"
-    PATH="$SERVICE_PATH" flock -u "$validator_runtime_lock_fd"
+    VALIDATOR_RUNTIME_ACTIVATED=1
+}
+
+release_validator_runtime_lock() {
+    if [[ -n "$VALIDATOR_RUNTIME_LOCK_FD" ]]; then
+        PATH="$SERVICE_PATH" flock -u "$VALIDATOR_RUNTIME_LOCK_FD" || true
+        exec {VALIDATOR_RUNTIME_LOCK_FD}>&-
+        VALIDATOR_RUNTIME_LOCK_FD=""
+    fi
+}
+
+rollback_validator_runtime_install() {
+    local status="$?"
+    local temporary_link="$VALIDATOR_RUNTIME_BASE/.rollback-current-$$"
+    local rollback_failed=0
+
+    trap - ERR
+    set +e
+    if [[ "$VALIDATOR_RUNTIME_ACTIVATED" -eq 1 ]]; then
+        if [[ "$VALIDATOR_RUNTIME_HAD_PREVIOUS" -eq 1 ]]; then
+            rm -f -- "$temporary_link"
+            if ! ln -s "$VALIDATOR_RUNTIME_PREVIOUS_NAME" "$temporary_link" \
+                || ! mv -Tf "$temporary_link" "$VALIDATOR_RUNTIME_CURRENT"; then
+                echo "Error: failed to restore the previous validator runtime pointer." >&2
+                rollback_failed=1
+            fi
+        elif ! rm -f -- "$VALIDATOR_RUNTIME_CURRENT"; then
+            echo "Error: failed to remove the validator runtime pointer during rollback." >&2
+            rollback_failed=1
+        fi
+        "$SYSTEMCTL_BIN" --user daemon-reload >/dev/null 2>&1 || true
+        if [[ "$server_scope" == "user" ]]; then
+            "$SYSTEMCTL_BIN" --user restart polyscope-server.service \
+                >/dev/null 2>&1 || true
+        fi
+    fi
+    release_validator_runtime_lock
+    if [[ "$rollback_failed" -ne 0 ]]; then
+        echo "Error: validator runtime rollback was incomplete." >&2
+    fi
+    exit "$status"
 }
 
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
@@ -606,7 +668,8 @@ if [[ "$server_scope" == "system" ]]; then
     fi
 fi
 
-install_validator_runtime_toolchain
+prepare_validator_runtime_toolchain
+trap rollback_validator_runtime_install ERR
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$CODEX_HOME_DIR" "$POLYSCOPE_GIT_BIN_DIR" "$(dirname -- "$POLYSCOPE_EXPOSE_BIN")" "$(dirname -- "$POLYSCOPE_EXPOSE_REAL_BIN")"
 ln -sfn "$SOURCE_SCRIPT" "$INSTALL_TARGET"
@@ -811,6 +874,7 @@ WantedBy=timers.target
 EOF
 
 "$SYSTEMCTL_BIN" --user daemon-reload
+activate_validator_runtime_toolchain
 
 if [[ "$server_scope" == "user" ]]; then
     "$SYSTEMCTL_BIN" --user enable --now polyscope-server.service
@@ -828,6 +892,9 @@ fi
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.path
 "$SYSTEMCTL_BIN" --user enable --now polyscope-worktree-provision.timer
 "$SYSTEMCTL_BIN" --user enable --now polyscope-clone-reaper.timer
+
+trap - ERR
+release_validator_runtime_lock
 
 echo "Installed $INSTALL_TARGET"
 echo "Installed $EXPOSE_WRAPPER_TARGET"

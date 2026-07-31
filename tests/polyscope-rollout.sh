@@ -6139,6 +6139,9 @@ fi
 if [[ "${1:-}" == "show" && "${2:-}" == "-p" && "${3:-}" == "User" && "${4:-}" == "--value" && "${5:-}" == "polyscope-server.service" ]]; then
     printf '%s\n' "${FAKE_SYSTEM_POLYSCOPE_SERVER_USER:-}"
 fi
+if [[ -n "${SYSTEMCTL_FAIL_MATCH:-}" && "$*" == *"$SYSTEMCTL_FAIL_MATCH"* ]]; then
+    exit 71
+fi
 exit 0
 STUB
 chmod +x "$fake_systemctl_dir/systemctl"
@@ -6685,7 +6688,7 @@ grep -Fq 'npm ci --prefix "$staging_dir" --offline --ignore-scripts' \
 grep -Fq 'npm ci --prefix "$staging_dir" --offline --ignore-scripts' \
     "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
 # shellcheck disable=SC2016 # Installer variables are literal source assertions.
-grep -Fq 'PATH="$SERVICE_PATH" flock "$validator_runtime_lock_fd"' "$INSTALL_SCRIPT"
+grep -Fq 'PATH="$SERVICE_PATH" flock "$VALIDATOR_RUNTIME_LOCK_FD"' "$INSTALL_SCRIPT"
 # shellcheck disable=SC2016 # Installer variables are literal source assertions.
 grep -Fq 'PATH="$SERVICE_PATH" sha256sum "$VALIDATOR_PACKAGE_LOCK"' "$INSTALL_SCRIPT"
 # shellcheck disable=SC2016 # Installer variables are literal source assertions.
@@ -7107,7 +7110,64 @@ newer_snapshot_target="$(readlink "$freshness_current")"
 grep -qxF "source_commit=$newer_source_commit" \
     "$freshness_current/.secpal-validator-snapshot"
 
-git -C "$freshness_source_root" checkout --quiet HEAD^
+# Publishing a candidate is not activation. A later installer failure must
+# leave existing services on the previously committed snapshot.
+printf '\n' >>"$freshness_source_root/package-lock.json"
+git -C "$freshness_source_root" add package-lock.json
+git -C "$freshness_source_root" commit --quiet -m "fixture: prepare failed validator activation"
+failed_candidate_commit="$(git -C "$freshness_source_root" rev-parse HEAD)"
+blocked_bin_parent="$workspace/blocked-validator-bin-parent"
+printf 'not a directory\n' >"$blocked_bin_parent"
+failed_activation_error="$workspace/failed-validator-activation.error"
+failed_activation_exit=0
+env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    FAKE_EXPOSE_REAL_LOG="$fake_expose_real_log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
+        --bin-dir "$blocked_bin_parent/bin" \
+        --unit-dir "$fake_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+        2>"$failed_activation_error" \
+    || failed_activation_exit=$?
+if [[ "$failed_activation_exit" -eq 0 ]]; then
+    echo "failed user installation must not activate its validator candidate" >&2
+    exit 1
+fi
+grep -qF "$failed_candidate_commit" \
+    "$home_dir/.local/share/polyscope/ai-instruction-validator/v3-"*"-$failed_candidate_commit/.secpal-validator-snapshot"
+test "$(readlink "$freshness_current")" = "$newer_snapshot_target"
+
+# A service failure after activation must roll the current pointer back too.
+failed_service_activation_exit=0
+env HOME="$home_dir" \
+    CODEX_HOME="$fake_codex_home" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SYSTEMCTL_FAIL_MATCH='enable --now polyscope-rollout-sync.path' \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/user-sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+        --source-script "$freshness_source_root/scripts/polyscope-rollout.py" \
+        --bin-dir "$fake_bin_dir" \
+        --unit-dir "$fake_unit_dir" \
+        --polyscope-server-bin "$fake_server_bin" \
+    || failed_service_activation_exit=$?
+if [[ "$failed_service_activation_exit" -eq 0 ]]; then
+    echo "failed service activation must roll back its validator candidate" >&2
+    exit 1
+fi
+test "$(readlink "$freshness_current")" = "$newer_snapshot_target"
+
+git -C "$freshness_source_root" checkout --quiet "$newer_source_commit^"
 stale_source_error="$workspace/stale-validator-source.error"
 stale_source_exit=0
 env HOME="$home_dir" \

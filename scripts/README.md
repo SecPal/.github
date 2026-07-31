@@ -513,8 +513,9 @@ successfully. Before switching `current`, the installers prove that the
 candidate source commit descends from the active one; a delayed stale publisher
 or unrelated custom bundle fails closed. A legacy `v2-` snapshot migrates only
 when its lock digest matches the candidate. The privileged publisher opens its
-shared lock and reads service-owned snapshot data as `secpal`, and activates the
-prepared pointer inside the system-component rollback transaction. A custom
+shared lock and reads service-owned snapshot data as `secpal`. Both installers
+activate the prepared pointer inside their complete transaction and restore the
+prior pointer if a later service operation fails. A custom
 `SECPAL_AI_VALIDATOR_RUNTIME_BASE` must be absolute and contain no whitespace.
 An explicitly selected snapshot never falls back to a global Markdownlint. The
 rollout still watches the runtime files and npm lock state for rollout changes

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 MANAGED_REPOSITORIES = (
@@ -65,6 +66,10 @@ EXIT_OR_RETURN = re.compile(r"\b(?:exit|return)(?:\s+([^;\s]+))?")
 FALSE_COMMAND = re.compile(r"(?:^|[;&|]\s*)false(?:\s*(?:[;&|]|$))")
 PYTHON_EXIT = re.compile(
     r"(?:sys\.exit\s*\(\s*([^)]*)\)|raise\s+SystemExit(?:\s*\(\s*([^)]*)\)|\s+([^;\s]+))?)"
+)
+PYTHON_RETURN = re.compile(r"\breturn(?:\s+([^#;\s]+))?")
+PYTHON_STATUS_CALL = re.compile(
+    r"(?:sys\.exit\s*\(|raise\s+SystemExit\s*\()\s*([A-Za-z_]\w*)\s*\("
 )
 JAVASCRIPT_EXIT = re.compile(
     r"(?:process|Deno|Bun)\.exit\s*\(\s*([^)]*)\)"
@@ -265,9 +270,32 @@ def indentation_block(lines: list[str], index: int) -> list[str]:
 
 
 def python_hard_size_exit(lines: list[str]) -> bool:
+    source_without_comments = "\n".join(
+        re.sub(r"#.*$", "", line) for line in lines
+    )
+    process_status_functions = {
+        match.group(1)
+        for match in PYTHON_STATUS_CALL.finditer(source_without_comments)
+    }
     for index, line in enumerate(lines):
         if not re.search(r"\bif\b", line) or not size_comparison(line):
             continue
+        condition_indent = len(line) - len(line.lstrip())
+        containing_function: str | None = None
+        for candidate in reversed(lines[:index]):
+            if not candidate.strip():
+                continue
+            indent = len(candidate) - len(candidate.lstrip())
+            if indent >= condition_indent:
+                continue
+            function = re.match(
+                r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(", candidate
+            )
+            if function is not None:
+                containing_function = function.group(1)
+                break
+            if indent == 0:
+                break
         for candidate in indentation_block(lines, index):
             for termination in PYTHON_EXIT.finditer(candidate):
                 status = next(
@@ -280,6 +308,12 @@ def python_hard_size_exit(lines: list[str]) -> bool:
                 )
                 if nonzero_status(status, empty_is_failure=False):
                     return True
+            if containing_function in process_status_functions:
+                for termination in PYTHON_RETURN.finditer(candidate):
+                    if nonzero_status(
+                        termination.group(1), empty_is_failure=False
+                    ):
+                        return True
     return False
 
 
@@ -308,15 +342,21 @@ def javascript_hard_size_exit(lines: list[str]) -> bool:
     return False
 
 
+def is_workflow_policy(root: Path, path: Path) -> bool:
+    relative = path.relative_to(root)
+    parts = relative.parts
+    return path.suffix.lower() in {".yml", ".yaml"} and (
+        (len(parts) >= 3 and parts[:2] == (".github", "workflows"))
+        or (len(parts) >= 2 and parts[0] == "workflow-templates")
+        or (len(parts) >= 3 and parts[:2] == (".github", "workflow-templates"))
+    )
+
+
 def policy_language(root: Path, path: Path, text: str) -> str | None:
     relative = path.relative_to(root)
     parts = relative.parts
     suffix = path.suffix.lower()
-    if (
-        len(parts) >= 3
-        and parts[:2] == (".github", "workflows")
-        and suffix in {".yml", ".yaml"}
-    ):
+    if is_workflow_policy(root, path):
         return "shell"
 
     policy_root = bool(parts) and parts[0] in POLICY_ROOTS
@@ -333,11 +373,55 @@ def policy_language(root: Path, path: Path, text: str) -> str | None:
     return None
 
 
-def workflow_steps(lines: list[str]) -> list[list[str]]:
+@dataclass(frozen=True)
+class WorkflowUnit:
+    language: str
+    lines: list[str]
+    blocking: bool
+
+
+def workflow_jobs(lines: list[str]) -> list[list[str]]:
+    jobs: list[list[str]] = []
+    jobs_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.match(r"^(\s*)jobs:\s*(?:#.*)?$", line)
+        ),
+        None,
+    )
+    if jobs_index is None:
+        return jobs
+    jobs_indent = len(lines[jobs_index]) - len(lines[jobs_index].lstrip())
+    current: list[str] = []
+    job_indent: int | None = None
+    for line in lines[jobs_index + 1 :]:
+        if not line.strip():
+            if current:
+                current.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= jobs_indent:
+            break
+        job = re.match(r"^(\s*)[A-Za-z0-9_-]+:\s*(?:#.*)?$", line)
+        if job is not None and (job_indent is None or indent == job_indent):
+            if current:
+                jobs.append(current)
+            job_indent = indent
+            current = [line]
+            continue
+        if current:
+            current.append(line)
+    if current:
+        jobs.append(current)
+    return jobs
+
+
+def workflow_steps(job: list[str]) -> list[list[str]]:
     steps: list[list[str]] = []
     index = 0
-    while index < len(lines):
-        match = re.match(r"^(\s*)steps:\s*(?:#.*)?$", lines[index])
+    while index < len(job):
+        match = re.match(r"^(\s*)steps:\s*(?:#.*)?$", job[index])
         if match is None:
             index += 1
             continue
@@ -345,8 +429,8 @@ def workflow_steps(lines: list[str]) -> list[list[str]]:
         index += 1
         current: list[str] = []
         item_indent: int | None = None
-        while index < len(lines):
-            line = lines[index]
+        while index < len(job):
+            line = job[index]
             if line.strip():
                 indent = len(line) - len(line.lstrip())
                 if indent <= steps_indent:
@@ -369,7 +453,46 @@ def workflow_steps(lines: list[str]) -> list[list[str]]:
     return steps
 
 
-def workflow_step_shell_units(step: list[str]) -> list[list[str]]:
+def workflow_literal_true(lines: list[str], key: str, indent: int) -> bool:
+    return any(
+        len(line) - len(line.lstrip()) == indent
+        and re.match(
+            rf"^\s*{re.escape(key)}:\s*true\s*(?:#.*)?$", line, re.IGNORECASE
+        )
+        is not None
+        for line in lines
+    )
+
+
+def workflow_runner_language(step: list[str], property_indent: int) -> str:
+    shell = next(
+        (
+            match.group(1).strip().strip("\"'").lower()
+            for line in step
+            if len(line) - len(line.lstrip()) == property_indent
+            and (match := re.match(r"^\s*shell:\s*([^#]+?)\s*(?:#.*)?$", line))
+        ),
+        "bash",
+    )
+    shell_parts = shell.split()
+    if not shell_parts:
+        return "unknown"
+    executable = shell_parts[0]
+    if executable.startswith("python"):
+        return "python"
+    if executable in {"node", "deno", "bun"}:
+        return "javascript"
+    if re.search(r"(?:^|/)(?:ba|da|k|z)?sh$", executable):
+        return "shell"
+    return "unknown"
+
+
+def workflow_step_units(
+    step: list[str], *, job_blocking: bool
+) -> list[WorkflowUnit]:
+    property_indent = min(
+        len(line) - len(line.lstrip()) for line in step if line.strip()
+    )
     size_conditions = [
         match.group(1)
         for line in step
@@ -378,7 +501,11 @@ def workflow_step_shell_units(step: list[str]) -> list[list[str]]:
         )
         and size_comparison(match.group(1))
     ]
-    units: list[list[str]] = []
+    language = workflow_runner_language(step, property_indent)
+    blocking = job_blocking and not workflow_literal_true(
+        step, "continue-on-error", property_indent
+    )
+    units: list[WorkflowUnit] = []
     for index, line in enumerate(step):
         match = re.match(r"^(\s*)run:\s*(.*)$", line)
         if match is None:
@@ -396,31 +523,57 @@ def workflow_step_shell_units(step: list[str]) -> list[list[str]]:
         else:
             block = [scalar.strip("\"'")]
         condition_lines = [f"if {condition}" for condition in size_conditions]
-        units.append(condition_lines + block)
+        units.append(WorkflowUnit(language, condition_lines + block, blocking))
     return units
 
 
-def workflow_shell_units(text: str) -> list[list[str]]:
-    return [
-        unit
-        for step in workflow_steps(text.splitlines())
-        for unit in workflow_step_shell_units(step)
-    ]
+def workflow_units(text: str) -> list[WorkflowUnit]:
+    units: list[WorkflowUnit] = []
+    for job in workflow_jobs(text.splitlines()):
+        job_indent = len(job[0]) - len(job[0].lstrip())
+        property_indent = next(
+            (
+                len(line) - len(line.lstrip())
+                for line in job[1:]
+                if re.match(r"^\s*[A-Za-z][A-Za-z0-9_-]*:", line)
+                and len(line) - len(line.lstrip()) > job_indent
+            ),
+            job_indent + 2,
+        )
+        job_blocking = not workflow_literal_true(
+            job, "continue-on-error", property_indent
+        )
+        for step in workflow_steps(job):
+            units.extend(workflow_step_units(step, job_blocking=job_blocking))
+    return units
+
+
+def workflow_unit_hard_size_exit(unit: WorkflowUnit) -> bool:
+    if not unit.blocking:
+        return False
+    if unit.language == "shell":
+        return shell_hard_size_exit(unit.lines, errexit_default=True)
+    if unit.language == "python":
+        return python_hard_size_exit(unit.lines)
+    if unit.language == "javascript":
+        return javascript_hard_size_exit(unit.lines)
+    return any(
+        detector(unit.lines)
+        for detector in (
+            python_hard_size_exit,
+            javascript_hard_size_exit,
+        )
+    ) or shell_hard_size_exit(unit.lines, errexit_default=True)
 
 
 def hard_size_exit(root: Path, path: Path, text: str) -> bool:
     language = policy_language(root, path, text)
     lines = text.splitlines()
     if language == "shell":
-        relative = path.relative_to(root)
-        if (
-            len(relative.parts) >= 3
-            and relative.parts[:2] == (".github", "workflows")
-            and path.suffix.lower() in {".yml", ".yaml"}
-        ):
+        if is_workflow_policy(root, path):
             return any(
-                shell_hard_size_exit(unit, errexit_default=True)
-                for unit in workflow_shell_units(text)
+                workflow_unit_hard_size_exit(unit)
+                for unit in workflow_units(text)
             )
         return shell_hard_size_exit(lines)
     if language == "python":
@@ -446,10 +599,7 @@ def reusable_workflow_contract_failures(text: str) -> list[str]:
         failures.append("unused pull-request permission")
     if ".preflight-allow-large-pr" in text or "large-pr-approved" in text:
         failures.append("obsolete size override")
-    if any(
-        shell_hard_size_exit(unit, errexit_default=True)
-        for unit in workflow_shell_units(text)
-    ):
+    if any(workflow_unit_hard_size_exit(unit) for unit in workflow_units(text)):
         failures.append("size-triggered nonzero exit")
     return sorted(set(failures))
 

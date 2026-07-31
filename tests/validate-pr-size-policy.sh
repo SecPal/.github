@@ -163,12 +163,116 @@ jobs:
         run: exit 1
 EOF
 
+make_repo workflow-template-advisory
+mkdir -p "$workspace/workflow-template-advisory/workflow-templates"
+cat >"$workspace/workflow-template-advisory/workflow-templates/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - run: echo "PR size advisory threshold is $CHANGED"
+EOF
+
+make_repo workflow-template-hard-exit
+mkdir -p "$workspace/workflow-template-hard-exit/workflow-templates"
+cat >"$workspace/workflow-template-hard-exit/workflow-templates/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - run: |
+          if [ "$CHANGED" -gt 600 ]; then
+            exit 1
+          fi
+EOF
+
+make_repo workflow-python-hard-exit
+cat >"$workspace/workflow-python-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - shell: python
+        run: |
+          import sys
+          if changed_lines > 600:
+              sys.exit(1)
+EOF
+
+make_repo workflow-javascript-hard-exit
+cat >"$workspace/workflow-javascript-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - shell: node {0}
+        run: |
+          if (changedLines > 600) {
+            process.exit(1);
+          }
+EOF
+
+make_repo workflow-nonblocking-step
+cat >"$workspace/workflow-nonblocking-step/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - continue-on-error: true
+        run: |
+          if [ "$CHANGED" -gt 600 ]; then
+            exit 1
+          fi
+EOF
+
+make_repo workflow-nonblocking-job
+cat >"$workspace/workflow-nonblocking-job/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    continue-on-error: true
+    steps:
+      - run: |
+          if [ "$CHANGED" -gt 600 ]; then
+            exit 1
+          fi
+EOF
+
+make_repo workflow-blocking-step
+cat >"$workspace/workflow-blocking-step/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - continue-on-error: false
+        run: |
+          if [ "$CHANGED" -gt 600 ]; then
+            exit 1
+          fi
+EOF
+
 make_repo python-exit
 cat >"$workspace/python-exit/scripts/check_pr_size.py" <<'EOF'
 import sys
 
 if changed_lines > 600:
     sys.exit(1)
+EOF
+
+make_repo python-return-exit
+cat >"$workspace/python-return-exit/scripts/check_pr_size.py" <<'EOF'
+def main():
+    if policy_enabled:
+        if changed_lines > max_lines:
+            return 1
+    return 0
+
+
+raise SystemExit(main())
+EOF
+
+make_repo python-library-return
+cat >"$workspace/python-library-return/scripts/report_pr_size.py" <<'EOF'
+def report(changed_lines, max_lines):
+    if changed_lines > max_lines:
+        return 1
+    return 0
+
+
+# raise SystemExit(report(changed_lines, max_lines))
 EOF
 
 make_repo javascript-exit
@@ -231,8 +335,12 @@ bash "$validator" \
   "$workspace/no-gate" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" \
+  "$workspace/python-library-return" \
   "$workspace/suffixless-binary" \
   "$workspace/workflow-step-boundary" \
+  "$workspace/workflow-nonblocking-job" \
+  "$workspace/workflow-nonblocking-step" \
+  "$workspace/workflow-template-advisory" \
   "$repo_root" >"$workspace/pass.out"
 grep -Fq "advisory: PASS" "$workspace/pass.out"
 grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
@@ -241,8 +349,12 @@ grep -Fq "errexit-disabled: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
+grep -Fq "python-library-return: PASS" "$workspace/pass.out"
 grep -Fq "suffixless-binary: PASS" "$workspace/pass.out"
 grep -Fq "workflow-step-boundary: PASS" "$workspace/pass.out"
+grep -Fq "workflow-nonblocking-job: PASS" "$workspace/pass.out"
+grep -Fq "workflow-nonblocking-step: PASS" "$workspace/pass.out"
+grep -Fq "workflow-template-advisory: PASS" "$workspace/pass.out"
 
 for invalid in \
   alternate-workflow-name \
@@ -256,9 +368,14 @@ for invalid in \
   override-file \
   label-override \
   python-exit \
+  python-return-exit \
   unreadable-policy \
   workflow-if-hard-exit \
+  workflow-blocking-step \
   workflow-failure \
+  workflow-javascript-hard-exit \
+  workflow-python-hard-exit \
+  workflow-template-hard-exit \
   exit-three \
   lowercase-variable \
   dynamic-exit \

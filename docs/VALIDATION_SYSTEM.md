@@ -96,9 +96,11 @@ contents, or nest a losing staging directory inside the winning target. The
 user installer executes validator tools through the same service `PATH` that it
 validated. The privileged installer opens the shared publication lock and reads
 service-owned snapshot contents as the `secpal` user. It prepares the candidate
-while holding that lock but moves `current` only inside the system-component
-rollback transaction, so a failed component install restores the prior pointer
-with the prior files. User-scoped runtime-root overrides must be absolute
+while holding that lock but moves `current` only inside the corresponding
+installer transaction. Both installers retain the lock through activation and
+restore the prior pointer when a later service operation fails; the privileged
+installer also restores its prior component files. User-scoped runtime-root
+overrides must be absolute
 because the generated services have independent working directories. An absent
 offline npm cache, incomparable source history, or unsafe runtime root fails
 closed.
