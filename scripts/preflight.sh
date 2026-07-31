@@ -514,6 +514,8 @@ else
             echo "⚠️  WARNING: .preflight-exclude contains pattern that matches EVERYTHING (e.g., '.*')" >&2
             echo "This will exclude all files from PR size calculation!" >&2
           fi
+
+          DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
         else
           # Invalid regex - grep failed even on empty input
           echo "⚠️  WARNING: .preflight-exclude contains invalid regex pattern(s)" >&2
@@ -521,9 +523,6 @@ else
           echo "Common issues: unbalanced brackets [, unmatched (, trailing backslash \\" >&2
         fi
 
-        # Use -- to prevent patterns starting with - from being interpreted as flags
-        # || true prevents script exit if pattern is invalid
-        DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
       fi
     fi
 

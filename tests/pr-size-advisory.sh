@@ -356,6 +356,46 @@ assert_not_contains \
   "::warning::PR size advisory threshold exceeded" \
   "hosted excluded changes must not trigger the advisory warning"
 
+invalid_workflow_repo="$workspace/workflow-invalid-exclusion"
+invalid_workflow_output="$workspace/workflow-invalid-exclusion.out"
+invalid_local_stdout="$workspace/local-invalid-exclusion.stdout"
+invalid_local_stderr="$workspace/local-invalid-exclusion.stderr"
+create_preflight_fixture "$invalid_workflow_repo"
+make_lines 601 "$invalid_workflow_repo/source/large.txt"
+printf '[\n' >"$invalid_workflow_repo/.preflight-exclude"
+(
+  cd "$invalid_workflow_repo"
+  git add source/large.txt .preflight-exclude
+  git commit --quiet -m "test: create hosted invalid exclusion"
+)
+run_preflight_fixture \
+  "$invalid_workflow_repo" \
+  "$invalid_local_stdout" \
+  "$invalid_local_stderr"
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "local preflight must safely ignore invalid exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$invalid_local_stderr" \
+  ".preflight-exclude contains invalid regex pattern" \
+  "local preflight must report an invalid exclusion"
+assert_contains \
+  "$invalid_local_stderr" \
+  "PR size: 604 changed lines" \
+  "an invalid exclusion must not hide a large local diff"
+run_workflow_fixture "$invalid_workflow_repo" "$invalid_workflow_output" ""
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "reusable workflow shell must safely ignore invalid exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$invalid_workflow_output" \
+  ".preflight-exclude contains invalid regex pattern(s)" \
+  "reusable workflow must report an invalid exclusion"
+assert_contains \
+  "$invalid_workflow_output" \
+  "PR size: 604 changed lines" \
+  "an invalid exclusion must not hide a large hosted-workflow diff"
+
 policy_files=(
   "$REPO_ROOT/README.md"
   "$REPO_ROOT/CONTRIBUTING.md"
