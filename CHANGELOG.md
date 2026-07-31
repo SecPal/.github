@@ -16,7 +16,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - registered `test:container` as a focused frontend container-contract check
 - registered `test:e2e:container` as a focused real-container browser check
 - kept both Docker-backed targets out of unconditional complete validation and
-  required explicit current authorization for local Docker daemon access
+  required explicit current authorization for Docker daemon and outbound
+  container-registry and npm-registry network access
 - kept publishing, deployment, and other environment-connected checks subject
   to separate explicit authorization
 - continued to derive Required Checks from live rulesets and branch protection

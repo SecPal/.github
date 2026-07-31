@@ -393,22 +393,35 @@ expected_manual_gates = [
     ),
     (
         "The deterministic local `npm run test:e2e:csp` target may be selected "
-        "when UI or CSP behavior is affected. The deterministic local "
+        "when UI or CSP behavior is affected. The local Docker-backed "
         "`npm run test:container` target may be selected when Dockerfile, image, "
         "Nginx, entrypoint, runtime configuration, PWA cache, or container-contract "
-        "behavior is affected. The deterministic local `npm run test:e2e:container` "
+        "behavior is affected. The local Docker-backed `npm run test:e2e:container` "
         "target may be selected when container-browser, runtime-origin, CSP, "
-        "service-worker, or real HTTP delivery behavior is affected. Each local "
-        "container command requires explicit current user authorization for Docker "
-        "daemon access; authorization from an earlier task does not carry over. "
+        "service-worker, or real HTTP delivery behavior is affected. Each container "
+        "command requires explicit current user authorization for Docker daemon "
+        "access and outbound container-registry and npm-registry network access; "
+        "authorization from an earlier task does not carry over. "
         "Live, workspace, Lighthouse, deployment, and other environment-connected "
         "targets require separate explicit user authorization. Image publishing, "
         "registry login, push, prune, and deployment remain prohibited."
     ),
 ]
 assert frontend["manual_gates"] == expected_manual_gates, (
-    "SecPal/frontend must distinguish deterministic local CSP and container "
-    "targets from separately authorized environment-connected targets"
+    "SecPal/frontend must distinguish deterministic local CSP and Docker-backed "
+    "container targets from separately authorized environment-connected targets"
+)
+container_gate = frontend["manual_gates"][1]
+assert "local Docker-backed" in container_gate, (
+    "SecPal/frontend must not describe network-capable container targets as "
+    "deterministic local commands"
+)
+assert (
+    "Docker daemon access and outbound container-registry and npm-registry "
+    "network access"
+) in container_gate, (
+    "SecPal/frontend container targets must require current authorization for "
+    "both privileged Docker access and their transitive network access"
 )
 assert [
     command["argv"]
