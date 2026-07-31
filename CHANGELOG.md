@@ -25,6 +25,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-31 - Preserve Pull Request Size Reporting
+
+**Changed:**
+
+- invalid `.preflight-exclude` regular expressions are now ignored consistently
+  by local and hosted advisory reporting instead of hiding every changed line
+
 ## 2026-07-28 - Retire Changelog Polyscope Integration
 
 **Changed:**
