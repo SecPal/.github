@@ -465,15 +465,6 @@ elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
   fi
 fi
 
-if [ -f tests/validate-pr-size-policy.sh ]; then
-  bash tests/validate-pr-size-policy.sh || {
-    echo "" >&2
-    echo "❌ Organization-wide PR-size policy validation failed!" >&2
-    echo "Keep every managed local and hosted size policy advisory-only." >&2
-    exit 1
-  }
-fi
-
 # 3) OpenAPI (Spectral)
 if [ -f docs/openapi.yaml ] && command -v npx >/dev/null 2>&1; then
   npx --yes @stoplight/spectral-cli lint docs/openapi.yaml

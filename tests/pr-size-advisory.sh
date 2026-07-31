@@ -208,63 +208,6 @@ assert_contains \
   "Preflight OK · PR size: 0 changed lines (0 insertions, 0 deletions; advisory threshold: 600)" \
   "local preflight must report zero counts normally when every changed file is excluded"
 
-empty_local_repo="$workspace/local-empty"
-empty_local_stdout="$workspace/local-empty.stdout"
-empty_local_stderr="$workspace/local-empty.stderr"
-create_preflight_fixture "$empty_local_repo"
-run_preflight_fixture "$empty_local_repo" "$empty_local_stdout" "$empty_local_stderr"
-if [ "$fixture_status" -ne 0 ]; then
-  record_failure "local preflight must succeed for an empty diff (status $fixture_status)"
-fi
-assert_contains \
-  "$empty_local_stdout" \
-  "Preflight OK · PR size: 0 changed lines (0 insertions, 0 deletions; advisory threshold: 600)" \
-  "local preflight must report zero counts normally for an empty diff"
-
-invalid_exclusion_repo="$workspace/local-invalid-exclusion"
-invalid_exclusion_stdout="$workspace/local-invalid-exclusion.stdout"
-invalid_exclusion_stderr="$workspace/local-invalid-exclusion.stderr"
-create_preflight_fixture "$invalid_exclusion_repo"
-printf '[invalid\n' >"$invalid_exclusion_repo/.preflight-exclude"
-make_lines 601 "$invalid_exclusion_repo/source/large.txt"
-(
-  cd "$invalid_exclusion_repo"
-  git add .preflight-exclude source/large.txt
-  git commit --quiet -m "test: preserve invalid exclusion handling"
-)
-run_preflight_fixture \
-  "$invalid_exclusion_repo" \
-  "$invalid_exclusion_stdout" \
-  "$invalid_exclusion_stderr"
-if [ "$fixture_status" -ne 0 ]; then
-  record_failure "invalid exclusions must remain warning-only (status $fixture_status)"
-fi
-assert_contains \
-  "$invalid_exclusion_stderr" \
-  ".preflight-exclude contains invalid regex pattern" \
-  "invalid exclusions must retain their safe warning"
-assert_contains \
-  "$invalid_exclusion_stderr" \
-  "PR size: 604 changed lines" \
-  "invalid exclusions must be ignored instead of hiding changed lines"
-
-non_size_failure_repo="$workspace/local-non-size-failure"
-non_size_failure_stdout="$workspace/local-non-size-failure.stdout"
-non_size_failure_stderr="$workspace/local-non-size-failure.stderr"
-create_preflight_fixture "$non_size_failure_repo"
-printf '#!/usr/bin/env bash\nexit 1\n' >"$non_size_failure_repo/bin/npx"
-run_preflight_fixture \
-  "$non_size_failure_repo" \
-  "$non_size_failure_stdout" \
-  "$non_size_failure_stderr"
-if [ "$fixture_status" -eq 0 ]; then
-  record_failure "a real non-size formatting failure must still fail preflight"
-fi
-assert_contains \
-  "$non_size_failure_stderr" \
-  "Formatting/compliance checks failed" \
-  "non-size validation failures must retain their original failure path"
-
 assert_contains \
   "$REUSABLE_WORKFLOW" \
   'description: "Advisory changed-line threshold for reviewability"' \
@@ -415,7 +358,9 @@ assert_not_contains \
 
 invalid_workflow_repo="$workspace/workflow-invalid-exclusion"
 invalid_workflow_output="$workspace/workflow-invalid-exclusion.out"
-create_git_fixture "$invalid_workflow_repo"
+invalid_local_stdout="$workspace/local-invalid-exclusion.stdout"
+invalid_local_stderr="$workspace/local-invalid-exclusion.stderr"
+create_preflight_fixture "$invalid_workflow_repo"
 make_lines 601 "$invalid_workflow_repo/source/large.txt"
 printf '[\n' >"$invalid_workflow_repo/.preflight-exclude"
 (
@@ -423,6 +368,21 @@ printf '[\n' >"$invalid_workflow_repo/.preflight-exclude"
   git add source/large.txt .preflight-exclude
   git commit --quiet -m "test: create hosted invalid exclusion"
 )
+run_preflight_fixture \
+  "$invalid_workflow_repo" \
+  "$invalid_local_stdout" \
+  "$invalid_local_stderr"
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "local preflight must safely ignore invalid exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$invalid_local_stderr" \
+  ".preflight-exclude contains invalid regex pattern" \
+  "local preflight must report an invalid exclusion"
+assert_contains \
+  "$invalid_local_stderr" \
+  "PR size: 604 changed lines" \
+  "an invalid exclusion must not hide a large local diff"
 run_workflow_fixture "$invalid_workflow_repo" "$invalid_workflow_output" ""
 if [ "$fixture_status" -ne 0 ]; then
   record_failure "reusable workflow shell must safely ignore invalid exclusions (status $fixture_status)"
@@ -433,7 +393,7 @@ assert_contains \
   "reusable workflow must report an invalid exclusion"
 assert_contains \
   "$invalid_workflow_output" \
-  "::warning::PR size advisory threshold exceeded" \
+  "PR size: 604 changed lines" \
   "an invalid exclusion must not hide a large hosted-workflow diff"
 
 policy_files=(

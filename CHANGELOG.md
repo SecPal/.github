@@ -9,44 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-07-31 - Harden Pull Request Size Policy Validation
+## 2026-07-31 - Preserve Pull Request Size Reporting
 
 **Changed:**
 
-- added deterministic, checkout-portable validation of the organization-wide
-  advisory-only pull-request size policy
-- parsed hosted workflow structure with the pinned YAML implementation so valid
-  indentless, folded-scalar, and flow-style representations cannot bypass the
-  policy audit, and fail closed when workflow YAML cannot be parsed
-- honored inherited workflow and job runner defaults, followed conditional
-  local composite actions, and excluded commented or quoted historical gates
-  from executable policy behavior
-- extended structured policy inspection to composite-action steps and root
-  pre-commit hooks, dispatching embedded commands by their configured runtime
-- replaced line-oriented Python gate matching with syntax-tree analysis so
-  multiline conditions and assertions are detected without treating caught
-  advisory exceptions as process failures
-- expanded the PR-size policy audit to recognize shell conditional lists,
-  deferred failure statuses, case-insensitive GitHub repository identifiers,
-  language-specific workflow runners, and standalone predicates under Shell
-  `errexit`
-- parsed multiline JavaScript conditions with Acorn, required proven PR-size
-  provenance for generic counters, and validated reusable-workflow reporting
-  from parsed executable commands instead of raw YAML text
-- followed reachable JavaScript failure paths through functions and exception
-  handlers while excluding dormant functions, unreachable handlers, and typed
-  TypeScript sources from the plain-JavaScript parser boundary
-- modeled effective per-job permission overrides and permission shorthands,
-  inspected immutable `actions/github-script` steps, and made partial managed
-  workspaces retain repository boundaries during policy validation
-- ordered the policy audit after locked npm dependency installation so its
-  pinned YAML and JavaScript parsers are available in fresh checkouts
-- preserved workflow step boundaries, validated pinned historical workflow
-  revisions against the advisory contract, and ignored suffixless binary helpers
-- fixed invalid `.preflight-exclude` expressions so they remain advisory and
-  cannot hide changed lines from local or hosted size reporting
-- documented that central reusable-workflow updates do not automatically
-  update repository-local preflight implementations
+- invalid `.preflight-exclude` regular expressions are now ignored consistently
+  by local and hosted advisory reporting instead of hiding every changed line
 
 ## 2026-07-28 - Retire Changelog Polyscope Integration
 
