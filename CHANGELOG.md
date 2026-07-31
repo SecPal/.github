@@ -18,6 +18,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - parsed hosted workflow structure with the pinned YAML implementation so valid
   indentless, folded-scalar, and flow-style representations cannot bypass the
   policy audit, and fail closed when workflow YAML cannot be parsed
+- honored inherited workflow and job runner defaults, followed conditional
+  local composite actions, and excluded commented or quoted historical gates
+  from executable policy behavior
 - extended structured policy inspection to composite-action steps and root
   pre-commit hooks, dispatching embedded commands by their configured runtime
 - replaced line-oriented Python gate matching with syntax-tree analysis so
@@ -27,6 +30,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   deferred failure statuses, case-insensitive GitHub repository identifiers,
   language-specific workflow runners, and standalone predicates under Shell
   `errexit`
+- parsed multiline JavaScript conditions with Acorn, required proven PR-size
+  provenance for generic counters, and validated reusable-workflow reporting
+  from parsed executable commands instead of raw YAML text
 - preserved workflow step boundaries, validated pinned historical workflow
   revisions against the advisory contract, and ignore suffixless binary helpers
 - fixed invalid `.preflight-exclude` expressions so they remain advisory and

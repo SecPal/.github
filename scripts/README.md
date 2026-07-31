@@ -105,15 +105,18 @@ instructions, unused size-override permissions, and mutable reusable-workflow
 references in every workflow filename. It fails closed on unreadable or
 non-UTF-8 policy inputs and workflow YAML that the repository-pinned `js-yaml`
 cannot parse. Node.js and the committed npm dependencies must be installed
-next to the validator source. Parsed workflow objects preserve step boundaries
-across indentless sequences, folded scalars, and flow-style collections.
-Composite-action steps and root pre-commit hook entries are parsed through the
+next to the validator source. Parsed workflow objects preserve step boundaries,
+effective workflow/job/step Shell defaults, conditions, and action references
+across indentless sequences, folded scalars, and flow-style collections. Local
+composite-action steps and root pre-commit hook entries are parsed through the
 same structured boundary and dispatched by their configured runtime. The audit
 recognizes compact and multi-line Shell conditional lists, deferred failure
 statuses, standalone Shell predicates under `errexit`, syntax-tree-aware Python
-conditions and assertions, and JavaScript policy entry points, while avoiding
-caught Python exceptions, ordinary application returns, or suffixless binary
-helpers.
+conditions and assertions, and Acorn-parsed JavaScript policy entry points. It
+ignores YAML, Shell, Python, and JavaScript comments and quoted Shell examples,
+requires explicit PR-size provenance for generic counters, and avoids treating
+caught exceptions, ordinary application returns, or suffixless binary helpers
+as policy failures.
 Immutable reusable-workflow references are
 loaded from the supplied governance Git checkout and checked against the
 advisory contract at that exact historical revision; callers with such a

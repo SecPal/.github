@@ -9,9 +9,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 python3 - "$SCRIPT_DIR/parse-pr-size-workflow.cjs" "$@" <<'PY'
 from __future__ import annotations
 
-import json
 import ast
+import json
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -61,6 +62,11 @@ SIZE_POLICY_CONTEXT = re.compile(
     r"\badvisory[- ]threshold\b|\b(?:CHANGED|TOTAL_CHANGES|MAX_LINES|PR_SIZE)\b)",
     re.IGNORECASE,
 )
+EXPLICIT_SIZE_CONTEXT = re.compile(
+    r"(?:\bPR[- ]?size\b|\bchanged[- ]lines?\b|\bsize[- ](?:limit|threshold)\b|"
+    r"\badvisory[- ]threshold\b)",
+    re.IGNORECASE,
+)
 SIZE_COMPARISON = re.compile(r"(?:-(?:gt|ge|lt|le)\b|[<>]=?)", re.IGNORECASE)
 IDENTIFIER = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 ASSIGNMENT = re.compile(
@@ -72,15 +78,7 @@ SIZE_CALCULATION = re.compile(
     r"--numstat[\s\S]{0,400}?\bgit\s+diff\b)",
     re.IGNORECASE,
 )
-EXIT_OR_RETURN = re.compile(r"\b(?:exit|return)(?:\s+([^;\s]+))?")
 FALSE_COMMAND = re.compile(r"(?:^|[;&|]\s*)false(?:\s*(?:[;&|]|$))")
-JAVASCRIPT_EXIT = re.compile(
-    r"(?:process|Deno|Bun)\.exit\s*\(\s*([^)]*)\)"
-)
-JAVASCRIPT_EXIT_CODE = re.compile(
-    r"\bprocess\.exitCode\s*(?:\|\|=|\?\?=|=)\s*([^;\s]+)"
-)
-JAVASCRIPT_THROW = re.compile(r"(?:^\s*|[;{}]\s*)throw\b")
 POLICY_ROOTS = {".githooks", ".github", ".husky", "scripts"}
 SHELL_SHEBANG = re.compile(rb"^#![^\r\n]*\b(?:ba|da|k|z)?sh\b")
 SHELL_ERREXIT_ENABLE = re.compile(
@@ -91,6 +89,10 @@ SHELL_ERREXIT_DISABLE = re.compile(
 )
 SHELL_TEST_COMMAND = re.compile(r"^\s*!?\s*(?:test\b|\[\[?(?:\s|$)|\(\()")
 WORKFLOW_PARSER = Path(sys.argv[1]).resolve()
+
+
+class PolicyParseError(RuntimeError):
+    pass
 
 
 def resolve_repositories(arguments: list[str]) -> list[Path]:
@@ -188,8 +190,10 @@ def canonical_identifier(value: str) -> str:
 
 def semantic_size_identifier(value: str) -> bool:
     normalized = canonical_identifier(value)
+    if value == "CHANGED":
+        return True
     return re.fullmatch(
-        r"(?:changed(?:_lines?)?|changes?|total_changes?|"
+        r"(?:changed_lines?|total_changes?|"
         r"diff_(?:size|lines?|count|changes?)|pr_size|"
         r"insertions?|deletions?|advisory_threshold|max_lines?)",
         normalized,
@@ -226,11 +230,20 @@ class SizeContext:
     @classmethod
     def from_lines(cls, lines: list[str]) -> SizeContext:
         assignments = assignment_expressions(lines)
+        source = "\n".join(lines)
+        explicit_context = EXPLICIT_SIZE_CONTEXT.search(source) is not None
+        diff_changed_context = re.search(
+            r"\bdiff\b[^\n]{0,120}\bchanged\b", source, re.IGNORECASE
+        ) is not None
         identifiers = {
             name.lower()
             for line in lines
             for name in IDENTIFIER.findall(line)
             if semantic_size_identifier(name)
+            or (
+                canonical_identifier(name) in {"changed", "changes"}
+                and (explicit_context or diff_changed_context)
+            )
         }
         changed = True
         while changed:
@@ -256,13 +269,85 @@ class SizeContext:
         )
 
 
+def shell_code_line(line: str) -> str:
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            continue
+        if character == "#" and (
+            index == 0
+            or line[index - 1].isspace()
+            or line[index - 1] in ";|&()"
+        ):
+            return line[:index].rstrip()
+    return line
+
+
+def shell_code_lines(lines: list[str]) -> list[str]:
+    return [shell_code_line(line) for line in lines]
+
+
+def shell_structure_line(line: str) -> str:
+    result: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for character in line:
+        if escaped:
+            result.append(" " if quote is not None else character)
+            escaped = False
+            continue
+        if character == "\\" and quote != "'":
+            result.append(character)
+            escaped = True
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+                result.append(character)
+            else:
+                result.append(" ")
+            continue
+        result.append(character)
+        if character in {"'", '"'}:
+            quote = character
+    return "".join(result)
+
+
+def shell_terminations(value: str) -> list[tuple[int, str | None]]:
+    structure = shell_structure_line(value)
+    result: list[tuple[int, str | None]] = []
+    for termination in re.finditer(r"\b(?:exit|return)\b", structure):
+        status_match = re.match(
+            r"\s+(\"[^\"]*\"|'[^']*'|[^;\s]+)", value[termination.end() :]
+        )
+        result.append(
+            (
+                termination.start(),
+                status_match.group(1) if status_match is not None else None,
+            )
+        )
+    return result
+
+
 def shell_failure_command(value: str) -> bool:
-    if FALSE_COMMAND.search(value):
+    structure = shell_structure_line(value)
+    if FALSE_COMMAND.search(structure):
         return True
-    for termination in EXIT_OR_RETURN.finditer(value):
-        status = termination.group(1)
+    for start, status in shell_terminations(value):
         if status is None:
-            prefix = value[: termination.start()].rstrip()
+            prefix = structure[:start].rstrip()
             if prefix.endswith("||"):
                 return True
             continue
@@ -294,8 +379,8 @@ def shell_deferred_failure(
             assignment = ASSIGNMENT.match(command)
             if assignment is not None:
                 active.discard(assignment.group(1).lower())
-            for termination in EXIT_OR_RETURN.finditer(command):
-                if shell_status_identifier(termination.group(1)) in active:
+            for _, status in shell_terminations(command):
+                if shell_status_identifier(status) in active:
                     return True
         if not active:
             return False
@@ -316,16 +401,17 @@ def shell_errexit_comparison(
     value: str, enabled: bool, context: SizeContext
 ) -> tuple[bool, bool]:
     for command in re.split(r"[;\n]", value):
-        if SHELL_ERREXIT_DISABLE.search(command):
+        structure = shell_structure_line(command)
+        if SHELL_ERREXIT_DISABLE.search(structure):
             enabled = False
-        elif SHELL_ERREXIT_ENABLE.search(command):
+        elif SHELL_ERREXIT_ENABLE.search(structure):
             enabled = True
         if (
             enabled
             and context.is_comparison(command)
-            and SHELL_TEST_COMMAND.search(command)
-            and "&&" not in command
-            and "||" not in command
+            and SHELL_TEST_COMMAND.search(structure)
+            and "&&" not in structure
+            and "||" not in structure
         ):
             return enabled, True
     return enabled, False
@@ -337,6 +423,7 @@ def shell_hard_size_exit(
     errexit_default: bool = False,
     context: SizeContext | None = None,
 ) -> bool:
+    lines = shell_code_lines(lines)
     context = context or SizeContext.from_lines(lines)
     errexit_enabled = errexit_default
     for index, line in enumerate(lines):
@@ -350,11 +437,14 @@ def shell_hard_size_exit(
             continue
 
         if (
-            "&&" in logical_command or "||" in logical_command
+            "&&" in shell_structure_line(logical_command)
+            or "||" in shell_structure_line(logical_command)
         ) and shell_failure_command(logical_command):
             return True
 
-        if not re.search(r"\bif\b", logical_command, re.IGNORECASE):
+        if not re.search(
+            r"\bif\b", shell_structure_line(logical_command), re.IGNORECASE
+        ):
             continue
         depth = 0
         opened = False
@@ -365,8 +455,12 @@ def shell_hard_size_exit(
         ):
             block_end = candidate_index
             stripped = candidate.strip()
+            structure = shell_structure_line(stripped)
             openings = len(
-                re.findall(r"(?:^|;\s*)if\b.*?(?:;\s*then\b|\bthen\b)", stripped)
+                re.findall(
+                    r"(?:^|;\s*)if\b.*?(?:;\s*then\b|\bthen\b)",
+                    structure,
+                )
             )
             if openings:
                 depth += openings
@@ -379,7 +473,7 @@ def shell_hard_size_exit(
             ):
                 deferred_failure_identifiers.add(assignment.group(1).lower())
             if opened:
-                depth -= len(re.findall(r"\bfi\b", stripped))
+                depth -= len(re.findall(r"\bfi\b", structure))
                 if depth <= 0:
                     break
         if deferred_failure_identifiers and shell_deferred_failure(
@@ -387,21 +481,6 @@ def shell_hard_size_exit(
         ):
             return True
     return False
-
-
-def indentation_block(lines: list[str], index: int) -> list[str]:
-    condition = lines[index]
-    condition_indent = len(condition) - len(condition.lstrip())
-    result = [condition]
-    for candidate in lines[index + 1 : index + 80]:
-        if not candidate.strip():
-            result.append(candidate)
-            continue
-        indent = len(candidate) - len(candidate.lstrip())
-        if indent <= condition_indent:
-            break
-        result.append(candidate)
-    return result
 
 
 def python_name(node: ast.AST | None) -> str | None:
@@ -554,16 +633,16 @@ def python_failure_nodes(
     return False
 
 
-def python_tree(lines: list[str]) -> ast.Module | None:
+def python_tree(lines: list[str]) -> ast.Module:
     try:
         return ast.parse("\n".join(lines))
-    except SyntaxError:
-        return None
+    except SyntaxError as error:
+        raise PolicyParseError("Python policy cannot be parsed safely") from error
 
 
 def python_failure(lines: list[str]) -> bool:
     tree = python_tree(lines)
-    return tree is not None and python_failure_nodes(tree.body)
+    return python_failure_nodes(tree.body)
 
 
 def python_size_comparison(node: ast.AST, context: SizeContext) -> bool:
@@ -671,51 +750,72 @@ def python_hard_size_exit(
 ) -> bool:
     context = context or SizeContext.from_lines(lines)
     tree = python_tree(lines)
-    if tree is None:
-        return False
     process_status_functions = python_process_status_functions(tree)
     return python_hard_size_nodes(
         tree.body, context, process_status_functions
     )
 
 
-def javascript_block(lines: list[str], index: int) -> list[str]:
-    condition = lines[index]
-    result = [condition]
-    depth = condition.count("{") - condition.count("}")
-    if depth <= 0:
-        return indentation_block(lines, index)
-    for candidate in lines[index + 1 : index + 80]:
-        result.append(candidate)
-        depth += candidate.count("{") - candidate.count("}")
-        if depth <= 0:
-            break
-    return result
+def parser_result(kind: str, source: str) -> object:
+    try:
+        result = subprocess.run(
+            ["node", str(WORKFLOW_PARSER), kind],
+            input=source.encode("utf-8"),
+            check=False,
+            capture_output=True,
+        )
+    except OSError as error:
+        raise PolicyParseError("policy parser is unavailable") from error
+    if result.returncode != 0:
+        raise PolicyParseError("policy source cannot be parsed safely")
+    try:
+        return json.loads(result.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PolicyParseError("policy parser returned invalid data") from error
+
+
+@dataclass(frozen=True)
+class JavaScriptAnalysis:
+    hard_size_exit: bool
+    process_failure: bool
+    executable_source: str
+
+
+def javascript_analysis(
+    lines: list[str], context: SizeContext | None = None
+) -> JavaScriptAnalysis:
+    context = context or SizeContext.from_lines(lines)
+    value = parser_result(
+        "javascript",
+        json.dumps(
+            {
+                "identifiers": sorted(context.identifiers),
+                "source": "\n".join(lines),
+            }
+        ),
+    )
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("hardSizeExit"), bool)
+        or not isinstance(value.get("processFailure"), bool)
+        or not isinstance(value.get("executableSource"), str)
+    ):
+        raise PolicyParseError("JavaScript parser returned invalid data")
+    return JavaScriptAnalysis(
+        hard_size_exit=value["hardSizeExit"],
+        process_failure=value["processFailure"],
+        executable_source=value["executableSource"],
+    )
 
 
 def javascript_failure(lines: list[str]) -> bool:
-    for line in lines:
-        if JAVASCRIPT_THROW.search(line):
-            return True
-        for termination in JAVASCRIPT_EXIT.finditer(line):
-            if nonzero_status(termination.group(1), empty_is_failure=False):
-                return True
-        for termination in JAVASCRIPT_EXIT_CODE.finditer(line):
-            if nonzero_status(termination.group(1), empty_is_failure=False):
-                return True
-    return False
+    return javascript_analysis(lines).process_failure
 
 
 def javascript_hard_size_exit(
     lines: list[str], context: SizeContext | None = None
 ) -> bool:
-    context = context or SizeContext.from_lines(lines)
-    for index, line in enumerate(lines):
-        if not re.search(r"\bif\b", line) or not context.is_comparison(line):
-            continue
-        if javascript_failure(javascript_block(lines, index)):
-            return True
-    return False
+    return javascript_analysis(lines, context).hard_size_exit
 
 
 def is_workflow_policy(root: Path, path: Path) -> bool:
@@ -756,7 +856,7 @@ def policy_language(root: Path, path: Path, text: str) -> str | None:
     policy_root = bool(parts) and parts[0] in POLICY_ROOTS
     if not policy_root:
         return None
-    if suffix in {".sh", ".bash", ".yml", ".yaml"}:
+    if suffix in {".sh", ".bash"}:
         return "shell"
     if suffix == ".py":
         return "python"
@@ -773,59 +873,221 @@ class WorkflowUnit:
     lines: list[str]
     blocking: bool
     conditions: tuple[str, ...]
+    uses: str | None
 
 
-class WorkflowParseError(RuntimeError):
-    pass
+@dataclass(frozen=True)
+class WorkflowDocument:
+    units: tuple[WorkflowUnit, ...]
+    max_lines_description: str | None
+    permissions: frozenset[str]
 
 
-def workflow_units(text: str, kind: str = "workflow") -> list[WorkflowUnit]:
+def runner_language(shell_value: object) -> str:
+    if shell_value is None:
+        shell = "bash"
+    elif isinstance(shell_value, str):
+        shell = shell_value.strip().lower()
+    else:
+        raise PolicyParseError("workflow shells must be strings")
+    executable = shell.split(maxsplit=1)[0] if shell else ""
+    executable = executable.rsplit("/", maxsplit=1)[-1]
+    if executable.startswith("python"):
+        return "python"
+    if executable in {"node", "deno", "bun"}:
+        return "javascript"
+    if re.fullmatch(r"(?:ba|da|k|z)?sh", executable):
+        return "shell"
+    return "unknown"
+
+
+def runner_source(entry: str) -> list[str]:
     try:
-        result = subprocess.run(
-            ["node", str(WORKFLOW_PARSER), kind],
-            input=text.encode("utf-8"),
-            check=False,
-            capture_output=True,
-        )
-    except OSError as error:
-        raise WorkflowParseError("workflow YAML parser is unavailable") from error
-    if result.returncode != 0:
-        raise WorkflowParseError("workflow YAML cannot be parsed safely")
+        tokens = shlex.split(entry)
+    except ValueError as error:
+        raise PolicyParseError("runner command cannot be parsed safely") from error
+    if (
+        len(tokens) >= 3
+        and runner_language(tokens[0]) == "shell"
+        and tokens[1] == "-c"
+    ):
+        return tokens[2].splitlines()
+    return [entry]
+
+
+def workflow_document(text: str, kind: str = "workflow") -> WorkflowDocument:
+    value = parser_result(kind, text)
     try:
-        values = json.loads(result.stdout.decode("utf-8"))
-        return [
+        metadata = value["metadata"]
+        units = tuple(
             WorkflowUnit(
-                language=value["language"],
-                lines=value["lines"],
-                blocking=value["blocking"],
-                conditions=tuple(value["conditions"]),
+                language=item["language"],
+                lines=(
+                    runner_source(item["lines"][0])
+                    if kind == "pre-commit" and len(item["lines"]) == 1
+                    else item["lines"]
+                ),
+                blocking=item["blocking"],
+                conditions=tuple(item["conditions"]),
+                uses=item["uses"],
             )
-            for value in values
-        ]
-    except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise WorkflowParseError("workflow YAML parser returned invalid data") from error
+            for item in value["units"]
+        )
+        description = metadata.get("maxLinesDescription")
+        permissions = metadata.get("permissions", [])
+        if (
+            not all(
+                isinstance(unit.language, str)
+                and isinstance(unit.lines, list)
+                and all(isinstance(line, str) for line in unit.lines)
+                and isinstance(unit.blocking, bool)
+                and all(isinstance(condition, str) for condition in unit.conditions)
+                and (unit.uses is None or isinstance(unit.uses, str))
+                for unit in units
+            )
+            or (description is not None and not isinstance(description, str))
+            or not isinstance(permissions, list)
+            or not all(isinstance(permission, str) for permission in permissions)
+        ):
+            raise TypeError
+        return WorkflowDocument(
+            units, description, frozenset(permissions)
+        )
+    except (KeyError, TypeError) as error:
+        raise PolicyParseError("workflow YAML parser returned invalid data") from error
+
+
+def workflow_units(text: str, kind: str = "workflow") -> tuple[WorkflowUnit, ...]:
+    return workflow_document(text, kind).units
+
+
+def unit_executable_lines(unit: WorkflowUnit) -> list[str]:
+    if unit.language == "shell":
+        lines = shell_code_lines(unit.lines)
+    elif unit.language == "python":
+        lines = ast.unparse(python_tree(unit.lines)).splitlines()
+    elif unit.language == "javascript":
+        lines = javascript_analysis(unit.lines).executable_source.splitlines()
+    else:
+        lines = unit.lines
+    return [*unit.conditions, *lines, *([unit.uses] if unit.uses else [])]
+
+
+def workflow_executable_text(document: WorkflowDocument) -> str:
+    return "\n".join(
+        line for unit in document.units for line in unit_executable_lines(unit)
+    )
+
+
+def policy_executable_text(root: Path, path: Path, text: str) -> str:
+    if is_workflow_policy(root, path):
+        return workflow_executable_text(workflow_document(text))
+    if is_composite_action(root, path):
+        return workflow_executable_text(workflow_document(text, "action"))
+    if is_pre_commit_config(root, path):
+        return workflow_executable_text(workflow_document(text, "pre-commit"))
+    language = policy_language(root, path, text)
+    if language == "shell":
+        return "\n".join(shell_code_lines(text.splitlines()))
+    if language == "python":
+        return ast.unparse(python_tree(text.splitlines()))
+    if language == "javascript":
+        return javascript_analysis(text.splitlines()).executable_source
+    return ""
 
 
 def workflow_process_failure(unit: WorkflowUnit) -> bool:
     if unit.language == "shell":
-        return any(shell_failure_command(line) for line in unit.lines)
+        return any(
+            shell_failure_command(line) for line in shell_code_lines(unit.lines)
+        )
     if unit.language == "python":
         return python_failure(unit.lines)
     if unit.language == "javascript":
         return javascript_failure(unit.lines)
-    return (
-        any(shell_failure_command(line) for line in unit.lines)
-        or python_failure(unit.lines)
-        or javascript_failure(unit.lines)
+    return any(
+        shell_failure_command(line) for line in shell_code_lines(unit.lines)
     )
 
 
-def workflow_unit_hard_size_exit(unit: WorkflowUnit) -> bool:
+def local_action_path(root: Path, uses: str) -> Path | None:
+    if not uses.startswith("./"):
+        return None
+    candidate = (root / uses[2:]).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError as error:
+        raise PolicyParseError("local action reference escapes the repository") from error
+    if candidate.is_dir():
+        for name in ("action.yml", "action.yaml"):
+            action = candidate / name
+            if action.is_file():
+                return action
+        raise PolicyParseError("local action directory has no action metadata")
+    if candidate.is_file() and candidate.name in {"action.yml", "action.yaml"}:
+        return candidate
+    raise PolicyParseError("local action reference is unavailable")
+
+
+def action_process_failure(
+    root: Path,
+    uses: str,
+    contents: dict[Path, str],
+    action_cache: dict[Path, WorkflowDocument],
+    resolving: frozenset[Path] = frozenset(),
+) -> bool:
+    action_path = local_action_path(root, uses)
+    if action_path is None:
+        return True
+    if action_path in resolving:
+        raise PolicyParseError("local composite actions contain a cycle")
+    text = contents.get(action_path)
+    if text is None:
+        try:
+            text = read_text(action_path)
+        except (OSError, UnicodeDecodeError) as error:
+            raise PolicyParseError("local action metadata is unreadable") from error
+    document = action_cache.get(action_path)
+    if document is None:
+        document = workflow_document(text, "action")
+        action_cache[action_path] = document
+    nested = resolving.union({action_path})
+    for unit in document.units:
+        if not unit.blocking:
+            continue
+        if unit.uses is not None:
+            if action_process_failure(
+                root, unit.uses, contents, action_cache, nested
+            ):
+                return True
+        elif workflow_process_failure(unit):
+            return True
+    return False
+
+
+def workflow_unit_hard_size_exit(
+    unit: WorkflowUnit,
+    *,
+    root: Path | None = None,
+    contents: dict[Path, str] | None = None,
+    action_cache: dict[Path, WorkflowDocument] | None = None,
+) -> bool:
     if not unit.blocking:
         return False
-    context = SizeContext.from_lines([*unit.conditions, *unit.lines])
+    analysis_lines = [*unit.conditions, *unit.lines]
+    if unit.language == "shell":
+        analysis_lines = [*unit.conditions, *shell_code_lines(unit.lines)]
+    context = SizeContext.from_lines(analysis_lines)
+    if not context.identifiers:
+        return False
     if any(context.is_comparison(condition) for condition in unit.conditions):
+        if unit.uses is not None:
+            if root is None or contents is None or action_cache is None:
+                return True
+            return action_process_failure(root, unit.uses, contents, action_cache)
         return workflow_process_failure(unit)
+    if unit.uses is not None:
+        return False
     if unit.language == "shell":
         return shell_hard_size_exit(
             unit.lines, errexit_default=True, context=context
@@ -834,27 +1096,39 @@ def workflow_unit_hard_size_exit(unit: WorkflowUnit) -> bool:
         return python_hard_size_exit(unit.lines, context)
     if unit.language == "javascript":
         return javascript_hard_size_exit(unit.lines, context)
-    return (
-        python_hard_size_exit(unit.lines, context)
-        or javascript_hard_size_exit(unit.lines, context)
-        or shell_hard_size_exit(
-            unit.lines, errexit_default=True, context=context
-        )
+    return shell_hard_size_exit(
+        unit.lines, errexit_default=True, context=context
     )
 
 
-def hard_size_exit(root: Path, path: Path, text: str) -> bool:
+def hard_size_exit(
+    root: Path,
+    path: Path,
+    text: str,
+    contents: dict[Path, str],
+    action_cache: dict[Path, WorkflowDocument],
+) -> bool:
     language = policy_language(root, path, text)
     lines = text.splitlines()
     if language == "shell":
         if is_workflow_policy(root, path):
             return any(
-                workflow_unit_hard_size_exit(unit)
+                workflow_unit_hard_size_exit(
+                    unit,
+                    root=root,
+                    contents=contents,
+                    action_cache=action_cache,
+                )
                 for unit in workflow_units(text)
             )
         if is_composite_action(root, path):
             return any(
-                workflow_unit_hard_size_exit(unit)
+                workflow_unit_hard_size_exit(
+                    unit,
+                    root=root,
+                    contents=contents,
+                    action_cache=action_cache,
+                )
                 for unit in workflow_units(text, "action")
             )
         if is_pre_commit_config(root, path):
@@ -870,23 +1144,61 @@ def hard_size_exit(root: Path, path: Path, text: str) -> bool:
     return False
 
 
+def shell_assignment_present(lines: list[str], name: str) -> bool:
+    return any(
+        (match := ASSIGNMENT.match(line)) is not None
+        and match.group(1) == name
+        for line in shell_code_lines(lines)
+    )
+
+
+def shell_output_present(lines: list[str], fragment: str) -> bool:
+    return any(
+        fragment in line
+        and re.search(
+            r"(?:^|[;&|])\s*(?:echo|printf)\b", shell_structure_line(line)
+        )
+        for line in shell_code_lines(lines)
+    )
+
+
 def reusable_workflow_contract_failures(text: str) -> list[str]:
     failures: list[str] = []
-    required_fragments = {
-        "git diff --numstat": "locale-independent changed-line calculation",
-        "INSERTIONS": "insertion reporting",
-        "DELETIONS": "deletion reporting",
-        "::warning::": "advisory GitHub warning",
-        "Advisory changed-line threshold": "advisory max-lines contract",
-    }
-    for fragment, description in required_fragments.items():
-        if fragment not in text:
-            failures.append(f"missing {description}")
-    if "pull-requests: read" in text:
+    document = workflow_document(text)
+    executable_text = workflow_executable_text(document)
+    shell_lines = [
+        line
+        for unit in document.units
+        if unit.language == "shell"
+        for line in unit.lines
+    ]
+    shell_structure = "\n".join(
+        shell_structure_line(line) for line in shell_code_lines(shell_lines)
+    )
+    if re.search(r"\bgit\s+diff\b[^\n]*--numstat\b", shell_structure) is None:
+        failures.append("missing locale-independent changed-line calculation")
+    if not shell_assignment_present(shell_lines, "INSERTIONS"):
+        failures.append("missing insertion reporting")
+    if not shell_assignment_present(shell_lines, "DELETIONS"):
+        failures.append("missing deletion reporting")
+    if not shell_output_present(shell_lines, "::warning::"):
+        failures.append("missing advisory GitHub warning")
+    if document.max_lines_description is None or not re.search(
+        r"advisory.*changed[- ]line.*threshold",
+        document.max_lines_description,
+        re.IGNORECASE,
+    ):
+        failures.append("missing advisory max-lines contract")
+    if "pull-requests" in document.permissions:
         failures.append("unused pull-request permission")
-    if ".preflight-allow-large-pr" in text or "large-pr-approved" in text:
+    if (
+        ".preflight-allow-large-pr" in executable_text
+        or "large-pr-approved" in executable_text
+    ):
         failures.append("obsolete size override")
-    if any(workflow_unit_hard_size_exit(unit) for unit in workflow_units(text)):
+    if any(
+        workflow_unit_hard_size_exit(unit) for unit in document.units
+    ):
         failures.append("size-triggered nonzero exit")
     return sorted(set(failures))
 
@@ -928,7 +1240,7 @@ def pinned_workflow_contract_failures(
         return ["reusable workflow revision is not readable UTF-8"]
     try:
         return reusable_workflow_contract_failures(text)
-    except WorkflowParseError:
+    except PolicyParseError:
         return ["reusable workflow revision cannot be parsed safely"]
 
 
@@ -968,6 +1280,7 @@ def validate_repository(
         )
 
     contents: dict[Path, str] = {}
+    action_cache: dict[Path, WorkflowDocument] = {}
     for path in active_files(root):
         relative = path.relative_to(root).as_posix()
         try:
@@ -978,29 +1291,34 @@ def validate_repository(
     for path, text in contents.items():
         relative = path.relative_to(root).as_posix()
         lines = text.splitlines()
-
-        if ".preflight-allow-large-pr" in text:
-            failures.append(f"{relative}: obsolete override-file policy")
-        if "large-pr-approved" in text:
-            failures.append(f"{relative}: obsolete approval-label policy")
-        if re.search(r"Maximum allowed:\s*600", text, re.IGNORECASE):
-            failures.append(f"{relative}: hard-maximum wording")
-        if re.search(r"PR TOO LARGE", text, re.IGNORECASE):
-            failures.append(f"{relative}: hard-failure banner")
-        if re.search(r"Push aborted", text, re.IGNORECASE) and SIZE_TERMS.search(text):
-            failures.append(f"{relative}: size-based push abortion")
         try:
-            if hard_size_exit(root, path, text):
+            executable_text = policy_executable_text(root, path, text)
+            if ".preflight-allow-large-pr" in executable_text:
+                failures.append(f"{relative}: obsolete override-file policy")
+            if "large-pr-approved" in executable_text:
+                failures.append(f"{relative}: obsolete approval-label policy")
+            if re.search(
+                r"Maximum allowed:\s*600", executable_text, re.IGNORECASE
+            ):
+                failures.append(f"{relative}: hard-maximum wording")
+            if re.search(r"PR TOO LARGE", executable_text, re.IGNORECASE):
+                failures.append(f"{relative}: hard-failure banner")
+            if re.search(
+                r"Push aborted", executable_text, re.IGNORECASE
+            ) and SIZE_TERMS.search(executable_text):
+                failures.append(f"{relative}: size-based push abortion")
+            if hard_size_exit(root, path, text, contents, action_cache):
                 failures.append(f"{relative}: size-triggered nonzero exit")
-        except WorkflowParseError:
-            failures.append(f"{relative}: workflow YAML cannot be parsed safely")
+        except PolicyParseError:
+            failures.append(f"{relative}: policy source cannot be parsed safely")
         if size_bypass_instruction(lines):
             failures.append(f"{relative}: size-policy hook bypass instruction")
 
     preflight = root / "scripts/preflight.sh"
     preflight_text = contents.get(preflight, "")
-    has_local_size_calculation = "--numstat" in preflight_text and bool(
-        re.search(r"(?:PR_SIZE|MAX_LINES|ADVISORY_THRESHOLD)", preflight_text)
+    preflight_code = "\n".join(shell_code_lines(preflight_text.splitlines()))
+    has_local_size_calculation = "--numstat" in preflight_code and bool(
+        re.search(r"(?:PR_SIZE|MAX_LINES|ADVISORY_THRESHOLD)", preflight_code)
     )
     if has_local_size_calculation:
         required_fragments = {
@@ -1010,7 +1328,7 @@ def validate_repository(
             "WARNING": "above-threshold warning",
         }
         for fragment, description in required_fragments.items():
-            if fragment not in preflight_text:
+            if fragment not in preflight_code:
                 failures.append(f"scripts/preflight.sh: missing {description}")
 
     for workflow, workflow_text in contents.items():
@@ -1021,16 +1339,28 @@ def validate_repository(
             or workflow.suffix.lower() not in {".yml", ".yaml"}
         ):
             continue
-        references = re.findall(
-            r"SecPal/\.github/\.github/workflows/reusable-pr-size\.yml@([^\s\"']+)",
-            workflow_text,
-            re.IGNORECASE,
-        )
+        try:
+            document = workflow_document(workflow_text)
+        except PolicyParseError:
+            continue
+        executable_text = workflow_executable_text(document)
+        references = [
+            match.group(1)
+            for unit in document.units
+            if unit.uses is not None
+            and (
+                match := re.fullmatch(
+                    r"SecPal/\.github/\.github/workflows/reusable-pr-size\.yml@(.+)",
+                    unit.uses,
+                    re.IGNORECASE,
+                )
+            )
+        ]
         is_size_workflow = bool(references) or (
-            "git diff --numstat" in workflow_text
-            and re.search(r"\bPR[- ]?size\b", workflow_text, re.IGNORECASE)
+            "git diff --numstat" in executable_text
+            and re.search(r"\bPR[- ]?size\b", executable_text, re.IGNORECASE)
         )
-        if "pull-requests: read" in workflow_text and is_size_workflow:
+        if "pull-requests" in document.permissions and is_size_workflow:
             failures.append(
                 f"{relative.as_posix()}: unused pull-request permission"
             )
@@ -1040,10 +1370,12 @@ def validate_repository(
                     f"{relative.as_posix()}: reusable workflow is not pinned to an immutable SHA"
                 )
                 continue
-            contract_failures = workflow_contract_cache.setdefault(
-                reference,
-                pinned_workflow_contract_failures(workflow_source, reference),
-            )
+            contract_failures = workflow_contract_cache.get(reference)
+            if contract_failures is None:
+                contract_failures = pinned_workflow_contract_failures(
+                    workflow_source, reference
+                )
+                workflow_contract_cache[reference] = contract_failures
             if contract_failures:
                 failures.append(
                     f"{relative.as_posix()}: pinned reusable workflow violates the advisory contract "
@@ -1055,7 +1387,7 @@ def validate_repository(
     if reusable_text:
         try:
             contract_failures = reusable_workflow_contract_failures(reusable_text)
-        except WorkflowParseError:
+        except PolicyParseError:
             contract_failures = ["workflow YAML cannot be parsed safely"]
         for description in contract_failures:
             failures.append(

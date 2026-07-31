@@ -83,6 +83,8 @@ EOF
 
 make_repo lowercase-variable
 cat >"$workspace/lowercase-variable/scripts/preflight.sh" <<'EOF'
+# This counter is derived from the PR's changed-line diff.
+changed="$(git diff --numstat "$BASE"...HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
 if [ "$changed" -gt 600 ]; then
   echo "PR exceeds the size limit"
   exit 1
@@ -109,7 +111,7 @@ EOF
 
 make_repo dynamic-exit
 cat >"$workspace/dynamic-exit/scripts/preflight.sh" <<'EOF'
-if [ "$changed" -ge 600 ]; then
+if [ "$changed_lines" -ge 600 ]; then
   exit "$failure_status"
 fi
 EOF
@@ -279,6 +281,35 @@ jobs:
               sys.exit(1)
 EOF
 
+make_repo workflow-default-python-hard-exit
+cat >"$workspace/workflow-default-python-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+defaults:
+  run:
+    shell: python
+jobs:
+  size:
+    steps:
+      - run: |
+          if changed_lines > 600:
+              raise SystemExit(1)
+EOF
+
+make_repo job-default-python-advisory
+cat >"$workspace/job-default-python-advisory/.github/workflows/pr-size.yml" <<'EOF'
+defaults:
+  run:
+    shell: bash
+jobs:
+  size:
+    defaults:
+      run:
+        shell: python
+    steps:
+      - run: |
+          if changed_lines > 600:
+              print("PR size advisory threshold exceeded")
+EOF
+
 make_repo composite-python-hard-exit
 mkdir -p "$workspace/composite-python-hard-exit/.github/actions"
 cat >"$workspace/composite-python-hard-exit/.github/actions/action.yml" <<'EOF'
@@ -314,6 +345,49 @@ jobs:
           if (changedLines > 600) {
             process.exit(1);
           }
+EOF
+
+make_repo javascript-multiline-exit
+cat >"$workspace/javascript-multiline-exit/scripts/check-pr-size.mjs" <<'EOF'
+if (
+  changedLines > 600
+) {
+  process.exit(1);
+}
+EOF
+
+make_repo conditional-action-hard-exit
+mkdir -p "$workspace/conditional-action-hard-exit/.github/actions/pr-size"
+cat >"$workspace/conditional-action-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: ./.github/actions/pr-size
+EOF
+cat >"$workspace/conditional-action-hard-exit/.github/actions/pr-size/action.yml" <<'EOF'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: exit 1
+EOF
+
+make_repo conditional-action-advisory
+mkdir -p "$workspace/conditional-action-advisory/.github/actions/pr-size"
+cat >"$workspace/conditional-action-advisory/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: ./.github/actions/pr-size
+EOF
+cat >"$workspace/conditional-action-advisory/.github/actions/pr-size/action.yml" <<'EOF'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "PR size advisory threshold exceeded"
 EOF
 
 make_repo workflow-nonblocking-step
@@ -493,6 +567,60 @@ if [ "$ARTIFACT_SIZE" -gt 600 ]; then
 fi
 EOF
 
+make_repo unrelated-changed-counter
+cat >"$workspace/unrelated-changed-counter/scripts/check-generated.sh" <<'EOF'
+changed=1
+if [ "$changed" -gt 0 ]; then
+  echo "Generated sources need an update"
+  exit 1
+fi
+EOF
+
+make_repo commented-shell-gate
+cat >"$workspace/commented-shell-gate/scripts/preflight.sh" <<'EOF'
+# Historical policy, intentionally disabled:
+# if [ "$CHANGED" -gt 600 ]; then
+#   exit 1
+# fi
+echo "PR size remains advisory"
+EOF
+
+make_repo quoted-shell-gate
+cat >"$workspace/quoted-shell-gate/scripts/preflight.sh" <<'EOF'
+CHANGED="$(git diff --numstat "$BASE"...HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+echo 'if [ "$CHANGED" -gt 600 ]; then exit 1; fi'
+EOF
+
+make_repo commented-reusable-contract
+cat >"$workspace/commented-reusable-contract/.github/workflows/reusable-pr-size.yml" <<'EOF'
+# git diff --numstat
+# INSERTIONS DELETIONS
+# ::warning::
+# Advisory changed-line threshold
+jobs:
+  size:
+    steps:
+      - run: echo "No PR-size reporting is implemented"
+EOF
+
+make_repo quoted-reusable-contract
+cat >"$workspace/quoted-reusable-contract/.github/workflows/reusable-pr-size.yml" <<'EOF'
+on:
+  workflow_call:
+    inputs:
+      max-lines:
+        description: Advisory changed-line threshold
+permissions:
+  contents: read
+jobs:
+  size:
+    steps:
+      - run: |
+          echo 'git diff --numstat'
+          echo 'INSERTIONS DELETIONS'
+          echo '::warning::'
+EOF
+
 make_repo root-hook-advisory
 cat >"$workspace/root-hook-advisory/.pre-commit-config.yaml" <<'EOF'
 repos:
@@ -520,6 +648,12 @@ make_repo unreadable-policy
 printf '# invalid UTF-8 comment: \377\nif [ "$CHANGED" -gt 600 ]; then exit 23; fi\n' \
   >"$workspace/unreadable-policy/scripts/preflight.sh"
 chmod +x "$workspace/unreadable-policy/scripts/preflight.sh"
+
+make_repo malformed-javascript
+cat >"$workspace/malformed-javascript/scripts/check-pr-size.mjs" <<'EOF'
+if (changedLines > 600) {
+  process.exit(1);
+EOF
 
 make_repo zero-exit
 cat >"$workspace/zero-exit/scripts/preflight.sh" <<'EOF'
@@ -560,10 +694,12 @@ printf 'agent scratch\n' >"$workspace/tracked-context/.context/note.txt"
   git add -f .context/note.txt
 )
 
-bash "$validator" \
+if ! bash "$validator" \
   "$workspace/advisory" \
   "$workspace/advisory-typescript" \
   "$workspace/conditional-list-zero-exit" \
+  "$workspace/commented-shell-gate" \
+  "$workspace/conditional-action-advisory" \
   "$workspace/deferred-zero-status" \
   "$workspace/errexit-disabled" \
   "$workspace/no-gate" \
@@ -571,11 +707,14 @@ bash "$validator" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" \
   "$workspace/javascript-zero-exit-code" \
+  "$workspace/job-default-python-advisory" \
   "$workspace/python-library-return" \
   "$workspace/python-zero-status" \
+  "$workspace/quoted-shell-gate" \
   "$workspace/root-hook-advisory" \
   "$workspace/suffixless-binary" \
   "$workspace/unrelated-size" \
+  "$workspace/unrelated-changed-counter" \
   "$workspace/workflow-boolean-condition" \
   "$workspace/workflow-job-if-advisory" \
   "$workspace/workflow-step-boundary" \
@@ -583,10 +722,16 @@ bash "$validator" \
   "$workspace/workflow-nonblocking-step" \
   "$workspace/workflow-template-advisory" \
   "$workspace/composite-python-advisory" \
-  "$repo_root" >"$workspace/pass.out"
+  "$repo_root" >"$workspace/pass.out"; then
+  cat "$workspace/pass.out" >&2
+  echo "Expected advisory fixtures to pass policy validation" >&2
+  exit 1
+fi
 grep -Fq "advisory: PASS" "$workspace/pass.out"
 grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
 grep -Fq "conditional-list-zero-exit: PASS" "$workspace/pass.out"
+grep -Fq "commented-shell-gate: PASS" "$workspace/pass.out"
+grep -Fq "conditional-action-advisory: PASS" "$workspace/pass.out"
 grep -Fq "deferred-zero-status: PASS" "$workspace/pass.out"
 grep -Fq "errexit-disabled: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
@@ -594,11 +739,14 @@ grep -Fq "python-caught-exception: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
 grep -Fq "javascript-zero-exit-code: PASS" "$workspace/pass.out"
+grep -Fq "job-default-python-advisory: PASS" "$workspace/pass.out"
 grep -Fq "python-library-return: PASS" "$workspace/pass.out"
 grep -Fq "python-zero-status: PASS" "$workspace/pass.out"
+grep -Fq "quoted-shell-gate: PASS" "$workspace/pass.out"
 grep -Fq "root-hook-advisory: PASS" "$workspace/pass.out"
 grep -Fq "suffixless-binary: PASS" "$workspace/pass.out"
 grep -Fq "unrelated-size: PASS" "$workspace/pass.out"
+grep -Fq "unrelated-changed-counter: PASS" "$workspace/pass.out"
 grep -Fq "workflow-boolean-condition: PASS" "$workspace/pass.out"
 grep -Fq "workflow-job-if-advisory: PASS" "$workspace/pass.out"
 grep -Fq "workflow-step-boundary: PASS" "$workspace/pass.out"
@@ -610,20 +758,24 @@ grep -Fq "composite-python-advisory: PASS" "$workspace/pass.out"
 for invalid in \
   alternate-workflow-name \
   composite-python-hard-exit \
+  commented-reusable-contract \
   compact-exit \
   conditional-list-exit \
   conditional-list-multiline \
+  conditional-action-hard-exit \
   deferred-exit \
   derived-size-alias \
   diff-size-alias \
   errexit-standalone \
   hard-pinned-revision \
   javascript-compound-exit-code \
+  javascript-multiline-exit \
   javascript-exit \
   javascript-exit-code \
   javascript-throw \
   hard-exit \
   lowercase-owner-reference \
+  malformed-javascript \
   malformed-workflow-yaml \
   override-file \
   label-override \
@@ -633,6 +785,7 @@ for invalid in \
   python-multiline-exit \
   python-raise \
   python-return-exit \
+  quoted-reusable-contract \
   unreadable-policy \
   workflow-if-hard-exit \
   workflow-folded-condition \
@@ -642,6 +795,7 @@ for invalid in \
   workflow-blocking-step \
   workflow-failure \
   workflow-javascript-hard-exit \
+  workflow-default-python-hard-exit \
   workflow-python-hard-exit \
   workflow-template-hard-exit \
   exit-three \
