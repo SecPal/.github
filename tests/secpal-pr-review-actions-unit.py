@@ -280,6 +280,41 @@ def registry_entry(repository: str) -> dict[str, Any]:
     }
 
 
+def frontend_registry_entry() -> dict[str, Any]:
+    value = registry_entry("SecPal/frontend")
+    value["focused_validation"] = [
+        {
+            "argv": ["npm", "run", "test:migration-boundary"],
+            "working_directory": ".",
+            "purpose": "Run migration tests",
+        },
+        {
+            "argv": ["npm", "run", "test:ui-csp"],
+            "working_directory": ".",
+            "purpose": "Run UI and CSP tests",
+        },
+        {
+            "argv": ["npm", "run", "test:e2e:csp"],
+            "working_directory": ".",
+            "purpose": "Run local CSP browser tests",
+            "execution_policy": "focused-only",
+        },
+    ]
+    value["required_local_validation"] = [
+        {
+            "argv": ["npm", "run", "build:web"],
+            "working_directory": ".",
+            "purpose": "Build Web",
+        },
+        {
+            "argv": ["npm", "run", "build:android"],
+            "working_directory": ".",
+            "purpose": "Build Android",
+        },
+    ]
+    return value
+
+
 class FakeGitHub:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -3756,6 +3791,31 @@ class RegistryTests(TestCase):
                     str(executable),
                 )
 
+    def test_playwright_browser_cache_uses_the_host_platform_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            account_home = Path(directory)
+            expected_by_platform = {
+                "linux": account_home / ".cache/ms-playwright",
+                "darwin": account_home / "Library/Caches/ms-playwright",
+            }
+
+            for caches_exist in (False, True):
+                if caches_exist:
+                    for cache in expected_by_platform.values():
+                        cache.mkdir(parents=True)
+                for host_platform, expected in expected_by_platform.items():
+                    with (
+                        self.subTest(
+                            host_platform=host_platform,
+                            caches_exist=caches_exist,
+                        ),
+                        mock.patch.object(actions.sys, "platform", host_platform),
+                    ):
+                        self.assertEqual(
+                            actions._playwright_browsers_path(account_home),
+                            expected,
+                        )
+
     def test_registered_validations_receive_a_minimal_secret_free_environment(self) -> None:
         repository = registry_entry("SecPal/.github")
         completed = SimpleNamespace(returncode=0)
@@ -3765,6 +3825,7 @@ class RegistryTests(TestCase):
                 {
                     "GH_TOKEN": "parent-token-placeholder",
                     "AWS_SECRET_ACCESS_KEY": "parent-secret",
+                    "PLAYWRIGHT_BROWSERS_PATH": "/tmp/parent-controlled-browser-cache",
                     "PYTHONPATH": "/tmp/parent-controlled-pythonpath",
                     "UNRELATED_PARENT_VALUE": "must-not-leak",
                 },
@@ -3793,6 +3854,14 @@ class RegistryTests(TestCase):
             self.assertNotEqual(
                 environment["PYTHONPATH"], "/tmp/parent-controlled-pythonpath"
             )
+            self.assertEqual(
+                environment.get("PLAYWRIGHT_BROWSERS_PATH"),
+                str(actions.PLAYWRIGHT_BROWSERS_PATH),
+            )
+            self.assertNotEqual(
+                environment.get("PLAYWRIGHT_BROWSERS_PATH"),
+                "/tmp/parent-controlled-browser-cache",
+            )
             self.assertNotEqual(environment.get("HOME"), str(actions.ACCOUNT_HOME))
             self.assertEqual(
                 set(environment),
@@ -3809,6 +3878,7 @@ class RegistryTests(TestCase):
                     "NO_COLOR",
                     "PAGER",
                     "PATH",
+                    "PLAYWRIGHT_BROWSERS_PATH",
                     "PYTHONPATH",
                     "TMPDIR",
                     "USER",
@@ -3817,6 +3887,62 @@ class RegistryTests(TestCase):
                     "XDG_DATA_HOME",
                 },
             )
+
+    def test_complete_validation_excludes_focused_only_commands(self) -> None:
+        repository = frontend_registry_entry()
+
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run,
+        ):
+            self.assertTrue(
+                actions._run_registered_validations(repository, REPO_ROOT)
+            )
+
+        executed_scripts = [call.args[0][-1] for call in run.call_args_list]
+        self.assertIn("test:migration-boundary", executed_scripts)
+        self.assertIn("test:ui-csp", executed_scripts)
+        self.assertNotIn("test:e2e:csp", executed_scripts)
+        self.assertIn("build:web", executed_scripts)
+        self.assertIn("build:android", executed_scripts)
+
+    def test_complete_validation_binding_excludes_focused_only_commands(self) -> None:
+        repository = frontend_registry_entry()
+
+        binding = actions._fast_registry_binding(repository)
+
+        self.assertNotIn(
+            ["npm", "run", "test:e2e:csp"],
+            [command["argv"] for command in binding["validation"]],
+        )
+        self.assertIn(
+            ["npm", "run", "test:ui-csp"],
+            [command["argv"] for command in binding["validation"]],
+        )
+        self.assertEqual(
+            [command["argv"] for command in binding["focused_only_validation"]],
+            [["npm", "run", "test:e2e:csp"]],
+        )
+
+    def test_required_validation_rejects_focused_only_execution(self) -> None:
+        registry = {"schema_version": "1.0", "repositories": [frontend_registry_entry()]}
+        registry["repositories"][0]["required_local_validation"][0][
+            "execution_policy"
+        ] = "focused-only"
+
+        with self.assertRaisesRegex(
+            actions.RegistryError,
+            "required local validation cannot use focused-only execution",
+        ):
+            actions.validate_registry(registry)
 
 
 class AuditModeTests(TestCase):

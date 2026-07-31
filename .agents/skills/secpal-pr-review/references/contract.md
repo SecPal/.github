@@ -136,12 +136,15 @@ excludes Required Check results and all other volatile readiness values.
 `CLASSIFY_AND_FIX_ALL_CURRENT_FINDINGS` independently proves each classification,
 adds failing regression coverage for valid findings, and implements the smallest
 coherent correction. `FOCUSED_VALIDATION_WHILE_EDITING` runs only affected tests.
+Commands marked `execution_policy: focused-only` remain available for that
+explicit selection and are excluded from unconditional complete validation.
 
 `HOLISTIC_AUDIT` runs once and covers correctness, security, privacy, data
 integrity, lifecycle, rollout, user control, and avoidable complexity.
 
-`COMPLETE_LOCAL_VALIDATION_ONCE` runs the registered complete command
-set once and returns a deterministic receipt binding repository, parent head,
+`COMPLETE_LOCAL_VALIDATION_ONCE` runs the registry's unconditional focused
+commands and every required local command once and returns a deterministic
+receipt binding repository, parent head,
 staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
 manual gate. Time is informational only and cannot determine validity.
@@ -414,7 +417,7 @@ independently prove all of the following:
 
 - expected head unchanged and local, upstream remote, and PR heads equal;
 - clean worktree and every relevant commit validly signed;
-- focused and complete required local validation successful;
+- selected focused and complete required local validation successful;
 - all required checks successful, with no missing, pending, failed, or unknown
   required evidence;
 - complete snapshot evidence and an unchanged expected target thread belonging
@@ -435,8 +438,9 @@ signed commit and fast-forward push, with the chain starting at the immutable
 initial head and ending at the expected final head. Reusing the final snapshot
 as the initial anchor therefore fails closed.
 
-Immediately before each resolution write, the helper runs the repository's
-registered focused and required local validation commands without a shell and
+Immediately before each forensic resolution write, the helper runs the
+repository's unconditional focused and required local validation commands
+without a shell and
 performs one bounded live PR-wide feedback read. It compares the canonical
 reviews, conversation comments, review threads, inline comments, and reactions
 with the final snapshot, allowing only individually recorded earlier thread

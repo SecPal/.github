@@ -9,6 +9,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-07-31 - Register Frontend Strict CSP Validation
+
+**Changed:**
+
+- updated the frontend review registry to use explicit Web and Android surface
+  builds
+- registered focused shadcn/Base UI architecture and strict-CSP validation
+- registered the local production Chromium CSP test as an allowed focused
+  target that is excluded from unconditional complete validation, while keeping
+  live, workspace, Lighthouse, and other environment-connected targets subject
+  to separate user authorization
+- preserved the isolated validation environment while making the canonical
+  local Playwright browser installation available to the CSP test
+- continued to derive Required Checks from live rulesets and branch protection
+
+---
+
 ## 2026-07-31 - Preserve Pull Request Size Reporting
 
 **Changed:**
