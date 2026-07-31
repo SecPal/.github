@@ -3756,6 +3756,28 @@ class RegistryTests(TestCase):
                     str(executable),
                 )
 
+    def test_playwright_browser_cache_supports_linux_and_macos_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            account_home = Path(directory)
+            self.assertEqual(
+                actions._playwright_browsers_path(account_home),
+                account_home / ".cache/ms-playwright",
+            )
+
+            macos_cache = account_home / "Library/Caches/ms-playwright"
+            macos_cache.mkdir(parents=True)
+            self.assertEqual(
+                actions._playwright_browsers_path(account_home),
+                macos_cache,
+            )
+
+            linux_cache = account_home / ".cache/ms-playwright"
+            linux_cache.mkdir(parents=True)
+            self.assertEqual(
+                actions._playwright_browsers_path(account_home),
+                linux_cache,
+            )
+
     def test_registered_validations_receive_a_minimal_secret_free_environment(self) -> None:
         repository = registry_entry("SecPal/.github")
         completed = SimpleNamespace(returncode=0)
@@ -3765,6 +3787,7 @@ class RegistryTests(TestCase):
                 {
                     "GH_TOKEN": "parent-token-placeholder",
                     "AWS_SECRET_ACCESS_KEY": "parent-secret",
+                    "PLAYWRIGHT_BROWSERS_PATH": "/tmp/parent-controlled-browser-cache",
                     "PYTHONPATH": "/tmp/parent-controlled-pythonpath",
                     "UNRELATED_PARENT_VALUE": "must-not-leak",
                 },
@@ -3793,6 +3816,14 @@ class RegistryTests(TestCase):
             self.assertNotEqual(
                 environment["PYTHONPATH"], "/tmp/parent-controlled-pythonpath"
             )
+            self.assertEqual(
+                environment.get("PLAYWRIGHT_BROWSERS_PATH"),
+                str(actions.PLAYWRIGHT_BROWSERS_PATH),
+            )
+            self.assertNotEqual(
+                environment.get("PLAYWRIGHT_BROWSERS_PATH"),
+                "/tmp/parent-controlled-browser-cache",
+            )
             self.assertNotEqual(environment.get("HOME"), str(actions.ACCOUNT_HOME))
             self.assertEqual(
                 set(environment),
@@ -3809,6 +3840,7 @@ class RegistryTests(TestCase):
                     "NO_COLOR",
                     "PAGER",
                     "PATH",
+                    "PLAYWRIGHT_BROWSERS_PATH",
                     "PYTHONPATH",
                     "TMPDIR",
                     "USER",

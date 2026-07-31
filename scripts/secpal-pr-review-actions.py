@@ -86,9 +86,23 @@ def _load_fast_path_helper() -> Any:
 
 
 fast_path = _load_fast_path_helper()
+
+
+def _playwright_browsers_path(account_home: Path) -> Path:
+    candidates = (
+        account_home / ".cache/ms-playwright",
+        account_home / "Library/Caches/ms-playwright",
+    )
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
 ACCOUNT_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
 ACCOUNT_NAME = pwd.getpwuid(os.getuid()).pw_name
 USER_SITE_PACKAGES = site.getusersitepackages()
+PLAYWRIGHT_BROWSERS_PATH = _playwright_browsers_path(ACCOUNT_HOME)
 LOCAL_VALIDATION_COMMAND_DIRECTORIES = (
     *evidence.TRUSTED_COMMAND_DIRECTORIES,
     ACCOUNT_HOME / ".local/bin",
@@ -1110,6 +1124,7 @@ def _run_registered_validations(
             "PATH": os.pathsep.join(
                 str(directory) for directory in LOCAL_VALIDATION_COMMAND_DIRECTORIES
             ),
+            "PLAYWRIGHT_BROWSERS_PATH": str(PLAYWRIGHT_BROWSERS_PATH),
             "PYTHONPATH": os.pathsep.join(
                 USER_SITE_PACKAGES
                 if isinstance(USER_SITE_PACKAGES, list)

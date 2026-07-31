@@ -19,6 +19,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - registered the local production Chromium CSP test as an allowed focused
   target while keeping live, workspace, Lighthouse, and other
   environment-connected targets subject to separate user authorization
+- preserved the isolated validation environment while making the canonical
+  local Playwright browser installation available to the CSP test
 - continued to derive Required Checks from live rulesets and branch protection
 
 ---
