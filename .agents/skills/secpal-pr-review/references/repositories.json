@@ -153,6 +153,16 @@
           "argv": ["npm", "run", "test:migration-boundary"],
           "working_directory": ".",
           "purpose": "Run documented frontend migration-boundary tests"
+        },
+        {
+          "argv": ["npm", "run", "test:ui-csp"],
+          "working_directory": ".",
+          "purpose": "Run the focused shadcn/Base UI and strict CSP architecture and artifact contracts"
+        },
+        {
+          "argv": ["npm", "run", "test:e2e:csp"],
+          "working_directory": ".",
+          "purpose": "Exercise the local production frontend under the strict CSP in Chromium"
         }
       ],
       "required_local_validation": [
@@ -177,9 +187,14 @@
           "purpose": "Run deterministic Vitest suite"
         },
         {
-          "argv": ["npm", "run", "build"],
+          "argv": ["npm", "run", "build:web"],
           "working_directory": ".",
-          "purpose": "Build the web surface"
+          "purpose": "Build the Web production surface"
+        },
+        {
+          "argv": ["npm", "run", "build:android"],
+          "working_directory": ".",
+          "purpose": "Build the Capacitor Android frontend surface"
         }
       ],
       "signature_policy": {
@@ -194,7 +209,7 @@
       },
       "manual_gates": [
         "Select additional focused Vitest paths from the changed behavior using documented test entry points.",
-        "Live, workspace, Lighthouse, Playwright, and environment-connected targets require separate user authorization."
+        "The deterministic local `npm run test:e2e:csp` target may be selected when UI or CSP behavior is affected. Live, workspace, Lighthouse, and other environment-connected targets require separate user authorization."
       ],
       "unsupported_operations": [
         "REVIEW_REQUEST",

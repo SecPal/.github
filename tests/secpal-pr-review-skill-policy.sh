@@ -297,6 +297,143 @@ expected = [
     "SecPal/guardguide.de", "SecPal/secpal.app",
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
+
+frontend_entries = [
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/frontend"
+]
+assert len(frontend_entries) == 1, "SecPal/frontend must have exactly one registry entry"
+frontend = frontend_entries[0]
+
+expected_focused_validation = [
+    {
+        "argv": ["npm", "run", "test:migration-boundary"],
+        "working_directory": ".",
+        "purpose": "Run documented frontend migration-boundary tests",
+    },
+    {
+        "argv": ["npm", "run", "test:ui-csp"],
+        "working_directory": ".",
+        "purpose": (
+            "Run the focused shadcn/Base UI and strict CSP architecture "
+            "and artifact contracts"
+        ),
+    },
+    {
+        "argv": ["npm", "run", "test:e2e:csp"],
+        "working_directory": ".",
+        "purpose": (
+            "Exercise the local production frontend under the strict CSP "
+            "in Chromium"
+        ),
+    },
+]
+assert frontend["focused_validation"] == expected_focused_validation, (
+    "SecPal/frontend focused validation must register the migration, UI/CSP, "
+    "and local Chromium CSP contracts exactly once and in order"
+)
+
+expected_required_local_validation = [
+    {
+        "argv": ["npm", "run", "format:check"],
+        "working_directory": ".",
+        "purpose": "Check formatting",
+    },
+    {
+        "argv": ["npm", "run", "lint"],
+        "working_directory": ".",
+        "purpose": "Run ESLint",
+    },
+    {
+        "argv": ["npm", "run", "typecheck"],
+        "working_directory": ".",
+        "purpose": "Run TypeScript checks",
+    },
+    {
+        "argv": ["npm", "run", "test:ci"],
+        "working_directory": ".",
+        "purpose": "Run deterministic Vitest suite",
+    },
+    {
+        "argv": ["npm", "run", "build:web"],
+        "working_directory": ".",
+        "purpose": "Build the Web production surface",
+    },
+    {
+        "argv": ["npm", "run", "build:android"],
+        "working_directory": ".",
+        "purpose": "Build the Capacitor Android frontend surface",
+    },
+]
+assert frontend["required_local_validation"] == expected_required_local_validation, (
+    "SecPal/frontend required local validation must preserve static checks and "
+    "use the explicit Web and Android builds exactly once and in order"
+)
+
+expected_manual_gates = [
+    (
+        "Select additional focused Vitest paths from the changed behavior using "
+        "documented test entry points."
+    ),
+    (
+        "The deterministic local `npm run test:e2e:csp` target may be selected "
+        "when UI or CSP behavior is affected. Live, workspace, Lighthouse, and "
+        "other environment-connected targets require separate user authorization."
+    ),
+]
+assert frontend["manual_gates"] == expected_manual_gates, (
+    "SecPal/frontend must distinguish the deterministic local CSP browser test "
+    "from separately authorized environment-connected targets"
+)
+
+all_validation_argv = [
+    tuple(command["argv"])
+    for command_group in ("focused_validation", "required_local_validation")
+    for command in frontend[command_group]
+]
+assert len(all_validation_argv) == len(set(all_validation_argv)), (
+    "SecPal/frontend validation commands must not be duplicated"
+)
+assert ("npm", "run", "build") not in all_validation_argv, (
+    "SecPal/frontend must not use the generic build command"
+)
+prohibited_target_fragments = ("test:e2e:live:", "workspace", "lighthouse")
+assert not any(
+    fragment in argument.lower()
+    for argv in all_validation_argv
+    for argument in argv
+    for fragment in prohibited_target_fragments
+), "SecPal/frontend must not register live, workspace, or Lighthouse targets"
+
+assert frontend["signature_policy"] == {
+    "require_github_verified": True,
+    "require_local_verified": True,
+    "accepted_formats": ["ssh", "openpgp"],
+}, "SecPal/frontend signature policy must remain strict"
+assert frontend["check_policy"] == {
+    "require_ruleset_evidence": True,
+    "require_branch_protection_evidence": True,
+    "expected_skipped": "block",
+}, "SecPal/frontend check policy must remain strict"
+assert frontend["unsupported_operations"] == [
+    "REVIEW_REQUEST", "READY_TRANSITION", "LABEL", "ISSUE",
+    "REVIEW_SUBMISSION", "MERGE", "AUTO_MERGE", "COMMENT_DELETE",
+    "REVIEW_DISMISSAL", "BRANCH_WRITE",
+], "SecPal/frontend unsupported operations must remain unchanged"
+assert {
+    key: frontend[key]
+    for key in (
+        "maximum_api_calls", "maximum_items", "maximum_threads",
+        "maximum_comments", "maximum_reactions",
+    )
+} == {
+    "maximum_api_calls": 200,
+    "maximum_items": 10000,
+    "maximum_threads": 500,
+    "maximum_comments": 200,
+    "maximum_reactions": 50,
+}, "SecPal/frontend capture limits must remain unchanged"
+
 for item in registry["repositories"]:
     for command_group in ("focused_validation", "required_local_validation"):
         for command in item[command_group]:
