@@ -75,16 +75,21 @@ frontmatter is parsed with the repository-pinned `js-yaml`. When focused
 overlays exist, a missing parser also fails closed.
 
 Polyscope does not use the mutable governance checkout's `node_modules`
-directly at runtime. Its installers copy the committed-lockfile installation to
-a content-addressed directory below
+directly at runtime. Its installers run `npm ci --offline --ignore-scripts`
+against the committed package and lock files, using only the service user's
+local npm cache, and publish the result below
 `~/.local/share/polyscope/ai-instruction-validator/` and switch the `current`
 symlink atomically. `SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT` selects that installed
 snapshot. This keeps bootstrap validation available while a separate
 governance command replaces checkout-local dependencies, without adding a
-download or permissive fallback to the validator. Snapshot activation verifies
-that both pinned validator tools execute successfully, and concurrent
-publishers treat the content-addressed directory as one exact target rather
-than nesting a losing staging directory inside it.
+download or permissive fallback to the validator. A shared publisher lock
+serializes user and system installers before they read the source lockfile, and
+each versioned snapshot records both the lockfile digest and a normalized digest
+of the installed dependency tree. Snapshot activation verifies those digests
+and smoke-tests both pinned validator tools. Concurrent publishers therefore
+cannot roll `current` back, publish mutable checkout contents, or nest a losing
+staging directory inside the winning target. An absent offline npm cache fails
+closed; run the repository's committed `npm ci` before retrying installation.
 
 Run the validator and its regression suite with:
 
@@ -113,7 +118,7 @@ Copilot review profile fails through the same canonical contract.
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;
 - an explicitly selected installed toolchain works independently of the
-  validator script's checkout;
+  validator script's checkout and never falls back to a global Markdownlint;
 - mirror phrases, copied overlay content, and policy keywords are unnecessary;
 - repository-path arguments continue to work.
 

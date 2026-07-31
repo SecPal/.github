@@ -96,11 +96,55 @@ if [ "$changed" -ge 600 ]; then
 fi
 EOF
 
+make_repo compact-exit
+cat >"$workspace/compact-exit/scripts/preflight.sh" <<'EOF'
+if [ "$CHANGED" -gt 600 ]; then echo "PR exceeds the size limit"; exit 1; fi
+EOF
+
+make_repo alternate-workflow-name
+cat >"$workspace/alternate-workflow-name/.github/workflows/custom-pr-size.yaml" <<'EOF'
+jobs:
+  size:
+    uses: SecPal/.github/.github/workflows/reusable-pr-size.yml@main
+EOF
+
+make_repo python-exit
+cat >"$workspace/python-exit/scripts/check_pr_size.py" <<'EOF'
+import sys
+
+if changed_lines > 600:
+    sys.exit(1)
+EOF
+
+make_repo javascript-exit
+cat >"$workspace/javascript-exit/scripts/check-pr-size.mjs" <<'EOF'
+if (changedLines > 600) {
+  process.exit(1);
+}
+EOF
+
+make_repo unreadable-policy
+# shellcheck disable=SC2016 # Fixture variables must remain literal.
+printf '# invalid UTF-8 comment: \377\nif [ "$CHANGED" -gt 600 ]; then exit 23; fi\n' \
+  >"$workspace/unreadable-policy/scripts/preflight.sh"
+chmod +x "$workspace/unreadable-policy/scripts/preflight.sh"
+
 make_repo zero-exit
 cat >"$workspace/zero-exit/scripts/preflight.sh" <<'EOF'
 if [ "$CHANGED" -gt 600 ]; then
   exit 0
 fi
+EOF
+
+make_repo advisory-typescript
+mkdir -p "$workspace/advisory-typescript/src"
+cat >"$workspace/advisory-typescript/src/report.ts" <<'EOF'
+export function reportSize(changedLines: number, threshold: number): string {
+  if (changedLines > threshold) {
+    console.warn("Advisory PR-size threshold exceeded");
+  }
+  return "reported";
+}
 EOF
 
 make_repo ignored-context
@@ -122,18 +166,25 @@ printf 'agent scratch\n' >"$workspace/tracked-context/.context/note.txt"
 
 bash "$validator" \
   "$workspace/advisory" \
+  "$workspace/advisory-typescript" \
   "$workspace/no-gate" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" >"$workspace/pass.out"
 grep -Fq "advisory: PASS" "$workspace/pass.out"
+grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
 
 for invalid in \
+  alternate-workflow-name \
+  compact-exit \
+  javascript-exit \
   hard-exit \
   override-file \
   label-override \
+  python-exit \
+  unreadable-policy \
   workflow-failure \
   exit-three \
   lowercase-variable \

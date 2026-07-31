@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
+VALIDATOR_NPM_CACHE="$(npm config get cache)"
 
 if [[ ! -x "$PRETTIER_BIN" ]]; then
     (cd "$REPO_ROOT" && npm ci)
@@ -38,6 +39,7 @@ trap 'rm -rf "$workspace"' EXIT
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"
 mkdir -p "$workspace_root" "$home_dir"
+export SECPAL_AI_VALIDATOR_NPM_CACHE="$VALIDATOR_NPM_CACHE"
 export HOME="$home_dir"
 
 create_repo() {
@@ -6586,12 +6588,24 @@ env HOME="$home_dir" \
 
 installed_validator_toolchain="$home_dir/.local/share/polyscope/ai-instruction-validator/current"
 test -L "$installed_validator_toolchain"
+if [[ ! "$(readlink "$installed_validator_toolchain")" =~ ^v2-[0-9a-f]{64}$ ]]; then
+    echo "validator current must select a versioned lockfile snapshot" >&2
+    exit 1
+fi
 installed_validator_toolchain="$(readlink -f "$installed_validator_toolchain")"
 test -d "$installed_validator_toolchain/node_modules"
 test ! -L "$installed_validator_toolchain/node_modules"
+test -f "$installed_validator_toolchain/package.json"
+test -f "$installed_validator_toolchain/.secpal-validator-snapshot"
 test -x "$installed_validator_toolchain/node_modules/.bin/markdownlint"
 test -f "$installed_validator_toolchain/node_modules/js-yaml/package.json"
 "$installed_validator_toolchain/node_modules/.bin/markdownlint" --version >/dev/null
+grep -q '^schema=1$' \
+    "$installed_validator_toolchain/.secpal-validator-snapshot"
+grep -q '^lock_sha256=[0-9a-f]\{64\}$' \
+    "$installed_validator_toolchain/.secpal-validator-snapshot"
+grep -q '^node_modules_sha256=[0-9a-f]\{64\}$' \
+    "$installed_validator_toolchain/.secpal-validator-snapshot"
 
 # A cached snapshot with a merely executable but unusable Markdownlint must be
 # rejected instead of being retained as the service-wide current toolchain.
@@ -6626,6 +6640,31 @@ grep -Fq "mv -T \"\$staging_dir\" \"\$snapshot_dir\"" "$INSTALL_SCRIPT"
 grep -Fq \
     "mv -T \"\$staging_dir\" \"\$snapshot_dir\"" \
     "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
+# shellcheck disable=SC2016 # Installer variables are literal source assertions.
+grep -Fq 'npm ci --prefix "$staging_dir" --offline --ignore-scripts' \
+    "$INSTALL_SCRIPT"
+# shellcheck disable=SC2016 # Installer variables are literal source assertions.
+grep -Fq 'npm ci --prefix "$staging_dir" --offline --ignore-scripts' \
+    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
+# shellcheck disable=SC2016 # Installer variables are literal source assertions.
+grep -Fq 'flock "$validator_runtime_lock_fd"' "$INSTALL_SCRIPT"
+# shellcheck disable=SC2016 # Installer variables are literal source assertions.
+grep -Fq 'flock "$validator_runtime_lock_fd"' \
+    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"
+# shellcheck disable=SC2016 # Installer variables are literal source assertions.
+if grep -Fq \
+    'cp -R --reflink=auto "$VALIDATOR_TOOLCHAIN_ROOT/node_modules"' \
+    "$INSTALL_SCRIPT"; then
+    echo "validator snapshots must not copy mutable checkout dependencies" >&2
+    exit 1
+fi
+# shellcheck disable=SC2016 # Installer variables are literal source assertions.
+if grep -Fq \
+    'cp -R --reflink=auto "$RUNTIME_TOOLCHAIN_ROOT/node_modules"' \
+    "$REPO_ROOT/scripts/install-polyscope-system-components.sh"; then
+    echo "system validator snapshots must not copy mutable checkout dependencies" >&2
+    exit 1
+fi
 
 # If the wrapped Expose path is replaced with the original real binary while .real already exists,
 # the installer must still repair it idempotently instead of failing.

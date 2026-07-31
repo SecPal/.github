@@ -102,8 +102,11 @@ bash scripts/validate-pr-size-policy.sh /path/to/api /path/to/frontend
 The validator reports one concise result per repository and rejects active
 size-triggered failures, override files or labels, size-based hook bypass
 instructions, unused size-override permissions, and mutable reusable-workflow
-references. It positively verifies advisory local reporting and the central
-reusable workflow contract where those implementations exist.
+references in every workflow filename. It fails closed on unreadable or
+non-UTF-8 policy inputs, recognizes compact Shell gates plus Python and
+JavaScript policy entry points, and avoids treating ordinary application
+returns as process failures. It positively verifies advisory local reporting
+and the central reusable workflow contract where those implementations exist.
 
 The regression suite builds its multi-repository fixtures in temporary storage
 and validates the current repository independently, so a normal preflight does
@@ -491,13 +494,18 @@ verifier with the committed npm validator dependencies installed. The installer
 loads the pinned parser and verifies its required API before any installation
 writes. It then publishes the lockfile-addressed validator dependencies below
 `~/.local/share/polyscope/ai-instruction-validator/` and atomically moves the
-`current` symlink. Polyscope services use that immutable snapshot, so a
-concurrent `npm ci` in the governance checkout cannot temporarily remove
-Markdownlint or `js-yaml` from a workspace bootstrap. Each published snapshot
-must execute both validator tools successfully, and concurrent publishers use
-an exact-target move so a losing staging directory cannot be nested inside the
-winning snapshot. The rollout still watches the runtime files and npm lock
-state for rollout changes and dependency-install recovery.
+`current` symlink. The snapshot is built with
+`npm ci --offline --ignore-scripts` from the committed package and lock files,
+not by copying the checkout's mutable `node_modules`. Polyscope services use
+that immutable snapshot, so a concurrent dependency replacement in the
+governance checkout cannot temporarily remove Markdownlint or `js-yaml` from a
+workspace bootstrap. A shared publisher lock covers lockfile selection,
+installation, exact-target publication, and `current` activation. Each
+published snapshot records and verifies its lockfile and normalized dependency
+tree digests and must execute both validator tools successfully. An explicitly
+selected snapshot never falls back to a global Markdownlint. The rollout still
+watches the runtime files and npm lock state for rollout changes and
+dependency-install recovery.
 
 After installation, the user-level `polyscope-rollout-sync.service` and
 `polyscope-worktree-provision.service` units take care of provisioning new

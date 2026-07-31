@@ -120,6 +120,11 @@ if grep -qF 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$dropin
     exit 1
 fi
 grep -q -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$dropin"
+# shellcheck disable=SC2016 # Installer variable is a literal source assertion.
+grep -Fq '/usr/bin/flock "$validator_runtime_lock_fd"' "$INSTALLER"
+grep -Fq '/usr/bin/tar' "$INSTALLER"
+grep -Fq '| /usr/bin/sha256sum' "$INSTALLER"
+grep -Fq '| /usr/bin/awk ' "$INSTALLER"
 
 if command -v visudo >/dev/null 2>&1; then
     visudo -c -f "$sudoers" >/dev/null

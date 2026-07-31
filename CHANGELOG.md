@@ -16,11 +16,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 - made pull-request size reporting advisory-only and added deterministic,
   checkout-portable validation of the organization-wide policy
 - installed the pinned Markdownlint and `js-yaml` runtime as an atomic,
-  lockfile-addressed Polyscope snapshot instead of reading the mutable
-  governance checkout's `node_modules` during workspace setup
+  integrity-recorded Polyscope snapshot built offline from the committed
+  lockfile instead of copying or reading the mutable governance checkout's
+  `node_modules` during workspace setup
 - retained fail-closed instruction validation while preventing concurrent
   dependency installation from transiently blocking unrelated workspaces,
-  including executable tool smoke checks and collision-safe snapshot publishing
+  including strict selected-toolchain isolation, serialized publishers,
+  dependency-tree integrity checks, and collision-safe snapshot publishing
 - documented that central reusable-workflow updates do not automatically
   update repository-local preflight implementations
 

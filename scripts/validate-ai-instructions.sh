@@ -9,7 +9,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VALIDATOR_TOOLCHAIN_ROOT="${SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT:-$SCRIPT_DIR/..}"
+if [ "${SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT+x}" = "x" ]; then
+    VALIDATOR_TOOLCHAIN_ROOT="$SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT"
+    VALIDATOR_TOOLCHAIN_REQUIRED=1
+else
+    VALIDATOR_TOOLCHAIN_ROOT="$SCRIPT_DIR/.."
+    VALIDATOR_TOOLCHAIN_REQUIRED=0
+fi
 
 TOTAL_TESTS=0
 PASSED_TESTS=0
@@ -172,8 +178,13 @@ test_reuse_license() {
 }
 
 markdownlint_available() {
-    [ -x "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ] \
-        || command -v markdownlint >/dev/null 2>&1
+    if [ -x "$VALIDATOR_TOOLCHAIN_ROOT/node_modules/.bin/markdownlint" ]; then
+        return 0
+    fi
+    if [ "$VALIDATOR_TOOLCHAIN_REQUIRED" -eq 1 ]; then
+        return 1
+    fi
+    command -v markdownlint >/dev/null 2>&1
 }
 
 markdownlint_runner() {
@@ -183,6 +194,9 @@ markdownlint_runner() {
         return
     fi
 
+    if [ "$VALIDATOR_TOOLCHAIN_REQUIRED" -eq 1 ]; then
+        return 1
+    fi
     markdownlint --config .markdownlint.json "$@"
 }
 
@@ -204,8 +218,13 @@ test_markdown_lint() {
         print_result "instruction Markdown passes lint" "FAIL" \
             "No instruction Markdown files found"
     elif ! markdownlint_available; then
-        print_result "instruction Markdown passes lint" "FAIL" \
-            "Markdownlint is unavailable; provide it with the committed lockfile dependencies or a compatible global markdownlint"
+        if [ "$VALIDATOR_TOOLCHAIN_REQUIRED" -eq 1 ]; then
+            print_result "instruction Markdown passes lint" "FAIL" \
+                "selected validator toolchain is incomplete: Markdownlint is unavailable"
+        else
+            print_result "instruction Markdown passes lint" "FAIL" \
+                "Markdownlint is unavailable; provide it with the committed lockfile dependencies or a compatible global markdownlint"
+        fi
     elif lint_output="$(markdownlint_runner "${targets[@]}" 2>&1)"; then
         print_result "instruction Markdown passes lint" "PASS"
     else

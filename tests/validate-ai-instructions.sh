@@ -389,6 +389,42 @@ fi
 grep -qF 'instruction overlays include valid frontmatter' "$runtime_toolchain_output"
 grep -qF 'instruction Markdown passes lint' "$runtime_toolchain_output"
 
+# An explicitly selected runtime snapshot is a strict dependency boundary.
+# Missing snapshot tools must fail closed instead of falling back to a mutable
+# command from PATH.
+incomplete_runtime_root="$workspace/incomplete-installed-validator-toolchain"
+incomplete_runtime_bin="$workspace/incomplete-installed-validator-bin"
+incomplete_runtime_repo="$workspace/incomplete-installed-validator-repository"
+mkdir -p "$incomplete_runtime_root/node_modules" "$incomplete_runtime_bin"
+ln -s "$REPO_ROOT/node_modules/js-yaml" \
+    "$incomplete_runtime_root/node_modules/js-yaml"
+ln -s "$REPO_ROOT/node_modules/argparse" \
+    "$incomplete_runtime_root/node_modules/argparse"
+copy_valid_repo "$valid_repo" "$incomplete_runtime_repo"
+cat >"$incomplete_runtime_bin/markdownlint" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$incomplete_runtime_bin/markdownlint"
+
+incomplete_runtime_output="$workspace/incomplete-installed-validator.output"
+set +e
+(
+    cd "$incomplete_runtime_repo"
+    PATH="$incomplete_runtime_bin:$PATH" \
+        SECPAL_AI_VALIDATOR_TOOLCHAIN_ROOT="$incomplete_runtime_root" \
+        REPO_TYPE=org /bin/bash "$VALIDATOR"
+) >"$incomplete_runtime_output" 2>&1
+incomplete_runtime_status=$?
+set -e
+if [ "$incomplete_runtime_status" -eq 0 ]; then
+    sed -n '1,240p' "$incomplete_runtime_output" >&2
+    echo "an incomplete selected validator snapshot must fail closed" >&2
+    exit 1
+fi
+grep -qF 'selected validator toolchain is incomplete' \
+    "$incomplete_runtime_output"
+
 # Focused frontmatter must fail closed when the repository-pinned YAML parser
 # is unavailable, even if Markdownlint itself is available globally.
 isolated_yaml_root="$workspace/no-frontmatter-yaml-toolchain"

@@ -14,8 +14,10 @@ RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
 RUNTIME_YAML_CHECK="$RUNTIME_SCRIPT_DIR/verify-js-yaml-package.cjs"
 RUNTIME_YAML_PACKAGE="$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml"
+RUNTIME_PACKAGE_JSON="$RUNTIME_TOOLCHAIN_ROOT/package.json"
 RUNTIME_VALIDATOR_BASE="/home/secpal/.local/share/polyscope/ai-instruction-validator"
 RUNTIME_VALIDATOR_CURRENT="$RUNTIME_VALIDATOR_BASE/current"
+RUNTIME_NPM_CACHE="/home/secpal/.npm"
 DESTDIR="${DESTDIR:-}"
 NODE_BIN=""
 STAGE_ONLY=0
@@ -111,6 +113,7 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
         "$RUNTIME_YAML_CHECK" \
+        "$RUNTIME_PACKAGE_JSON" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/.package-lock.json" \
         "$RUNTIME_TOOLCHAIN_ROOT/node_modules/js-yaml/package.json"; do
@@ -130,14 +133,67 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         echo "Error: canonical Polyscope runtime js-yaml package is unusable; reinstall the committed dependencies before activation." >&2
         exit 1
     fi
+    for trusted_system_tool in \
+        /usr/bin/awk \
+        /usr/bin/flock \
+        /usr/bin/sha256sum \
+        /usr/bin/tar; do
+        if [[ ! -x "$trusted_system_tool" ]]; then
+            echo "Error: trusted system runtime tool is unavailable: $trusted_system_tool" >&2
+            exit 1
+        fi
+    done
+    runtime_npm="$(PATH="$SYSTEM_SERVICE_PATH" command -v npm || true)"
+    if [[ -z "$runtime_npm" || "$runtime_npm" != /* ]] \
+        || ! /usr/bin/sudo -u secpal -- /usr/bin/test -x "$runtime_npm"; then
+        echo "Error: npm is unavailable to the secpal service user." >&2
+        exit 1
+    fi
 fi
+
+validator_node_modules_digest() {
+    local toolchain_root="$1"
+
+    /usr/bin/tar \
+        --sort=name \
+        --mtime='@0' \
+        --owner=0 \
+        --group=0 \
+        --numeric-owner \
+        --format=gnu \
+        -cf - \
+        -C "$toolchain_root" node_modules \
+        | /usr/bin/sha256sum \
+        | /usr/bin/awk '{print $1}'
+}
 
 installed_validator_toolchain_usable() {
     local toolchain_root="$1"
+    local expected_lock_digest="$2"
+    local installed_lock_digest installed_node_modules_digest
 
-    [[ -f "$toolchain_root/package-lock.json" \
+    read -r installed_lock_digest _ < <(
+        /usr/bin/sha256sum "$toolchain_root/package-lock.json"
+    )
+    if [[ "$installed_lock_digest" != "$expected_lock_digest" ]]; then
+        return 1
+    fi
+    if ! installed_node_modules_digest="$(validator_node_modules_digest "$toolchain_root")"; then
+        return 1
+    fi
+
+    [[ -f "$toolchain_root/package.json" \
+        && -f "$toolchain_root/package-lock.json" \
         && -f "$toolchain_root/node_modules/.package-lock.json" \
+        && -f "$toolchain_root/.secpal-validator-snapshot" \
         && -x "$toolchain_root/node_modules/.bin/markdownlint" ]] \
+        && grep -qxF 'schema=1' "$toolchain_root/.secpal-validator-snapshot" \
+        && grep -qxF \
+            "lock_sha256=$expected_lock_digest" \
+            "$toolchain_root/.secpal-validator-snapshot" \
+        && grep -qxF \
+            "node_modules_sha256=$installed_node_modules_digest" \
+            "$toolchain_root/.secpal-validator-snapshot" \
         && /usr/bin/sudo -u secpal -- /usr/bin/env \
             PATH="$SYSTEM_SERVICE_PATH" \
             "$toolchain_root/node_modules/.bin/markdownlint" --version >/dev/null 2>&1 \
@@ -146,10 +202,8 @@ installed_validator_toolchain_usable() {
 }
 
 install_validator_runtime_toolchain() {
-    local lock_digest snapshot_dir staging_dir temporary_link
-
-    read -r lock_digest _ < <(sha256sum "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json")
-    snapshot_dir="$RUNTIME_VALIDATOR_BASE/$lock_digest"
+    local lock_digest node_modules_digest snapshot_dir snapshot_name staging_dir temporary_link
+    local validator_runtime_lock_file validator_runtime_lock_fd
 
     if [[ -e "$RUNTIME_VALIDATOR_CURRENT" && ! -L "$RUNTIME_VALIDATOR_CURRENT" ]]; then
         echo "Error: validator runtime current pointer must be a symlink: $RUNTIME_VALIDATOR_CURRENT" >&2
@@ -157,12 +211,22 @@ install_validator_runtime_toolchain() {
     fi
 
     /usr/bin/sudo -u secpal -- mkdir -p "$RUNTIME_VALIDATOR_BASE"
+    validator_runtime_lock_file="$RUNTIME_VALIDATOR_BASE/.install.lock"
+    /usr/bin/sudo -u secpal -- touch "$validator_runtime_lock_file"
+    exec {validator_runtime_lock_fd}>"$validator_runtime_lock_file"
+    /usr/bin/flock "$validator_runtime_lock_fd"
+
+    read -r lock_digest _ < <(
+        /usr/bin/sha256sum "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json"
+    )
+    snapshot_name="v2-$lock_digest"
+    snapshot_dir="$RUNTIME_VALIDATOR_BASE/$snapshot_name"
     if [[ -e "$snapshot_dir" || -L "$snapshot_dir" ]]; then
         if [[ ! -d "$snapshot_dir" || -L "$snapshot_dir" ]]; then
             echo "Error: installed validator runtime snapshot must be a regular directory: $snapshot_dir" >&2
             exit 1
         fi
-        if ! installed_validator_toolchain_usable "$snapshot_dir"; then
+        if ! installed_validator_toolchain_usable "$snapshot_dir" "$lock_digest"; then
             echo "Error: installed validator runtime snapshot is incomplete: $snapshot_dir" >&2
             exit 1
         fi
@@ -170,16 +234,38 @@ install_validator_runtime_toolchain() {
         staging_dir="$(/usr/bin/sudo -u secpal -- \
             mktemp -d "$RUNTIME_VALIDATOR_BASE/.staging-$lock_digest.XXXXXX")"
         /usr/bin/sudo -u secpal -- \
-            cp -R --reflink=auto "$RUNTIME_TOOLCHAIN_ROOT/node_modules" "$staging_dir/node_modules"
+            cp "$RUNTIME_PACKAGE_JSON" "$staging_dir/package.json"
         /usr/bin/sudo -u secpal -- \
             cp "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" "$staging_dir/package-lock.json"
-        if ! installed_validator_toolchain_usable "$staging_dir"; then
+        if ! /usr/bin/sudo -u secpal -- /usr/bin/env \
+            HOME=/home/secpal \
+            NPM_CONFIG_CACHE="$RUNTIME_NPM_CACHE" \
+            PATH="$SYSTEM_SERVICE_PATH" \
+            npm ci --prefix "$staging_dir" --offline --ignore-scripts --no-audit --no-fund; then
+            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
+            echo "Error: failed to install the isolated validator runtime from the committed lockfile and local npm cache." >&2
+            exit 1
+        fi
+        if ! node_modules_digest="$(validator_node_modules_digest "$staging_dir")"; then
+            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
+            echo "Error: failed to hash the isolated validator runtime toolchain." >&2
+            exit 1
+        fi
+        if ! printf 'schema=1\nlock_sha256=%s\nnode_modules_sha256=%s\n' \
+            "$lock_digest" "$node_modules_digest" \
+            | /usr/bin/sudo -u secpal -- \
+                /usr/bin/tee "$staging_dir/.secpal-validator-snapshot" >/dev/null; then
+            /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
+            echo "Error: failed to record validator runtime snapshot integrity." >&2
+            exit 1
+        fi
+        if ! installed_validator_toolchain_usable "$staging_dir" "$lock_digest"; then
             /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
             echo "Error: failed to stage a complete isolated validator runtime toolchain." >&2
             exit 1
         fi
         if ! /usr/bin/sudo -u secpal -- mv -T "$staging_dir" "$snapshot_dir" 2>/dev/null; then
-            if installed_validator_toolchain_usable "$snapshot_dir"; then
+            if installed_validator_toolchain_usable "$snapshot_dir" "$lock_digest"; then
                 /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
             else
                 /usr/bin/sudo -u secpal -- rm -rf -- "$staging_dir"
@@ -190,8 +276,10 @@ install_validator_runtime_toolchain() {
     fi
 
     temporary_link="$RUNTIME_VALIDATOR_BASE/.current-$$"
-    /usr/bin/sudo -u secpal -- ln -s "${snapshot_dir##*/}" "$temporary_link"
+    /usr/bin/sudo -u secpal -- rm -f -- "$temporary_link"
+    /usr/bin/sudo -u secpal -- ln -s "$snapshot_name" "$temporary_link"
     /usr/bin/sudo -u secpal -- mv -Tf "$temporary_link" "$RUNTIME_VALIDATOR_CURRENT"
+    /usr/bin/flock -u "$validator_runtime_lock_fd"
 }
 
 prefix_path() {
