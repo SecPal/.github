@@ -3756,27 +3756,30 @@ class RegistryTests(TestCase):
                     str(executable),
                 )
 
-    def test_playwright_browser_cache_supports_linux_and_macos_defaults(self) -> None:
+    def test_playwright_browser_cache_uses_the_host_platform_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             account_home = Path(directory)
-            self.assertEqual(
-                actions._playwright_browsers_path(account_home),
-                account_home / ".cache/ms-playwright",
-            )
+            expected_by_platform = {
+                "linux": account_home / ".cache/ms-playwright",
+                "darwin": account_home / "Library/Caches/ms-playwright",
+            }
 
-            macos_cache = account_home / "Library/Caches/ms-playwright"
-            macos_cache.mkdir(parents=True)
-            self.assertEqual(
-                actions._playwright_browsers_path(account_home),
-                macos_cache,
-            )
-
-            linux_cache = account_home / ".cache/ms-playwright"
-            linux_cache.mkdir(parents=True)
-            self.assertEqual(
-                actions._playwright_browsers_path(account_home),
-                linux_cache,
-            )
+            for caches_exist in (False, True):
+                if caches_exist:
+                    for cache in expected_by_platform.values():
+                        cache.mkdir(parents=True)
+                for host_platform, expected in expected_by_platform.items():
+                    with (
+                        self.subTest(
+                            host_platform=host_platform,
+                            caches_exist=caches_exist,
+                        ),
+                        mock.patch.object(actions.sys, "platform", host_platform),
+                    ):
+                        self.assertEqual(
+                            actions._playwright_browsers_path(account_home),
+                            expected,
+                        )
 
     def test_registered_validations_receive_a_minimal_secret_free_environment(self) -> None:
         repository = registry_entry("SecPal/.github")

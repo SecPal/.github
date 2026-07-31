@@ -330,7 +330,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "pwd": {"getpwuid"},
         "site": {"getusersitepackages"},
-        "sys": {"modules", "stderr", "stdout", "version_info"},
+        "sys": {"modules", "platform", "stderr", "stdout", "version_info"},
         "tempfile": {"TemporaryDirectory"},
     },
     "fast_path.py": {

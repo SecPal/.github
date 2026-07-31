@@ -89,14 +89,9 @@ fast_path = _load_fast_path_helper()
 
 
 def _playwright_browsers_path(account_home: Path) -> Path:
-    candidates = (
-        account_home / ".cache/ms-playwright",
-        account_home / "Library/Caches/ms-playwright",
-    )
-    for candidate in candidates:
-        if candidate.is_dir():
-            return candidate
-    return candidates[0]
+    if sys.platform == "darwin":
+        return account_home / "Library/Caches/ms-playwright"
+    return account_home / ".cache/ms-playwright"
 
 
 ACCOUNT_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
