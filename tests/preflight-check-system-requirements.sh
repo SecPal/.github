@@ -18,4 +18,11 @@ if ! grep -Fq 'tests/check-system-requirements.sh' "$PREFLIGHT_SCRIPT"; then
   exit 1
 fi
 
+dependency_line="$(grep -n -m1 '^[[:space:]]*npm ci[[:space:]]*$' "$PREFLIGHT_SCRIPT" | cut -d: -f1)"
+policy_line="$(grep -n -m1 'bash tests/validate-pr-size-policy.sh' "$PREFLIGHT_SCRIPT" | cut -d: -f1)"
+if [ -z "$dependency_line" ] || [ -z "$policy_line" ] || [ "$dependency_line" -ge "$policy_line" ]; then
+  echo "scripts/preflight.sh must install locked npm dependencies before running tests/validate-pr-size-policy.sh." >&2
+  exit 1
+fi
+
 echo "tests/preflight-check-system-requirements.sh: preflight wiring verified."

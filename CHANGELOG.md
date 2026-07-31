@@ -33,8 +33,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 - parsed multiline JavaScript conditions with Acorn, required proven PR-size
   provenance for generic counters, and validated reusable-workflow reporting
   from parsed executable commands instead of raw YAML text
+- followed reachable JavaScript failure paths through functions and exception
+  handlers while excluding dormant functions, unreachable handlers, and typed
+  TypeScript sources from the plain-JavaScript parser boundary
+- modeled effective per-job permission overrides and permission shorthands,
+  inspected immutable `actions/github-script` steps, and made partial managed
+  workspaces retain repository boundaries during policy validation
+- ordered the policy audit after locked npm dependency installation so its
+  pinned YAML and JavaScript parsers are available in fresh checkouts
 - preserved workflow step boundaries, validated pinned historical workflow
-  revisions against the advisory contract, and ignore suffixless binary helpers
+  revisions against the advisory contract, and ignored suffixless binary helpers
 - fixed invalid `.preflight-exclude` expressions so they remain advisory and
   cannot hide changed lines from local or hosted size reporting
 - documented that central reusable-workflow updates do not automatically

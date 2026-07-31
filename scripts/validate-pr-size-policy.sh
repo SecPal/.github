@@ -101,10 +101,15 @@ def resolve_repositories(arguments: list[str]) -> list[Path]:
         return [workspace / name for name in MANAGED_REPOSITORIES]
 
     supplied = [Path(value).resolve() for value in arguments]
-    if len(supplied) == 1 and all(
-        (supplied[0] / name).is_dir() for name in MANAGED_REPOSITORIES
-    ):
-        return [supplied[0] / name for name in MANAGED_REPOSITORIES]
+    if len(supplied) == 1 and not (supplied[0] / ".git").exists():
+        managed_children = [
+            supplied[0] / name
+            for name in MANAGED_REPOSITORIES
+            if (supplied[0] / name).is_dir()
+            and (supplied[0] / name / ".git").exists()
+        ]
+        if managed_children:
+            return managed_children
     return supplied
 
 
@@ -860,7 +865,7 @@ def policy_language(root: Path, path: Path, text: str) -> str | None:
         return "shell"
     if suffix == ".py":
         return "python"
-    if suffix in {".js", ".cjs", ".mjs", ".ts"}:
+    if suffix in {".js", ".cjs", ".mjs"}:
         return "javascript"
     if suffix == "" and re.match(r"^#!.*\b(?:ba|da|k|z)?sh\b", text):
         return "shell"
@@ -874,6 +879,9 @@ class WorkflowUnit:
     blocking: bool
     conditions: tuple[str, ...]
     uses: str | None
+    action_script: str | None
+    job_id: str | None
+    permissions: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -930,6 +938,9 @@ def workflow_document(text: str, kind: str = "workflow") -> WorkflowDocument:
                 blocking=item["blocking"],
                 conditions=tuple(item["conditions"]),
                 uses=item["uses"],
+                action_script=item["actionScript"],
+                job_id=item["jobId"],
+                permissions=frozenset(item["permissions"]),
             )
             for item in value["units"]
         )
@@ -943,6 +954,15 @@ def workflow_document(text: str, kind: str = "workflow") -> WorkflowDocument:
                 and isinstance(unit.blocking, bool)
                 and all(isinstance(condition, str) for condition in unit.conditions)
                 and (unit.uses is None or isinstance(unit.uses, str))
+                and (
+                    unit.action_script is None
+                    or isinstance(unit.action_script, str)
+                )
+                and (unit.job_id is None or isinstance(unit.job_id, str))
+                and all(
+                    isinstance(permission, str)
+                    for permission in unit.permissions
+                )
                 for unit in units
             )
             or (description is not None and not isinstance(description, str))
@@ -970,7 +990,12 @@ def unit_executable_lines(unit: WorkflowUnit) -> list[str]:
         lines = javascript_analysis(unit.lines).executable_source.splitlines()
     else:
         lines = unit.lines
-    return [*unit.conditions, *lines, *([unit.uses] if unit.uses else [])]
+    return [
+        *unit.conditions,
+        *lines,
+        *([unit.uses] if unit.uses else []),
+        *([unit.action_script] if unit.action_script else []),
+    ]
 
 
 def workflow_executable_text(document: WorkflowDocument) -> str:
@@ -1031,13 +1056,23 @@ def local_action_path(root: Path, uses: str) -> Path | None:
 
 def action_process_failure(
     root: Path,
-    uses: str,
+    unit: WorkflowUnit,
     contents: dict[Path, str],
     action_cache: dict[Path, WorkflowDocument],
     resolving: frozenset[Path] = frozenset(),
 ) -> bool:
+    uses = unit.uses
+    if uses is None:
+        raise PolicyParseError("action analysis requires an action reference")
     action_path = local_action_path(root, uses)
     if action_path is None:
+        if (
+            re.fullmatch(
+                r"actions/github-script@[0-9a-f]{40}", uses, re.IGNORECASE
+            )
+            and unit.action_script is not None
+        ):
+            return javascript_failure(unit.action_script.splitlines())
         return True
     if action_path in resolving:
         raise PolicyParseError("local composite actions contain a cycle")
@@ -1057,7 +1092,7 @@ def action_process_failure(
             continue
         if unit.uses is not None:
             if action_process_failure(
-                root, unit.uses, contents, action_cache, nested
+                root, unit, contents, action_cache, nested
             ):
                 return True
         elif workflow_process_failure(unit):
@@ -1084,7 +1119,7 @@ def workflow_unit_hard_size_exit(
         if unit.uses is not None:
             if root is None or contents is None or action_cache is None:
                 return True
-            return action_process_failure(root, unit.uses, contents, action_cache)
+            return action_process_failure(root, unit, contents, action_cache)
         return workflow_process_failure(unit)
     if unit.uses is not None:
         return False
@@ -1344,8 +1379,8 @@ def validate_repository(
         except PolicyParseError:
             continue
         executable_text = workflow_executable_text(document)
-        references = [
-            match.group(1)
+        referenced_units = [
+            (unit, match.group(1))
             for unit in document.units
             if unit.uses is not None
             and (
@@ -1356,15 +1391,49 @@ def validate_repository(
                 )
             )
         ]
-        is_size_workflow = bool(references) or (
-            "git diff --numstat" in executable_text
-            and re.search(r"\bPR[- ]?size\b", executable_text, re.IGNORECASE)
-        )
-        if "pull-requests" in document.permissions and is_size_workflow:
+        size_job_ids = {
+            unit.job_id for unit, _ in referenced_units if unit.job_id is not None
+        }
+        for job_id in {
+            unit.job_id for unit in document.units if unit.job_id is not None
+        }:
+            job_text = "\n".join(
+                line
+                for unit in document.units
+                if unit.job_id == job_id
+                for line in unit_executable_lines(unit)
+            )
+            job_shell_structure = "\n".join(
+                shell_structure_line(line)
+                for unit in document.units
+                if unit.job_id == job_id and unit.language == "shell"
+                for line in shell_code_lines(unit.lines)
+            )
+            job_shell_lines = [
+                line
+                for unit in document.units
+                if unit.job_id == job_id and unit.language == "shell"
+                for line in shell_code_lines(unit.lines)
+            ]
+            has_size_calculation = re.search(
+                r"\bgit\s+diff\b[^\n]*--numstat\b", job_shell_structure
+            ) is not None or any(
+                SIZE_CALCULATION.search(expression)
+                for _, expression in assignment_expressions(job_shell_lines)
+            )
+            if has_size_calculation and re.search(
+                r"\bPR[- ]?size\b", job_text, re.IGNORECASE
+            ):
+                size_job_ids.add(job_id)
+        if any(
+            unit.job_id in size_job_ids
+            and "pull-requests" in unit.permissions
+            for unit in document.units
+        ):
             failures.append(
                 f"{relative.as_posix()}: unused pull-request permission"
             )
-        for reference in references:
+        for _, reference in referenced_units:
             if not re.fullmatch(r"[0-9a-f]{40}", reference):
                 failures.append(
                     f"{relative.as_posix()}: reusable workflow is not pinned to an immutable SHA"

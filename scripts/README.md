@@ -109,26 +109,34 @@ next to the validator source. Parsed workflow objects preserve step boundaries,
 effective workflow/job/step Shell defaults, conditions, and action references
 across indentless sequences, folded scalars, and flow-style collections. Local
 composite-action steps and root pre-commit hook entries are parsed through the
-same structured boundary and dispatched by their configured runtime. The audit
-recognizes compact and multi-line Shell conditional lists, deferred failure
-statuses, standalone Shell predicates under `errexit`, syntax-tree-aware Python
-conditions and assertions, and Acorn-parsed JavaScript policy entry points. It
-ignores YAML, Shell, Python, and JavaScript comments and quoted Shell examples,
-requires explicit PR-size provenance for generic counters, and avoids treating
-caught exceptions, ordinary application returns, or suffixless binary helpers
-as policy failures.
-Immutable reusable-workflow references are
-loaded from the supplied governance Git checkout and checked against the
-advisory contract at that exact historical revision; callers with such a
-reference fail closed when no unique governance checkout is supplied. The
-validator also positively verifies advisory local reporting and the current
-central reusable workflow contract where those implementations exist.
+same structured boundary and dispatched by their configured runtime. Immutable
+`actions/github-script` steps are inspected through their embedded script;
+unknown or mutable external actions remain fail-closed. Effective permissions
+are evaluated per job, including `read-all`, `write-all`, explicit `none`, and
+job-level overrides. The audit recognizes compact and multi-line Shell
+conditional lists, deferred failure statuses, standalone Shell predicates under
+`errexit`, syntax-tree-aware Python conditions and assertions, and Acorn-parsed
+JavaScript policy entry points. JavaScript reachability follows invoked
+functions, argument provenance, immediately invoked functions, and exception
+handlers. Typed `.ts` sources stay outside that plain-JavaScript parser boundary.
+The audit ignores YAML, Shell, Python, and JavaScript comments and quoted Shell
+examples, requires explicit PR-size provenance for generic counters, and avoids
+treating caught exceptions, dormant functions, unreachable handlers, ordinary
+application returns, or suffixless binary helpers as policy failures. Immutable
+reusable-workflow references are loaded from the supplied governance Git
+checkout and checked against the advisory contract at that exact historical
+revision; callers with such a reference fail closed when no unique governance
+checkout is supplied. The validator also positively verifies advisory local
+reporting and the current central reusable workflow contract where those
+implementations exist.
 
 The regression suite builds its multi-repository fixtures in temporary storage
 and validates the current repository independently, so a normal preflight does
-not require sibling checkouts. Gitignored Polyscope `.context` collaboration
-data is outside the policy scan, while a tracking-aware guard rejects any
-force-added `.context` path.
+not require sibling checkouts. When a workspace root is supplied, every
+available managed child Git repository is validated independently even if the
+workspace is incomplete. Gitignored Polyscope `.context` collaboration data is
+outside the policy scan, while a tracking-aware guard rejects any force-added
+`.context` path.
 
 Updating the central reusable workflow does not update repository-local
 preflight copies. Each repository keeps its own non-size validation

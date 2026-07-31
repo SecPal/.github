@@ -390,6 +390,74 @@ runs:
       run: echo "PR size advisory threshold exceeded"
 EOF
 
+make_repo conditional-external-action-advisory
+cat >"$workspace/conditional-external-action-advisory/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: actions/github-script@0123456789abcdef0123456789abcdef01234567
+        with:
+          script: console.log("PR size advisory threshold exceeded")
+EOF
+
+make_repo conditional-external-action-hard-exit
+cat >"$workspace/conditional-external-action-hard-exit/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: actions/github-script@0123456789abcdef0123456789abcdef01234567
+        with:
+          script: core.setFailed("PR size threshold exceeded")
+EOF
+
+make_repo conditional-external-action-unreachable-catch
+cat >"$workspace/conditional-external-action-unreachable-catch/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: actions/github-script@0123456789abcdef0123456789abcdef01234567
+        with:
+          script: |
+            try {
+              console.log("PR size advisory threshold exceeded");
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+EOF
+
+make_repo conditional-external-action-called-function
+cat >"$workspace/conditional-external-action-called-function/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: actions/github-script@0123456789abcdef0123456789abcdef01234567
+        with:
+          script: |
+            function rejectLargePullRequest() {
+              core.setFailed("PR size threshold exceeded");
+            }
+            rejectLargePullRequest();
+EOF
+
+make_repo conditional-external-action-uncalled-function
+cat >"$workspace/conditional-external-action-uncalled-function/.github/workflows/pr-size.yml" <<'EOF'
+jobs:
+  size:
+    steps:
+      - if: env.CHANGED > 600
+        uses: actions/github-script@0123456789abcdef0123456789abcdef01234567
+        with:
+          script: |
+            function unusedFailure() {
+              core.setFailed("unused");
+            }
+            console.log("PR size advisory threshold exceeded");
+EOF
+
 make_repo workflow-nonblocking-step
 cat >"$workspace/workflow-nonblocking-step/.github/workflows/pr-size.yml" <<'EOF'
 jobs:
@@ -534,6 +602,79 @@ if (changedLines > 600) {
 }
 EOF
 
+make_repo javascript-caught-advisory
+cat >"$workspace/javascript-caught-advisory/scripts/report-pr-size.mjs" <<'EOF'
+try {
+  if (changedLines > 600) {
+    throw new Error("threshold exceeded");
+  }
+} catch (error) {
+  console.warn(error.message);
+}
+EOF
+
+make_repo javascript-caught-rethrow
+cat >"$workspace/javascript-caught-rethrow/scripts/check-pr-size.mjs" <<'EOF'
+try {
+  if (changedLines > 600) {
+    throw new Error("threshold exceeded");
+  }
+} catch (error) {
+  throw error;
+}
+EOF
+
+make_repo javascript-caught-exit
+cat >"$workspace/javascript-caught-exit/scripts/check-pr-size.mjs" <<'EOF'
+try {
+  if (changedLines > 600) {
+    throw new Error("threshold exceeded");
+  }
+} catch (error) {
+  process.exit(1);
+}
+EOF
+
+make_repo javascript-unreachable-catch
+cat >"$workspace/javascript-unreachable-catch/scripts/report-pr-size.mjs" <<'EOF'
+try {
+  console.warn("PR size remains advisory");
+} catch (error) {
+  if (changedLines > 600) {
+    process.exit(1);
+  }
+}
+EOF
+
+make_repo javascript-called-parameter-advisory
+cat >"$workspace/javascript-called-parameter-advisory/scripts/report-pr-size.mjs" <<'EOF'
+function report(size, threshold) {
+  if (size > threshold) {
+    console.warn("PR size advisory threshold exceeded");
+  }
+}
+report(changedLines, 600);
+EOF
+
+make_repo javascript-called-parameter-exit
+cat >"$workspace/javascript-called-parameter-exit/scripts/check-pr-size.mjs" <<'EOF'
+function enforce(size, threshold) {
+  if (size > threshold) {
+    process.exit(1);
+  }
+}
+enforce(changedLines, 600);
+EOF
+
+make_repo javascript-iife-exit
+cat >"$workspace/javascript-iife-exit/scripts/check-pr-size.mjs" <<'EOF'
+((size, threshold) => {
+  if (size > threshold) {
+    process.exit(1);
+  }
+})(changedLines, 600);
+EOF
+
 make_repo javascript-zero-exit-code
 cat >"$workspace/javascript-zero-exit-code/scripts/report-pr-size.mjs" <<'EOF'
 if (changedLines > 600) {
@@ -663,14 +804,87 @@ fi
 EOF
 
 make_repo advisory-typescript
-mkdir -p "$workspace/advisory-typescript/src"
-cat >"$workspace/advisory-typescript/src/report.ts" <<'EOF'
+cat >"$workspace/advisory-typescript/scripts/report.ts" <<'EOF'
 export function reportSize(changedLines: number, threshold: number): string {
   if (changedLines > threshold) {
     console.warn("Advisory PR-size threshold exceeded");
   }
   return "reported";
 }
+EOF
+
+make_repo workflow-write-all-permissions
+cat >"$workspace/workflow-write-all-permissions/.github/workflows/pr-size.yml" <<'EOF'
+permissions: write-all
+jobs:
+  size:
+    steps:
+      - run: |
+          CHANGED="$(git diff --numstat HEAD^..HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+          echo "PR size: $CHANGED changed lines"
+EOF
+
+make_repo workflow-read-all-permissions
+cat >"$workspace/workflow-read-all-permissions/.github/workflows/pr-size.yml" <<'EOF'
+permissions: read-all
+jobs:
+  size:
+    steps:
+      - run: |
+          CHANGED="$(git diff --numstat HEAD^..HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+          echo "PR size: $CHANGED changed lines"
+EOF
+
+make_repo workflow-no-pull-request-permission
+cat >"$workspace/workflow-no-pull-request-permission/.github/workflows/pr-size.yml" <<'EOF'
+permissions:
+  contents: read
+  pull-requests: none
+jobs:
+  size:
+    steps:
+      - run: |
+          CHANGED="$(git diff --numstat HEAD^..HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+          echo "PR size: $CHANGED changed lines"
+EOF
+
+make_repo workflow-job-permission-override
+cat >"$workspace/workflow-job-permission-override/.github/workflows/pr-size.yml" <<'EOF'
+permissions: write-all
+jobs:
+  size:
+    permissions:
+      contents: read
+    steps:
+      - run: |
+          CHANGED="$(git diff --numstat HEAD^..HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+          echo "PR size: $CHANGED changed lines"
+EOF
+
+make_repo workflow-unrelated-privileged-job
+cat >"$workspace/workflow-unrelated-privileged-job/.github/workflows/pr-size.yml" <<'EOF'
+permissions:
+  contents: read
+jobs:
+  maintenance:
+    permissions: write-all
+    steps:
+      - run: echo "Unrelated maintenance"
+  size:
+    steps:
+      - run: |
+          CHANGED="$(git diff --numstat HEAD^..HEAD | awk '{sum += $1 + $2} END {print sum + 0}')"
+          echo "PR size: $CHANGED changed lines"
+EOF
+
+make_repo workflow-unrelated-permission-text
+cat >"$workspace/workflow-unrelated-permission-text/.github/workflows/docs.yml" <<'EOF'
+permissions: write-all
+jobs:
+  docs:
+    steps:
+      - run: |
+          echo 'Documentation example: git diff --numstat reports PR size'
 EOF
 
 make_repo ignored-context
@@ -700,13 +914,19 @@ if ! bash "$validator" \
   "$workspace/conditional-list-zero-exit" \
   "$workspace/commented-shell-gate" \
   "$workspace/conditional-action-advisory" \
+  "$workspace/conditional-external-action-advisory" \
+  "$workspace/conditional-external-action-uncalled-function" \
+  "$workspace/conditional-external-action-unreachable-catch" \
   "$workspace/deferred-zero-status" \
   "$workspace/errexit-disabled" \
   "$workspace/no-gate" \
   "$workspace/python-caught-exception" \
   "$workspace/zero-exit" \
   "$workspace/ignored-context" \
+  "$workspace/javascript-called-parameter-advisory" \
+  "$workspace/javascript-unreachable-catch" \
   "$workspace/javascript-zero-exit-code" \
+  "$workspace/javascript-caught-advisory" \
   "$workspace/job-default-python-advisory" \
   "$workspace/python-library-return" \
   "$workspace/python-zero-status" \
@@ -717,10 +937,14 @@ if ! bash "$validator" \
   "$workspace/unrelated-changed-counter" \
   "$workspace/workflow-boolean-condition" \
   "$workspace/workflow-job-if-advisory" \
+  "$workspace/workflow-job-permission-override" \
+  "$workspace/workflow-no-pull-request-permission" \
   "$workspace/workflow-step-boundary" \
   "$workspace/workflow-nonblocking-job" \
   "$workspace/workflow-nonblocking-step" \
   "$workspace/workflow-template-advisory" \
+  "$workspace/workflow-unrelated-privileged-job" \
+  "$workspace/workflow-unrelated-permission-text" \
   "$workspace/composite-python-advisory" \
   "$repo_root" >"$workspace/pass.out"; then
   cat "$workspace/pass.out" >&2
@@ -732,13 +956,19 @@ grep -Fq "advisory-typescript: PASS" "$workspace/pass.out"
 grep -Fq "conditional-list-zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "commented-shell-gate: PASS" "$workspace/pass.out"
 grep -Fq "conditional-action-advisory: PASS" "$workspace/pass.out"
+grep -Fq "conditional-external-action-advisory: PASS" "$workspace/pass.out"
+grep -Fq "conditional-external-action-uncalled-function: PASS" "$workspace/pass.out"
+grep -Fq "conditional-external-action-unreachable-catch: PASS" "$workspace/pass.out"
 grep -Fq "deferred-zero-status: PASS" "$workspace/pass.out"
 grep -Fq "errexit-disabled: PASS" "$workspace/pass.out"
 grep -Fq "no-gate: PASS" "$workspace/pass.out"
 grep -Fq "python-caught-exception: PASS" "$workspace/pass.out"
 grep -Fq "zero-exit: PASS" "$workspace/pass.out"
 grep -Fq "ignored-context: PASS" "$workspace/pass.out"
+grep -Fq "javascript-called-parameter-advisory: PASS" "$workspace/pass.out"
+grep -Fq "javascript-unreachable-catch: PASS" "$workspace/pass.out"
 grep -Fq "javascript-zero-exit-code: PASS" "$workspace/pass.out"
+grep -Fq "javascript-caught-advisory: PASS" "$workspace/pass.out"
 grep -Fq "job-default-python-advisory: PASS" "$workspace/pass.out"
 grep -Fq "python-library-return: PASS" "$workspace/pass.out"
 grep -Fq "python-zero-status: PASS" "$workspace/pass.out"
@@ -749,10 +979,14 @@ grep -Fq "unrelated-size: PASS" "$workspace/pass.out"
 grep -Fq "unrelated-changed-counter: PASS" "$workspace/pass.out"
 grep -Fq "workflow-boolean-condition: PASS" "$workspace/pass.out"
 grep -Fq "workflow-job-if-advisory: PASS" "$workspace/pass.out"
+grep -Fq "workflow-job-permission-override: PASS" "$workspace/pass.out"
+grep -Fq "workflow-no-pull-request-permission: PASS" "$workspace/pass.out"
 grep -Fq "workflow-step-boundary: PASS" "$workspace/pass.out"
 grep -Fq "workflow-nonblocking-job: PASS" "$workspace/pass.out"
 grep -Fq "workflow-nonblocking-step: PASS" "$workspace/pass.out"
 grep -Fq "workflow-template-advisory: PASS" "$workspace/pass.out"
+grep -Fq "workflow-unrelated-privileged-job: PASS" "$workspace/pass.out"
+grep -Fq "workflow-unrelated-permission-text: PASS" "$workspace/pass.out"
 grep -Fq "composite-python-advisory: PASS" "$workspace/pass.out"
 
 for invalid in \
@@ -763,12 +997,18 @@ for invalid in \
   conditional-list-exit \
   conditional-list-multiline \
   conditional-action-hard-exit \
+  conditional-external-action-hard-exit \
+  conditional-external-action-called-function \
   deferred-exit \
   derived-size-alias \
   diff-size-alias \
   errexit-standalone \
   hard-pinned-revision \
   javascript-compound-exit-code \
+  javascript-called-parameter-exit \
+  javascript-caught-exit \
+  javascript-caught-rethrow \
+  javascript-iife-exit \
   javascript-multiline-exit \
   javascript-exit \
   javascript-exit-code \
@@ -795,6 +1035,8 @@ for invalid in \
   workflow-blocking-step \
   workflow-failure \
   workflow-javascript-hard-exit \
+  workflow-read-all-permissions \
+  workflow-write-all-permissions \
   workflow-default-python-hard-exit \
   workflow-python-hard-exit \
   workflow-template-hard-exit \
@@ -827,11 +1069,26 @@ managed_repositories=(
 )
 for repository in "${managed_repositories[@]}"; do
   mkdir -p "$managed_workspace/$repository"
+  git -C "$managed_workspace/$repository" init --quiet --initial-branch=main
 done
 bash "$validator" "$managed_workspace" >"$workspace/managed.out"
 for repository in "${managed_repositories[@]}"; do
   grep -Fq "$repository: PASS" "$workspace/managed.out"
 done
+
+partial_workspace="$workspace/partial-managed"
+mkdir -p "$partial_workspace/api/scripts"
+git -C "$partial_workspace/api" init --quiet --initial-branch=main
+cat >"$partial_workspace/api/scripts/preflight.sh" <<'EOF'
+if [ "$CHANGED" -gt 600 ]; then
+  exit 1
+fi
+EOF
+if bash "$validator" "$partial_workspace" >"$workspace/partial-managed.out" 2>&1; then
+  echo "Expected partial managed workspace hard gate to fail validation" >&2
+  exit 1
+fi
+grep -Fq "api: FAIL" "$workspace/partial-managed.out"
 
 # A repository preflight must remain runnable from an isolated checkout. The
 # explicit multi-repository command above covers workspace-wide auditing.

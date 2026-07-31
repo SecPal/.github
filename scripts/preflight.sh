@@ -288,15 +288,6 @@ if [ -f tests/pr-size-advisory.sh ]; then
   }
 fi
 
-if [ -f tests/validate-pr-size-policy.sh ]; then
-  bash tests/validate-pr-size-policy.sh || {
-    echo "" >&2
-    echo "❌ Organization-wide PR-size policy validation failed!" >&2
-    echo "Keep every managed local and hosted size policy advisory-only." >&2
-    exit 1
-  }
-fi
-
 if [ -f tests/markdownlint-precommit-config.sh ]; then
   bash tests/markdownlint-precommit-config.sh || {
     echo "" >&2
@@ -472,6 +463,15 @@ elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
     yarn typecheck 2>/dev/null || true
     yarn test 2>/dev/null || true
   fi
+fi
+
+if [ -f tests/validate-pr-size-policy.sh ]; then
+  bash tests/validate-pr-size-policy.sh || {
+    echo "" >&2
+    echo "❌ Organization-wide PR-size policy validation failed!" >&2
+    echo "Keep every managed local and hosted size policy advisory-only." >&2
+    exit 1
+  }
 fi
 
 # 3) OpenAPI (Spectral)
