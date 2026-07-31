@@ -331,10 +331,22 @@ expected_focused_validation = [
         ),
         "execution_policy": "focused-only",
     },
+    {
+        "argv": ["npm", "run", "test:container"],
+        "working_directory": ".",
+        "purpose": "Build and exercise the hardened frontend container contract",
+        "execution_policy": "focused-only",
+    },
+    {
+        "argv": ["npm", "run", "test:e2e:container"],
+        "working_directory": ".",
+        "purpose": "Exercise the real frontend container in Chromium",
+        "execution_policy": "focused-only",
+    },
 ]
 assert frontend["focused_validation"] == expected_focused_validation, (
     "SecPal/frontend focused validation must register the migration, UI/CSP, "
-    "and local Chromium CSP contracts exactly once and in order"
+    "local Chromium CSP, and container contracts exactly once and in order"
 )
 
 expected_required_local_validation = [
@@ -381,21 +393,34 @@ expected_manual_gates = [
     ),
     (
         "The deterministic local `npm run test:e2e:csp` target may be selected "
-        "when UI or CSP behavior is affected. Live, workspace, Lighthouse, and "
-        "other environment-connected targets require separate user authorization."
+        "when UI or CSP behavior is affected. The deterministic local "
+        "`npm run test:container` target may be selected when Dockerfile, image, "
+        "Nginx, entrypoint, runtime configuration, PWA cache, or container-contract "
+        "behavior is affected. The deterministic local `npm run test:e2e:container` "
+        "target may be selected when container-browser, runtime-origin, CSP, "
+        "service-worker, or real HTTP delivery behavior is affected. Each local "
+        "container command requires explicit current user authorization for Docker "
+        "daemon access; authorization from an earlier task does not carry over. "
+        "Live, workspace, Lighthouse, deployment, and other environment-connected "
+        "targets require separate explicit user authorization. Image publishing, "
+        "registry login, push, prune, and deployment remain prohibited."
     ),
 ]
 assert frontend["manual_gates"] == expected_manual_gates, (
-    "SecPal/frontend must distinguish the deterministic local CSP browser test "
-    "from separately authorized environment-connected targets"
+    "SecPal/frontend must distinguish deterministic local CSP and container "
+    "targets from separately authorized environment-connected targets"
 )
 assert [
     command["argv"]
     for command in frontend["focused_validation"]
     if command.get("execution_policy") == "focused-only"
-] == [["npm", "run", "test:e2e:csp"]], (
-    "SecPal/frontend must keep only the local Chromium CSP target out of "
-    "unconditional complete validation"
+] == [
+    ["npm", "run", "test:e2e:csp"],
+    ["npm", "run", "test:container"],
+    ["npm", "run", "test:e2e:container"],
+], (
+    "SecPal/frontend must keep the local Chromium CSP and container targets out "
+    "of unconditional complete validation"
 )
 command_policy = schema["$defs"]["command"]["properties"]["execution_policy"]
 assert command_policy == {"enum": ["always", "focused-only"]}, (
@@ -411,16 +436,29 @@ all_validation_argv = [
 assert len(all_validation_argv) == len(set(all_validation_argv)), (
     "SecPal/frontend validation commands must not be duplicated"
 )
+container_validation_argv = {
+    ("npm", "run", "test:container"),
+    ("npm", "run", "test:e2e:container"),
+}
+assert container_validation_argv.isdisjoint(
+    tuple(command["argv"])
+    for command in frontend["required_local_validation"]
+), "SecPal/frontend container targets must not become required local validation"
 assert ("npm", "run", "build") not in all_validation_argv, (
     "SecPal/frontend must not use the generic build command"
 )
-prohibited_target_fragments = ("test:e2e:live:", "workspace", "lighthouse")
+prohibited_target_fragments = (
+    "docker login", "docker push", "docker system prune", "docker image prune",
+    "ghcr", "test:e2e:live:", "workspace", "lighthouse", "deploy",
+)
 assert not any(
-    fragment in argument.lower()
+    fragment in " ".join(argv).lower()
     for argv in all_validation_argv
-    for argument in argv
     for fragment in prohibited_target_fragments
-), "SecPal/frontend must not register live, workspace, or Lighthouse targets"
+), (
+    "SecPal/frontend must not register publishing, pruning, deployment, live, "
+    "workspace, or Lighthouse targets"
+)
 
 assert frontend["signature_policy"] == {
     "require_github_verified": True,

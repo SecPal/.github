@@ -3889,7 +3889,9 @@ class RegistryTests(TestCase):
             )
 
     def test_complete_validation_excludes_focused_only_commands(self) -> None:
-        repository = frontend_registry_entry()
+        repository = actions.select_repository(
+            actions.load_registry(), "SecPal/frontend"
+        )
 
         with (
             mock.patch.object(
@@ -3908,28 +3910,50 @@ class RegistryTests(TestCase):
             )
 
         executed_scripts = [call.args[0][-1] for call in run.call_args_list]
-        self.assertIn("test:migration-boundary", executed_scripts)
-        self.assertIn("test:ui-csp", executed_scripts)
+        self.assertEqual(
+            executed_scripts,
+            [
+                "test:migration-boundary",
+                "test:ui-csp",
+                "format:check",
+                "lint",
+                "typecheck",
+                "test:ci",
+                "build:web",
+                "build:android",
+            ],
+        )
         self.assertNotIn("test:e2e:csp", executed_scripts)
-        self.assertIn("build:web", executed_scripts)
-        self.assertIn("build:android", executed_scripts)
+        self.assertNotIn("test:container", executed_scripts)
+        self.assertNotIn("test:e2e:container", executed_scripts)
 
     def test_complete_validation_binding_excludes_focused_only_commands(self) -> None:
-        repository = frontend_registry_entry()
+        repository = actions.select_repository(
+            actions.load_registry(), "SecPal/frontend"
+        )
 
         binding = actions._fast_registry_binding(repository)
 
-        self.assertNotIn(
-            ["npm", "run", "test:e2e:csp"],
+        self.assertEqual(
             [command["argv"] for command in binding["validation"]],
-        )
-        self.assertIn(
-            ["npm", "run", "test:ui-csp"],
-            [command["argv"] for command in binding["validation"]],
+            [
+                ["npm", "run", "test:migration-boundary"],
+                ["npm", "run", "test:ui-csp"],
+                ["npm", "run", "format:check"],
+                ["npm", "run", "lint"],
+                ["npm", "run", "typecheck"],
+                ["npm", "run", "test:ci"],
+                ["npm", "run", "build:web"],
+                ["npm", "run", "build:android"],
+            ],
         )
         self.assertEqual(
             [command["argv"] for command in binding["focused_only_validation"]],
-            [["npm", "run", "test:e2e:csp"]],
+            [
+                ["npm", "run", "test:e2e:csp"],
+                ["npm", "run", "test:container"],
+                ["npm", "run", "test:e2e:container"],
+            ],
         )
 
     def test_required_validation_rejects_focused_only_execution(self) -> None:

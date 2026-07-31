@@ -164,6 +164,18 @@
           "working_directory": ".",
           "purpose": "Exercise the local production frontend under the strict CSP in Chromium",
           "execution_policy": "focused-only"
+        },
+        {
+          "argv": ["npm", "run", "test:container"],
+          "working_directory": ".",
+          "purpose": "Build and exercise the hardened frontend container contract",
+          "execution_policy": "focused-only"
+        },
+        {
+          "argv": ["npm", "run", "test:e2e:container"],
+          "working_directory": ".",
+          "purpose": "Exercise the real frontend container in Chromium",
+          "execution_policy": "focused-only"
         }
       ],
       "required_local_validation": [
@@ -210,7 +222,7 @@
       },
       "manual_gates": [
         "Select additional focused Vitest paths from the changed behavior using documented test entry points.",
-        "The deterministic local `npm run test:e2e:csp` target may be selected when UI or CSP behavior is affected. Live, workspace, Lighthouse, and other environment-connected targets require separate user authorization."
+        "The deterministic local `npm run test:e2e:csp` target may be selected when UI or CSP behavior is affected. The deterministic local `npm run test:container` target may be selected when Dockerfile, image, Nginx, entrypoint, runtime configuration, PWA cache, or container-contract behavior is affected. The deterministic local `npm run test:e2e:container` target may be selected when container-browser, runtime-origin, CSP, service-worker, or real HTTP delivery behavior is affected. Each local container command requires explicit current user authorization for Docker daemon access; authorization from an earlier task does not carry over. Live, workspace, Lighthouse, deployment, and other environment-connected targets require separate explicit user authorization. Image publishing, registry login, push, prune, and deployment remain prohibited."
       ],
       "unsupported_operations": [
         "REVIEW_REQUEST",
