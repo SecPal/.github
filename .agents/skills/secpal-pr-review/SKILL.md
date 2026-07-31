@@ -111,13 +111,16 @@ The following state machine applies only to the full feedback-remediation path.
    thread comments. Reactions and unrelated feedback are not thread-resolution
    preconditions. Never infer truth from reviewer identity, keywords, or CI.
 3. Reproduce every valid finding, add a failing test first, make the smallest
-   coherent corrections, and use focused validation while editing.
+   coherent corrections, and use focused validation while editing. A registry
+   command with `execution_policy: focused-only` is eligible for this explicit
+   selection but is never added to unconditional complete validation.
 4. Perform the one holistic audit across correctness, security, privacy, data
    integrity, lifecycle, rollout, and avoidable complexity. Fix material
    in-scope defects before the complete validation.
-5. Stage the finished tree and run complete registered local validation exactly
-   once through `attest-validation`, supplying explicit satisfied evidence for
-   every registered manual gate. Preserve its deterministic staged-tree,
+5. Stage the finished tree and run the registered unconditional focused commands
+   plus every required local validation exactly once through
+   `attest-validation`, supplying explicit satisfied evidence for every
+   registered manual gate. Preserve its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
    receipt.
 6. When remediation changed the staged tree, create one signed commit containing

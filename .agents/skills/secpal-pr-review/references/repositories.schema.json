@@ -92,7 +92,8 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "working_directory": { "type": "string", "minLength": 1 },
-        "purpose": { "type": "string", "minLength": 1 }
+        "purpose": { "type": "string", "minLength": 1 },
+        "execution_policy": { "enum": ["always", "focused-only"] }
       }
     }
   }

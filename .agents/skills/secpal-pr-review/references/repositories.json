@@ -162,7 +162,8 @@
         {
           "argv": ["npm", "run", "test:e2e:csp"],
           "working_directory": ".",
-          "purpose": "Exercise the local production frontend under the strict CSP in Chromium"
+          "purpose": "Exercise the local production frontend under the strict CSP in Chromium",
+          "execution_policy": "focused-only"
         }
       ],
       "required_local_validation": [

@@ -280,8 +280,9 @@ requires `--apply`. `reply` has the same anchors. `resolve` also requires
 `--initial-snapshot` and refuses the write until final evidence proves clean and
 matching heads, accepted signatures, complete validation, successful required
 checks, no late feedback, and complete dispositions for all unresolved initial
-threads and material top-level findings. Each resolution invocation also runs
-the checked-in focused and required local validation commands and compares the
+threads and material top-level findings. Each forensic resolution invocation
+also runs the checked-in unconditional focused and required local validation
+commands and compares the
 complete live target-thread comment set with the final snapshot. It then
 re-reads applicable required-check rules, branch protection, the current base,
 the effective check target, and current required-check outcomes; any drift or

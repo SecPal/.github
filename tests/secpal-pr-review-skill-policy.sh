@@ -11,6 +11,7 @@ CONTRACT="$REPO_ROOT/.agents/skills/secpal-pr-review/references/contract.md"
 EVIDENCE="$REPO_ROOT/scripts/secpal-pr-review.py"
 ACTIONS="$REPO_ROOT/scripts/secpal-pr-review-actions.py"
 REGISTRY="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.json"
+REGISTRY_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.schema.json"
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
 FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
@@ -61,6 +62,7 @@ for required in \
   "$SCRIPT_README" \
   "$POLYSCOPE_INSTALLER" \
   "$REGISTRY" \
+  "$REGISTRY_SCHEMA" \
   "$PLAN_SCHEMA" \
   "$FAST_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
@@ -269,13 +271,14 @@ done
 test "$(git -C "$REPO_ROOT" diff --name-only "$P21_BASELINE" -- "${relative_paths[@]}" | wc -l)" -eq 0 \
   || fail 'existing review governance or instruction routing changed'
 
-python3 - "$PLAN_SCHEMA" "$FAST_SCHEMA" "$REGISTRY" <<'PY'
+python3 - "$PLAN_SCHEMA" "$FAST_SCHEMA" "$REGISTRY" "$REGISTRY_SCHEMA" <<'PY'
 import json
 import sys
 
 plan_schema = json.load(open(sys.argv[1], encoding="utf-8"))
 fast_schema = json.load(open(sys.argv[2], encoding="utf-8"))
 registry = json.load(open(sys.argv[3], encoding="utf-8"))
+schema = json.load(open(sys.argv[4], encoding="utf-8"))
 
 allowed = {"REACTION", "EVIDENCE_REPLY", "THREAD_RESOLUTION"}
 operation_kind = plan_schema["$defs"]["operation"]["properties"]["kind"]["enum"]
@@ -326,6 +329,7 @@ expected_focused_validation = [
             "Exercise the local production frontend under the strict CSP "
             "in Chromium"
         ),
+        "execution_policy": "focused-only",
     },
 ]
 assert frontend["focused_validation"] == expected_focused_validation, (
@@ -384,6 +388,19 @@ expected_manual_gates = [
 assert frontend["manual_gates"] == expected_manual_gates, (
     "SecPal/frontend must distinguish the deterministic local CSP browser test "
     "from separately authorized environment-connected targets"
+)
+assert [
+    command["argv"]
+    for command in frontend["focused_validation"]
+    if command.get("execution_policy") == "focused-only"
+] == [["npm", "run", "test:e2e:csp"]], (
+    "SecPal/frontend must keep only the local Chromium CSP target out of "
+    "unconditional complete validation"
+)
+command_policy = schema["$defs"]["command"]["properties"]["execution_policy"]
+assert command_policy == {"enum": ["always", "focused-only"]}, (
+    "registry command execution policy must remain closed to always and "
+    "focused-only"
 )
 
 all_validation_argv = [

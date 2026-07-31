@@ -1034,6 +1034,13 @@ def validate_registry(registry: dict[str, Any]) -> dict[str, Any]:
             raise RegistryError(f"invalid Package 2.1 configuration for {repository}: {exc}") from exc
         for command in (*entry["focused_validation"], *entry["required_local_validation"]):
             _validate_command(command)
+        if any(
+            command.get("execution_policy") == "focused-only"
+            for command in entry["required_local_validation"]
+        ):
+            raise RegistryError(
+                "required local validation cannot use focused-only execution"
+            )
         if not entry["required_local_validation"] and not entry["manual_gates"]:
             raise RegistryError("incomplete validation requires an explicit manual gate")
         if set(entry["unsupported_operations"]) != set(PROHIBITED_OPERATION_KINDS):
@@ -1087,15 +1094,26 @@ def _validation_executable(
     raise RegistryError("registered validation executable is unavailable")
 
 
+def _complete_validation_commands(
+    repository: dict[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    focused = tuple(
+        command
+        for command in repository["focused_validation"]
+        if command.get("execution_policy", "always") == "always"
+    )
+    return (*focused, *repository["required_local_validation"])
+
+
 def _run_registered_validations(
     repository: dict[str, Any], repository_root: Path
 ) -> bool:
-    """Run every checked-in validation command once, without a shell or diagnostic output."""
+    """Run unconditional validation once, without a shell or diagnostic output."""
 
     repository_root = repository_root.resolve()
     if not repository_root.is_dir():
         return False
-    commands = (*repository["focused_validation"], *repository["required_local_validation"])
+    commands = _complete_validation_commands(repository)
     try:
         validation_home = tempfile.TemporaryDirectory(
             prefix="secpal-pr-review-validation-"
@@ -4008,8 +4026,13 @@ def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
             key: entry[key]
             for key in ("maximum_api_calls", "maximum_items")
         },
-        "validation": copy.deepcopy(
-            [*entry["focused_validation"], *entry["required_local_validation"]]
+        "validation": copy.deepcopy(list(_complete_validation_commands(entry))),
+        "focused_only_validation": copy.deepcopy(
+            [
+                command
+                for command in entry["focused_validation"]
+                if command.get("execution_policy") == "focused-only"
+            ]
         ),
     }
 
