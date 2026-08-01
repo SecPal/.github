@@ -6909,6 +6909,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         module.subprocess.run = original_run
 
     expected_paths = [
+        clone_root.parent.parent,
         clone_root.parent,
         clone_root,
         worktree.parent,

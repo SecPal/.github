@@ -3876,6 +3876,7 @@ def ensure_preview_nginx_access(
         raise RuntimeError("setfacl is required to grant Nginx access to preview worktrees")
 
     for path in (
+        resolved_clone_root.parent.parent,
         resolved_clone_root.parent,
         resolved_clone_root,
         repo_clone_root,
