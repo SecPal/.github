@@ -6813,6 +6813,66 @@ fi
 grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '.polyscope-preview-stage' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'build.lock' "$workspace_root/frontend/polyscope.local.json"
+python3 - "$PYTHON_SCRIPT" <<'PY'
+import importlib.util
+import os
+import shlex
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+
+def generated_namespace(command: str, terminator: str) -> dict[str, object]:
+    argv = shlex.split(command)
+    assert argv[:2] == ["python3", "-c"], argv
+    source = argv[2].split(terminator, 1)[0]
+    namespace: dict[str, object] = {}
+    exec(source, namespace)
+    return namespace
+
+
+for command, terminator in (
+    (module.build_frontend_preview_build_command(), "\nworkspace = resolve_current_workspace"),
+    (module.build_frontend_preview_build_watch_command(), "\ndef run_build"),
+):
+    namespace = generated_namespace(command, terminator)
+    publish_preview_build = namespace["publish_preview_build"]
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        worktree = Path(temporary_directory)
+        stage_dir = worktree / "stage"
+        assets_dir = stage_dir / "assets"
+        assets_dir.mkdir(parents=True)
+        os.chmod(assets_dir, 0o700)
+
+        index_file = stage_dir / "index.html"
+        index_file.write_text("<!doctype html>")
+        os.chmod(index_file, 0o600)
+
+        asset_file = assets_dir / "app.js"
+        asset_file.write_text("console.log('preview')")
+        os.chmod(asset_file, 0o600)
+
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(worktree)
+            publish_preview_build(stage_dir)
+        finally:
+            os.chdir(previous_directory)
+
+        dist_dir = worktree / "dist"
+        assert stat.S_IMODE(dist_dir.stat().st_mode) == 0o755
+        assert stat.S_IMODE((dist_dir / "assets").stat().st_mode) == 0o755
+        assert stat.S_IMODE((dist_dir / "index.html").stat().st_mode) == 0o644
+        assert stat.S_IMODE((dist_dir / "assets" / "app.js").stat().st_mode) == 0o644
+PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"

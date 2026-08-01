@@ -1697,6 +1697,7 @@ def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
     os.close(fd)
     shutil.copy2(src_file, tmp_path)
+    os.chmod(tmp_path, 0o644)
     if dest_file.is_dir() and not dest_file.is_symlink():
         shutil.rmtree(dest_file)
     os.replace(tmp_path, dest_file)
@@ -1705,6 +1706,7 @@ def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(dest_dir, 0o755)
     for child in sorted(src_dir.iterdir()):
         dest_child = dest_dir / child.name
         if child.is_dir():
@@ -1742,6 +1744,7 @@ def publish_preview_build(stage_dir: Path) -> None:
     if live_root.is_symlink():
         raise RuntimeError("live preview dist is a symlink")
     live_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(live_root, 0o755)
 
     with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
         tmp_dir = Path(_tmp)
@@ -1909,6 +1912,7 @@ def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
     fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
     os.close(fd)
     shutil.copy2(src_file, tmp_path)
+    os.chmod(tmp_path, 0o644)
     if dest_file.is_dir() and not dest_file.is_symlink():
         shutil.rmtree(dest_file)
     os.replace(tmp_path, dest_file)
@@ -1917,6 +1921,7 @@ def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(dest_dir, 0o755)
     for child in sorted(src_dir.iterdir()):
         dest_child = dest_dir / child.name
         if child.is_dir():
@@ -1954,6 +1959,7 @@ def publish_preview_build(stage_dir: Path) -> None:
     if live_root.is_symlink():
         raise RuntimeError("live preview dist is a symlink")
     live_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(live_root, 0o755)
 
     with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
         tmp_dir = Path(_tmp)
