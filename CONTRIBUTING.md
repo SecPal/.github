@@ -30,6 +30,7 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
 ├── api/              # Laravel backend API
 ├── android/          # React/TypeScript Android app via Capacitor
 ├── contracts/        # OpenAPI 3.1 specifications
+├── deployment/       # Public governance and future deployment repository
 ├── frontend/         # React/TypeScript frontend
 └── secpal.app/       # Astro public website
 ```

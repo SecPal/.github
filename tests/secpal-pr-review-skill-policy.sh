@@ -298,6 +298,7 @@ expected = [
     "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts",
     "SecPal/android", "SecPal/GuardGuide",
     "SecPal/guardguide.de", "SecPal/secpal.app",
+    "SecPal/deployment",
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
 
