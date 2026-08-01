@@ -3704,7 +3704,61 @@ class RegistryTests(TestCase):
     repositories = [
         "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts", "SecPal/android",
         "SecPal/changelog", "SecPal/GuardGuide", "SecPal/guardguide.de", "SecPal/secpal.app",
+        "SecPal/deployment",
     ]
+
+    def test_deployment_repository_registration_matches_the_supported_schema(self) -> None:
+        registry = actions.load_registry()
+        self.assertEqual([item["repository"] for item in registry["repositories"]], self.repositories)
+        deployment = actions.select_repository(registry, "SecPal/deployment")
+
+        self.assertEqual(deployment["repository"], "SecPal/deployment")
+        self.assertEqual(
+            f"https://github.com/{deployment['repository']}",
+            "https://github.com/SecPal/deployment",
+        )
+        self.assertEqual(deployment["default_branch"], "main")
+        self.assertEqual(deployment["allowed_base_repositories"], ["SecPal/deployment"])
+        self.assertEqual(deployment["reviewer_identities"], [])
+        self.assertEqual(deployment["focused_validation"], [])
+        self.assertEqual(deployment["required_local_validation"], [])
+        self.assertEqual(
+            deployment["signature_policy"],
+            {
+                "require_github_verified": True,
+                "require_local_verified": True,
+                "accepted_formats": ["ssh", "openpgp"],
+            },
+        )
+        self.assertEqual(
+            deployment["check_policy"],
+            {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True,
+                "expected_skipped": "block",
+            },
+        )
+        self.assertIn("BRANCH_WRITE", deployment["unsupported_operations"])
+        self.assertEqual(
+            set(deployment),
+            {
+                "repository",
+                "default_branch",
+                "allowed_base_repositories",
+                "reviewer_identities",
+                "focused_validation",
+                "required_local_validation",
+                "signature_policy",
+                "check_policy",
+                "manual_gates",
+                "unsupported_operations",
+                "maximum_api_calls",
+                "maximum_items",
+                "maximum_threads",
+                "maximum_comments",
+                "maximum_reactions",
+            },
+        )
 
     def test_registry_caps_match_unpaginated_nested_live_connections(self) -> None:
         registry = actions.load_registry()

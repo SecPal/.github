@@ -604,6 +604,44 @@
       "maximum_threads": 500,
       "maximum_comments": 200,
       "maximum_reactions": 50
+    },
+    {
+      "repository": "SecPal/deployment",
+      "default_branch": "main",
+      "allowed_base_repositories": ["SecPal/deployment"],
+      "reviewer_identities": [],
+      "focused_validation": [],
+      "required_local_validation": [],
+      "signature_policy": {
+        "require_github_verified": true,
+        "require_local_verified": true,
+        "accepted_formats": ["ssh", "openpgp"]
+      },
+      "check_policy": {
+        "require_ruleset_evidence": true,
+        "require_branch_protection_evidence": true,
+        "expected_skipped": "block"
+      },
+      "manual_gates": [
+        "Do not deploy, access deployment infrastructure, or use environment-connected validation; this repository currently contains only a governance bootstrap."
+      ],
+      "unsupported_operations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE"
+      ],
+      "maximum_api_calls": 200,
+      "maximum_items": 10000,
+      "maximum_threads": 500,
+      "maximum_comments": 200,
+      "maximum_reactions": 50
     }
   ]
 }

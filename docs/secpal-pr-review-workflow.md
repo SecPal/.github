@@ -41,6 +41,7 @@ The production registry explicitly supports:
 - `SecPal/GuardGuide`
 - `SecPal/guardguide.de`
 - `SecPal/secpal.app`
+- `SecPal/deployment`
 
 Repository-local `AGENTS.md` and focused instructions remain authoritative.
 Commands in the central registry are argument arrays, never shell strings. Bare
