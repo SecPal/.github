@@ -479,9 +479,12 @@ else
   if [ -z "$MERGE_BASE" ]; then
     echo "Warning: Cannot determine merge base with origin/$BASE. Skipping PR size check." >&2
   else
-    # Get raw diff output
-    RAW_DIFF_OUTPUT=$(git diff --numstat "$MERGE_BASE"..HEAD 2>/dev/null)
-    DIFF_OUTPUT="$RAW_DIFF_OUTPUT"
+    # Keep raw path bytes and separate rename/copy source and destination paths.
+    # Bash variables cannot store NUL bytes, so retain the diff in a temporary file.
+    NUMSTAT_FILE=$(mktemp "${TMPDIR:-/tmp}/secpal-pr-size.XXXXXX")
+    trap 'rm -f -- "$NUMSTAT_FILE"' EXIT
+    git diff --numstat -z "$MERGE_BASE"..HEAD >"$NUMSTAT_FILE" 2>/dev/null
+    EXCLUDE_REGEX=""
 
     # Load exclude patterns from .preflight-exclude if it exists
     if [ -f "$ROOT_DIR/.preflight-exclude" ]; then
@@ -498,8 +501,10 @@ else
         set +e  # Temporarily disable exit-on-error to capture grep's exit code
         echo "" | grep -qE -- "$EXCLUDE_REGEX" 2>/dev/null
         GREP_EXIT=$?
+        [[ "" =~ $EXCLUDE_REGEX ]]
+        BASH_REGEX_EXIT=$?
         set -e  # Re-enable exit-on-error
-        if [ $GREP_EXIT -ne 2 ]; then
+        if [ $GREP_EXIT -ne 2 ] && [ $BASH_REGEX_EXIT -ne 2 ]; then
           # Pattern is valid (exit 0 or 1), check if it matches everything
           # Test against diverse filenames to detect overly broad patterns
           # Include various cases: lowercase, uppercase, numbers, special chars, hidden files
@@ -515,9 +520,9 @@ else
             echo "This will exclude all files from PR size calculation!" >&2
           fi
 
-          DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
         else
           # Invalid regex - grep failed even on empty input
+          EXCLUDE_REGEX=""
           echo "⚠️  WARNING: .preflight-exclude contains invalid regex pattern(s)" >&2
           echo "The pattern will be ignored. Please check your .preflight-exclude file." >&2
           echo "Common issues: unbalanced brackets [, unmatched (, trailing backslash \\" >&2
@@ -526,16 +531,47 @@ else
       fi
     fi
 
+    # With --numstat -z, a rename or copy has an empty path field followed
+    # by separate source and destination paths. Match only the destination.
+    RAW_RECORD_COUNT=0
+    INCLUDED_RECORD_COUNT=0
+    INSERTIONS=0
+    DELETIONS=0
+    while IFS= read -r -d '' record; do
+      insertions=${record%%$'\t'*}
+      remainder=${record#*$'\t'}
+      deletions=${remainder%%$'\t'*}
+      path=${remainder#*$'\t'}
+
+      if [ -z "$path" ]; then
+        if ! IFS= read -r -d '' _source_path || ! IFS= read -r -d '' path; then
+          echo "Error: Malformed rename or copy record in git diff --numstat output" >&2
+          exit 1
+        fi
+      fi
+
+      RAW_RECORD_COUNT=$((RAW_RECORD_COUNT + 1))
+      if [ -n "$EXCLUDE_REGEX" ] && [[ $path =~ $EXCLUDE_REGEX ]]; then
+        continue
+      fi
+
+      INCLUDED_RECORD_COUNT=$((INCLUDED_RECORD_COUNT + 1))
+      if [[ $insertions =~ ^[0-9]+$ ]] && [[ $deletions =~ ^[0-9]+$ ]]; then
+        INSERTIONS=$((INSERTIONS + insertions))
+        DELETIONS=$((DELETIONS + deletions))
+      elif [ "$insertions" != "-" ] || [ "$deletions" != "-" ]; then
+        echo "Error: Malformed counts in git diff --numstat output" >&2
+        exit 1
+      fi
+    done <"$NUMSTAT_FILE"
+
     PR_SIZE_ADVISORY_THRESHOLD=600
 
     # Report when all files were excluded, then continue with zero counts.
-    if [ -n "$RAW_DIFF_OUTPUT" ] && [ -z "$DIFF_OUTPUT" ]; then
+    if [ "$RAW_RECORD_COUNT" -gt 0 ] && [ "$INCLUDED_RECORD_COUNT" -eq 0 ]; then
       echo "⚠️  All changed files are excluded (lock files, license files, etc.)" >&2
     fi
 
-    # Use --numstat for locale-independent parsing.
-    INSERTIONS=$(echo "$DIFF_OUTPUT" | awk '{ins+=$1} END {print ins+0}')
-    DELETIONS=$(echo "$DIFF_OUTPUT" | awk '{del+=$2} END {print del+0}')
     CHANGED=$((INSERTIONS + DELETIONS))
     SIZE_REPORT="PR size: $CHANGED changed lines ($INSERTIONS insertions, $DELETIONS deletions; advisory threshold: $PR_SIZE_ADVISORY_THRESHOLD)"
 
