@@ -483,6 +483,21 @@ else
     RAW_DIFF_OUTPUT=$(git diff --numstat "$MERGE_BASE"..HEAD 2>/dev/null)
     DIFF_OUTPUT="$RAW_DIFF_OUTPUT"
 
+    # --numstat records contain insertion count, deletion count, and path.
+    # Exclusions describe paths, not their tab-separated accounting records.
+    filter_numstat_by_path() {
+      local records="$1"
+      local exclude_regex="$2"
+      local insertions deletions path
+
+      while IFS=$'\t' read -r insertions deletions path; do
+        [ -n "$insertions$deletions$path" ] || continue
+        if ! printf '%s\n' "$path" | grep -qE -- "$exclude_regex"; then
+          printf '%s\t%s\t%s\n' "$insertions" "$deletions" "$path"
+        fi
+      done <<< "$records"
+    }
+
     # Load exclude patterns from .preflight-exclude if it exists
     if [ -f "$ROOT_DIR/.preflight-exclude" ]; then
       # Extract non-comment, non-empty lines as grep-compatible regex patterns
@@ -515,7 +530,7 @@ else
             echo "This will exclude all files from PR size calculation!" >&2
           fi
 
-          DIFF_OUTPUT=$(echo "$DIFF_OUTPUT" | grep -vE -- "$EXCLUDE_REGEX" 2>/dev/null || true)
+          DIFF_OUTPUT=$(filter_numstat_by_path "$DIFF_OUTPUT" "$EXCLUDE_REGEX")
         else
           # Invalid regex - grep failed even on empty input
           echo "⚠️  WARNING: .preflight-exclude contains invalid regex pattern(s)" >&2

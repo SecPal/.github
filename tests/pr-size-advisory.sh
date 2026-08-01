@@ -49,12 +49,17 @@ make_lines() {
 
 create_git_fixture() {
   local repository="$1"
+  local exclude_patterns="${2-}"
 
   mkdir -p "$repository/source" "$repository/generated" "$repository/vendor"
-  cat >"$repository/.preflight-exclude" <<'EOF'
+  if [ -n "$exclude_patterns" ]; then
+    printf '%s\n' "$exclude_patterns" >"$repository/.preflight-exclude"
+  else
+    cat >"$repository/.preflight-exclude" <<'EOF'
 # Keep generated changes out of the reviewability report.
 generated/
 EOF
+  fi
   make_lines 4 "$repository/source/existing.txt"
 
   (
@@ -74,8 +79,9 @@ EOF
 
 create_preflight_fixture() {
   local repository="$1"
+  local exclude_patterns="${2-}"
 
-  create_git_fixture "$repository"
+  create_git_fixture "$repository" "$exclude_patterns"
   mkdir -p "$repository/scripts" "$repository/bin"
   cp "$PREFLIGHT_SCRIPT" "$repository/scripts/preflight.sh"
 
@@ -177,6 +183,50 @@ assert_not_contains \
   "$excluded_local_stderr" \
   "WARNING: PR size advisory threshold exceeded" \
   "excluded changes must not trigger the advisory warning"
+
+path_exclusion_local_repo="$workspace/local-path-exclusions"
+path_exclusion_local_stdout="$workspace/local-path-exclusions.stdout"
+path_exclusion_local_stderr="$workspace/local-path-exclusions.stderr"
+create_preflight_fixture \
+  "$path_exclusion_local_repo" \
+  $'^LICENSES/.*\\.txt$\npackage-lock.json'
+mkdir -p \
+  "$path_exclusion_local_repo/LICENSES" \
+  "$path_exclusion_local_repo/docs/LICENSES" \
+  "$path_exclusion_local_repo/assets" \
+  "$path_exclusion_local_repo/custom" \
+  "$path_exclusion_local_repo/lockfiles" \
+  "$path_exclusion_local_repo/prefix LICENSES"
+make_lines 601 "$path_exclusion_local_repo/LICENSES/license.txt"
+make_lines 5 "$path_exclusion_local_repo/docs/LICENSES/license.txt"
+make_lines 6 "$path_exclusion_local_repo/prefix LICENSES/notes.txt"
+make_lines 700 "$path_exclusion_local_repo/lockfiles/package-lock.json"
+make_lines 500 "$path_exclusion_local_repo/custom/ignored.txt"
+printf 'binary\0content\n' >"$path_exclusion_local_repo/assets/image.bin"
+(
+  cd "$path_exclusion_local_repo"
+  git add LICENSES/license.txt docs/LICENSES/license.txt 'prefix LICENSES/notes.txt' \
+    lockfiles/package-lock.json custom/ignored.txt assets/image.bin
+  git commit --quiet -m "test: cover path-based exclusions"
+)
+if ! git -C "$path_exclusion_local_repo" diff --numstat origin/main..HEAD | grep -Fqx -- $'-\t-\tassets/image.bin'; then
+  record_failure "path-exclusion fixture must contain a binary --numstat record"
+fi
+run_preflight_fixture \
+  "$path_exclusion_local_repo" \
+  "$path_exclusion_local_stdout" \
+  "$path_exclusion_local_stderr"
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "local preflight must support anchored path exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$path_exclusion_local_stdout" \
+  "Preflight OK · PR size: 511 changed lines (511 insertions, 0 deletions; advisory threshold: 600)" \
+  "local preflight must exclude root licenses and lock files without excluding nested or spaced paths"
+assert_not_contains \
+  "$path_exclusion_local_stderr" \
+  "WARNING: PR size advisory threshold exceeded" \
+  "path exclusions must prevent the local advisory warning"
 
 all_excluded_local_repo="$workspace/local-all-excluded"
 all_excluded_local_stdout="$workspace/local-all-excluded.stdout"
@@ -355,6 +405,45 @@ assert_not_contains \
   "$excluded_workflow_output" \
   "::warning::PR size advisory threshold exceeded" \
   "hosted excluded changes must not trigger the advisory warning"
+
+path_exclusion_workflow_output="$workspace/workflow-path-exclusions.out"
+run_workflow_fixture \
+  "$path_exclusion_local_repo" \
+  "$path_exclusion_workflow_output" \
+  ""
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "reusable workflow shell must match local path exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$path_exclusion_workflow_output" \
+  "PR size: 511 changed lines (511 insertions, 0 deletions; advisory threshold: 600)" \
+  "local and hosted fixtures must report identical counts after repository exclusions"
+
+path_exclusion_custom_workflow_output="$workspace/workflow-path-custom-exclusions.out"
+run_workflow_fixture \
+  "$path_exclusion_local_repo" \
+  "$path_exclusion_custom_workflow_output" \
+  '^custom/.*\.txt$'
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "reusable workflow shell must support anchored path exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$path_exclusion_custom_workflow_output" \
+  "PR size: 11 changed lines (11 insertions, 0 deletions; advisory threshold: 600)" \
+  "reusable workflow must apply repository and custom exclusions to paths only"
+assert_not_contains \
+  "$path_exclusion_custom_workflow_output" \
+  "::warning::PR size advisory threshold exceeded" \
+  "path exclusions must prevent the hosted advisory warning"
+
+local_path_counts=$(sed -n 's/.*\(PR size: [0-9][0-9]* changed lines.*\)/\1/p' "$path_exclusion_local_stdout")
+hosted_path_counts=$(sed -n 's/.*\(PR size: [0-9][0-9]* changed lines.*\)/\1/p' "$path_exclusion_workflow_output")
+if [ "$local_path_counts" != "PR size: 511 changed lines (511 insertions, 0 deletions; advisory threshold: 600)" ]; then
+  record_failure "local path-exclusion fixture must retain nested and spaced paths"
+fi
+if [ "$hosted_path_counts" != "$local_path_counts" ]; then
+  record_failure "hosted path-exclusion fixture must retain nested and spaced paths"
+fi
 
 invalid_workflow_repo="$workspace/workflow-invalid-exclusion"
 invalid_workflow_output="$workspace/workflow-invalid-exclusion.out"
