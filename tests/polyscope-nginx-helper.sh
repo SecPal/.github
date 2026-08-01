@@ -90,7 +90,6 @@ manifest = {
         "GuardGuide": "8fadd2fb",
         "secpal.app": "c46a8454",
         "guardguide.de": "3d0fcf01",
-        "changelog": "__retired_changelog__",
     },
     "php_upstream": {
         "kind": "unix",
@@ -102,44 +101,11 @@ manifest = {
 active_repo_state = {
     repo_name: {"id": repo_id}
     for repo_name, repo_id in manifest["repositories"].items()
-    if repo_name != "changelog"
 }
 built_manifest = library.build_manifest(
     active_repo_state,
     nginx_http2_syntax="modern",
 )
-assert built_manifest["repositories"]["changelog"] == "__retired_changelog__"
-library.ensure_retired_repository_roots_absent(
-    built_manifest,
-    filesystem_clone_root=workspace / "absent-retired-clone-root",
-)
-
-occupied_clone_root = workspace / "occupied-retired-clone-root"
-(occupied_clone_root / "__retired_changelog__").mkdir(parents=True)
-try:
-    library.ensure_retired_repository_roots_absent(
-        built_manifest,
-        filesystem_clone_root=occupied_clone_root,
-    )
-except ValueError as error:
-    assert "retired repository tombstone path must stay absent" in str(error), error
-else:
-    raise AssertionError("occupied retired repository tombstone path was accepted")
-
-linked_clone_root = workspace / "linked-retired-clone-root"
-linked_clone_root.mkdir()
-(linked_clone_root / "__retired_changelog__").symlink_to(
-    workspace / "missing-retired-target"
-)
-try:
-    library.ensure_retired_repository_roots_absent(
-        built_manifest,
-        filesystem_clone_root=linked_clone_root,
-    )
-except ValueError as error:
-    assert "retired repository tombstone path must stay absent" in str(error), error
-else:
-    raise AssertionError("linked retired repository tombstone path was accepted")
 
 
 def write_manifest(path: pathlib.Path, payload: object, mode: int = 0o600) -> None:
@@ -177,10 +143,6 @@ for port in (0, 65536, "9000"):
 payload = copy.deepcopy(manifest)
 payload["repositories"]["api"] = "../../etc"
 invalid_payloads.append(payload)
-payload = copy.deepcopy(manifest)
-payload["repositories"]["changelog"] = "active123"
-invalid_payloads.append(payload)
-
 for index, payload in enumerate(invalid_payloads):
     candidate = workspace / f"invalid-{index}.json"
     write_manifest(candidate, payload)

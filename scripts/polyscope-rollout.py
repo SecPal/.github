@@ -4296,18 +4296,16 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
     http2_listen_suffix = "" if nginx_http2_syntax == "modern" else " http2"
     http2_directive = "\n            http2 on;" if nginx_http2_syntax == "modern" else ""
     # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-,
-    # secpal-app-, or changelog- are reserved for legacy per-repo routing (e.g.
-    # api-WORKSPACE.preview.secpal.dev). The retired changelog prefix remains reserved
-    # solely so those hostnames can fail closed instead of becoming generic workspaces.
-    # Generic workspaces must not use the active prefixes because the regex will route
-    # them to a repository-specific backend; the retired prefix always returns 404.
+    # or secpal-app- are reserved for per-repository routing (for example,
+    # api-WORKSPACE.preview.secpal.dev). Generic workspaces must not use these prefixes
+    # because the regex routes them to a repository-specific backend.
     # `http2 on;` requires nginx >= 1.25.1, so install mode version-gates this render option.
     return textwrap.dedent(
         f"""
         server {{
             listen 80;
             listen [::]:80;
-            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             location /.well-known/acme-challenge/ {{
                 root /var/www/certbot;
@@ -4319,7 +4317,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
         server {{
             listen 443 ssl{http2_listen_suffix};
             listen [::]:443 ssl{http2_listen_suffix};{http2_directive}
-            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
@@ -4348,10 +4346,6 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_csp $preview_relaxed_csp;
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
-
-            if ($repo = changelog) {{
-                return 404;
-            }}
 
             if (-f $api_public/index.php) {{
                 set $preview_docroot $api_public;
@@ -4884,7 +4878,6 @@ def main() -> int:
             repo_state,
             nginx_http2_syntax=nginx_http2_syntax,
         )
-        polyscope_nginx.ensure_retired_repository_roots_absent(nginx_manifest)
         write_nginx_manifest(
             args.nginx_manifest_output,
             nginx_manifest,

@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 > `AGENTS.md`, an independent `.github/copilot-instructions.md` review profile,
 > and focused `.github/instructions/*.instructions.md` overlays.
 
-This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `api`, `frontend`, `contracts`, `android`, `secpal.app`, `changelog`, `GuardGuide`, and `guardguide.de`.
+This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `api`, `frontend`, `contracts`, `android`, `secpal.app`, `GuardGuide`, and `guardguide.de`.
 
 ## Quick Navigation
 

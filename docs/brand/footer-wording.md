@@ -69,13 +69,12 @@ The Source Code link target is **per-surface**, not per-brand. It points to the 
 
 ### Source Code Link Targets Per Managed Surface
 
-| Surface                                        | Source Code link target                   |
-| ---------------------------------------------- | ----------------------------------------- |
-| SecPal platform/suite footer (org-level page)  | `https://github.com/SecPal`               |
-| SecPal landing page (`secpal.app`)             | `https://github.com/SecPal/secpal.app`    |
-| SecPal changelog site (`changelog.secpal.app`) | `https://github.com/SecPal/changelog`     |
-| GuardGuide product app                         | `https://github.com/SecPal/GuardGuide`    |
-| GuardGuide marketing site (`guardguide.de`)    | `https://github.com/SecPal/guardguide.de` |
+| Surface                                       | Source Code link target                   |
+| --------------------------------------------- | ----------------------------------------- |
+| SecPal platform/suite footer (org-level page) | `https://github.com/SecPal`               |
+| SecPal landing page (`secpal.app`)            | `https://github.com/SecPal/secpal.app`    |
+| GuardGuide product app                        | `https://github.com/SecPal/GuardGuide`    |
+| GuardGuide marketing site (`guardguide.de`)   | `https://github.com/SecPal/guardguide.de` |
 
 The SecPal platform/suite entry points at the SecPal GitHub organization because no single repository backs the platform as a whole. Every per-surface entry points at that surface's own repository because every managed SecPal/GuardGuide deployment is published from its own dedicated public AGPL repository. Surfaces added in the future follow the same per-surface rule.
 

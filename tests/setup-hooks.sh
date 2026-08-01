@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-ALL_REPOS=(api frontend contracts android secpal.app guardguide.de changelog .github)
+ALL_REPOS=(api frontend contracts android secpal.app guardguide.de .github)
 
 # Single portable mktemp invocation (matches the regression guard in
 # tests/mktemp-portability.sh); each scenario gets its own subdirectory below.
@@ -105,7 +105,7 @@ fi
 # must surface as a warning so workspaces that have not synced the latest REPOS
 # list (for example after a fresh repo is added) still install hooks for the
 # repos they do have, instead of failing the whole script.
-warning_present_repos=(api frontend contracts android secpal.app changelog .github)
+warning_present_repos=(api frontend contracts android secpal.app .github)
 setup_workspace "$warning_workspace" "${warning_present_repos[@]}"
 
 warning_output="$warning_workspace/output.txt"
@@ -132,7 +132,7 @@ fi
 # ─── Corrupt path: managed repo path exists but is not a directory ───────────
 # Only a truly missing repo should soft-warn. If the path exists as a regular
 # file, the workspace is corrupted and setup-hooks.sh must fail loudly.
-corrupt_present_repos=(api frontend contracts android secpal.app changelog .github)
+corrupt_present_repos=(api frontend contracts android secpal.app .github)
 setup_workspace "$corrupt_workspace" "${corrupt_present_repos[@]}"
 printf 'not a directory\n' >"$corrupt_workspace/guardguide.de"
 

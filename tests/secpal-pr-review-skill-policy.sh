@@ -296,7 +296,7 @@ assert fast_schema["$defs"]["operation"]["properties"]["kind"] == {
 
 expected = [
     "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts",
-    "SecPal/android", "SecPal/changelog", "SecPal/GuardGuide",
+    "SecPal/android", "SecPal/GuardGuide",
     "SecPal/guardguide.de", "SecPal/secpal.app",
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
