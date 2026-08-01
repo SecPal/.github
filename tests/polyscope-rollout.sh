@@ -220,6 +220,8 @@ seed_api_worktree_files() {
     local worktree_dir="$1"
 
     write_valid_worktree_instructions "$worktree_dir"
+    mkdir -p "$worktree_dir/public"
+    printf '<?php\n' > "$worktree_dir/public/index.php"
     printf '{}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
     chmod +x "$worktree_dir/artisan"
@@ -916,6 +918,8 @@ for executable in ("composer", "php", "psql"):
 
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
+    (root / "public").mkdir()
+    (root / "public" / "index.php").write_text("<?php\n")
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
     (root / "AGENTS.md").write_text(
         "<!--\n"
@@ -1179,6 +1183,8 @@ release_first = fixture / "release-first"
 
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
+    (root / "public").mkdir()
+    (root / "public" / "index.php").write_text("<?php\n")
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
     (root / "AGENTS.md").write_text(
         "<!--\n"
@@ -4168,6 +4174,7 @@ try:
 
     command = module.build_preview_full_rebuild_watch_command(
         label="watching",
+        preview_root="public",
         watch_directories=["src", "public"],
         ignored_directories=["public/build"],
         watch_files=["package.json"],
@@ -4215,6 +4222,7 @@ python3 -B - <<'PY' "$PYTHON_SCRIPT"
 import importlib.util
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -4237,6 +4245,7 @@ try:
 
     command = module.build_preview_full_rebuild_watch_command(
         label="watching",
+        preview_root="public",
         watch_directories=["public", "src"],
         ignored_paths=["public/generated.svg", "public/generated.png"],
         watch_files=["package.json"],
@@ -4276,6 +4285,9 @@ try:
         raise SystemExit(
             f"build watcher must ignore generated files inside watched source trees; observed {build_count} builds"
         )
+    assert stat.S_IMODE((workspace / "public").stat().st_mode) == 0o755
+    assert stat.S_IMODE((workspace / "public" / "generated.svg").stat().st_mode) == 0o644
+    assert stat.S_IMODE((workspace / "public" / "generated.png").stat().st_mode) == 0o644
 finally:
     shutil.rmtree(workspace)
 PY
@@ -6875,6 +6887,8 @@ for command, terminator in (
 PY
 python3 - "$PYTHON_SCRIPT" <<'PY'
 import importlib.util
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -6891,6 +6905,34 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     clone_root = temporary_root / ".polyscope" / "clones"
     worktree = clone_root / "repository-id" / "workspace"
     worktree.mkdir(parents=True)
+
+    public_root = worktree / "public"
+    asset_root = public_root / "assets"
+    asset_root.mkdir(parents=True)
+    index_file = public_root / "index.php"
+    asset_file = asset_root / "app.js"
+    index_file.write_text("<?php")
+    asset_file.write_text("console.log('preview')")
+    os.chmod(public_root, 0o700)
+    os.chmod(asset_root, 0o700)
+    os.chmod(index_file, 0o600)
+    os.chmod(asset_file, 0o600)
+
+    module.normalize_preview_document_root_access(worktree, Path("public"))
+    assert stat.S_IMODE(public_root.stat().st_mode) == 0o755
+    assert stat.S_IMODE(asset_root.stat().st_mode) == 0o755
+    assert stat.S_IMODE(index_file.stat().st_mode) == 0o644
+    assert stat.S_IMODE(asset_file.stat().st_mode) == 0o644
+
+    outside_root = temporary_root / "outside"
+    outside_root.mkdir()
+    (worktree / "unsafe-public").symlink_to(outside_root, target_is_directory=True)
+    try:
+        module.normalize_preview_document_root_access(worktree, Path("unsafe-public"))
+    except RuntimeError as error:
+        assert "symlink" in str(error)
+    else:
+        raise AssertionError("preview document roots must not follow symlinks")
 
     calls: list[tuple[list[str], dict[str, object]]] = []
     original_run = module.subprocess.run
@@ -6923,6 +6965,43 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         for _arguments, kwargs in calls
     )
 
+    inactive_worktree = clone_root / "repository-id" / "inactive-workspace"
+    inactive_worktree.mkdir()
+    alias_path = inactive_worktree.parent / "inactive-alias"
+    alias_path.symlink_to(inactive_worktree.name)
+    calls.clear()
+    module.subprocess.run = record_run
+    try:
+        module.deny_inactive_preview_nginx_access(
+            {
+                "frontend": {"id": "repository-id"},
+            },
+            {
+                "frontend": {"preview_prefix": "frontend"},
+            },
+            clone_root,
+            {
+                "frontend": [worktree],
+            },
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---",
+            "--",
+            str(inactive_worktree),
+        ]
+    ]
+    assert all(
+        kwargs == {"check": True, "capture_output": True, "text": True}
+        for _arguments, kwargs in calls
+    )
+
     def fail_run(arguments: list[str], **kwargs: object) -> None:
         raise subprocess.CalledProcessError(
             1,
@@ -6942,6 +7021,17 @@ with tempfile.TemporaryDirectory() as temporary_directory:
             assert "unable to grant Nginx preview access" in str(error)
         else:
             raise AssertionError("setfacl failure must stop provisioning")
+
+        try:
+            module.deny_preview_nginx_access(
+                clone_root,
+                inactive_worktree,
+                setfacl_bin="/usr/bin/setfacl",
+            )
+        except RuntimeError as error:
+            assert "unable to deny Nginx preview access" in str(error)
+        else:
+            raise AssertionError("setfacl failure must stop preview access revocation")
     finally:
         module.subprocess.run = original_run
 PY

@@ -87,6 +87,13 @@ API_RUNTIME_PREVIEW_COMMANDS = frozenset(
         API_PAIL_COMMAND,
     }
 )
+PREVIEW_DOCUMENT_ROOTS = {
+    "api": pathlib.Path("public"),
+    "frontend": pathlib.Path("dist"),
+    "GuardGuide": pathlib.Path("public"),
+    "secpal.app": pathlib.Path("dist"),
+    "guardguide.de": pathlib.Path("dist"),
+}
 INSTRUCTION_DEPENDENT_DIRECT_API_MODES = (
     "prepare_api_worktree",
     "bootstrap_api_worktree",
@@ -2086,6 +2093,7 @@ raise SystemExit(subprocess.run({test_args!r}, env=env).returncode)
 def build_preview_full_rebuild_watch_command(
     *,
     label: str,
+    preview_root: str,
     watch_directories: list[str],
     ignored_directories: list[str] | None = None,
     ignored_paths: list[str] | None = None,
@@ -2096,9 +2104,18 @@ def build_preview_full_rebuild_watch_command(
     command = build_args or ["npm", "run", "build"]
     ignored_directories = ignored_directories or []
     ignored_paths = ignored_paths or []
+    preview_root_path = pathlib.PurePosixPath(preview_root)
+    if (
+        preview_root_path.is_absolute()
+        or not preview_root_path.parts
+        or ".." in preview_root_path.parts
+    ):
+        raise ValueError(f"preview root must stay inside the worktree: {preview_root}")
     script = textwrap.dedent(
         f"""
         import hashlib
+        import os
+        import stat
         import subprocess
         import sys
         import time
@@ -2109,6 +2126,25 @@ def build_preview_full_rebuild_watch_command(
         watch_files = [Path(value) for value in {watch_files!r}]
         watch_suffixes = set({watch_suffixes!r})
         build_args = {command!r}
+        preview_root = Path({preview_root!r})
+
+        def normalize_preview_root() -> None:
+            if preview_root.is_symlink():
+                raise RuntimeError(f"preview document root is a symlink: {{preview_root}}")
+            if not preview_root.is_dir():
+                raise RuntimeError(f"preview build did not create document root: {{preview_root}}")
+
+            paths = [preview_root, *sorted(preview_root.rglob("*"))]
+            for path in paths:
+                mode = path.lstat().st_mode
+                if stat.S_ISLNK(mode):
+                    raise RuntimeError(f"preview document root contains symlink: {{path}}")
+                if not stat.S_ISDIR(mode) and not stat.S_ISREG(mode):
+                    raise RuntimeError(f"preview document root contains unsupported file: {{path}}")
+
+            for path in paths:
+                mode = path.lstat().st_mode
+                os.chmod(path, 0o755 if stat.S_ISDIR(mode) else 0o644)
 
         def is_ignored(path: Path) -> bool:
             try:
@@ -2175,7 +2211,15 @@ def build_preview_full_rebuild_watch_command(
             return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
         def run_build() -> int:
-            return subprocess.run(build_args, check=False).returncode
+            result = subprocess.run(build_args, check=False)
+            if result.returncode != 0:
+                return result.returncode
+            try:
+                normalize_preview_root()
+            except (OSError, RuntimeError) as error:
+                print(f"Preview access normalization failed: {{error}}", file=sys.stderr, flush=True)
+                return 1
+            return 0
 
         print({label!r}, flush=True)
         previous_snapshot = None
@@ -2202,6 +2246,7 @@ def build_preview_full_rebuild_watch_command(
 def build_guardguide_preview_build_watch_command() -> str:
     return build_preview_full_rebuild_watch_command(
         label="Watching GuardGuide preview sources for changes...",
+        preview_root="public",
         watch_directories=["app", "config", "public", "resources", "routes"],
         ignored_directories=["public/build"],
         watch_files=[
@@ -2250,6 +2295,7 @@ def build_static_preview_build_watch_command(
 ) -> str:
     return build_preview_full_rebuild_watch_command(
         label=f"Watching {site_name} preview sources for changes...",
+        preview_root="dist",
         watch_directories=watch_directories,
         ignored_paths=ignored_paths,
         watch_files=[
@@ -3856,6 +3902,43 @@ def resolve_executable(command: str) -> str | None:
     return None
 
 
+def resolve_preview_worktree_layout(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+    resolved_clone_root = clone_root.resolve(strict=True)
+    if worktree_path.is_symlink():
+        raise RuntimeError(f"preview worktree must not be a symlink: {worktree_path}")
+    resolved_worktree_path = worktree_path.resolve(strict=True)
+    repo_clone_root = resolved_worktree_path.parent
+    if repo_clone_root.parent != resolved_clone_root:
+        raise RuntimeError(
+            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+        )
+    return resolved_clone_root, repo_clone_root, resolved_worktree_path
+
+
+def run_preview_acl_command(
+    executable: str,
+    path: pathlib.Path,
+    acl_entry: str,
+    *,
+    operation: str,
+) -> None:
+    try:
+        subprocess.run(
+            [executable, "-m", acl_entry, "--", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() if error.stderr else "no error output"
+        raise RuntimeError(
+            f"unable to {operation} Nginx preview access to {path}: {detail}"
+        ) from error
+
+
 def ensure_preview_nginx_access(
     clone_root: pathlib.Path,
     worktree_path: pathlib.Path,
@@ -3863,13 +3946,10 @@ def ensure_preview_nginx_access(
     setfacl_bin: str | None = None,
 ) -> None:
     """Allow the nginx worker to traverse exactly one preview worktree path."""
-    resolved_clone_root = clone_root.resolve(strict=True)
-    resolved_worktree_path = worktree_path.resolve(strict=True)
-    repo_clone_root = resolved_worktree_path.parent
-    if repo_clone_root.parent != resolved_clone_root:
-        raise RuntimeError(
-            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
-        )
+    resolved_clone_root, repo_clone_root, resolved_worktree_path = resolve_preview_worktree_layout(
+        clone_root,
+        worktree_path,
+    )
 
     executable = setfacl_bin or resolve_executable("setfacl")
     if executable is None:
@@ -3881,18 +3961,139 @@ def ensure_preview_nginx_access(
         repo_clone_root,
         resolved_worktree_path,
     ):
-        try:
-            subprocess.run(
-                [executable, "-m", "u:www-data:--x", "--", str(path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as error:
-            detail = error.stderr.strip() if error.stderr else "no error output"
+        run_preview_acl_command(
+            executable,
+            path,
+            "u:www-data:--x",
+            operation="grant",
+        )
+
+
+def deny_preview_nginx_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Explicitly block the nginx worker at one physical preview worktree."""
+    (
+        _resolved_clone_root,
+        _repo_clone_root,
+        resolved_worktree_path,
+    ) = resolve_preview_worktree_layout(clone_root, worktree_path)
+    executable = setfacl_bin or resolve_executable("setfacl")
+    if executable is None:
+        raise RuntimeError("setfacl is required to deny Nginx access to preview worktrees")
+    run_preview_acl_command(
+        executable,
+        resolved_worktree_path,
+        "u:www-data:---",
+        operation="deny",
+    )
+
+
+def deny_inactive_preview_nginx_access(
+    repo_state: dict[str, dict[str, Any]],
+    repo_specs: dict[str, dict[str, Any]],
+    clone_root: pathlib.Path,
+    accessible_worktrees: dict[str, list[pathlib.Path]],
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Block nginx from every retained preview worktree that is not currently usable."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    executable = setfacl_bin
+
+    for repo_name, spec in repo_specs.items():
+        preview_prefix = spec.get("preview_prefix")
+        if not isinstance(preview_prefix, str) or not preview_prefix:
+            continue
+
+        repo_clone_root = resolved_clone_root / str(repo_state[repo_name]["id"])
+        if not repo_clone_root.exists():
+            continue
+        if repo_clone_root.is_symlink() or not repo_clone_root.is_dir():
             raise RuntimeError(
-                f"unable to grant Nginx preview access to {path}: {detail}"
-            ) from error
+                f"preview repository clone root is not a physical directory: {repo_clone_root}"
+            )
+        resolved_repo_clone_root = repo_clone_root.resolve(strict=True)
+        if resolved_repo_clone_root.parent != resolved_clone_root:
+            raise RuntimeError(f"preview repository clone root escaped clone root: {repo_clone_root}")
+
+        accessible_paths = {
+            path.resolve(strict=True)
+            for path in accessible_worktrees.get(repo_name, [])
+        }
+        for candidate in sorted(repo_clone_root.iterdir()):
+            if candidate.is_symlink() or not candidate.is_dir():
+                continue
+            resolved_candidate = candidate.resolve(strict=True)
+            if resolved_candidate.parent != resolved_repo_clone_root:
+                raise RuntimeError(f"preview worktree escaped repository clone root: {candidate}")
+            if resolved_candidate in accessible_paths:
+                continue
+            if executable is None:
+                executable = resolve_executable("setfacl")
+            if executable is None:
+                raise RuntimeError(
+                    "setfacl is required to deny Nginx access to inactive preview worktrees"
+                )
+            run_preview_acl_command(
+                executable,
+                resolved_candidate,
+                "u:www-data:---",
+                operation="deny",
+            )
+
+
+def normalize_preview_document_root_access(
+    worktree_path: pathlib.Path,
+    relative_document_root: pathlib.Path,
+) -> None:
+    """Make only one nginx-served document tree world-readable and traversable."""
+    if (
+        relative_document_root.is_absolute()
+        or not relative_document_root.parts
+        or ".." in relative_document_root.parts
+    ):
+        raise RuntimeError(
+            f"preview document root must stay inside its worktree: {relative_document_root}"
+        )
+    if worktree_path.is_symlink():
+        raise RuntimeError(f"preview worktree must not be a symlink: {worktree_path}")
+    resolved_worktree_path = worktree_path.resolve(strict=True)
+    document_root = resolved_worktree_path / relative_document_root
+    if document_root.is_symlink():
+        raise RuntimeError(f"preview document root is a symlink: {document_root}")
+    if not document_root.is_dir():
+        raise RuntimeError(f"preview document root is missing or not a directory: {document_root}")
+    resolved_document_root = document_root.resolve(strict=True)
+    if resolved_document_root.parent != resolved_worktree_path:
+        raise RuntimeError(f"preview document root escaped its worktree: {document_root}")
+
+    paths = [resolved_document_root, *sorted(resolved_document_root.rglob("*"))]
+    for path in paths:
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise RuntimeError(f"preview document root contains symlink: {path}")
+        if not stat.S_ISDIR(mode) and not stat.S_ISREG(mode):
+            raise RuntimeError(f"preview document root contains unsupported file: {path}")
+
+    for path in paths:
+        mode = path.lstat().st_mode
+        os.chmod(path, 0o755 if stat.S_ISDIR(mode) else 0o644)
+
+
+def configure_preview_nginx_access(
+    repo_name: str,
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+) -> None:
+    relative_document_root = PREVIEW_DOCUMENT_ROOTS.get(repo_name)
+    if relative_document_root is None:
+        raise RuntimeError(f"preview repository has no document-root policy: {repo_name}")
+    normalize_preview_document_root_access(worktree_path, relative_document_root)
+    ensure_preview_nginx_access(clone_root, worktree_path)
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
@@ -4041,6 +4242,24 @@ def provision_worktrees(
                 (repo_name, spec, worktree_path, validation_commands, setup_commands)
             )
 
+    accessible_worktrees: dict[str, list[pathlib.Path]] = {
+        repo_name: [] for repo_name in repo_specs
+    }
+    for (
+        repo_name,
+        _spec,
+        worktree_path,
+        _validation_commands,
+        _setup_commands,
+    ) in provisionable_worktrees:
+        accessible_worktrees[repo_name].append(worktree_path)
+    deny_inactive_preview_nginx_access(
+        repo_state,
+        repo_specs,
+        clone_root,
+        accessible_worktrees,
+    )
+
     if canonical_validation_failed:
         return [], [], failed_provision_worktrees
 
@@ -4063,14 +4282,15 @@ def provision_worktrees(
     provisioned_worktrees: list[str] = []
 
     for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
+        preview_prefix = spec.get("preview_prefix")
+        preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix)
         try:
+            if preview_enabled:
+                deny_preview_nginx_access(clone_root, worktree_path)
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
             sync_worktree_local_config(worktree_path, config_text)
             ensure_workspace_alias(worktree_path, db_path=db_path)
-            preview_prefix = spec.get("preview_prefix")
-            if isinstance(preview_prefix, str) and preview_prefix:
-                ensure_preview_nginx_access(clone_root, worktree_path)
             sync_worktree_auxiliary_files(repo_name, worktree_path)
             ensure_worktree_hooks(worktree_path)
             lock_context = (
@@ -4104,6 +4324,8 @@ def provision_worktrees(
                 marker = load_provision_marker(marker_path)
                 if marker is not None and marker.get("setup_hash") == setup_hash:
                     if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                        if preview_enabled:
+                            configure_preview_nginx_access(repo_name, clone_root, locked_worktree_path)
                         continue
 
                 if setup_commands:
@@ -4123,6 +4345,9 @@ def provision_worktrees(
                     else:
                         run_setup_commands(locked_worktree_path, setup_commands, db_path=db_path)
 
+                if preview_enabled:
+                    configure_preview_nginx_access(repo_name, clone_root, locked_worktree_path)
+
                 marker_payload: dict[str, Any] = {
                     "repo": repo_name,
                     "workspace": workspace,
@@ -4139,6 +4364,11 @@ def provision_worktrees(
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)
+            if preview_enabled:
+                try:
+                    deny_preview_nginx_access(clone_root, worktree_path)
+                except (OSError, RuntimeError, subprocess.CalledProcessError) as deny_error:
+                    error_message += f"; additionally unable to deny Nginx preview access: {deny_error}"
             print(
                 f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
                 file=sys.stderr,
