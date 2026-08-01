@@ -64,11 +64,10 @@ repo_prefixes = {
     "GuardGuide": "guardguide",
     "guardguide.de": "guardguide-de",
     "secpal.app": "secpal-app",
-    "changelog": "changelog",
 }
 url = urlsplit(direct_url)
 host_match = re.fullmatch(
-    r"(api|frontend|guardguide-de|guardguide|secpal-app|changelog)-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.preview\.secpal\.dev",
+    r"(api|frontend|guardguide-de|guardguide|secpal-app)-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.preview\.secpal\.dev",
     url.hostname or "",
 )
 if host_match is None:
@@ -182,7 +181,7 @@ if [[ $# -ge 2 && "$1" == "share" ]]; then
 		canonical_preview_url=""
 		if canonical_preview_url="$(canonicalize_preview_url_from_marker "$direct_preview_url")"; then
 			direct_preview_url="$canonical_preview_url"
-		elif [[ "$direct_preview_url" =~ ^https://(api|frontend|guardguide-de|guardguide|secpal-app|changelog)-[A-Za-z0-9-]+-[0-9a-fA-F]{8}\.preview\.secpal\.dev(/|$) ]]; then
+		elif [[ "$direct_preview_url" =~ ^https://(api|frontend|guardguide-de|guardguide|secpal-app)-[A-Za-z0-9-]+-[0-9a-fA-F]{8}\.preview\.secpal\.dev(/|$) ]]; then
 			echo "Error: refusing to announce physical hash-suffixed preview URL without a canonical workspace host: $direct_preview_url" >&2
 			exit 1
 		fi

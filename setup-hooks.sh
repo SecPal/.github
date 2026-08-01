@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$WORKSPACE_ROOT"
 
-REPOS=("api" "frontend" "contracts" "android" "secpal.app" "guardguide.de" "changelog" ".github")
+REPOS=("api" "frontend" "contracts" "android" "secpal.app" "guardguide.de" ".github")
 ROLLOUT_HINT="Run .github/scripts/install-polyscope-rollout.sh (or sync via Polyscope) to provision missing SecPal repositories."
 SUCCESS_COUNT=0
 FAILED_REPOS=()

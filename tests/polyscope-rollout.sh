@@ -821,7 +821,7 @@ repo_state = {
     'guardguide.de': {'id': 'gd123456', 'name': 'SecPal/guardguide.de', 'path': str(workspace_root / 'guardguide.de')},
     # Preserve a retired database row to prove rollout ignores repositories
     # that are no longer part of the managed workspace.
-    'changelog': {'id': 'ch123456', 'name': 'SecPal/changelog', 'path': str(workspace_root / 'changelog')},
+    'retired-docs': {'id': 'rd123456', 'name': 'SecPal/retired-docs', 'path': str(workspace_root / 'retired-docs')},
     'GuardGuide': {'id': 'gg123456', 'name': 'SecPal/GuardGuide', 'path': str(workspace_root / 'GuardGuide')},
     '.github': {'id': 'gh123456', 'name': 'SecPal/.github', 'path': str(workspace_root / '.github')},
 }
@@ -4385,29 +4385,10 @@ if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
     exit 1
 fi
 
-if [ "$(grep -cF 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app|changelog)-)?(?<workspace>' "$nginx_output")" -ne 2 ]; then
-    echo "preview nginx config must reserve the retired changelog hostname prefix in both servers" >&2
+if [ "$(grep -cF 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>' "$nginx_output")" -ne 2 ]; then
+    echo "preview nginx config must reserve every active repository hostname prefix in both servers" >&2
     exit 1
 fi
-python3 -B - <<'PY' "$nginx_output"
-import pathlib
-import re
-import sys
-
-config = pathlib.Path(sys.argv[1]).read_text()
-retired_route = re.search(
-    r"if \(\$repo = changelog\) \{\s*(?P<body>.*?)\s*\}",
-    config,
-    re.DOTALL,
-)
-if retired_route is None or "return 404;" not in retired_route.group("body"):
-    raise SystemExit("retired changelog hostnames must fail closed with an explicit 404")
-tls_server = config.index("listen 443 ssl;")
-retired_guard = config.index("if ($repo = changelog)")
-first_docroot_probe = config.index("if (-f $api_public/index.php)")
-if not tls_server < retired_guard < first_docroot_probe:
-    raise SystemExit("retired changelog hostnames must fail closed before docroot probes")
-PY
 grep -qF "listen 443 ssl;" "$nginx_output"
 grep -qF "listen [::]:443 ssl;" "$nginx_output"
 grep -qF "http2 on;" "$nginx_output"
@@ -4779,11 +4760,11 @@ org_prompts = cur.execute(
     ('gh123456',),
 ).fetchone()
 prompt_rows = cur.execute(
-    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id != 'ch123456' order by id"
+    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id != 'rd123456' order by id"
 ).fetchall()
 retired_prompts = cur.execute(
     'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
-    ('ch123456',),
+    ('rd123456',),
 ).fetchone()
 links = cur.execute('select repo_id, linked_repo_id from repository_links order by repo_id, linked_repo_id').fetchall()
 
@@ -4816,7 +4797,7 @@ assert ('gg123456', 'an123456') in links
 assert ('gg123456', 'api12345') in links
 assert ('gg123456', 'co123456') in links
 assert ('gg123456', 'fe123456') in links
-assert ('sa123456', 'ch123456') not in links
+assert ('sa123456', 'rd123456') not in links
 assert retired_prompts is not None
 assert all(prompt is None for prompt in retired_prompts)
 
@@ -4827,7 +4808,7 @@ assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
 assert summary['repositories']['GuardGuide']['preview_prefix'] == 'guardguide'
 assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
 assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
-assert 'changelog' not in summary['repositories']
+assert 'retired-docs' not in summary['repositories']
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['api']['agent_instructions'].endswith('/api/AGENTS.md')
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
@@ -6758,8 +6739,8 @@ grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
-if grep -q '/changelog/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
-    echo "rollout sync watcher must not retain the retired changelog repository" >&2
+if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
+    echo "rollout sync watcher must not retain an unmanaged repository" >&2
     exit 1
 fi
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
@@ -6784,8 +6765,8 @@ if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polysco
 fi
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
-if grep -q '/changelog/' "$fake_unit_dir/polyscope-worktree-provision.path"; then
-    echo "worktree provision watcher must not retain the retired changelog repository" >&2
+if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-worktree-provision.path"; then
+    echo "worktree provision watcher must not retain an unmanaged repository" >&2
     exit 1
 fi
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.timer"

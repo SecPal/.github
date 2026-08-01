@@ -29,7 +29,6 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
 ├── .github/          # Organization-wide settings and documentation
 ├── api/              # Laravel backend API
 ├── android/          # React/TypeScript Android app via Capacitor
-├── changelog/        # Next.js public changelog site
 ├── contracts/        # OpenAPI 3.1 specifications
 ├── deployment/       # Public governance and future deployment repository
 ├── frontend/         # React/TypeScript frontend

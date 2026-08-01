@@ -37,7 +37,6 @@ The production registry explicitly supports:
 - `SecPal/frontend`
 - `SecPal/contracts`
 - `SecPal/android`
-- `SecPal/changelog`
 - `SecPal/GuardGuide`
 - `SecPal/guardguide.de`
 - `SecPal/secpal.app`

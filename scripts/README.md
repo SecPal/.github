@@ -94,7 +94,7 @@ Enforces the SecPal `secpal.*` namespace split. The script greps text files
 in the working tree (via `grep -r --include=...`, so untracked files matching
 the include patterns are inspected too) for any `secpal.<something>`
 substring and flags entries that fall outside the approved set
-(`secpal.app`, `changelog.secpal.app`, `apk.secpal.app`, `secpal.dev`,
+(`secpal.app`, `apk.secpal.app`, `secpal.dev`,
 `api.secpal.dev`, `app.secpal.dev`, plus arbitrary `*.preview.secpal.dev`
 previews). It also surfaces `api.secpal.app`, the deprecated `.app` web
 host, so callers cannot reintroduce it as an active host.
@@ -320,7 +320,6 @@ The script automatically detects repository type:
 - **org**: `.github` repository (org-wide instructions)
 - **api**: Laravel API (has `artisan`, `composer.json`)
 - **frontend**: React frontend or Android wrapper (has `package.json` with `vite`)
-- **changelog**: Next.js changelog site (has `next.config.mjs`)
 - **website**: Astro landing page (has `astro.config.mjs`)
 - **contracts**: OpenAPI contracts (has `package.json` with `openapi` or `docs/openapi.yaml`)
 
@@ -346,7 +345,6 @@ bash scripts/sync-required-checks.sh --apply
 
 - `.github`
 - `api`
-- `changelog`
 - `frontend`
 - `contracts`
 - `android`

@@ -46,8 +46,6 @@ detect_repo_type() {
         printf '%s\n' guardguide
     elif [ -f artisan ] || [ -f composer.json ]; then
         printf '%s\n' api
-    elif [ -f next.config.mjs ]; then
-        printf '%s\n' changelog
     elif [ -f capacitor.config.ts ] || [ -d android/app/src ]; then
         printf '%s\n' android
     elif [ -f astro.config.mjs ]; then

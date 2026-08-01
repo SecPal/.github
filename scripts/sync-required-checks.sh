@@ -64,19 +64,6 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "check-conflicts / Detect Git Conflict Markers",
     "AI Instructions / Validate AI Instructions"
   ],
-  "changelog": [
-    "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
-    "Formatting Check / Check Code Formatting",
-    "Markdown Lint / Lint Markdown Files",
-    "ESLint / Run Linter",
-    "Next.js Build / Build Project",
-    "Check PR Size / Check PR Size",
-    "check-conflicts / Detect Git Conflict Markers",
-    "TypeScript Check / Build Project",
-    "Analyze Code (javascript-typescript)",
-    "AI Instructions / Validate AI Instructions"
-  ],
   "guardguide.de": [
     "Check REUSE Compliance / Check REUSE Compliance",
     "Check License Compatibility / Check License Compatibility",

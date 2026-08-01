@@ -41,7 +41,6 @@ SecPal and GuardGuide use a fixed two-line footer on every AGPL-licensed public 
 - The Source Code label is linked **per surface** to the canonical public source repository that backs the surface rendering the footer:
   - SecPal platform/suite (org-level page): `https://github.com/SecPal` (the SecPal organization is used because no single repository backs the platform as a whole).
   - SecPal landing page (`secpal.app`): `https://github.com/SecPal/secpal.app`.
-  - SecPal changelog site (`changelog.secpal.app`): `https://github.com/SecPal/changelog`.
   - GuardGuide product app: `https://github.com/SecPal/GuardGuide`.
   - GuardGuide marketing site (`guardguide.de`): `https://github.com/SecPal/guardguide.de`.
   - Surfaces added in the future follow the same per-surface rule.
