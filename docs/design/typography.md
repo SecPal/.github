@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # Typography
 
-Inter is the primary and only default typeface for SecPal, GuardGuide, changelog, promotional sites, generated documents, and shared contributor-facing materials.
+Inter is the primary and only default typeface for SecPal, GuardGuide, promotional sites, generated documents, and shared contributor-facing materials.
 
 Use Inter for body text, headings, navigation, controls, data tables, labels, and generated PDF or document text. Product repositories should self-host Inter where the surface ships fonts directly, subject to license and platform constraints. Do not rely on remote font CDNs for production product interfaces when self-hosting is practical.
 

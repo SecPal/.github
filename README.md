@@ -19,7 +19,6 @@ SecPal is the operations software for German private security services. Everythi
 - [`.github`](https://github.com/SecPal/.github): Organization-wide settings and documentation
 - [`api`](https://github.com/SecPal/api): Laravel backend API
 - [`android`](https://github.com/SecPal/android): React/TypeScript Android app via Capacitor
-- [`changelog`](https://github.com/SecPal/changelog): Public changelog site for SecPal releases
 - [`contracts`](https://github.com/SecPal/contracts): OpenAPI 3.1 API specifications
 - [`frontend`](https://github.com/SecPal/frontend): React/TypeScript frontend application
 - [`GuardGuide`](https://github.com/SecPal/GuardGuide): Laravel/React operations platform for GuardGuide

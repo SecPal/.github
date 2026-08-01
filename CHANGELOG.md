@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-01 - Remove Retired Changelog Integration
+
+**Changed:**
+
+- removed the final retired standalone changelog repository from Polyscope
+  manifests, preview routing, repository registries, required-check policy,
+  workspace hook setup, domain policy, and active documentation
+- removed the compatibility tombstone now that the privileged Nginx helper and
+  rollout runtime are deployed together
+
+---
+
 ## 2026-08-01 - Register Frontend Container Validation
 
 **Changed:**

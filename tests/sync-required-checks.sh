@@ -68,10 +68,6 @@ secpal_app_payload="$(bash "$SYNC_SCRIPT" --repo secpal.app --print-payload)"
 assert_payload_has_context "$secpal_app_payload" "Node Tests / Run Tests"
 assert_payload_has_context "$secpal_app_payload" "Analyze Code (javascript-typescript)"
 
-changelog_payload="$(bash "$SYNC_SCRIPT" --repo changelog --print-payload)"
-assert_payload_has_context "$changelog_payload" "Analyze Code (javascript-typescript)"
-assert_payload_has_context "$changelog_payload" "Next.js Build / Build Project"
-
 guardguide_de_payload="$(bash "$SYNC_SCRIPT" --repo guardguide.de --print-payload)"
 assert_payload_has_context "$guardguide_de_payload" "Node Tests / Run Tests"
 assert_payload_has_context "$guardguide_de_payload" "Astro Build / Build Project"
@@ -88,7 +84,7 @@ assert_payload_has_context "$contracts_payload" "AI Instructions / Validate AI I
 # Guardrail workflow names its job exactly 'CodeQL'). For every other repo the
 # CodeQL workflow names a different job (e.g. 'Analyze with CodeQL' / 'Analyze
 # Code'), so requiring bare 'CodeQL' there would block PRs forever.
-for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload" "$secpal_app_payload" "$changelog_payload" "$guardguide_de_payload" "$frontend_payload" "$contracts_payload"; do
+for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload" "$secpal_app_payload" "$guardguide_de_payload" "$frontend_payload" "$contracts_payload"; do
   if jq -e '.checks | any(.context == "CodeQL")' >/dev/null <<<"$non_github_payload"; then
     echo "Only the '.github' manifest entry may require the bare 'CodeQL' context; other repos must require their actual CodeQL job context (e.g. 'Analyze with CodeQL (<language>)' or 'Analyze Code (<language>)')." >&2
     echo "$non_github_payload" >&2

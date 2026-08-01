@@ -20,7 +20,6 @@ Use the product-name-only fallback when the current route, document, or preview 
 ## Examples
 
 - `Dashboard – SecPal`
-- `Changelog – SecPal`
 - `Security Briefings – GuardGuide by SecPal`
 - `Acme Security GmbH – Customers – SecPal`
 - `Work Instruction 42 – Instructions – GuardGuide by SecPal`

@@ -167,7 +167,6 @@ Marketing redirect: https://www.guardguide.de
 
 Approved SecPal hosts used in examples:
 - https://secpal.app
-- https://changelog.secpal.app
 - https://apk.secpal.app
 - https://api.secpal.dev
 - https://app.secpal.dev

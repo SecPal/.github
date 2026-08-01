@@ -3703,7 +3703,7 @@ class MutationTests(TestCase):
 class RegistryTests(TestCase):
     repositories = [
         "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts", "SecPal/android",
-        "SecPal/changelog", "SecPal/GuardGuide", "SecPal/guardguide.de", "SecPal/secpal.app",
+        "SecPal/GuardGuide", "SecPal/guardguide.de", "SecPal/secpal.app",
     ]
 
     def test_registry_caps_match_unpaginated_nested_live_connections(self) -> None:
