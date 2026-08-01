@@ -6873,6 +6873,78 @@ for command, terminator in (
         assert stat.S_IMODE((dist_dir / "index.html").stat().st_mode) == 0o644
         assert stat.S_IMODE((dist_dir / "assets" / "app.js").stat().st_mode) == 0o644
 PY
+python3 - "$PYTHON_SCRIPT" <<'PY'
+import importlib.util
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    clone_root = temporary_root / ".polyscope" / "clones"
+    worktree = clone_root / "repository-id" / "workspace"
+    worktree.mkdir(parents=True)
+
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    original_run = module.subprocess.run
+
+    def record_run(arguments: list[str], **kwargs: object) -> None:
+        calls.append((arguments, kwargs))
+
+    module.subprocess.run = record_run
+    try:
+        module.ensure_preview_nginx_access(
+            clone_root,
+            worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+
+    expected_paths = [
+        clone_root.parent,
+        clone_root,
+        worktree.parent,
+        worktree,
+    ]
+    assert [arguments for arguments, _kwargs in calls] == [
+        ["/usr/bin/setfacl", "-m", "u:www-data:--x", "--", str(path)]
+        for path in expected_paths
+    ]
+    assert all(
+        kwargs == {"check": True, "capture_output": True, "text": True}
+        for _arguments, kwargs in calls
+    )
+
+    def fail_run(arguments: list[str], **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            arguments,
+            stderr="Operation not supported",
+        )
+
+    module.subprocess.run = fail_run
+    try:
+        try:
+            module.ensure_preview_nginx_access(
+                clone_root,
+                worktree,
+                setfacl_bin="/usr/bin/setfacl",
+            )
+        except RuntimeError as error:
+            assert "unable to grant Nginx preview access" in str(error)
+        else:
+            raise AssertionError("setfacl failure must stop provisioning")
+    finally:
+        module.subprocess.run = original_run
+PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"

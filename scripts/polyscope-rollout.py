@@ -3856,6 +3856,45 @@ def resolve_executable(command: str) -> str | None:
     return None
 
 
+def ensure_preview_nginx_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Allow the nginx worker to traverse exactly one preview worktree path."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    resolved_worktree_path = worktree_path.resolve(strict=True)
+    repo_clone_root = resolved_worktree_path.parent
+    if repo_clone_root.parent != resolved_clone_root:
+        raise RuntimeError(
+            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+        )
+
+    executable = setfacl_bin or resolve_executable("setfacl")
+    if executable is None:
+        raise RuntimeError("setfacl is required to grant Nginx access to preview worktrees")
+
+    for path in (
+        resolved_clone_root.parent,
+        resolved_clone_root,
+        repo_clone_root,
+        resolved_worktree_path,
+    ):
+        try:
+            subprocess.run(
+                [executable, "-m", "u:www-data:--x", "--", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.strip() if error.stderr else "no error output"
+            raise RuntimeError(
+                f"unable to grant Nginx preview access to {path}: {detail}"
+            ) from error
+
+
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
     if not (worktree_path / ".pre-commit-config.yaml").exists():
         return
@@ -4029,6 +4068,9 @@ def provision_worktrees(
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
             sync_worktree_local_config(worktree_path, config_text)
             ensure_workspace_alias(worktree_path, db_path=db_path)
+            preview_prefix = spec.get("preview_prefix")
+            if isinstance(preview_prefix, str) and preview_prefix:
+                ensure_preview_nginx_access(clone_root, worktree_path)
             sync_worktree_auxiliary_files(repo_name, worktree_path)
             ensure_worktree_hooks(worktree_path)
             lock_context = (
