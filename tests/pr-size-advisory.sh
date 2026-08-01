@@ -47,9 +47,26 @@ make_lines() {
   awk -v count="$count" 'BEGIN { for (line = 1; line <= count; line++) print "line " line }' >"$target"
 }
 
+append_lines() {
+  local count="$1"
+  local target="$2"
+
+  awk -v count="$count" 'BEGIN { for (line = 1; line <= count; line++) print "appended " line }' >>"$target"
+}
+
+make_prefixed_lines() {
+  local count="$1"
+  local prefix="$2"
+  local target="$3"
+
+  awk -v count="$count" -v prefix="$prefix" \
+    'BEGIN { for (line = 1; line <= count; line++) print prefix " " line }' >"$target"
+}
+
 create_git_fixture() {
   local repository="$1"
   local exclude_patterns="${2-}"
+  local seed_renames="${3-false}"
 
   mkdir -p "$repository/source" "$repository/generated" "$repository/vendor"
   if [ -n "$exclude_patterns" ]; then
@@ -61,6 +78,10 @@ generated/
 EOF
   fi
   make_lines 4 "$repository/source/existing.txt"
+  if [ "$seed_renames" = "true" ]; then
+    make_prefixed_lines 700 "generated source" "$repository/generated/old-name.txt"
+    make_prefixed_lines 700 "included source" "$repository/source/to-generated.txt"
+  fi
 
   (
     cd "$repository"
@@ -69,6 +90,9 @@ EOF
     git config user.email "test@secpal.dev"
     git config commit.gpgSign false
     git add .preflight-exclude source/existing.txt
+    if [ "$seed_renames" = "true" ]; then
+      git add generated/old-name.txt source/to-generated.txt
+    fi
     git commit --quiet -m "test: seed size fixture"
     git remote add origin "$repository"
     git update-ref refs/remotes/origin/main HEAD
@@ -80,8 +104,9 @@ EOF
 create_preflight_fixture() {
   local repository="$1"
   local exclude_patterns="${2-}"
+  local seed_renames="${3-false}"
 
-  create_git_fixture "$repository" "$exclude_patterns"
+  create_git_fixture "$repository" "$exclude_patterns" "$seed_renames"
   mkdir -p "$repository/scripts" "$repository/bin"
   cp "$PREFLIGHT_SCRIPT" "$repository/scripts/preflight.sh"
 
@@ -189,7 +214,8 @@ path_exclusion_local_stdout="$workspace/local-path-exclusions.stdout"
 path_exclusion_local_stderr="$workspace/local-path-exclusions.stderr"
 create_preflight_fixture \
   "$path_exclusion_local_repo" \
-  $'^LICENSES/.*\\.txt$\npackage-lock.json'
+  $'^LICENSES/.*\\.txt$\npackage-lock.json\n^generated/' \
+  true
 mkdir -p \
   "$path_exclusion_local_repo/LICENSES" \
   "$path_exclusion_local_repo/docs/LICENSES" \
@@ -198,6 +224,9 @@ mkdir -p \
   "$path_exclusion_local_repo/lockfiles" \
   "$path_exclusion_local_repo/prefix LICENSES"
 make_lines 601 "$path_exclusion_local_repo/LICENSES/license.txt"
+make_lines 602 "$path_exclusion_local_repo/LICENSES/über.txt"
+make_lines 603 "$path_exclusion_local_repo/"$'LICENSES/tab\tname.txt'
+make_lines 604 "$path_exclusion_local_repo/"$'LICENSES/line\nname.txt'
 make_lines 5 "$path_exclusion_local_repo/docs/LICENSES/license.txt"
 make_lines 6 "$path_exclusion_local_repo/prefix LICENSES/notes.txt"
 make_lines 700 "$path_exclusion_local_repo/lockfiles/package-lock.json"
@@ -205,12 +234,25 @@ make_lines 500 "$path_exclusion_local_repo/custom/ignored.txt"
 printf 'binary\0content\n' >"$path_exclusion_local_repo/assets/image.bin"
 (
   cd "$path_exclusion_local_repo"
-  git add LICENSES/license.txt docs/LICENSES/license.txt 'prefix LICENSES/notes.txt' \
-    lockfiles/package-lock.json custom/ignored.txt assets/image.bin
+  mv generated/old-name.txt source/from-generated.txt
+  append_lines 20 source/from-generated.txt
+  mv source/to-generated.txt generated/from-source.txt
+  append_lines 21 generated/from-source.txt
+  git add -- LICENSES/license.txt 'LICENSES/über.txt' $'LICENSES/tab\tname.txt' \
+    $'LICENSES/line\nname.txt' docs/LICENSES/license.txt 'prefix LICENSES/notes.txt' \
+    lockfiles/package-lock.json custom/ignored.txt assets/image.bin \
+    generated/old-name.txt source/from-generated.txt \
+    source/to-generated.txt generated/from-source.txt
   git commit --quiet -m "test: cover path-based exclusions"
 )
 if ! git -C "$path_exclusion_local_repo" diff --numstat origin/main..HEAD | grep -Fqx -- $'-\t-\tassets/image.bin'; then
   record_failure "path-exclusion fixture must contain a binary --numstat record"
+fi
+if ! git -C "$path_exclusion_local_repo" diff --numstat origin/main..HEAD | grep -Fqx -- $'20\t0\tgenerated/old-name.txt => source/from-generated.txt'; then
+  record_failure "path-exclusion fixture must contain a detected rename from excluded to included"
+fi
+if ! git -C "$path_exclusion_local_repo" diff --numstat origin/main..HEAD | grep -Fqx -- $'21\t0\tsource/to-generated.txt => generated/from-source.txt'; then
+  record_failure "path-exclusion fixture must contain a detected rename from included to excluded"
 fi
 run_preflight_fixture \
   "$path_exclusion_local_repo" \
@@ -221,8 +263,8 @@ if [ "$fixture_status" -ne 0 ]; then
 fi
 assert_contains \
   "$path_exclusion_local_stdout" \
-  "Preflight OK · PR size: 511 changed lines (511 insertions, 0 deletions; advisory threshold: 600)" \
-  "local preflight must exclude root licenses and lock files without excluding nested or spaced paths"
+  "Preflight OK · PR size: 531 changed lines (531 insertions, 0 deletions; advisory threshold: 600)" \
+  "local preflight must filter raw paths and apply rename exclusions to destination paths"
 assert_not_contains \
   "$path_exclusion_local_stderr" \
   "WARNING: PR size advisory threshold exceeded" \
@@ -416,7 +458,7 @@ if [ "$fixture_status" -ne 0 ]; then
 fi
 assert_contains \
   "$path_exclusion_workflow_output" \
-  "PR size: 511 changed lines (511 insertions, 0 deletions; advisory threshold: 600)" \
+  "PR size: 531 changed lines (531 insertions, 0 deletions; advisory threshold: 600)" \
   "local and hosted fixtures must report identical counts after repository exclusions"
 
 path_exclusion_custom_workflow_output="$workspace/workflow-path-custom-exclusions.out"
@@ -429,7 +471,7 @@ if [ "$fixture_status" -ne 0 ]; then
 fi
 assert_contains \
   "$path_exclusion_custom_workflow_output" \
-  "PR size: 11 changed lines (11 insertions, 0 deletions; advisory threshold: 600)" \
+  "PR size: 31 changed lines (31 insertions, 0 deletions; advisory threshold: 600)" \
   "reusable workflow must apply repository and custom exclusions to paths only"
 assert_not_contains \
   "$path_exclusion_custom_workflow_output" \
@@ -438,8 +480,8 @@ assert_not_contains \
 
 local_path_counts=$(sed -n 's/.*\(PR size: [0-9][0-9]* changed lines.*\)/\1/p' "$path_exclusion_local_stdout")
 hosted_path_counts=$(sed -n 's/.*\(PR size: [0-9][0-9]* changed lines.*\)/\1/p' "$path_exclusion_workflow_output")
-if [ "$local_path_counts" != "PR size: 511 changed lines (511 insertions, 0 deletions; advisory threshold: 600)" ]; then
-  record_failure "local path-exclusion fixture must retain nested and spaced paths"
+if [ "$local_path_counts" != "PR size: 531 changed lines (531 insertions, 0 deletions; advisory threshold: 600)" ]; then
+  record_failure "local path-exclusion fixture must retain included paths and rename destinations"
 fi
 if [ "$hosted_path_counts" != "$local_path_counts" ]; then
   record_failure "hosted path-exclusion fixture must retain nested and spaced paths"
@@ -484,6 +526,20 @@ assert_contains \
   "$invalid_workflow_output" \
   "PR size: 604 changed lines" \
   "an invalid exclusion must not hide a large hosted-workflow diff"
+
+invalid_custom_workflow_output="$workspace/workflow-invalid-custom-exclusion.out"
+run_workflow_fixture "$large_workflow_repo" "$invalid_custom_workflow_output" "["
+if [ "$fixture_status" -ne 0 ]; then
+  record_failure "reusable workflow shell must safely ignore invalid custom exclusions (status $fixture_status)"
+fi
+assert_contains \
+  "$invalid_custom_workflow_output" \
+  "Custom exclude patterns contain invalid regex" \
+  "reusable workflow must report an invalid custom exclusion"
+assert_contains \
+  "$invalid_custom_workflow_output" \
+  "PR size: 601 changed lines" \
+  "an invalid custom exclusion must not hide a large hosted-workflow diff"
 
 policy_files=(
   "$REPO_ROOT/README.md"
