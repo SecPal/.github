@@ -6905,6 +6905,9 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     clone_root = temporary_root / ".polyscope" / "clones"
     worktree = clone_root / "repository-id" / "workspace"
     worktree.mkdir(parents=True)
+    public_directory = worktree / "public"
+    public_directory.mkdir()
+    (public_directory / "index.php").write_text("<?php")
 
     calls: list[tuple[list[str], dict[str, object]]] = []
     original_run = module.subprocess.run
@@ -6930,8 +6933,26 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         worktree,
     ]
     assert [arguments for arguments, _kwargs in calls] == [
-        ["/usr/bin/setfacl", "-m", "u:www-data:--x", "--", str(path)]
-        for path in expected_paths
+        [
+            "/usr/bin/setfacl",
+            "-x",
+            "d:u:www-data",
+            "--",
+            str(worktree),
+        ],
+        [
+            "/usr/bin/setfacl",
+            "-R",
+            "-P",
+            "-x",
+            "u:www-data,d:u:www-data",
+            "--",
+            str(public_directory),
+        ],
+        *[
+            ["/usr/bin/setfacl", "-m", "u:www-data:--x", "--", str(path)]
+            for path in expected_paths
+        ],
     ]
     assert all(
         kwargs == {"check": True, "capture_output": True, "text": True}
@@ -6967,6 +6988,26 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         module.subprocess.run = original_run
     assert [arguments for arguments, _kwargs in calls] == [
         ["/usr/bin/setfacl", "-m", "u:www-data:---", "--", str(worktree)]
+    ]
+
+    calls.clear()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_repository_access(
+            clone_root,
+            worktree.parent,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(worktree.parent),
+        ]
     ]
 
     def fail_run(arguments: list[str], **kwargs: object) -> None:
@@ -7007,10 +7048,14 @@ def run_case(
     *,
     marker_hit: bool,
     setup_fails: bool,
+    marker_acl_current: bool = False,
     provisionable: bool = True,
     canonical_validation_fails: bool = False,
     deny_fails: bool = False,
+    repository_deny_fails: bool = False,
     registered_worktree_count: int = 1,
+    unregistered_worktree_count: int = 0,
+    escaping_symlink: bool = False,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     temporary_directory = tempfile.TemporaryDirectory()
     case_root = Path(temporary_directory.name)
@@ -7022,6 +7067,15 @@ def run_case(
         additional_worktree = clone_root / "repository-id" / f"workspace-{index}"
         additional_worktree.mkdir()
         registered_worktrees.append(additional_worktree)
+    for index in range(unregistered_worktree_count):
+        (clone_root / "repository-id" / f"orphan-{index}").mkdir()
+    if escaping_symlink:
+        outside_preview = case_root / "outside-preview"
+        outside_preview.mkdir()
+        (clone_root / "repository-id" / "rogue-alias").symlink_to(
+            outside_preview,
+            target_is_directory=True,
+        )
     order: list[str] = []
 
     module.validate_repo_instruction_files = lambda *_args, **_kwargs: order.append(
@@ -7050,17 +7104,28 @@ def run_case(
     module.collect_linked_setup_context = lambda *_args, **_kwargs: {}
     module.resolve_current_workspace_name = lambda *_args, **_kwargs: "workspace"
     module.build_setup_hash = lambda *_args, **_kwargs: "setup-hash"
-    module.load_provision_marker = lambda _path: (
-        {"setup_hash": "setup-hash"} if marker_hit else None
-    )
+    marker_payload = {"setup_hash": "setup-hash"}
+    if marker_acl_current:
+        marker_payload["preview_acl_policy_version"] = module.PREVIEW_ACL_POLICY_VERSION
+    module.load_provision_marker = lambda _path: marker_payload if marker_hit else None
 
-    def deny_access(*_args, **_kwargs) -> None:
-        order.append("deny")
+    def deny_repository_access(*_args, **_kwargs) -> None:
+        order.append("deny-repository")
+        if repository_deny_fails:
+            raise RuntimeError("expected repository ACL denial failure")
+
+    def deny_access(_clone_root, denied_path, **_kwargs) -> None:
+        order.append(f"deny:{denied_path.name}")
         if deny_fails:
             raise RuntimeError("expected ACL denial failure")
 
+    module.deny_preview_nginx_repository_access = deny_repository_access
     module.deny_preview_nginx_access = deny_access
-    module.ensure_preview_nginx_access = lambda *_args, **_kwargs: order.append("grant")
+
+    def grant_access(*_args, clean_inherited_acl: bool = True, **_kwargs) -> None:
+        order.append("grant-clean" if clean_inherited_acl else "grant-current")
+
+    module.ensure_preview_nginx_access = grant_access
 
     def run_setup(*_args, **_kwargs) -> None:
         order.append("setup")
@@ -7096,7 +7161,13 @@ failure_order, failure_provisioned, failure_details = run_case(
     marker_hit=False,
     setup_fails=True,
 )
-assert failure_order == ["deny", "validate-repos", "validate", "setup"], failure_order
+assert failure_order == [
+    "deny-repository",
+    "deny:workspace",
+    "validate-repos",
+    "validate",
+    "setup",
+], failure_order
 assert failure_provisioned == []
 assert len(failure_details) == 1
 
@@ -7104,15 +7175,43 @@ marker_order, marker_provisioned, marker_failures = run_case(
     marker_hit=True,
     setup_fails=False,
 )
-assert marker_order == ["deny", "validate-repos", "validate", "grant"], marker_order
+assert marker_order == [
+    "deny-repository",
+    "deny:workspace",
+    "validate-repos",
+    "validate",
+    "grant-clean",
+], marker_order
 assert marker_provisioned == []
 assert marker_failures == []
+
+current_marker_order, current_marker_provisioned, current_marker_failures = run_case(
+    marker_hit=True,
+    marker_acl_current=True,
+    setup_fails=False,
+)
+assert current_marker_order == [
+    "deny-repository",
+    "deny:workspace",
+    "validate-repos",
+    "validate",
+    "grant-current",
+], current_marker_order
+assert current_marker_provisioned == []
+assert current_marker_failures == []
 
 success_order, success_provisioned, success_failures = run_case(
     marker_hit=False,
     setup_fails=False,
 )
-assert success_order == ["deny", "validate-repos", "validate", "setup", "grant"], success_order
+assert success_order == [
+    "deny-repository",
+    "deny:workspace",
+    "validate-repos",
+    "validate",
+    "setup",
+    "grant-clean",
+], success_order
 assert success_provisioned == ["frontend:workspace"]
 assert success_failures == []
 
@@ -7121,7 +7220,12 @@ invalid_order, invalid_provisioned, invalid_failures = run_case(
     setup_fails=False,
     provisionable=False,
 )
-assert invalid_order == ["deny", "validate-repos", "validate"], invalid_order
+assert invalid_order == [
+    "deny-repository",
+    "deny:workspace",
+    "validate-repos",
+    "validate",
+], invalid_order
 assert invalid_provisioned == []
 assert invalid_failures == []
 
@@ -7132,8 +7236,9 @@ canonical_order, canonical_provisioned, canonical_failures = run_case(
     registered_worktree_count=2,
 )
 assert canonical_order == [
-    "deny",
-    "deny",
+    "deny-repository",
+    "deny:workspace",
+    "deny:workspace-1",
     "validate-repos",
     "validate",
     "validate",
@@ -7146,9 +7251,44 @@ deny_failure_order, deny_failure_provisioned, deny_failure_details = run_case(
     setup_fails=False,
     deny_fails=True,
 )
-assert deny_failure_order == ["deny"], deny_failure_order
+assert deny_failure_order == ["deny-repository", "deny:workspace"], deny_failure_order
 assert deny_failure_provisioned == []
 assert len(deny_failure_details) == 1
+
+repository_failure_order, repository_failure_provisioned, repository_failure_details = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    repository_deny_fails=True,
+)
+assert repository_failure_order == ["deny-repository"], repository_failure_order
+assert repository_failure_provisioned == []
+assert len(repository_failure_details) == 1
+
+orphan_order, orphan_provisioned, orphan_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    unregistered_worktree_count=1,
+)
+assert orphan_order == [
+    "deny-repository",
+    "deny:orphan-0",
+    "deny:workspace",
+    "validate-repos",
+    "validate",
+    "setup",
+    "grant-clean",
+], orphan_order
+assert orphan_provisioned == ["frontend:workspace"]
+assert orphan_failures == []
+
+symlink_order, symlink_provisioned, symlink_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    escaping_symlink=True,
+)
+assert symlink_order == ["deny-repository", "deny:workspace"], symlink_order
+assert symlink_provisioned == []
+assert len(symlink_failures) == 1
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
