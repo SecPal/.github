@@ -1607,6 +1607,7 @@ from pathlib import Path
 
 package_json = Path("package.json")
 declared_packages = set()
+required_packages = set()
 if package_json.is_file():
     try:
         package_data = json.loads(package_json.read_text())
@@ -1617,10 +1618,15 @@ if package_json.is_file():
             section = package_data.get(key, {})
             if isinstance(section, dict):
                 declared_packages.update(name for name in section if isinstance(name, str))
+        for key in ("dependencies", "devDependencies"):
+            section = package_data.get(key, {})
+            if isinstance(section, dict):
+                required_packages.update(name for name in section if isinstance(name, str))
 
 required_paths = []
 if declared_packages:
     required_paths.append(Path("node_modules/.package-lock.json"))
+required_paths.extend(Path("node_modules") / package / "package.json" for package in sorted(required_packages))
 if "typescript" in declared_packages:
     required_paths.extend(
         [
@@ -1852,6 +1858,8 @@ watch_files = [
             Path(".env.preview.local"),
             Path(".env.production.local"),
             Path("node_modules/.package-lock.json"),
+            Path("node_modules/.bin/cross-env"),
+            Path("node_modules/.bin/vite"),
 ]
 watch_suffixes = {
             ".css",
@@ -4588,6 +4596,11 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
+
+            # Worktrees are built and published after their preview hostname is
+            # reachable. Do not retain a missing-file or permission result from
+            # that short provisioning window.
+            open_file_cache off;
 
             client_max_body_size 25m;
             index index.html index.php;

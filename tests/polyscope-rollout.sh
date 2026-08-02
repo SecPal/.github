@@ -2297,8 +2297,8 @@ assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
 assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
-assert 'Path("node_modules/.bin/cross-env")' not in watch_script, watch_script
-assert 'Path("node_modules/.bin/vite")' not in watch_script, watch_script
+assert 'Path("node_modules/.bin/cross-env")' in watch_script, watch_script
+assert 'Path("node_modules/.bin/vite")' in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html")') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
@@ -4047,8 +4047,9 @@ assert "APP_URL=https://guardguide-steady-otter.preview.secpal.dev" in env_text,
 assert "APP_URL=https://guardguide-Steady Otter.preview.secpal.dev" not in env_text, env_text
 PY
 
-# build_verified_npm_ci_command must retry failed npm ci attempts even though
-# provisioning runs the generated shell under `set -euo pipefail`.
+# build_verified_npm_ci_command must retry a zero-exit npm ci attempt that
+# leaves a declared development dependency incomplete, even though provisioning
+# runs the generated shell under `set -euo pipefail`.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
@@ -4062,7 +4063,10 @@ fixture = workspace / "npm-ci-retry-fixture"
 fake_bin = fixture / "fake-bin"
 fixture.mkdir()
 fake_bin.mkdir()
-fixture.joinpath("package.json").write_text('{"name":"retry","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}\n')
+fixture.joinpath("package.json").write_text(
+    '{"name":"retry","version":"1.0.0","dependencies":{"left-pad":"1.3.0"},'
+    '"devDependencies":{"vite":"8.1.5"}}\n'
+)
 fixture.joinpath("package-lock.json").write_text(
     '{"name":"retry","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"retry","version":"1.0.0"},"node_modules/left-pad":{"version":"1.3.0"}}}\n'
 )
@@ -4074,10 +4078,13 @@ import sys
 counter_path = Path("npm-ci-attempts.txt")
 attempt = int(counter_path.read_text()) + 1 if counter_path.exists() else 1
 counter_path.write_text(str(attempt))
-if attempt == 1:
-    sys.exit(42)
 Path("node_modules").mkdir(exist_ok=True)
 Path("node_modules/.package-lock.json").write_text("{}\\n")
+Path("node_modules/left-pad").mkdir(exist_ok=True)
+Path("node_modules/left-pad/package.json").write_text("{}\\n")
+if attempt > 1:
+    Path("node_modules/vite").mkdir(exist_ok=True)
+    Path("node_modules/vite/package.json").write_text("{}\\n")
 sys.exit(0)
 """
 )
