@@ -503,6 +503,102 @@ assert {
     "maximum_reactions": 50,
 }, "SecPal/frontend capture limits must remain unchanged"
 
+deployment_entries = [
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/deployment"
+]
+assert len(deployment_entries) == 1, (
+    "SecPal/deployment must have exactly one registry entry"
+)
+deployment = deployment_entries[0]
+assert deployment["required_local_validation"] == [
+    {
+        "argv": ["./scripts/preflight.sh"],
+        "working_directory": ".",
+        "purpose": "Run the deterministic deployment repository preflight",
+    },
+], "SecPal/deployment must require the deterministic preflight exactly once"
+assert deployment["focused_validation"] == [
+    {
+        "argv": ["./scripts/local-integration.sh"],
+        "working_directory": ".",
+        "purpose": "Build and exercise the complete local API/frontend integration stack",
+        "execution_policy": "focused-only",
+    },
+], "SecPal/deployment must register local integration as focused-only exactly once"
+
+deployment_validation_argv = [
+    tuple(command["argv"])
+    for command_group in ("focused_validation", "required_local_validation")
+    for command in deployment[command_group]
+]
+assert len(deployment_validation_argv) == len(set(deployment_validation_argv)), (
+    "SecPal/deployment validation commands must not be duplicated"
+)
+assert ("./scripts/local-integration.sh",) not in {
+    tuple(command["argv"])
+    for command in deployment["required_local_validation"]
+}, "SecPal/deployment local integration must not become required validation"
+deployment_prohibited_fragments = (
+    "docker login", "docker push", "docker system prune", "docker image prune",
+    "ghcr", "publish", "deploy", "production", "live",
+)
+assert not any(
+    fragment in " ".join(argv).lower()
+    for argv in deployment_validation_argv
+    for fragment in deployment_prohibited_fragments
+), (
+    "SecPal/deployment must not register login, publishing, push, prune, "
+    "deployment, production, or live targets"
+)
+
+assert len(deployment["manual_gates"]) == 1
+deployment_gate = deployment["manual_gates"][0]
+for required_text in (
+    "The deterministic `./scripts/preflight.sh` target is required.",
+    "Docker-backed `./scripts/local-integration.sh`",
+    "Compose", "container roles", "runtime secrets", "PostgreSQL", "Valkey",
+    "queue", "cache", "shared storage", "gateway", "CORS", "Sanctum",
+    "browser integration", "lifecycle", "cleanup",
+    "explicit current authorization for Docker daemon access",
+    "outbound GitHub, container-registry, and package-registry network access",
+    "Authorization from an earlier task does not carry over.",
+    "Registry login", "publishing", "push", "prune", "production infrastructure",
+    "public exposure", "deployment", "live systems", "real secrets",
+):
+    assert required_text in deployment_gate, (
+        f"SecPal/deployment manual gate must retain: {required_text}"
+    )
+
+assert deployment["signature_policy"] == {
+    "require_github_verified": True,
+    "require_local_verified": True,
+    "accepted_formats": ["ssh", "openpgp"],
+}, "SecPal/deployment signature policy must remain strict"
+assert deployment["check_policy"] == {
+    "require_ruleset_evidence": True,
+    "require_branch_protection_evidence": True,
+    "expected_skipped": "block",
+}, "SecPal/deployment check policy must remain strict"
+assert deployment["unsupported_operations"] == [
+    "REVIEW_REQUEST", "READY_TRANSITION", "LABEL", "ISSUE",
+    "REVIEW_SUBMISSION", "MERGE", "AUTO_MERGE", "COMMENT_DELETE",
+    "REVIEW_DISMISSAL", "BRANCH_WRITE",
+], "SecPal/deployment unsupported operations must remain unchanged"
+assert {
+    key: deployment[key]
+    for key in (
+        "maximum_api_calls", "maximum_items", "maximum_threads",
+        "maximum_comments", "maximum_reactions",
+    )
+} == {
+    "maximum_api_calls": 200,
+    "maximum_items": 10000,
+    "maximum_threads": 500,
+    "maximum_comments": 200,
+    "maximum_reactions": 50,
+}, "SecPal/deployment capture limits must remain unchanged"
+
 for item in registry["repositories"]:
     for command_group in ("focused_validation", "required_local_validation"):
         for command in item[command_group]:
