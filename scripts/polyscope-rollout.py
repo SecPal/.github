@@ -37,6 +37,7 @@ PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
 DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
+FIXED_SETFACL_BIN = "/usr/bin/setfacl"
 NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 NATIVE_SETUP_COMMANDS_KEY = "_native_setup_commands"
@@ -1680,48 +1681,47 @@ exit 1
     ).strip()
 
 
-def build_frontend_preview_build_command() -> str:
-    script = textwrap.dedent(
-        f"""\
-import fcntl
-import os
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
-
-{build_linked_workspace_resolver_source()}
-
-def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+def build_frontend_preview_publisher_source() -> str:
+    """Render the one canonical atomic preview publication implementation."""
+    return textwrap.dedent(
+        """\
+def replace_file(src_file: Path, dest_file: Path) -> None:
     dest_file.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
+    fd, tmp_name = tempfile.mkstemp(
+        suffix=".tmp",
+        prefix=dest_file.name + "-",
+        dir=dest_file.parent,
+    )
     os.close(fd)
-    shutil.copy2(src_file, tmp_path)
-    if dest_file.is_dir() and not dest_file.is_symlink():
-        shutil.rmtree(dest_file)
-    os.replace(tmp_path, dest_file)
+    tmp_path = Path(tmp_name)
+    try:
+        shutil.copyfile(src_file, tmp_path)
+        os.chmod(tmp_path, 0o644)
+        if dest_file.is_dir() and not dest_file.is_symlink():
+            shutil.rmtree(dest_file)
+        os.replace(tmp_path, dest_file)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
-def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
+def merge_tree(src_dir: Path, dest_dir: Path) -> None:
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(dest_dir, 0o755)
     for child in sorted(src_dir.iterdir()):
         dest_child = dest_dir / child.name
         if child.is_dir():
-            merge_tree(child, dest_child, tmp_dir)
+            merge_tree(child, dest_child)
         else:
-            replace_file(child, dest_child, tmp_dir)
+            replace_file(child, dest_child)
 
-def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[Path]]:
-    stage_dirs = {{Path(".")}}
+def collect_stage_paths(stage_dir: Path) -> tuple[set[Path], set[Path]]:
+    stage_dirs = {Path(".")}
     stage_files = set()
     for child in stage_dir.rglob("*"):
-        if child == tmp_dir or tmp_dir in child.parents:
-            continue
-
         relative = child.relative_to(stage_dir)
         if child.is_symlink():
-            raise RuntimeError(f"staged build output contains symlink: {{relative}}")
+            raise RuntimeError(f"staged build output contains symlink: {relative}")
         if child.is_dir():
             stage_dirs.add(relative)
         else:
@@ -1742,34 +1742,48 @@ def publish_preview_build(stage_dir: Path) -> None:
     if live_root.is_symlink():
         raise RuntimeError("live preview dist is a symlink")
     live_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(live_root, 0o755)
 
-    with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
-        tmp_dir = Path(_tmp)
-        stage_dirs, stage_files = collect_stage_paths(stage_dir, tmp_dir)
+    stage_dirs, stage_files = collect_stage_paths(stage_dir)
 
-        stage_assets = stage_dir / "assets"
-        if stage_assets.is_dir():
-            merge_tree(stage_assets, live_root / "assets", tmp_dir)
+    stage_assets = stage_dir / "assets"
+    if stage_assets.is_dir():
+        merge_tree(stage_assets, live_root / "assets")
 
-        deferred_index: Path | None = None
-        for child in sorted(stage_dir.iterdir()):
-            if child.name == "assets":
-                continue
-            if child.name == tmp_dir.name:
-                continue
-            if child.name == "index.html":
-                deferred_index = child
-                continue
-            destination = live_root / child.name
-            if child.is_dir():
-                merge_tree(child, destination, tmp_dir)
-            else:
-                replace_file(child, destination, tmp_dir)
+    deferred_index: Path | None = None
+    for child in sorted(stage_dir.iterdir()):
+        if child.name == "assets":
+            continue
+        if child.name == "index.html":
+            deferred_index = child
+            continue
+        destination = live_root / child.name
+        if child.is_dir():
+            merge_tree(child, destination)
+        else:
+            replace_file(child, destination)
 
-        if deferred_index is not None:
-            replace_file(deferred_index, live_root / "index.html", tmp_dir)
+    if deferred_index is not None:
+        replace_file(deferred_index, live_root / "index.html")
 
-        prune_live_tree(live_root, stage_dirs, stage_files)
+    prune_live_tree(live_root, stage_dirs, stage_files)
+        """
+    ).strip()
+
+
+def build_frontend_preview_build_command() -> str:
+    script = textwrap.dedent(
+        f"""\
+import fcntl
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+{build_linked_workspace_resolver_source()}
+
+{build_frontend_preview_publisher_source()}
 
 workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
@@ -1904,84 +1918,7 @@ def snapshot() -> str:
 
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
-def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
-    dest_file.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
-    os.close(fd)
-    shutil.copy2(src_file, tmp_path)
-    if dest_file.is_dir() and not dest_file.is_symlink():
-        shutil.rmtree(dest_file)
-    os.replace(tmp_path, dest_file)
-
-def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
-    if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
-        dest_dir.unlink()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for child in sorted(src_dir.iterdir()):
-        dest_child = dest_dir / child.name
-        if child.is_dir():
-            merge_tree(child, dest_child, tmp_dir)
-        else:
-            replace_file(child, dest_child, tmp_dir)
-
-def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[Path]]:
-    stage_dirs = {{Path(".")}}
-    stage_files = set()
-    for child in stage_dir.rglob("*"):
-        if child == tmp_dir or tmp_dir in child.parents:
-            continue
-
-        relative = child.relative_to(stage_dir)
-        if child.is_symlink():
-            raise RuntimeError(f"staged build output contains symlink: {{relative}}")
-        if child.is_dir():
-            stage_dirs.add(relative)
-        else:
-            stage_files.add(relative)
-    return stage_dirs, stage_files
-
-def prune_live_tree(live_root: Path, stage_dirs: set[Path], stage_files: set[Path]) -> None:
-    for child in sorted(live_root.rglob("*"), key=lambda path: len(path.relative_to(live_root).parts), reverse=True):
-        relative = child.relative_to(live_root)
-        if child.is_dir() and not child.is_symlink():
-            if relative not in stage_dirs:
-                shutil.rmtree(child)
-        elif relative not in stage_files:
-            child.unlink(missing_ok=True)
-
-def publish_preview_build(stage_dir: Path) -> None:
-    live_root = Path("dist")
-    if live_root.is_symlink():
-        raise RuntimeError("live preview dist is a symlink")
-    live_root.mkdir(parents=True, exist_ok=True)
-
-    with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
-        tmp_dir = Path(_tmp)
-        stage_dirs, stage_files = collect_stage_paths(stage_dir, tmp_dir)
-
-        stage_assets = stage_dir / "assets"
-        if stage_assets.is_dir():
-            merge_tree(stage_assets, live_root / "assets", tmp_dir)
-
-        deferred_index = None
-        for child in sorted(stage_dir.iterdir()):
-            if child.name == "assets":
-                continue
-            if child.name == tmp_dir.name:
-                continue
-            if child.name == "index.html":
-                deferred_index = child
-                continue
-            destination = live_root / child.name
-            if child.is_dir():
-                merge_tree(child, destination, tmp_dir)
-            else:
-                replace_file(child, destination, tmp_dir)
-
-        if deferred_index is not None:
-            replace_file(deferred_index, live_root / "index.html", tmp_dir)
-
-        prune_live_tree(live_root, stage_dirs, stage_files)
+{build_frontend_preview_publisher_source()}
 
 def run_build() -> int:
     workspace = resolve_current_workspace(Path.cwd())
@@ -3850,6 +3787,252 @@ def resolve_executable(command: str) -> str | None:
     return None
 
 
+def resolve_setfacl_bin(explicit_path: str | None = None) -> str:
+    if explicit_path is not None:
+        return explicit_path
+
+    test_override = os.environ.get("POLYSCOPE_TEST_SETFACL_BIN")
+    if test_override is None:
+        return FIXED_SETFACL_BIN
+    if os.environ.get("POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE") != "1":
+        raise RuntimeError("test setfacl override requires explicit test authorization")
+
+    override_path = pathlib.Path(test_override)
+    if not override_path.is_absolute() or not override_path.is_file() or not os.access(override_path, os.X_OK):
+        raise RuntimeError("test setfacl override must be an absolute executable file")
+    return str(override_path)
+
+
+def _run_preview_setfacl(
+    executable: str,
+    arguments: list[str],
+    failure_message: str,
+) -> None:
+    try:
+        subprocess.run(
+            [executable, *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() if error.stderr else "no error output"
+        raise RuntimeError(f"{failure_message}: {detail}") from error
+
+
+def ensure_preview_nginx_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Allow nginx to traverse one worktree and read its preview document roots."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    resolved_worktree_path = worktree_path.resolve(strict=True)
+    repo_clone_root = resolved_worktree_path.parent
+    if repo_clone_root.parent != resolved_clone_root:
+        raise RuntimeError(
+            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+        )
+
+    executable = resolve_setfacl_bin(setfacl_bin)
+
+    # Clone and repository defaults deliberately keep unknown worktrees closed.
+    # Once this worktree has provisioned successfully, remove the inherited
+    # default denial so later build outputs do not inherit a stale block.  The
+    # worktree's access denial remains effective until traversal is granted
+    # below, after all content ACL reconciliation has succeeded.
+    _run_preview_setfacl(
+        executable,
+        ["-x", "d:u:www-data", "--", str(resolved_worktree_path)],
+        f"unable to remove inherited Nginx preview denial from {resolved_worktree_path}",
+    )
+
+    document_roots: list[pathlib.Path] = []
+    for document_root_name in ("public", "dist"):
+        document_root = resolved_worktree_path / document_root_name
+        if not document_root.exists() and not document_root.is_symlink():
+            continue
+        if document_root.is_symlink() or not document_root.is_dir():
+            raise RuntimeError(f"preview document root is not a physical directory: {document_root}")
+        document_roots.append(document_root)
+
+    for document_root in document_roots:
+        _run_preview_setfacl(
+            executable,
+            [
+                "-R",
+                "-P",
+                "-m",
+                "u:www-data:rX",
+                "--",
+                str(document_root),
+            ],
+            f"unable to grant Nginx preview content access to {document_root}",
+        )
+        _run_preview_setfacl(
+            executable,
+            [
+                "-R",
+                "-P",
+                "-d",
+                "-m",
+                "u:www-data:r-x",
+                "--",
+                str(document_root),
+            ],
+            f"unable to grant inherited Nginx preview content access to {document_root}",
+        )
+
+    for path in (
+        resolved_clone_root.parent.parent,
+        resolved_clone_root.parent,
+        resolved_clone_root,
+        repo_clone_root,
+        resolved_worktree_path,
+    ):
+        _run_preview_setfacl(
+            executable,
+            ["-m", "u:www-data:--x", "--", str(path)],
+            f"unable to grant Nginx preview access to {path}",
+        )
+
+
+def deny_preview_nginx_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Block the nginx worker at one physical preview worktree."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    resolved_worktree_path = worktree_path.resolve(strict=True)
+    if resolved_worktree_path.parent.parent != resolved_clone_root:
+        raise RuntimeError(
+            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+        )
+
+    executable = resolve_setfacl_bin(setfacl_bin)
+    _run_preview_setfacl(
+        executable,
+        [
+            "-m",
+            "u:www-data:---",
+            "--",
+            str(resolved_worktree_path),
+        ],
+        f"unable to deny Nginx preview access to {resolved_worktree_path}",
+    )
+
+
+def deny_preview_nginx_clone_access(
+    clone_root: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Block existing and future preview repositories at the clone boundary."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    executable = resolve_setfacl_bin(setfacl_bin)
+    _run_preview_setfacl(
+        executable,
+        [
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(resolved_clone_root),
+        ],
+        f"unable to deny Nginx preview access at clone root {resolved_clone_root}",
+    )
+
+
+def deny_preview_nginx_repository_access(
+    clone_root: pathlib.Path,
+    repo_clone_root: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Block existing and newly created children of one preview repository."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    if repo_clone_root.is_symlink() or not repo_clone_root.is_dir():
+        raise RuntimeError(f"preview repository clone root is not a physical directory: {repo_clone_root}")
+    resolved_repo_clone_root = repo_clone_root.resolve(strict=True)
+    if resolved_repo_clone_root.parent != resolved_clone_root:
+        raise RuntimeError(
+            f"preview repository clone root {resolved_repo_clone_root} is not directly below {resolved_clone_root}"
+        )
+
+    executable = resolve_setfacl_bin(setfacl_bin)
+    _run_preview_setfacl(
+        executable,
+        [
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(resolved_repo_clone_root),
+        ],
+        f"unable to deny Nginx preview access to repository {resolved_repo_clone_root}",
+    )
+
+
+def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
+    """Revoke preview traversal before validation and selective regranting."""
+    clone_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if clone_root.is_symlink() or not clone_root.is_dir():
+        raise RuntimeError(f"preview clone root is not a physical directory: {clone_root}")
+    resolved_clone_root = clone_root.resolve(strict=True)
+    deny_preview_nginx_clone_access(resolved_clone_root)
+
+    for repo_clone_root in sorted(resolved_clone_root.iterdir(), key=lambda path: path.name):
+        if repo_clone_root.is_symlink():
+            raise RuntimeError(
+                f"preview clone root contains a repository symlink: {repo_clone_root}"
+            )
+        if not repo_clone_root.is_dir():
+            continue
+
+        deny_preview_nginx_repository_access(resolved_clone_root, repo_clone_root)
+        registered_aliases = load_workspace_alias_registry(repo_clone_root)
+        children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        for child in children:
+            if not child.is_symlink() and child.is_dir():
+                deny_preview_nginx_access(resolved_clone_root, child)
+
+        for child in children:
+            if not child.is_symlink():
+                continue
+            try:
+                link_target = os.readlink(child)
+            except OSError as error:
+                raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
+            registered_target = registered_aliases.get(child.name)
+            try:
+                resolved_target = child.resolve(strict=True)
+            except FileNotFoundError:
+                link_target_path = pathlib.Path(link_target)
+                lexical_target = (
+                    link_target_path
+                    if link_target_path.is_absolute()
+                    else child.parent / link_target_path
+                )
+                normalized_target = pathlib.Path(os.path.abspath(lexical_target))
+                if normalized_target.parent != repo_clone_root:
+                    raise RuntimeError(
+                        f"preview repository contains an unresolved symlink that escapes its root: "
+                        f"{child} -> {normalized_target}"
+                    )
+                if registered_target != link_target:
+                    raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
+                continue
+            except OSError as error:
+                raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
+            if resolved_target.parent != repo_clone_root or not resolved_target.is_dir():
+                raise RuntimeError(
+                    f"preview repository contains an escaping symlink: {child} -> {resolved_target}"
+                )
+            if registered_target != link_target or resolved_target.name != registered_target:
+                raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
+
+
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
     if not (worktree_path / ".pre-commit-config.yaml").exists():
         return
@@ -3926,8 +4109,9 @@ def provision_worktrees(
     validated_instruction_roots: set[pathlib.Path] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
-    validate_repo_instruction_files(repo_specs, validation_cache)
     resolved_db_path = db_path or default_polyscope_db_path()
+    failed_provision_worktrees: list[dict[str, str]] = []
+
     registered_worktrees = load_registered_worktree_paths(
         resolved_db_path,
         repo_state,
@@ -3937,7 +4121,6 @@ def provision_worktrees(
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
     ] = []
-    failed_provision_worktrees: list[dict[str, str]] = []
     canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
@@ -4018,6 +4201,8 @@ def provision_worktrees(
     provisioned_worktrees: list[str] = []
 
     for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
+        preview_prefix = spec.get("preview_prefix")
+        preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix)
         try:
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
@@ -4056,6 +4241,8 @@ def provision_worktrees(
                 marker = load_provision_marker(marker_path)
                 if marker is not None and marker.get("setup_hash") == setup_hash:
                     if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                        if preview_enabled:
+                            ensure_preview_nginx_access(clone_root, locked_worktree_path)
                         continue
 
                 if setup_commands:
@@ -4088,6 +4275,8 @@ def provision_worktrees(
                     marker_payload["linked_workspaces"] = linked_setup_context
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+                if preview_enabled:
+                    ensure_preview_nginx_access(clone_root, locked_worktree_path)
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)
@@ -4340,6 +4529,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $secpal_app_dist $secpal_app_root/dist;
             set $guardguide_de_root /home/secpal/.polyscope/clones/{guardguide_de_id}/$workspace;
             set $guardguide_de_dist $guardguide_de_root/dist;
+            set $preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
@@ -4348,47 +4538,55 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{
+                set $preview_worktree $api_root;
                 set $preview_docroot $api_public;
                 set $route_mode api;
             }}
 
             if (-f $frontend_dist/index.html) {{
+                set $preview_worktree $frontend_root;
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $secpal_app_dist/index.html) {{
+                set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $guardguide_de_dist/index.html) {{
+                set $preview_worktree $guardguide_de_root;
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = secpal-app) {{
+                set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = guardguide-de) {{
+                set $preview_worktree $guardguide_de_root;
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = frontend) {{
+                set $preview_worktree $frontend_root;
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = guardguide) {{
+                set $preview_worktree $guardguide_root;
                 set $preview_docroot $guardguide_public;
                 set $php_root $guardguide_public;
                 set $route_mode api;
@@ -4396,6 +4594,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             if ($repo = api) {{
+                set $preview_worktree $api_root;
                 set $preview_docroot $api_public;
                 set $php_root $api_public;
                 set $route_mode api;
@@ -4403,6 +4602,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             root $preview_docroot;
+            disable_symlinks on from=$preview_worktree;
 
             add_header Content-Security-Policy $secpal_csp always;
             add_header Permissions-Policy $secpal_permissions_policy always;
@@ -4840,8 +5040,25 @@ def main() -> int:
     if direct_mode_result is not None:
         return direct_mode_result
 
+    lock_context = (
+        provision_worktree_lock(args.provision_lock_path)
+        if args.provision_worktrees or args.install_nginx
+        else contextlib.nullcontext()
+    )
+    with lock_context:
+        return run_rollout(args)
+
+
+def run_rollout(args: argparse.Namespace) -> int:
     repo_specs = build_repo_specs(args.workspace_root)
     validated_instruction_roots: set[pathlib.Path] = set()
+
+    if args.provision_worktrees or args.install_nginx:
+        try:
+            revoke_all_preview_nginx_access(args.clone_root)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            print(f"Failed to revoke preview access: {error}", file=sys.stderr)
+            return 1
 
     try:
         validate_repo_instruction_files(repo_specs, validated_instruction_roots)
@@ -4867,6 +5084,18 @@ def main() -> int:
 
     args.nginx_output.write_text(render_nginx_config(repo_state, nginx_http2_syntax=nginx_http2_syntax))
 
+    provisioned_worktrees: list[str] = []
+    cleaned_preview_storage_targets: list[str] = []
+    failed_provision_worktrees: list[dict[str, str]] = []
+    if args.provision_worktrees or args.install_nginx:
+        provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
+            repo_state,
+            repo_specs,
+            args.clone_root,
+            db_path=args.db_path,
+            validated_instruction_roots=validated_instruction_roots,
+        )
+
     if args.install_nginx:
         try:
             import polyscope_nginx
@@ -4884,19 +5113,6 @@ def main() -> int:
             writer=polyscope_nginx.write_manifest_atomic,
         )
         install_nginx_config(args.nginx_manifest_output)
-
-    provisioned_worktrees: list[str] = []
-    cleaned_preview_storage_targets: list[str] = []
-    failed_provision_worktrees: list[dict[str, str]] = []
-    if args.provision_worktrees:
-        with provision_worktree_lock(args.provision_lock_path):
-            provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
-                repo_state,
-                repo_specs,
-                args.clone_root,
-                db_path=args.db_path,
-                validated_instruction_roots=validated_instruction_roots,
-            )
 
     summary = build_summary(
         repo_state,

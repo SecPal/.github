@@ -504,6 +504,10 @@ sudo -k
 sudo .github/scripts/install-polyscope-system-components.sh
 ```
 
+The host must provide `/usr/bin/setfacl` from its `acl` package before
+activation. The installer checks this prerequisite before writing any system
+component and exits with an actionable error when it is unavailable.
+
 The installer resolves `node` before writing the system drop-in, verifies that
 the `secpal` service account can execute it, and adds its directory to the
 service `PATH`. If root's environment cannot discover a user-managed Node.js

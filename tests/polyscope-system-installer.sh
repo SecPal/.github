@@ -11,6 +11,9 @@ YAML_CHECK="$REPO_ROOT/scripts/verify-js-yaml-package.cjs"
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-system-installer.XXXXXX")"
 trap 'rm -rf "$WORKSPACE"' EXIT
 
+grep -qF 'if [[ ! -x /usr/bin/setfacl ]]; then' "$INSTALLER"
+grep -qF "Error: /usr/bin/setfacl is required; install the 'acl' package before activation." "$INSTALLER"
+
 node "$YAML_CHECK" "$REPO_ROOT/node_modules/js-yaml"
 
 missing_yaml_entry="$WORKSPACE/missing-yaml-entry/js-yaml"

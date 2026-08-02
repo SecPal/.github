@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
+PYTHON_SOURCE="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
 
@@ -34,6 +34,19 @@ PY
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
+
+fake_setfacl="$workspace/fake-tools/setfacl"
+mkdir -p "$(dirname "$fake_setfacl")"
+cat >"$fake_setfacl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$fake_setfacl"
+
+grep -qF 'FIXED_SETFACL_BIN = "/usr/bin/setfacl"' "$PYTHON_SOURCE"
+PYTHON_SCRIPT="$PYTHON_SOURCE"
+export POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE=1
+export POLYSCOPE_TEST_SETFACL_BIN="$fake_setfacl"
 
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"
@@ -2146,7 +2159,7 @@ build_script = shlex.split(build_command)[2]
 build_publish_source = build_script[
     build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = resolve_current_workspace(Path.cwd())")
 ]
-assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
+assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html")') < build_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), build_publish_source
 assert "child.is_symlink()" in build_script, build_script
@@ -2164,8 +2177,8 @@ assert frontend_worktree.joinpath("dist", "assets", "removed.js").is_file()
 assert frontend_worktree.joinpath("dist", "assets", "shape").is_dir()
 
 failing_build_script = build_script.replace(
-    "def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:\n",
-    """def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    "def replace_file(src_file: Path, dest_file: Path) -> None:\n",
+    """def replace_file(src_file: Path, dest_file: Path) -> None:
     if src_file.name == "index.html" and dest_file.name == "index.html" and os.environ.get("FAIL_INDEX_SWAP") == "1":
         raise RuntimeError("simulated index replace failure")
 """,
@@ -2278,7 +2291,7 @@ assert 'Path("dist")' in watch_script, watch_script
 assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
 assert 'Path("node_modules/.bin/cross-env")' not in watch_script, watch_script
 assert 'Path("node_modules/.bin/vite")' not in watch_script, watch_script
-assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
+assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html")') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
@@ -4608,6 +4621,12 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
+grep -qF "set \$preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;" "$nginx_output"
+grep -qF "disable_symlinks on from=\$preview_worktree;" "$nginx_output"
+if grep -qF "disable_symlinks on from=\$preview_docroot;" "$nginx_output"; then
+    echo "preview nginx config must check the document-root symlink itself" >&2
+    exit 1
+fi
 grep -qF "set \$preview_relaxed_csp " "$nginx_output"
 grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
@@ -6813,6 +6832,730 @@ fi
 grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '.polyscope-preview-stage' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'build.lock' "$workspace_root/frontend/polyscope.local.json"
+python3 - "$PYTHON_SCRIPT" <<'PY'
+import importlib.util
+import os
+import shlex
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+
+def generated_namespace(command: str, terminator: str) -> dict[str, object]:
+    argv = shlex.split(command)
+    assert argv[:2] == ["python3", "-c"], argv
+    source = argv[2].split(terminator, 1)[0]
+    namespace: dict[str, object] = {}
+    exec(source, namespace)
+    return namespace
+
+
+for command, terminator in (
+    (module.build_frontend_preview_build_command(), "\nworkspace = resolve_current_workspace"),
+    (module.build_frontend_preview_build_watch_command(), "\ndef run_build"),
+):
+    namespace = generated_namespace(command, terminator)
+    publish_preview_build = namespace["publish_preview_build"]
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        worktree = Path(temporary_directory)
+        stage_dir = worktree / "stage"
+        assets_dir = stage_dir / "assets"
+        assets_dir.mkdir(parents=True)
+        os.chmod(assets_dir, 0o700)
+
+        index_file = stage_dir / "index.html"
+        index_file.write_text("<!doctype html>")
+        os.chmod(index_file, 0o600)
+
+        asset_file = assets_dir / "app.js"
+        asset_file.write_text("console.log('preview')")
+        os.chmod(asset_file, 0o600)
+
+        copied_xattr = "user.secpal-preview-source-metadata"
+        try:
+            os.setxattr(index_file, copied_xattr, b"must-not-be-published")
+            os.setxattr(asset_file, copied_xattr, b"must-not-be-published")
+        except OSError:
+            copied_xattr = ""
+
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(worktree)
+            publish_preview_build(stage_dir)
+        finally:
+            os.chdir(previous_directory)
+
+        dist_dir = worktree / "dist"
+        assert stat.S_IMODE(dist_dir.stat().st_mode) == 0o755
+        assert stat.S_IMODE((dist_dir / "assets").stat().st_mode) == 0o755
+        assert stat.S_IMODE((dist_dir / "index.html").stat().st_mode) == 0o644
+        assert stat.S_IMODE((dist_dir / "assets" / "app.js").stat().st_mode) == 0o644
+        if copied_xattr:
+            assert copied_xattr not in os.listxattr(dist_dir / "index.html")
+            assert copied_xattr not in os.listxattr(dist_dir / "assets" / "app.js")
+PY
+python3 - "$PYTHON_SCRIPT" <<'PY'
+import importlib.util
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    clone_root = temporary_root / ".polyscope" / "clones"
+    worktree = clone_root / "repository-id" / "workspace"
+    worktree.mkdir(parents=True)
+    public_directory = worktree / "public"
+    public_directory.mkdir()
+    (public_directory / "index.php").write_text("<?php")
+    assets_directory = public_directory / "assets"
+    assets_directory.mkdir()
+    (assets_directory / "app.js").write_text("console.log('preview')")
+
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    original_run = module.subprocess.run
+
+    def record_run(arguments: list[str], **kwargs: object) -> None:
+        if (
+            "-R" in arguments
+            and "-d" not in arguments
+            and any("d:u:www-data" in argument for argument in arguments)
+        ):
+            raise subprocess.CalledProcessError(
+                1,
+                arguments,
+                stderr="Only directories can have default ACLs",
+            )
+        calls.append((arguments, kwargs))
+
+    module.subprocess.run = record_run
+    try:
+        module.ensure_preview_nginx_access(
+            clone_root,
+            worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+
+    expected_paths = [
+        clone_root.parent.parent,
+        clone_root.parent,
+        clone_root,
+        worktree.parent,
+        worktree,
+    ]
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-x",
+            "d:u:www-data",
+            "--",
+            str(worktree),
+        ],
+        [
+            "/usr/bin/setfacl",
+            "-R",
+            "-P",
+            "-m",
+            "u:www-data:rX",
+            "--",
+            str(public_directory),
+        ],
+        [
+            "/usr/bin/setfacl",
+            "-R",
+            "-P",
+            "-d",
+            "-m",
+            "u:www-data:r-x",
+            "--",
+            str(public_directory),
+        ],
+        *[
+            ["/usr/bin/setfacl", "-m", "u:www-data:--x", "--", str(path)]
+            for path in expected_paths
+        ],
+    ]
+    assert all(
+        kwargs == {"check": True, "capture_output": True, "text": True}
+        for _arguments, kwargs in calls
+    )
+
+    calls.clear()
+    missing_document_root_worktree = clone_root / "repository-id" / "missing-document-root"
+    missing_document_root_worktree.mkdir()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_access(
+            clone_root,
+            missing_document_root_worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+        module.ensure_preview_nginx_access(
+            clone_root,
+            missing_document_root_worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---",
+            "--",
+            str(missing_document_root_worktree),
+        ],
+        [
+            "/usr/bin/setfacl",
+            "-x",
+            "d:u:www-data",
+            "--",
+            str(missing_document_root_worktree),
+        ],
+        *[
+            ["/usr/bin/setfacl", "-m", "u:www-data:--x", "--", str(path)]
+            for path in [
+                clone_root.parent.parent,
+                clone_root.parent,
+                clone_root,
+                missing_document_root_worktree.parent,
+                missing_document_root_worktree,
+            ]
+        ],
+    ]
+
+    calls.clear()
+    original_resolve_executable = module.resolve_executable
+    test_setfacl_bin = os.environ.pop("POLYSCOPE_TEST_SETFACL_BIN")
+    test_allow_override = os.environ.pop("POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE")
+    module.resolve_executable = lambda _command: "/tmp/shadowed-setfacl"
+    module.subprocess.run = record_run
+    try:
+        module.ensure_preview_nginx_access(clone_root, worktree)
+    finally:
+        os.environ["POLYSCOPE_TEST_SETFACL_BIN"] = test_setfacl_bin
+        os.environ["POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE"] = test_allow_override
+        module.resolve_executable = original_resolve_executable
+        module.subprocess.run = original_run
+
+    assert calls
+    assert all(arguments[0] == module.FIXED_SETFACL_BIN for arguments, _kwargs in calls)
+
+    calls.clear()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_access(
+            clone_root,
+            worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---",
+            "--",
+            str(worktree),
+        ]
+    ]
+
+    calls.clear()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_clone_access(
+            clone_root,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(clone_root),
+        ]
+    ]
+
+    calls.clear()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_repository_access(
+            clone_root,
+            worktree.parent,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(worktree.parent),
+        ]
+    ]
+
+    def fail_run(arguments: list[str], **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            arguments,
+            stderr="Operation not supported",
+        )
+
+    module.subprocess.run = fail_run
+    try:
+        try:
+            module.ensure_preview_nginx_access(
+                clone_root,
+                worktree,
+                setfacl_bin="/usr/bin/setfacl",
+            )
+        except RuntimeError as error:
+            assert "unable to" in str(error) and "Nginx preview" in str(error)
+        else:
+            raise AssertionError("setfacl failure must stop provisioning")
+    finally:
+        module.subprocess.run = original_run
+PY
+python3 - "$PYTHON_SCRIPT" <<'PY'
+import contextlib
+import importlib.util
+import sys
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+script_path = Path(__import__("sys").argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+
+def run_case(
+    *,
+    marker_hit: bool,
+    setup_fails: bool,
+    provisionable: bool = True,
+    canonical_validation_fails: bool = False,
+    registered_worktree_count: int = 1,
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    temporary_directory = tempfile.TemporaryDirectory()
+    case_root = Path(temporary_directory.name)
+    clone_root = case_root / ".polyscope" / "clones"
+    worktree = clone_root / "repository-id" / "workspace"
+    worktree.mkdir(parents=True)
+    registered_worktrees = [worktree]
+    for index in range(1, registered_worktree_count):
+        additional_worktree = clone_root / "repository-id" / f"workspace-{index}"
+        additional_worktree.mkdir()
+        registered_worktrees.append(additional_worktree)
+    order: list[str] = []
+
+    module.load_registered_worktree_paths = lambda *_args, **_kwargs: {
+        "api": [],
+        "frontend": registered_worktrees,
+    }
+
+    def is_provisionable(*_args, **_kwargs) -> bool:
+        order.append("validate")
+        if canonical_validation_fails:
+            raise module.CanonicalInstructionValidationError("expected validation failure")
+        return provisionable
+
+    module.is_provisionable_worktree = is_provisionable
+    module.cleanup_removed_workspace_aliases = lambda *_args, **_kwargs: []
+    module.cleanup_removed_api_preview_databases = lambda *_args, **_kwargs: []
+    module.preserve_registered_workspace_physical_path = lambda *_args, **_kwargs: None
+    module.render_worktree_local_config = lambda *_args, **_kwargs: "{}\n"
+    module.sync_worktree_local_config = lambda *_args, **_kwargs: None
+    module.ensure_workspace_alias = lambda *_args, **_kwargs: None
+    module.sync_worktree_auxiliary_files = lambda *_args, **_kwargs: None
+    module.ensure_worktree_hooks = lambda *_args, **_kwargs: None
+    module.collect_linked_setup_context = lambda *_args, **_kwargs: {}
+    module.resolve_current_workspace_name = lambda *_args, **_kwargs: "workspace"
+    module.build_setup_hash = lambda *_args, **_kwargs: "setup-hash"
+    module.load_provision_marker = lambda _path: {"setup_hash": "setup-hash"} if marker_hit else None
+
+    def grant_access(*_args, **_kwargs) -> None:
+        order.append("grant")
+
+    module.ensure_preview_nginx_access = grant_access
+
+    def run_setup(*_args, **_kwargs) -> None:
+        order.append("setup")
+        if setup_fails:
+            raise RuntimeError("expected setup failure")
+
+    module.run_setup_commands = run_setup
+    repo_state = {
+        "frontend": {
+            "id": "repository-id",
+            "name": "SecPal/frontend",
+            "path": str(case_root / "source-frontend"),
+        }
+    }
+    repo_specs = {
+        "frontend": {
+            module.NATIVE_SETUP_COMMANDS_KEY: ["npm run build"],
+            "path": str(case_root / "source-frontend"),
+            "preview_prefix": "frontend",
+        }
+    }
+    provisioned, _cleaned, failures = module.provision_worktrees(
+        repo_state,
+        repo_specs,
+        clone_root,
+        db_path=case_root / "polyscope.db",
+    )
+    temporary_directory.cleanup()
+    return order, provisioned, failures
+
+
+failure_order, failure_provisioned, failure_details = run_case(
+    marker_hit=False,
+    setup_fails=True,
+)
+assert failure_order == [
+    "validate",
+    "setup",
+], failure_order
+assert failure_provisioned == []
+assert len(failure_details) == 1
+
+marker_order, marker_provisioned, marker_failures = run_case(
+    marker_hit=True,
+    setup_fails=False,
+)
+assert marker_order == [
+    "validate",
+    "grant",
+], marker_order
+assert marker_provisioned == []
+assert marker_failures == []
+
+success_order, success_provisioned, success_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+)
+assert success_order == [
+    "validate",
+    "setup",
+    "grant",
+], success_order
+assert success_provisioned == ["frontend:workspace"]
+assert success_failures == []
+
+invalid_order, invalid_provisioned, invalid_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    provisionable=False,
+)
+assert invalid_order == [
+    "validate",
+], invalid_order
+assert invalid_provisioned == []
+assert invalid_failures == []
+
+canonical_order, canonical_provisioned, canonical_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    canonical_validation_fails=True,
+    registered_worktree_count=2,
+)
+assert canonical_order == [
+    "validate",
+    "validate",
+], canonical_order
+assert canonical_provisioned == []
+assert len(canonical_failures) == 2
+
+
+def run_revoke_case(
+    *,
+    clone_exists: bool = True,
+    repository_exists: bool = True,
+    unregistered_worktree_count: int = 0,
+    escaping_symlink: bool = False,
+    broken_symlink: bool = False,
+    broken_internal_symlink: bool = False,
+    internal_symlink: bool = False,
+    registered_internal_symlink: bool = False,
+    clone_deny_fails: bool = False,
+    repository_deny_fails: bool = False,
+    child_deny_fails: bool = False,
+) -> tuple[list[str], str | None]:
+    temporary_directory = tempfile.TemporaryDirectory()
+    case_root = Path(temporary_directory.name)
+    clone_root = case_root / ".polyscope" / "clones"
+    if clone_exists:
+        clone_root.mkdir(parents=True)
+    if repository_exists:
+        repo_root = clone_root / "repository-id"
+        worktree = repo_root / "workspace"
+        worktree.mkdir(parents=True)
+        for index in range(unregistered_worktree_count):
+            (repo_root / f"orphan-{index}").mkdir()
+        if escaping_symlink:
+            outside_preview = case_root / "outside-preview"
+            outside_preview.mkdir()
+            (repo_root / "rogue-alias").symlink_to(
+                outside_preview,
+                target_is_directory=True,
+            )
+        if broken_symlink:
+            (repo_root / "broken-alias").symlink_to(
+                case_root / "missing-outside-preview",
+                target_is_directory=True,
+            )
+        if broken_internal_symlink:
+            (repo_root / "broken-internal-alias").symlink_to(
+                "missing-worktree",
+                target_is_directory=True,
+            )
+        if internal_symlink or registered_internal_symlink:
+            alias_name = "managed-alias" if registered_internal_symlink else "rogue-alias"
+            (repo_root / alias_name).symlink_to(
+                worktree.name,
+                target_is_directory=True,
+            )
+            if registered_internal_symlink:
+                module.write_workspace_alias_registry(
+                    repo_root,
+                    {alias_name: worktree.name},
+                )
+
+    order: list[str] = []
+
+    def deny_clone(*_args, **_kwargs) -> None:
+        order.append("deny-clone")
+        if clone_deny_fails:
+            raise RuntimeError("expected clone ACL denial failure")
+
+    def deny_repository(_clone_root, denied_path, **_kwargs) -> None:
+        order.append(f"deny-repository:{denied_path.name}")
+        if repository_deny_fails:
+            raise RuntimeError("expected repository ACL denial failure")
+
+    def deny_child(_clone_root, denied_path, **_kwargs) -> None:
+        order.append(f"deny:{denied_path.name}")
+        if child_deny_fails:
+            raise RuntimeError("expected child ACL denial failure")
+
+    module.deny_preview_nginx_clone_access = deny_clone
+    module.deny_preview_nginx_repository_access = deny_repository
+    module.deny_preview_nginx_access = deny_child
+
+    error_message = None
+    try:
+        module.revoke_all_preview_nginx_access(clone_root)
+    except RuntimeError as error:
+        error_message = str(error)
+    temporary_directory.cleanup()
+    return order, error_message
+
+
+empty_order, empty_error = run_revoke_case(repository_exists=False)
+assert empty_order == ["deny-clone"], empty_order
+assert empty_error is None
+
+missing_clone_order, missing_clone_error = run_revoke_case(
+    clone_exists=False,
+    repository_exists=False,
+)
+assert missing_clone_order == ["deny-clone"], missing_clone_order
+assert missing_clone_error is None
+
+orphan_order, orphan_error = run_revoke_case(unregistered_worktree_count=1)
+assert orphan_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:orphan-0",
+    "deny:workspace",
+], orphan_order
+assert orphan_error is None
+
+escaping_order, escaping_error = run_revoke_case(escaping_symlink=True)
+assert escaping_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], escaping_order
+assert escaping_error is not None and "escaping symlink" in escaping_error
+
+broken_order, broken_error = run_revoke_case(broken_symlink=True)
+assert broken_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], broken_order
+assert broken_error is not None and "unresolved symlink" in broken_error
+
+internal_broken_order, internal_broken_error = run_revoke_case(
+    broken_internal_symlink=True,
+)
+assert internal_broken_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], internal_broken_order
+assert internal_broken_error is not None and "unregistered workspace alias" in internal_broken_error
+
+internal_order, internal_error = run_revoke_case(internal_symlink=True)
+assert internal_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], internal_order
+assert internal_error is not None and "unregistered workspace alias" in internal_error
+
+managed_alias_order, managed_alias_error = run_revoke_case(
+    registered_internal_symlink=True,
+)
+assert managed_alias_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], managed_alias_order
+assert managed_alias_error is None
+
+clone_failure_order, clone_failure_error = run_revoke_case(clone_deny_fails=True)
+assert clone_failure_order == ["deny-clone"], clone_failure_order
+assert clone_failure_error == "expected clone ACL denial failure"
+
+repository_failure_order, repository_failure_error = run_revoke_case(
+    repository_deny_fails=True,
+)
+assert repository_failure_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+], repository_failure_order
+assert repository_failure_error == "expected repository ACL denial failure"
+
+child_failure_order, child_failure_error = run_revoke_case(child_deny_fails=True)
+assert child_failure_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], child_failure_order
+assert child_failure_error == "expected child ACL denial failure"
+
+main_order: list[str] = []
+
+
+@contextlib.contextmanager
+def observed_provision_lock(_lock_path):
+    main_order.append("lock-enter")
+    try:
+        yield
+    finally:
+        main_order.append("lock-exit")
+
+
+module.parse_args = lambda: SimpleNamespace(
+    clone_root=Path("/tmp/unused-clone-root"),
+    install_nginx=False,
+    provision_lock_path=Path("/tmp/unused-provision.lock"),
+    provision_worktrees=True,
+    workspace_root=Path("/tmp/unused-workspace-root"),
+)
+module.dispatch_validation_only_direct_mode = lambda _args: None
+module.dispatch_instruction_dependent_direct_api_mode = lambda _args: None
+module.provision_worktree_lock = observed_provision_lock
+module.build_repo_specs = lambda _workspace_root: {}
+module.revoke_all_preview_nginx_access = lambda _clone_root: main_order.append("revoke")
+
+
+def fail_source_validation(*_args, **_kwargs) -> None:
+    main_order.append("validate")
+    raise module.CanonicalInstructionValidationError("expected source validation failure")
+
+
+module.validate_repo_instruction_files = fail_source_validation
+assert module.main() == 1
+assert main_order == ["lock-enter", "revoke", "validate", "lock-exit"], main_order
+
+main_order.clear()
+module.parse_args = lambda: SimpleNamespace(
+    clone_root=Path("/tmp/unused-clone-root"),
+    install_nginx=True,
+    provision_lock_path=Path("/tmp/unused-provision.lock"),
+    provision_worktrees=False,
+    workspace_root=Path("/tmp/unused-workspace-root"),
+)
+assert module.main() == 1
+assert main_order == ["lock-enter", "revoke", "validate", "lock-exit"], main_order
+
+rollout_order: list[str] = []
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    args = SimpleNamespace(
+        clone_root=temporary_root / "clones",
+        db_path=temporary_root / "polyscope.db",
+        install_nginx=True,
+        nginx_http2_syntax="modern",
+        nginx_manifest_output=temporary_root / "nginx-manifest.json",
+        nginx_output=temporary_root / "preview.nginx.conf",
+        polyscope_api_base="http://127.0.0.1:4321/api",
+        provision_worktrees=False,
+        repo_state_file=temporary_root / "repo-state.json",
+        skip_db_sync=True,
+        skip_local_configs=True,
+        summary_output=None,
+        workspace_root=temporary_root / "workspace",
+    )
+    args.clone_root.mkdir()
+
+    module.build_repo_specs = lambda _workspace_root: {}
+    module.revoke_all_preview_nginx_access = lambda _clone_root: rollout_order.append("revoke")
+    module.validate_repo_instruction_files = lambda *_args: rollout_order.append("validate")
+    module.validate_repo_local_configs = lambda _repo_specs: None
+    module.load_repo_state = lambda _path: {}
+    module.detect_nginx_http2_syntax = lambda: "modern"
+    module.render_nginx_config = lambda *_args, **_kwargs: "rendered\n"
+    module.provision_worktrees = lambda *_args, **_kwargs: (
+        rollout_order.append("provision") or ([], [], [])
+    )
+    module.write_nginx_manifest = lambda *_args, **_kwargs: rollout_order.append("manifest")
+    module.install_nginx_config = lambda _path: rollout_order.append("install")
+    module.build_summary = lambda *_args: {}
+    sys.modules["polyscope_nginx"] = SimpleNamespace(
+        build_manifest=lambda *_args, **_kwargs: {},
+        write_manifest_atomic=lambda *_args, **_kwargs: None,
+    )
+
+    assert module.run_rollout(args) == 0
+    assert rollout_order == [
+        "revoke",
+        "validate",
+        "provision",
+        "manifest",
+        "install",
+    ], rollout_order
+PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
 grep -q 'restart polyscope-server.service' "$fake_systemctl_log"

@@ -64,6 +64,13 @@ elif ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
     exit 1
 fi
 
+if [[ "$STAGE_ONLY" -eq 0 ]]; then
+    if [[ ! -x /usr/bin/setfacl ]]; then
+        echo "Error: /usr/bin/setfacl is required; install the 'acl' package before activation." >&2
+        exit 1
+    fi
+fi
+
 if [[ -z "$NODE_BIN" ]]; then
     if [[ "$STAGE_ONLY" -eq 1 ]]; then
         NODE_BIN="/usr/bin/node"
