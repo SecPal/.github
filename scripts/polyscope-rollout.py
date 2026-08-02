@@ -3837,6 +3837,17 @@ def ensure_preview_nginx_access(
 
     executable = resolve_setfacl_bin(setfacl_bin)
 
+    # Clone and repository defaults deliberately keep unknown worktrees closed.
+    # Once this worktree has provisioned successfully, remove the inherited
+    # default denial so later build outputs do not inherit a stale block.  The
+    # worktree's access denial remains effective until traversal is granted
+    # below, after all content ACL reconciliation has succeeded.
+    _run_preview_setfacl(
+        executable,
+        ["-x", "d:u:www-data", "--", str(resolved_worktree_path)],
+        f"unable to remove inherited Nginx preview denial from {resolved_worktree_path}",
+    )
+
     document_roots: list[pathlib.Path] = []
     for document_root_name in ("public", "dist"):
         document_root = resolved_worktree_path / document_root_name
@@ -3906,7 +3917,7 @@ def deny_preview_nginx_access(
         executable,
         [
             "-m",
-            "u:www-data:---,d:u:www-data:---",
+            "u:www-data:---",
             "--",
             str(resolved_worktree_path),
         ],
@@ -3965,6 +3976,9 @@ def deny_preview_nginx_repository_access(
 
 def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
     """Revoke preview traversal before validation and selective regranting."""
+    clone_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if clone_root.is_symlink() or not clone_root.is_dir():
+        raise RuntimeError(f"preview clone root is not a physical directory: {clone_root}")
     resolved_clone_root = clone_root.resolve(strict=True)
     deny_preview_nginx_clone_access(resolved_clone_root)
 
@@ -4515,6 +4529,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $secpal_app_dist $secpal_app_root/dist;
             set $guardguide_de_root /home/secpal/.polyscope/clones/{guardguide_de_id}/$workspace;
             set $guardguide_de_dist $guardguide_de_root/dist;
+            set $preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $php_root $api_public;
             set $route_mode static;
@@ -4523,47 +4538,55 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $secpal_permissions_policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
             if (-f $api_public/index.php) {{
+                set $preview_worktree $api_root;
                 set $preview_docroot $api_public;
                 set $route_mode api;
             }}
 
             if (-f $frontend_dist/index.html) {{
+                set $preview_worktree $frontend_root;
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $secpal_app_dist/index.html) {{
+                set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if (-f $guardguide_de_dist/index.html) {{
+                set $preview_worktree $guardguide_de_root;
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = secpal-app) {{
+                set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = guardguide-de) {{
+                set $preview_worktree $guardguide_de_root;
                 set $preview_docroot $guardguide_de_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = frontend) {{
+                set $preview_worktree $frontend_root;
                 set $preview_docroot $frontend_dist;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = guardguide) {{
+                set $preview_worktree $guardguide_root;
                 set $preview_docroot $guardguide_public;
                 set $php_root $guardguide_public;
                 set $route_mode api;
@@ -4571,6 +4594,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             if ($repo = api) {{
+                set $preview_worktree $api_root;
                 set $preview_docroot $api_public;
                 set $php_root $api_public;
                 set $route_mode api;
@@ -4578,7 +4602,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             root $preview_docroot;
-            disable_symlinks on from=$preview_docroot;
+            disable_symlinks on from=$preview_worktree;
 
             add_header Content-Security-Policy $secpal_csp always;
             add_header Permissions-Policy $secpal_permissions_policy always;
@@ -5018,7 +5042,7 @@ def main() -> int:
 
     lock_context = (
         provision_worktree_lock(args.provision_lock_path)
-        if args.provision_worktrees
+        if args.provision_worktrees or args.install_nginx
         else contextlib.nullcontext()
     )
     with lock_context:
@@ -5029,7 +5053,7 @@ def run_rollout(args: argparse.Namespace) -> int:
     repo_specs = build_repo_specs(args.workspace_root)
     validated_instruction_roots: set[pathlib.Path] = set()
 
-    if args.provision_worktrees:
+    if args.provision_worktrees or args.install_nginx:
         try:
             revoke_all_preview_nginx_access(args.clone_root)
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
@@ -5060,6 +5084,18 @@ def run_rollout(args: argparse.Namespace) -> int:
 
     args.nginx_output.write_text(render_nginx_config(repo_state, nginx_http2_syntax=nginx_http2_syntax))
 
+    provisioned_worktrees: list[str] = []
+    cleaned_preview_storage_targets: list[str] = []
+    failed_provision_worktrees: list[dict[str, str]] = []
+    if args.provision_worktrees or args.install_nginx:
+        provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
+            repo_state,
+            repo_specs,
+            args.clone_root,
+            db_path=args.db_path,
+            validated_instruction_roots=validated_instruction_roots,
+        )
+
     if args.install_nginx:
         try:
             import polyscope_nginx
@@ -5077,18 +5113,6 @@ def run_rollout(args: argparse.Namespace) -> int:
             writer=polyscope_nginx.write_manifest_atomic,
         )
         install_nginx_config(args.nginx_manifest_output)
-
-    provisioned_worktrees: list[str] = []
-    cleaned_preview_storage_targets: list[str] = []
-    failed_provision_worktrees: list[dict[str, str]] = []
-    if args.provision_worktrees:
-        provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
-            repo_state,
-            repo_specs,
-            args.clone_root,
-            db_path=args.db_path,
-            validated_instruction_roots=validated_instruction_roots,
-        )
 
     summary = build_summary(
         repo_state,

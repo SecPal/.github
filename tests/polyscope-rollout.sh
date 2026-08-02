@@ -4621,7 +4621,12 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
-grep -qF "disable_symlinks on from=\$preview_docroot;" "$nginx_output"
+grep -qF "set \$preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;" "$nginx_output"
+grep -qF "disable_symlinks on from=\$preview_worktree;" "$nginx_output"
+if grep -qF "disable_symlinks on from=\$preview_docroot;" "$nginx_output"; then
+    echo "preview nginx config must check the document-root symlink itself" >&2
+    exit 1
+fi
 grep -qF "set \$preview_relaxed_csp " "$nginx_output"
 grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
@@ -6959,6 +6964,13 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     assert [arguments for arguments, _kwargs in calls] == [
         [
             "/usr/bin/setfacl",
+            "-x",
+            "d:u:www-data",
+            "--",
+            str(worktree),
+        ],
+        [
+            "/usr/bin/setfacl",
             "-R",
             "-P",
             "-m",
@@ -7007,7 +7019,14 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         [
             "/usr/bin/setfacl",
             "-m",
-            "u:www-data:---,d:u:www-data:---",
+            "u:www-data:---",
+            "--",
+            str(missing_document_root_worktree),
+        ],
+        [
+            "/usr/bin/setfacl",
+            "-x",
+            "d:u:www-data",
             "--",
             str(missing_document_root_worktree),
         ],
@@ -7054,7 +7073,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         [
             "/usr/bin/setfacl",
             "-m",
-            "u:www-data:---,d:u:www-data:---",
+            "u:www-data:---",
             "--",
             str(worktree),
         ]
@@ -7124,6 +7143,7 @@ PY
 python3 - "$PYTHON_SCRIPT" <<'PY'
 import contextlib
 import importlib.util
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -7276,6 +7296,7 @@ assert len(canonical_failures) == 2
 
 def run_revoke_case(
     *,
+    clone_exists: bool = True,
     repository_exists: bool = True,
     unregistered_worktree_count: int = 0,
     escaping_symlink: bool = False,
@@ -7290,7 +7311,8 @@ def run_revoke_case(
     temporary_directory = tempfile.TemporaryDirectory()
     case_root = Path(temporary_directory.name)
     clone_root = case_root / ".polyscope" / "clones"
-    clone_root.mkdir(parents=True)
+    if clone_exists:
+        clone_root.mkdir(parents=True)
     if repository_exists:
         repo_root = clone_root / "repository-id"
         worktree = repo_root / "workspace"
@@ -7359,6 +7381,13 @@ def run_revoke_case(
 empty_order, empty_error = run_revoke_case(repository_exists=False)
 assert empty_order == ["deny-clone"], empty_order
 assert empty_error is None
+
+missing_clone_order, missing_clone_error = run_revoke_case(
+    clone_exists=False,
+    repository_exists=False,
+)
+assert missing_clone_order == ["deny-clone"], missing_clone_order
+assert missing_clone_error is None
 
 orphan_order, orphan_error = run_revoke_case(unregistered_worktree_count=1)
 assert orphan_order == [
@@ -7448,6 +7477,7 @@ def observed_provision_lock(_lock_path):
 
 module.parse_args = lambda: SimpleNamespace(
     clone_root=Path("/tmp/unused-clone-root"),
+    install_nginx=False,
     provision_lock_path=Path("/tmp/unused-provision.lock"),
     provision_worktrees=True,
     workspace_root=Path("/tmp/unused-workspace-root"),
@@ -7467,6 +7497,64 @@ def fail_source_validation(*_args, **_kwargs) -> None:
 module.validate_repo_instruction_files = fail_source_validation
 assert module.main() == 1
 assert main_order == ["lock-enter", "revoke", "validate", "lock-exit"], main_order
+
+main_order.clear()
+module.parse_args = lambda: SimpleNamespace(
+    clone_root=Path("/tmp/unused-clone-root"),
+    install_nginx=True,
+    provision_lock_path=Path("/tmp/unused-provision.lock"),
+    provision_worktrees=False,
+    workspace_root=Path("/tmp/unused-workspace-root"),
+)
+assert module.main() == 1
+assert main_order == ["lock-enter", "revoke", "validate", "lock-exit"], main_order
+
+rollout_order: list[str] = []
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    args = SimpleNamespace(
+        clone_root=temporary_root / "clones",
+        db_path=temporary_root / "polyscope.db",
+        install_nginx=True,
+        nginx_http2_syntax="modern",
+        nginx_manifest_output=temporary_root / "nginx-manifest.json",
+        nginx_output=temporary_root / "preview.nginx.conf",
+        polyscope_api_base="http://127.0.0.1:4321/api",
+        provision_worktrees=False,
+        repo_state_file=temporary_root / "repo-state.json",
+        skip_db_sync=True,
+        skip_local_configs=True,
+        summary_output=None,
+        workspace_root=temporary_root / "workspace",
+    )
+    args.clone_root.mkdir()
+
+    module.build_repo_specs = lambda _workspace_root: {}
+    module.revoke_all_preview_nginx_access = lambda _clone_root: rollout_order.append("revoke")
+    module.validate_repo_instruction_files = lambda *_args: rollout_order.append("validate")
+    module.validate_repo_local_configs = lambda _repo_specs: None
+    module.load_repo_state = lambda _path: {}
+    module.detect_nginx_http2_syntax = lambda: "modern"
+    module.render_nginx_config = lambda *_args, **_kwargs: "rendered\n"
+    module.provision_worktrees = lambda *_args, **_kwargs: (
+        rollout_order.append("provision") or ([], [], [])
+    )
+    module.write_nginx_manifest = lambda *_args, **_kwargs: rollout_order.append("manifest")
+    module.install_nginx_config = lambda _path: rollout_order.append("install")
+    module.build_summary = lambda *_args: {}
+    sys.modules["polyscope_nginx"] = SimpleNamespace(
+        build_manifest=lambda *_args, **_kwargs: {},
+        write_manifest_atomic=lambda *_args, **_kwargs: None,
+    )
+
+    assert module.run_rollout(args) == 0
+    assert rollout_order == [
+        "revoke",
+        "validate",
+        "provision",
+        "manifest",
+        "install",
+    ], rollout_order
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
