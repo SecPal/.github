@@ -7003,20 +7003,42 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 
-def run_case(*, marker_hit: bool, setup_fails: bool) -> tuple[list[str], list[str], list[dict[str, str]]]:
+def run_case(
+    *,
+    marker_hit: bool,
+    setup_fails: bool,
+    provisionable: bool = True,
+    canonical_validation_fails: bool = False,
+    deny_fails: bool = False,
+    registered_worktree_count: int = 1,
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
     temporary_directory = tempfile.TemporaryDirectory()
     case_root = Path(temporary_directory.name)
     clone_root = case_root / ".polyscope" / "clones"
     worktree = clone_root / "repository-id" / "workspace"
     worktree.mkdir(parents=True)
+    registered_worktrees = [worktree]
+    for index in range(1, registered_worktree_count):
+        additional_worktree = clone_root / "repository-id" / f"workspace-{index}"
+        additional_worktree.mkdir()
+        registered_worktrees.append(additional_worktree)
     order: list[str] = []
 
-    module.validate_repo_instruction_files = lambda *_args, **_kwargs: None
+    module.validate_repo_instruction_files = lambda *_args, **_kwargs: order.append(
+        "validate-repos"
+    )
     module.load_registered_worktree_paths = lambda *_args, **_kwargs: {
         "api": [],
-        "frontend": [worktree],
+        "frontend": registered_worktrees,
     }
-    module.is_provisionable_worktree = lambda *_args, **_kwargs: True
+
+    def is_provisionable(*_args, **_kwargs) -> bool:
+        order.append("validate")
+        if canonical_validation_fails:
+            raise module.CanonicalInstructionValidationError("expected validation failure")
+        return provisionable
+
+    module.is_provisionable_worktree = is_provisionable
     module.cleanup_removed_workspace_aliases = lambda *_args, **_kwargs: []
     module.cleanup_removed_api_preview_databases = lambda *_args, **_kwargs: []
     module.preserve_registered_workspace_physical_path = lambda *_args, **_kwargs: None
@@ -7031,7 +7053,13 @@ def run_case(*, marker_hit: bool, setup_fails: bool) -> tuple[list[str], list[st
     module.load_provision_marker = lambda _path: (
         {"setup_hash": "setup-hash"} if marker_hit else None
     )
-    module.deny_preview_nginx_access = lambda *_args, **_kwargs: order.append("deny")
+
+    def deny_access(*_args, **_kwargs) -> None:
+        order.append("deny")
+        if deny_fails:
+            raise RuntimeError("expected ACL denial failure")
+
+    module.deny_preview_nginx_access = deny_access
     module.ensure_preview_nginx_access = lambda *_args, **_kwargs: order.append("grant")
 
     def run_setup(*_args, **_kwargs) -> None:
@@ -7068,7 +7096,7 @@ failure_order, failure_provisioned, failure_details = run_case(
     marker_hit=False,
     setup_fails=True,
 )
-assert failure_order == ["deny", "setup"], failure_order
+assert failure_order == ["deny", "validate-repos", "validate", "setup"], failure_order
 assert failure_provisioned == []
 assert len(failure_details) == 1
 
@@ -7076,7 +7104,7 @@ marker_order, marker_provisioned, marker_failures = run_case(
     marker_hit=True,
     setup_fails=False,
 )
-assert marker_order == ["deny", "grant"], marker_order
+assert marker_order == ["deny", "validate-repos", "validate", "grant"], marker_order
 assert marker_provisioned == []
 assert marker_failures == []
 
@@ -7084,9 +7112,43 @@ success_order, success_provisioned, success_failures = run_case(
     marker_hit=False,
     setup_fails=False,
 )
-assert success_order == ["deny", "setup", "grant"], success_order
+assert success_order == ["deny", "validate-repos", "validate", "setup", "grant"], success_order
 assert success_provisioned == ["frontend:workspace"]
 assert success_failures == []
+
+invalid_order, invalid_provisioned, invalid_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    provisionable=False,
+)
+assert invalid_order == ["deny", "validate-repos", "validate"], invalid_order
+assert invalid_provisioned == []
+assert invalid_failures == []
+
+canonical_order, canonical_provisioned, canonical_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    canonical_validation_fails=True,
+    registered_worktree_count=2,
+)
+assert canonical_order == [
+    "deny",
+    "deny",
+    "validate-repos",
+    "validate",
+    "validate",
+], canonical_order
+assert canonical_provisioned == []
+assert len(canonical_failures) == 2
+
+deny_failure_order, deny_failure_provisioned, deny_failure_details = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    deny_fails=True,
+)
+assert deny_failure_order == ["deny"], deny_failure_order
+assert deny_failure_provisioned == []
+assert len(deny_failure_details) == 1
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"

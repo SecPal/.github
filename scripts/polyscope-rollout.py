@@ -4016,18 +4016,54 @@ def provision_worktrees(
     validated_instruction_roots: set[pathlib.Path] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
-    validate_repo_instruction_files(repo_specs, validation_cache)
     resolved_db_path = db_path or default_polyscope_db_path()
     registered_worktrees = load_registered_worktree_paths(
         resolved_db_path,
         repo_state,
         clone_root,
     )
+    failed_provision_worktrees: list[dict[str, str]] = []
+
+    # Revoke every existing preview grant before any validation can exclude a
+    # registered worktree or abort the provisioning batch.
+    for repo_name, spec in repo_specs.items():
+        preview_prefix = spec.get("preview_prefix")
+        if not isinstance(preview_prefix, str) or not preview_prefix:
+            continue
+        for worktree_path in registered_worktrees[repo_name]:
+            if not worktree_path.is_dir() or worktree_path.is_symlink():
+                continue
+            try:
+                deny_preview_nginx_access(clone_root, worktree_path)
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.CalledProcessError,
+                SystemExit,
+            ) as error:
+                error_message = str(error)
+                print(
+                    f"Failed to revoke preview access for {repo_name} worktree "
+                    f"{worktree_path.name} at {worktree_path}: {error_message}",
+                    file=sys.stderr,
+                )
+                failed_provision_worktrees.append(
+                    {
+                        "repo": repo_name,
+                        "workspace": worktree_path.name,
+                        "path": str(worktree_path),
+                        "error": error_message,
+                    }
+                )
+
+    if failed_provision_worktrees:
+        return [], [], failed_provision_worktrees
+
+    validate_repo_instruction_files(repo_specs, validation_cache)
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
     ] = []
-    failed_provision_worktrees: list[dict[str, str]] = []
     canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
@@ -4111,8 +4147,6 @@ def provision_worktrees(
         preview_prefix = spec.get("preview_prefix")
         preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix)
         try:
-            if preview_enabled:
-                deny_preview_nginx_access(clone_root, worktree_path)
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
             sync_worktree_local_config(worktree_path, config_text)
