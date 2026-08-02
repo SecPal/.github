@@ -37,6 +37,7 @@ PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
 DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
+FIXED_SETFACL_BIN = "/usr/bin/setfacl"
 NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 NATIVE_SETUP_COMMANDS_KEY = "_native_setup_commands"
@@ -3856,6 +3857,22 @@ def resolve_executable(command: str) -> str | None:
     return None
 
 
+def resolve_setfacl_bin(explicit_path: str | None = None) -> str:
+    if explicit_path is not None:
+        return explicit_path
+
+    test_override = os.environ.get("POLYSCOPE_TEST_SETFACL_BIN")
+    if test_override is None:
+        return FIXED_SETFACL_BIN
+    if os.environ.get("POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE") != "1":
+        raise RuntimeError("test setfacl override requires explicit test authorization")
+
+    override_path = pathlib.Path(test_override)
+    if not override_path.is_absolute() or not override_path.is_file() or not os.access(override_path, os.X_OK):
+        raise RuntimeError("test setfacl override must be an absolute executable file")
+    return str(override_path)
+
+
 def ensure_preview_nginx_access(
     clone_root: pathlib.Path,
     worktree_path: pathlib.Path,
@@ -3871,9 +3888,7 @@ def ensure_preview_nginx_access(
             f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
         )
 
-    executable = setfacl_bin or resolve_executable("setfacl")
-    if executable is None:
-        raise RuntimeError("setfacl is required to grant Nginx access to preview worktrees")
+    executable = resolve_setfacl_bin(setfacl_bin)
 
     for path in (
         resolved_clone_root.parent.parent,
@@ -3894,6 +3909,35 @@ def ensure_preview_nginx_access(
             raise RuntimeError(
                 f"unable to grant Nginx preview access to {path}: {detail}"
             ) from error
+
+
+def deny_preview_nginx_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Block the nginx worker at one physical preview worktree."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    resolved_worktree_path = worktree_path.resolve(strict=True)
+    if resolved_worktree_path.parent.parent != resolved_clone_root:
+        raise RuntimeError(
+            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+        )
+
+    executable = resolve_setfacl_bin(setfacl_bin)
+    try:
+        subprocess.run(
+            [executable, "-m", "u:www-data:---", "--", str(resolved_worktree_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() if error.stderr else "no error output"
+        raise RuntimeError(
+            f"unable to deny Nginx preview access to {resolved_worktree_path}: {detail}"
+        ) from error
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
@@ -4064,14 +4108,15 @@ def provision_worktrees(
     provisioned_worktrees: list[str] = []
 
     for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
+        preview_prefix = spec.get("preview_prefix")
+        preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix)
         try:
+            if preview_enabled:
+                deny_preview_nginx_access(clone_root, worktree_path)
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
             sync_worktree_local_config(worktree_path, config_text)
             ensure_workspace_alias(worktree_path, db_path=db_path)
-            preview_prefix = spec.get("preview_prefix")
-            if isinstance(preview_prefix, str) and preview_prefix:
-                ensure_preview_nginx_access(clone_root, worktree_path)
             sync_worktree_auxiliary_files(repo_name, worktree_path)
             ensure_worktree_hooks(worktree_path)
             lock_context = (
@@ -4105,6 +4150,8 @@ def provision_worktrees(
                 marker = load_provision_marker(marker_path)
                 if marker is not None and marker.get("setup_hash") == setup_hash:
                     if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                        if preview_enabled:
+                            ensure_preview_nginx_access(clone_root, locked_worktree_path)
                         continue
 
                 if setup_commands:
@@ -4137,6 +4184,8 @@ def provision_worktrees(
                     marker_payload["linked_workspaces"] = linked_setup_context
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+                if preview_enabled:
+                    ensure_preview_nginx_access(clone_root, locked_worktree_path)
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)

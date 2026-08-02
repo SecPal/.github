@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON_SCRIPT="$REPO_ROOT/scripts/polyscope-rollout.py"
+PYTHON_SOURCE="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
 
@@ -34,6 +34,19 @@ PY
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
+
+fake_setfacl="$workspace/fake-tools/setfacl"
+mkdir -p "$(dirname "$fake_setfacl")"
+cat >"$fake_setfacl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$fake_setfacl"
+
+grep -qF 'FIXED_SETFACL_BIN = "/usr/bin/setfacl"' "$PYTHON_SOURCE"
+PYTHON_SCRIPT="$PYTHON_SOURCE"
+export POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE=1
+export POLYSCOPE_TEST_SETFACL_BIN="$fake_setfacl"
 
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"
@@ -6875,6 +6888,7 @@ for command, terminator in (
 PY
 python3 - "$PYTHON_SCRIPT" <<'PY'
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -6924,6 +6938,37 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         for _arguments, kwargs in calls
     )
 
+    calls.clear()
+    original_resolve_executable = module.resolve_executable
+    test_setfacl_bin = os.environ.pop("POLYSCOPE_TEST_SETFACL_BIN")
+    test_allow_override = os.environ.pop("POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE")
+    module.resolve_executable = lambda _command: "/tmp/shadowed-setfacl"
+    module.subprocess.run = record_run
+    try:
+        module.ensure_preview_nginx_access(clone_root, worktree)
+    finally:
+        os.environ["POLYSCOPE_TEST_SETFACL_BIN"] = test_setfacl_bin
+        os.environ["POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE"] = test_allow_override
+        module.resolve_executable = original_resolve_executable
+        module.subprocess.run = original_run
+
+    assert calls
+    assert all(arguments[0] == module.FIXED_SETFACL_BIN for arguments, _kwargs in calls)
+
+    calls.clear()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_access(
+            clone_root,
+            worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        ["/usr/bin/setfacl", "-m", "u:www-data:---", "--", str(worktree)]
+    ]
+
     def fail_run(arguments: list[str], **kwargs: object) -> None:
         raise subprocess.CalledProcessError(
             1,
@@ -6945,6 +6990,103 @@ with tempfile.TemporaryDirectory() as temporary_directory:
             raise AssertionError("setfacl failure must stop provisioning")
     finally:
         module.subprocess.run = original_run
+PY
+python3 - "$PYTHON_SCRIPT" <<'PY'
+import importlib.util
+import tempfile
+from pathlib import Path
+
+script_path = Path(__import__("sys").argv[1])
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+
+def run_case(*, marker_hit: bool, setup_fails: bool) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    temporary_directory = tempfile.TemporaryDirectory()
+    case_root = Path(temporary_directory.name)
+    clone_root = case_root / ".polyscope" / "clones"
+    worktree = clone_root / "repository-id" / "workspace"
+    worktree.mkdir(parents=True)
+    order: list[str] = []
+
+    module.validate_repo_instruction_files = lambda *_args, **_kwargs: None
+    module.load_registered_worktree_paths = lambda *_args, **_kwargs: {
+        "api": [],
+        "frontend": [worktree],
+    }
+    module.is_provisionable_worktree = lambda *_args, **_kwargs: True
+    module.cleanup_removed_workspace_aliases = lambda *_args, **_kwargs: []
+    module.cleanup_removed_api_preview_databases = lambda *_args, **_kwargs: []
+    module.preserve_registered_workspace_physical_path = lambda *_args, **_kwargs: None
+    module.render_worktree_local_config = lambda *_args, **_kwargs: "{}\n"
+    module.sync_worktree_local_config = lambda *_args, **_kwargs: None
+    module.ensure_workspace_alias = lambda *_args, **_kwargs: None
+    module.sync_worktree_auxiliary_files = lambda *_args, **_kwargs: None
+    module.ensure_worktree_hooks = lambda *_args, **_kwargs: None
+    module.collect_linked_setup_context = lambda *_args, **_kwargs: {}
+    module.resolve_current_workspace_name = lambda *_args, **_kwargs: "workspace"
+    module.build_setup_hash = lambda *_args, **_kwargs: "setup-hash"
+    module.load_provision_marker = lambda _path: (
+        {"setup_hash": "setup-hash"} if marker_hit else None
+    )
+    module.deny_preview_nginx_access = lambda *_args, **_kwargs: order.append("deny")
+    module.ensure_preview_nginx_access = lambda *_args, **_kwargs: order.append("grant")
+
+    def run_setup(*_args, **_kwargs) -> None:
+        order.append("setup")
+        if setup_fails:
+            raise RuntimeError("expected setup failure")
+
+    module.run_setup_commands = run_setup
+    repo_state = {
+        "frontend": {
+            "id": "repository-id",
+            "name": "SecPal/frontend",
+            "path": str(case_root / "source-frontend"),
+        }
+    }
+    repo_specs = {
+        "frontend": {
+            module.NATIVE_SETUP_COMMANDS_KEY: ["npm run build"],
+            "path": str(case_root / "source-frontend"),
+            "preview_prefix": "frontend",
+        }
+    }
+    provisioned, _cleaned, failures = module.provision_worktrees(
+        repo_state,
+        repo_specs,
+        clone_root,
+        db_path=case_root / "polyscope.db",
+    )
+    temporary_directory.cleanup()
+    return order, provisioned, failures
+
+
+failure_order, failure_provisioned, failure_details = run_case(
+    marker_hit=False,
+    setup_fails=True,
+)
+assert failure_order == ["deny", "setup"], failure_order
+assert failure_provisioned == []
+assert len(failure_details) == 1
+
+marker_order, marker_provisioned, marker_failures = run_case(
+    marker_hit=True,
+    setup_fails=False,
+)
+assert marker_order == ["deny", "grant"], marker_order
+assert marker_provisioned == []
+assert marker_failures == []
+
+success_order, success_provisioned, success_failures = run_case(
+    marker_hit=False,
+    setup_fails=False,
+)
+assert success_order == ["deny", "setup", "grant"], success_order
+assert success_provisioned == ["frontend:workspace"]
+assert success_failures == []
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
