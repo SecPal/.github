@@ -2159,7 +2159,7 @@ build_script = shlex.split(build_command)[2]
 build_publish_source = build_script[
     build_script.index("def publish_preview_build(stage_dir: Path) -> None:") : build_script.index("workspace = resolve_current_workspace(Path.cwd())")
 ]
-assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < build_publish_source.index(
+assert build_publish_source.index('replace_file(deferred_index, live_root / "index.html")') < build_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), build_publish_source
 assert "child.is_symlink()" in build_script, build_script
@@ -2177,8 +2177,8 @@ assert frontend_worktree.joinpath("dist", "assets", "removed.js").is_file()
 assert frontend_worktree.joinpath("dist", "assets", "shape").is_dir()
 
 failing_build_script = build_script.replace(
-    "def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:\n",
-    """def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+    "def replace_file(src_file: Path, dest_file: Path) -> None:\n",
+    """def replace_file(src_file: Path, dest_file: Path) -> None:
     if src_file.name == "index.html" and dest_file.name == "index.html" and os.environ.get("FAIL_INDEX_SWAP") == "1":
         raise RuntimeError("simulated index replace failure")
 """,
@@ -2291,7 +2291,7 @@ assert 'Path("dist")' in watch_script, watch_script
 assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
 assert 'Path("node_modules/.bin/cross-env")' not in watch_script, watch_script
 assert 'Path("node_modules/.bin/vite")' not in watch_script, watch_script
-assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html", tmp_dir)') < watch_publish_source.index(
+assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html")') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
@@ -4621,6 +4621,7 @@ grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
+grep -qF "disable_symlinks on from=\$preview_docroot;" "$nginx_output"
 grep -qF "set \$preview_relaxed_csp " "$nginx_output"
 grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
@@ -6873,6 +6874,13 @@ for command, terminator in (
         asset_file.write_text("console.log('preview')")
         os.chmod(asset_file, 0o600)
 
+        copied_xattr = "user.secpal-preview-source-metadata"
+        try:
+            os.setxattr(index_file, copied_xattr, b"must-not-be-published")
+            os.setxattr(asset_file, copied_xattr, b"must-not-be-published")
+        except OSError:
+            copied_xattr = ""
+
         previous_directory = Path.cwd()
         try:
             os.chdir(worktree)
@@ -6885,6 +6893,9 @@ for command, terminator in (
         assert stat.S_IMODE((dist_dir / "assets").stat().st_mode) == 0o755
         assert stat.S_IMODE((dist_dir / "index.html").stat().st_mode) == 0o644
         assert stat.S_IMODE((dist_dir / "assets" / "app.js").stat().st_mode) == 0o644
+        if copied_xattr:
+            assert copied_xattr not in os.listxattr(dist_dir / "index.html")
+            assert copied_xattr not in os.listxattr(dist_dir / "assets" / "app.js")
 PY
 python3 - "$PYTHON_SCRIPT" <<'PY'
 import importlib.util

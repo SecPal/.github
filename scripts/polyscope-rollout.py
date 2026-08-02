@@ -1681,29 +1681,29 @@ exit 1
     ).strip()
 
 
-def build_frontend_preview_build_command() -> str:
-    script = textwrap.dedent(
-        f"""\
-import fcntl
-import os
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
-
-{build_linked_workspace_resolver_source()}
-
-def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
+def build_frontend_preview_publisher_source() -> str:
+    """Render the one canonical atomic preview publication implementation."""
+    return textwrap.dedent(
+        """\
+def replace_file(src_file: Path, dest_file: Path) -> None:
     dest_file.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
+    fd, tmp_name = tempfile.mkstemp(
+        suffix=".tmp",
+        prefix=dest_file.name + "-",
+        dir=dest_file.parent,
+    )
     os.close(fd)
-    shutil.copy2(src_file, tmp_path)
-    os.chmod(tmp_path, 0o644)
-    if dest_file.is_dir() and not dest_file.is_symlink():
-        shutil.rmtree(dest_file)
-    os.replace(tmp_path, dest_file)
+    tmp_path = Path(tmp_name)
+    try:
+        shutil.copyfile(src_file, tmp_path)
+        os.chmod(tmp_path, 0o644)
+        if dest_file.is_dir() and not dest_file.is_symlink():
+            shutil.rmtree(dest_file)
+        os.replace(tmp_path, dest_file)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
-def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
+def merge_tree(src_dir: Path, dest_dir: Path) -> None:
     if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
         dest_dir.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1711,20 +1711,17 @@ def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
     for child in sorted(src_dir.iterdir()):
         dest_child = dest_dir / child.name
         if child.is_dir():
-            merge_tree(child, dest_child, tmp_dir)
+            merge_tree(child, dest_child)
         else:
-            replace_file(child, dest_child, tmp_dir)
+            replace_file(child, dest_child)
 
-def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[Path]]:
-    stage_dirs = {{Path(".")}}
+def collect_stage_paths(stage_dir: Path) -> tuple[set[Path], set[Path]]:
+    stage_dirs = {Path(".")}
     stage_files = set()
     for child in stage_dir.rglob("*"):
-        if child == tmp_dir or tmp_dir in child.parents:
-            continue
-
         relative = child.relative_to(stage_dir)
         if child.is_symlink():
-            raise RuntimeError(f"staged build output contains symlink: {{relative}}")
+            raise RuntimeError(f"staged build output contains symlink: {relative}")
         if child.is_dir():
             stage_dirs.add(relative)
         else:
@@ -1747,33 +1744,46 @@ def publish_preview_build(stage_dir: Path) -> None:
     live_root.mkdir(parents=True, exist_ok=True)
     os.chmod(live_root, 0o755)
 
-    with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
-        tmp_dir = Path(_tmp)
-        stage_dirs, stage_files = collect_stage_paths(stage_dir, tmp_dir)
+    stage_dirs, stage_files = collect_stage_paths(stage_dir)
 
-        stage_assets = stage_dir / "assets"
-        if stage_assets.is_dir():
-            merge_tree(stage_assets, live_root / "assets", tmp_dir)
+    stage_assets = stage_dir / "assets"
+    if stage_assets.is_dir():
+        merge_tree(stage_assets, live_root / "assets")
 
-        deferred_index: Path | None = None
-        for child in sorted(stage_dir.iterdir()):
-            if child.name == "assets":
-                continue
-            if child.name == tmp_dir.name:
-                continue
-            if child.name == "index.html":
-                deferred_index = child
-                continue
-            destination = live_root / child.name
-            if child.is_dir():
-                merge_tree(child, destination, tmp_dir)
-            else:
-                replace_file(child, destination, tmp_dir)
+    deferred_index: Path | None = None
+    for child in sorted(stage_dir.iterdir()):
+        if child.name == "assets":
+            continue
+        if child.name == "index.html":
+            deferred_index = child
+            continue
+        destination = live_root / child.name
+        if child.is_dir():
+            merge_tree(child, destination)
+        else:
+            replace_file(child, destination)
 
-        if deferred_index is not None:
-            replace_file(deferred_index, live_root / "index.html", tmp_dir)
+    if deferred_index is not None:
+        replace_file(deferred_index, live_root / "index.html")
 
-        prune_live_tree(live_root, stage_dirs, stage_files)
+    prune_live_tree(live_root, stage_dirs, stage_files)
+        """
+    ).strip()
+
+
+def build_frontend_preview_build_command() -> str:
+    script = textwrap.dedent(
+        f"""\
+import fcntl
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+{build_linked_workspace_resolver_source()}
+
+{build_frontend_preview_publisher_source()}
 
 workspace = resolve_current_workspace(Path.cwd())
 api_workspace = resolve_linked_workspace("SecPal/api", workspace)
@@ -1908,87 +1918,7 @@ def snapshot() -> str:
 
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
-def replace_file(src_file: Path, dest_file: Path, tmp_dir: Path) -> None:
-    dest_file.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=dest_file.name + "-", dir=tmp_dir)
-    os.close(fd)
-    shutil.copy2(src_file, tmp_path)
-    os.chmod(tmp_path, 0o644)
-    if dest_file.is_dir() and not dest_file.is_symlink():
-        shutil.rmtree(dest_file)
-    os.replace(tmp_path, dest_file)
-
-def merge_tree(src_dir: Path, dest_dir: Path, tmp_dir: Path) -> None:
-    if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
-        dest_dir.unlink()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(dest_dir, 0o755)
-    for child in sorted(src_dir.iterdir()):
-        dest_child = dest_dir / child.name
-        if child.is_dir():
-            merge_tree(child, dest_child, tmp_dir)
-        else:
-            replace_file(child, dest_child, tmp_dir)
-
-def collect_stage_paths(stage_dir: Path, tmp_dir: Path) -> tuple[set[Path], set[Path]]:
-    stage_dirs = {{Path(".")}}
-    stage_files = set()
-    for child in stage_dir.rglob("*"):
-        if child == tmp_dir or tmp_dir in child.parents:
-            continue
-
-        relative = child.relative_to(stage_dir)
-        if child.is_symlink():
-            raise RuntimeError(f"staged build output contains symlink: {{relative}}")
-        if child.is_dir():
-            stage_dirs.add(relative)
-        else:
-            stage_files.add(relative)
-    return stage_dirs, stage_files
-
-def prune_live_tree(live_root: Path, stage_dirs: set[Path], stage_files: set[Path]) -> None:
-    for child in sorted(live_root.rglob("*"), key=lambda path: len(path.relative_to(live_root).parts), reverse=True):
-        relative = child.relative_to(live_root)
-        if child.is_dir() and not child.is_symlink():
-            if relative not in stage_dirs:
-                shutil.rmtree(child)
-        elif relative not in stage_files:
-            child.unlink(missing_ok=True)
-
-def publish_preview_build(stage_dir: Path) -> None:
-    live_root = Path("dist")
-    if live_root.is_symlink():
-        raise RuntimeError("live preview dist is a symlink")
-    live_root.mkdir(parents=True, exist_ok=True)
-    os.chmod(live_root, 0o755)
-
-    with tempfile.TemporaryDirectory(prefix="publish-tmp-", dir=stage_dir) as _tmp:
-        tmp_dir = Path(_tmp)
-        stage_dirs, stage_files = collect_stage_paths(stage_dir, tmp_dir)
-
-        stage_assets = stage_dir / "assets"
-        if stage_assets.is_dir():
-            merge_tree(stage_assets, live_root / "assets", tmp_dir)
-
-        deferred_index = None
-        for child in sorted(stage_dir.iterdir()):
-            if child.name == "assets":
-                continue
-            if child.name == tmp_dir.name:
-                continue
-            if child.name == "index.html":
-                deferred_index = child
-                continue
-            destination = live_root / child.name
-            if child.is_dir():
-                merge_tree(child, destination, tmp_dir)
-            else:
-                replace_file(child, destination, tmp_dir)
-
-        if deferred_index is not None:
-            replace_file(deferred_index, live_root / "index.html", tmp_dir)
-
-        prune_live_tree(live_root, stage_dirs, stage_files)
+{build_frontend_preview_publisher_source()}
 
 def run_build() -> int:
     workspace = resolve_current_workspace(Path.cwd())
@@ -4648,6 +4578,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             root $preview_docroot;
+            disable_symlinks on from=$preview_docroot;
 
             add_header Content-Security-Policy $secpal_csp always;
             add_header Permissions-Policy $secpal_permissions_policy always;
