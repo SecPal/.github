@@ -1234,6 +1234,14 @@ for repository_root in (source_api, physical_worktree):
 fake_bin.mkdir(parents=True)
 race_state.mkdir()
 alias_worktree.symlink_to(physical_worktree.name)
+physical_worktree.parent.joinpath(".polyscope-secpal-workspace-aliases.json").write_text(
+    '{\n'
+    '  "version": 1,\n'
+    '  "aliases": {\n'
+    f'    "{alias_worktree.name}": "{physical_worktree.name}"\n'
+    '  }\n'
+    '}\n'
+)
 os.mkfifo(release_first)
 
 source_api.joinpath(".env.example").write_text(
@@ -7160,6 +7168,7 @@ def run_case(
     marker_hit: bool,
     setup_fails: bool,
     grant_fails: bool = False,
+    marker_write_fails: bool = False,
     provisionable: bool = True,
     canonical_validation_fails: bool = False,
     registered_worktree_count: int = 1,
@@ -7207,6 +7216,15 @@ def run_case(
             raise RuntimeError("expected preview ACL failure")
 
     module.ensure_preview_nginx_access = grant_access
+    module.deny_preview_nginx_access = lambda *_args, **_kwargs: order.append("deny")
+
+    def write_marker(marker_path: Path, marker_payload: dict[str, object]) -> None:
+        if marker_write_fails:
+            order.append("marker")
+            raise OSError("expected provision marker failure")
+        marker_path.write_text(__import__("json").dumps(marker_payload, indent=2) + "\n")
+
+    module.write_provision_marker = write_marker
 
     def run_setup(*_args, **_kwargs) -> None:
         order.append("setup")
@@ -7285,10 +7303,27 @@ assert acl_failure_order == [
     "validate",
     "setup",
     "grant",
+    "deny",
 ], acl_failure_order
 assert acl_failure_provisioned == []
 assert len(acl_failure_details) == 1
 assert not acl_failure_marker_exists
+
+marker_write_failure_order, marker_write_failure_provisioned, marker_write_failure_details, marker_write_failure_exists = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    marker_write_fails=True,
+)
+assert marker_write_failure_order == [
+    "validate",
+    "setup",
+    "grant",
+    "marker",
+    "deny",
+], marker_write_failure_order
+assert marker_write_failure_provisioned == []
+assert len(marker_write_failure_details) == 1
+assert not marker_write_failure_exists
 
 invalid_order, invalid_provisioned, invalid_failures, invalid_marker_exists = run_case(
     marker_hit=False,
@@ -7464,6 +7499,45 @@ assert managed_alias_order == [
     "deny:workspace",
 ], managed_alias_order
 assert managed_alias_error is None
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    case_root = Path(temporary_directory)
+    clone_root = case_root / ".polyscope" / "clones"
+    repo_root = clone_root / "repository-id"
+    registered_worktree = repo_root / "registered"
+    orphan_worktree = repo_root / "orphan"
+    registered_worktree.mkdir(parents=True)
+    orphan_worktree.mkdir()
+    reconcile_order: list[str] = []
+
+    module.deny_preview_nginx_access = (
+        lambda _clone_root, denied_path, **_kwargs: reconcile_order.append(f"deny:{denied_path.name}")
+    )
+    module.revoke_unregistered_preview_nginx_access(
+        clone_root,
+        {"frontend": [registered_worktree]},
+    )
+    assert reconcile_order == ["deny:orphan"], reconcile_order
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    case_root = Path(temporary_directory)
+    clone_root = case_root / ".polyscope" / "clones"
+    repo_root = clone_root / "repository-id"
+    worktree = repo_root / "workspace"
+    outside_preview = case_root / "outside-preview"
+    worktree.mkdir(parents=True)
+    outside_preview.mkdir()
+    (repo_root / "rogue-alias").symlink_to(outside_preview, target_is_directory=True)
+
+    try:
+        module.revoke_unregistered_preview_nginx_access(
+            clone_root,
+            {"frontend": [worktree]},
+        )
+    except RuntimeError as error:
+        assert "escaping symlink" in str(error)
+    else:
+        raise AssertionError("routine ACL reconciliation must reject escaping workspace aliases")
 
 clone_failure_order, clone_failure_error = run_revoke_case(clone_deny_fails=True)
 assert clone_failure_order == ["deny-clone"], clone_failure_order

@@ -545,6 +545,7 @@ assert unrelated_alias.is_symlink(), (
 assert module.load_workspace_alias_registry(github_clone_root) == {
     "registered-valid": valid_candidate.name,
 }
+unrelated_alias.unlink()
 
 # Registration aliases may be migrated back to their verified physical target,
 # but symlink chains and paths outside the expected repository clone root are
@@ -569,6 +570,9 @@ else:
 with sqlite3.connect(db_path) as connection:
     assert connection.execute("select path from worktrees where id = 'chain'").fetchone()[0] == str(chain_alias)
     connection.execute("delete from worktrees where id = 'chain'")
+chain_alias.unlink()
+chain_middle.unlink()
+chain_target.rmdir()
 
 # Registry records cannot escape the repository clone root or turn another
 # user-owned path into an alias-cleanup target.
@@ -590,6 +594,7 @@ except RuntimeError as error:
 else:
     raise AssertionError("workspace alias registry traversal must fail closed")
 assert outside_sentinel.read_text() == "unchanged"
+module.workspace_alias_registry_path(unsafe_registry_root).unlink()
 
 # SQLite URI mode must quote legal filename characters instead of treating
 # them as URI query, fragment, or percent-escape syntax and selecting or

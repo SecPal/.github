@@ -3534,6 +3534,30 @@ def load_provision_marker(marker_path: pathlib.Path) -> dict[str, Any] | None:
     return marker
 
 
+def write_provision_marker(marker_path: pathlib.Path, marker_payload: dict[str, Any]) -> None:
+    if marker_path.is_symlink() or (marker_path.exists() and not marker_path.is_file()):
+        raise RuntimeError(f"provision marker is not a regular file: {marker_path}")
+
+    payload = json.dumps(marker_payload, indent=2) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{PROVISION_MARKER_FILENAME}.",
+        dir=marker_path.parent,
+    )
+    temporary_path = pathlib.Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, marker_path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
+
+
 def run_setup_commands(worktree_path: pathlib.Path, commands: list[str], *, db_path: pathlib.Path | None = None) -> None:
     env = os.environ.copy()
     if db_path is not None:
@@ -3997,40 +4021,82 @@ def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
             if not child.is_symlink() and child.is_dir():
                 deny_preview_nginx_access(resolved_clone_root, child)
 
-        for child in children:
-            if not child.is_symlink():
-                continue
-            try:
-                link_target = os.readlink(child)
-            except OSError as error:
-                raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
-            registered_target = registered_aliases.get(child.name)
-            try:
-                resolved_target = child.resolve(strict=True)
-            except FileNotFoundError:
-                link_target_path = pathlib.Path(link_target)
-                lexical_target = (
-                    link_target_path
-                    if link_target_path.is_absolute()
-                    else child.parent / link_target_path
-                )
-                normalized_target = pathlib.Path(os.path.abspath(lexical_target))
-                if normalized_target.parent != repo_clone_root:
-                    raise RuntimeError(
-                        f"preview repository contains an unresolved symlink that escapes its root: "
-                        f"{child} -> {normalized_target}"
-                    )
-                if registered_target != link_target:
-                    raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
-                continue
-            except OSError as error:
-                raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
-            if resolved_target.parent != repo_clone_root or not resolved_target.is_dir():
+        validate_preview_nginx_workspace_aliases(repo_clone_root, registered_aliases, children)
+
+
+def validate_preview_nginx_workspace_aliases(
+    repo_clone_root: pathlib.Path,
+    registered_aliases: dict[str, str],
+    children: list[pathlib.Path],
+) -> None:
+    for child in children:
+        if not child.is_symlink():
+            continue
+        try:
+            link_target = os.readlink(child)
+        except OSError as error:
+            raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
+        registered_target = registered_aliases.get(child.name)
+        try:
+            resolved_target = child.resolve(strict=True)
+        except FileNotFoundError:
+            link_target_path = pathlib.Path(link_target)
+            lexical_target = (
+                link_target_path
+                if link_target_path.is_absolute()
+                else child.parent / link_target_path
+            )
+            normalized_target = pathlib.Path(os.path.abspath(lexical_target))
+            if normalized_target.parent != repo_clone_root:
                 raise RuntimeError(
-                    f"preview repository contains an escaping symlink: {child} -> {resolved_target}"
+                    f"preview repository contains an unresolved symlink that escapes its root: "
+                    f"{child} -> {normalized_target}"
                 )
-            if registered_target != link_target or resolved_target.name != registered_target:
+            if registered_target != link_target:
                 raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
+            continue
+        except OSError as error:
+            raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
+        if resolved_target.parent != repo_clone_root or not resolved_target.is_dir():
+            raise RuntimeError(
+                f"preview repository contains an escaping symlink: {child} -> {resolved_target}"
+            )
+        if registered_target != link_target or resolved_target.name != registered_target:
+            raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
+
+
+def revoke_unregistered_preview_nginx_access(
+    clone_root: pathlib.Path,
+    registered_worktrees: dict[str, list[pathlib.Path]],
+) -> None:
+    """Deny stale preview worktrees without disrupting active registrations."""
+    clone_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if clone_root.is_symlink() or not clone_root.is_dir():
+        raise RuntimeError(f"preview clone root is not a physical directory: {clone_root}")
+    resolved_clone_root = clone_root.resolve(strict=True)
+    registered_paths = {
+        worktree_path.resolve()
+        for repo_worktrees in registered_worktrees.values()
+        for worktree_path in repo_worktrees
+    }
+
+    for repo_clone_root in sorted(resolved_clone_root.iterdir(), key=lambda path: path.name):
+        if repo_clone_root.is_symlink():
+            raise RuntimeError(
+                f"preview clone root contains a repository symlink: {repo_clone_root}"
+            )
+        if not repo_clone_root.is_dir():
+            continue
+
+        registered_aliases = load_workspace_alias_registry(repo_clone_root)
+        children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                continue
+            if child.resolve(strict=True) not in registered_paths:
+                deny_preview_nginx_access(resolved_clone_root, child)
+
+        validate_preview_nginx_workspace_aliases(repo_clone_root, registered_aliases, children)
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
@@ -4117,6 +4183,7 @@ def provision_worktrees(
         repo_state,
         clone_root,
     )
+    revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
@@ -4275,8 +4342,19 @@ def provision_worktrees(
                     marker_payload["linked_workspaces"] = linked_setup_context
 
                 if preview_enabled:
-                    ensure_preview_nginx_access(clone_root, locked_worktree_path)
-                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+                    try:
+                        ensure_preview_nginx_access(clone_root, locked_worktree_path)
+                        write_provision_marker(marker_path, marker_payload)
+                    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+                        try:
+                            deny_preview_nginx_access(clone_root, locked_worktree_path)
+                        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as rollback_error:
+                            raise RuntimeError(
+                                f"{error}; additionally failed to revoke preview access: {rollback_error}"
+                            ) from rollback_error
+                        raise
+                else:
+                    write_provision_marker(marker_path, marker_payload)
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)
