@@ -6908,11 +6908,24 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     public_directory = worktree / "public"
     public_directory.mkdir()
     (public_directory / "index.php").write_text("<?php")
+    assets_directory = public_directory / "assets"
+    assets_directory.mkdir()
+    (assets_directory / "app.js").write_text("console.log('preview')")
 
     calls: list[tuple[list[str], dict[str, object]]] = []
     original_run = module.subprocess.run
 
     def record_run(arguments: list[str], **kwargs: object) -> None:
+        if (
+            "-R" in arguments
+            and "-d" not in arguments
+            and any("d:u:www-data" in argument for argument in arguments)
+        ):
+            raise subprocess.CalledProcessError(
+                1,
+                arguments,
+                stderr="Only directories can have default ACLs",
+            )
         calls.append((arguments, kwargs))
 
     module.subprocess.run = record_run
@@ -6935,17 +6948,20 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     assert [arguments for arguments, _kwargs in calls] == [
         [
             "/usr/bin/setfacl",
-            "-x",
-            "d:u:www-data",
+            "-R",
+            "-P",
+            "-m",
+            "u:www-data:rX",
             "--",
-            str(worktree),
+            str(public_directory),
         ],
         [
             "/usr/bin/setfacl",
             "-R",
             "-P",
+            "-d",
             "-m",
-            "u:www-data:rX,d:u:www-data:r-x",
+            "u:www-data:r-x",
             "--",
             str(public_directory),
         ],
@@ -6958,6 +6974,43 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         kwargs == {"check": True, "capture_output": True, "text": True}
         for _arguments, kwargs in calls
     )
+
+    calls.clear()
+    missing_document_root_worktree = clone_root / "repository-id" / "missing-document-root"
+    missing_document_root_worktree.mkdir()
+    module.subprocess.run = record_run
+    try:
+        module.deny_preview_nginx_access(
+            clone_root,
+            missing_document_root_worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+        module.ensure_preview_nginx_access(
+            clone_root,
+            missing_document_root_worktree,
+            setfacl_bin="/usr/bin/setfacl",
+        )
+    finally:
+        module.subprocess.run = original_run
+    assert [arguments for arguments, _kwargs in calls] == [
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(missing_document_root_worktree),
+        ],
+        *[
+            ["/usr/bin/setfacl", "-m", "u:www-data:--x", "--", str(path)]
+            for path in [
+                clone_root.parent.parent,
+                clone_root.parent,
+                clone_root,
+                missing_document_root_worktree.parent,
+                missing_document_root_worktree,
+            ]
+        ],
+    ]
 
     calls.clear()
     original_resolve_executable = module.resolve_executable
@@ -6987,7 +7040,13 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     finally:
         module.subprocess.run = original_run
     assert [arguments for arguments, _kwargs in calls] == [
-        ["/usr/bin/setfacl", "-m", "u:www-data:---", "--", str(worktree)]
+        [
+            "/usr/bin/setfacl",
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(worktree),
+        ]
     ]
 
     calls.clear()
@@ -7211,6 +7270,8 @@ def run_revoke_case(
     escaping_symlink: bool = False,
     broken_symlink: bool = False,
     broken_internal_symlink: bool = False,
+    internal_symlink: bool = False,
+    registered_internal_symlink: bool = False,
     clone_deny_fails: bool = False,
     repository_deny_fails: bool = False,
     child_deny_fails: bool = False,
@@ -7242,6 +7303,17 @@ def run_revoke_case(
                 "missing-worktree",
                 target_is_directory=True,
             )
+        if internal_symlink or registered_internal_symlink:
+            alias_name = "managed-alias" if registered_internal_symlink else "rogue-alias"
+            (repo_root / alias_name).symlink_to(
+                worktree.name,
+                target_is_directory=True,
+            )
+            if registered_internal_symlink:
+                module.write_workspace_alias_registry(
+                    repo_root,
+                    {alias_name: worktree.name},
+                )
 
     order: list[str] = []
 
@@ -7310,7 +7382,25 @@ assert internal_broken_order == [
     "deny-repository:repository-id",
     "deny:workspace",
 ], internal_broken_order
-assert internal_broken_error is None
+assert internal_broken_error is not None and "unregistered workspace alias" in internal_broken_error
+
+internal_order, internal_error = run_revoke_case(internal_symlink=True)
+assert internal_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], internal_order
+assert internal_error is not None and "unregistered workspace alias" in internal_error
+
+managed_alias_order, managed_alias_error = run_revoke_case(
+    registered_internal_symlink=True,
+)
+assert managed_alias_order == [
+    "deny-clone",
+    "deny-repository:repository-id",
+    "deny:workspace",
+], managed_alias_order
+assert managed_alias_error is None
 
 clone_failure_order, clone_failure_error = run_revoke_case(clone_deny_fails=True)
 assert clone_failure_order == ["deny-clone"], clone_failure_order

@@ -3907,29 +3907,40 @@ def ensure_preview_nginx_access(
 
     executable = resolve_setfacl_bin(setfacl_bin)
 
-    _run_preview_setfacl(
-        executable,
-        ["-x", "d:u:www-data", "--", str(resolved_worktree_path)],
-        f"unable to remove inherited Nginx preview ACL from {resolved_worktree_path}",
-    )
-
+    document_roots: list[pathlib.Path] = []
     for document_root_name in ("public", "dist"):
         document_root = resolved_worktree_path / document_root_name
         if not document_root.exists() and not document_root.is_symlink():
             continue
         if document_root.is_symlink() or not document_root.is_dir():
             raise RuntimeError(f"preview document root is not a physical directory: {document_root}")
+        document_roots.append(document_root)
+
+    for document_root in document_roots:
         _run_preview_setfacl(
             executable,
             [
                 "-R",
                 "-P",
                 "-m",
-                "u:www-data:rX,d:u:www-data:r-x",
+                "u:www-data:rX",
                 "--",
                 str(document_root),
             ],
             f"unable to grant Nginx preview content access to {document_root}",
+        )
+        _run_preview_setfacl(
+            executable,
+            [
+                "-R",
+                "-P",
+                "-d",
+                "-m",
+                "u:www-data:r-x",
+                "--",
+                str(document_root),
+            ],
+            f"unable to grant inherited Nginx preview content access to {document_root}",
         )
 
     for path in (
@@ -3963,7 +3974,12 @@ def deny_preview_nginx_access(
     executable = resolve_setfacl_bin(setfacl_bin)
     _run_preview_setfacl(
         executable,
-        ["-m", "u:www-data:---", "--", str(resolved_worktree_path)],
+        [
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(resolved_worktree_path),
+        ],
         f"unable to deny Nginx preview access to {resolved_worktree_path}",
     )
 
@@ -4031,6 +4047,7 @@ def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
             continue
 
         deny_preview_nginx_repository_access(resolved_clone_root, repo_clone_root)
+        registered_aliases = load_workspace_alias_registry(repo_clone_root)
         children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
         for child in children:
             if not child.is_symlink() and child.is_dir():
@@ -4040,16 +4057,27 @@ def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
             if not child.is_symlink():
                 continue
             try:
+                link_target = os.readlink(child)
+            except OSError as error:
+                raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
+            registered_target = registered_aliases.get(child.name)
+            try:
                 resolved_target = child.resolve(strict=True)
             except FileNotFoundError:
-                link_target = pathlib.Path(os.readlink(child))
-                lexical_target = link_target if link_target.is_absolute() else child.parent / link_target
+                link_target_path = pathlib.Path(link_target)
+                lexical_target = (
+                    link_target_path
+                    if link_target_path.is_absolute()
+                    else child.parent / link_target_path
+                )
                 normalized_target = pathlib.Path(os.path.abspath(lexical_target))
                 if normalized_target.parent != repo_clone_root:
                     raise RuntimeError(
                         f"preview repository contains an unresolved symlink that escapes its root: "
                         f"{child} -> {normalized_target}"
                     )
+                if registered_target != link_target:
+                    raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
                 continue
             except OSError as error:
                 raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
@@ -4057,6 +4085,8 @@ def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
                 raise RuntimeError(
                     f"preview repository contains an escaping symlink: {child} -> {resolved_target}"
                 )
+            if registered_target != link_target or resolved_target.name != registered_target:
+                raise RuntimeError(f"preview repository contains an unregistered workspace alias: {child}")
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
