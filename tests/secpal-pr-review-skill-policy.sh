@@ -552,7 +552,9 @@ assert not any(
     "deployment, production, or live targets"
 )
 
-assert len(deployment["manual_gates"]) == 1
+assert len(deployment["manual_gates"]) == 1, (
+    "SecPal/deployment must define exactly one manual gate"
+)
 deployment_gate = deployment["manual_gates"][0]
 for required_text in (
     "The deterministic `./scripts/preflight.sh` target is required.",

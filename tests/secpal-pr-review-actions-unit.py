@@ -6247,6 +6247,18 @@ class FastPathTests(TestCase):
 
 
 class PolicyScriptTests(TestCase):
+    def test_deployment_manual_gate_count_assertion_has_diagnostic(self) -> None:
+        policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'assert len(deployment["manual_gates"]) == 1, (\n'
+            '    "SecPal/deployment must define exactly one manual gate"\n'
+            ")",
+            policy,
+        )
+
     def test_reuse_precommit_hook_provisions_the_pinned_tool(self) -> None:
         pre_commit = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
         reuse_hook = pre_commit.split("  # Code formatting", 1)[0]

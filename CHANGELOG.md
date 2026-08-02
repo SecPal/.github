@@ -17,7 +17,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - registered the Docker-backed complete local integration target as focused-only
   and required explicit current authorization for Docker daemon and outbound
   GitHub, container-registry, and package-registry network access
-- kept registry login, image publishing and push, prune, production
+- kept registry login, image publishing, image push, prune, production
   infrastructure, public exposure, deployment, live systems, and real secrets
   prohibited
 - continued to derive Required Checks from live rulesets and branch protection
