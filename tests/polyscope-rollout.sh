@@ -4636,7 +4636,7 @@ if grep -qF "disable_symlinks on from=\$preview_docroot;" "$nginx_output"; then
     exit 1
 fi
 grep -qF "set \$preview_relaxed_csp " "$nginx_output"
-grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline';" "$nginx_output"
+grep -qF "script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'none';" "$nginx_output"
 grep -qF "set \$secpal_csp \$preview_relaxed_csp;" "$nginx_output"
 if grep -qF "preview_frontend_csp" "$nginx_output" || grep -qF "csp_nonce" "$nginx_output" || grep -qF "nonce-\$csp_nonce" "$nginx_output"; then
     echo "preview nginx config must not advertise nonce-based frontend CSP after SSI removal" >&2
