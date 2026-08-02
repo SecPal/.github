@@ -1952,6 +1952,7 @@ fi
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
+import hashlib
 import os
 import pathlib
 import shutil
@@ -2304,9 +2305,27 @@ assert watch_publish_source.index('replace_file(deferred_index, live_root / "ind
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
 
-# The watcher can race setup-time npm ci. Dependency installation completes
-# independently after the initial missing-command failure and must trigger one
-# retry via npm's stable hidden lockfile, without a source edit.
+# A single build binary is not enough to retry the build. The watcher must wait
+# until both commands needed by the frontend build are available.
+snapshot_source = watch_script[watch_script.index("watch_directories =") : watch_script.index("def replace_file")]
+snapshot_scope = {"hashlib": hashlib}
+exec("from pathlib import Path\n" + snapshot_source, snapshot_scope)
+original_cwd = pathlib.Path.cwd()
+try:
+    os.chdir(frontend_worktree)
+    shutil.rmtree(frontend_worktree / "node_modules", ignore_errors=True)
+    initial_snapshot = snapshot_scope["snapshot"]()
+    frontend_worktree.joinpath("node_modules/.bin").mkdir(parents=True, exist_ok=True)
+    frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
+    assert snapshot_scope["snapshot"]() == initial_snapshot
+    frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
+    assert snapshot_scope["snapshot"]() != initial_snapshot
+finally:
+    os.chdir(original_cwd)
+
+# The watcher can race setup-time npm ci. When the required build binaries
+# become available after an initial missing-command failure, it must retry once
+# without a source edit.
 frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
 frontend_worktree.joinpath("dist").unlink()
 shutil.rmtree(frontend_worktree / "node_modules", ignore_errors=True)
@@ -2335,9 +2354,13 @@ frontend_worktree.joinpath("node_modules").mkdir(exist_ok=True)
 frontend_worktree.joinpath("node_modules/.bin").mkdir(exist_ok=True)
 frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
 frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
-time.sleep(0.2)
-assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1"
-frontend_worktree.joinpath("node_modules/.package-lock.json").write_text("{}\\n")
+for _ in range(20):
+    if frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2":
+        break
+    time.sleep(0.05)
+else:
+    watch_retry_process.kill()
+    raise AssertionError("watcher did not retry after the build binaries became available")
 _watch_retry_stdout, watch_retry_stderr = watch_retry_process.communicate(timeout=5)
 assert watch_retry_process.returncode == 0, watch_retry_stderr
 assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_stderr
@@ -2348,7 +2371,7 @@ assert "waiting for dependency installation or a source change" in watch_retry_s
 # Permanently unavailable dependencies must wait for a subsequent change, not
 # spin through repeated exit-127 builds.
 frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
-frontend_worktree.joinpath("node_modules/.package-lock.json").unlink()
+frontend_worktree.joinpath("node_modules/.package-lock.json").unlink(missing_ok=True)
 watch_no_retry_result = subprocess.run(
     ["python3", "-c", bounded_watch_script],
     cwd=frontend_worktree,

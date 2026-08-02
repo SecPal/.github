@@ -1858,6 +1858,8 @@ watch_files = [
             Path(".env.preview.local"),
             Path(".env.production.local"),
             Path("node_modules/.package-lock.json"),
+]
+build_binary_paths = [
             Path("node_modules/.bin/cross-env"),
             Path("node_modules/.bin/vite"),
 ]
@@ -1879,7 +1881,11 @@ watch_suffixes = {
 def iter_watch_paths():
     seen = set()
 
-    for path in watch_files:
+    # npm may create command shims one at a time. Treat them as one readiness
+    # signal so a partially completed install cannot trigger a premature build.
+    ready_build_binary_paths = build_binary_paths if all(path.is_file() for path in build_binary_paths) else []
+
+    for path in [*watch_files, *ready_build_binary_paths]:
         if not path.exists():
             continue
 
