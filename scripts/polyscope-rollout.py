@@ -34,7 +34,6 @@ ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
-PREVIEW_ACL_POLICY_VERSION = 1
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
 DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
@@ -3874,14 +3873,30 @@ def resolve_setfacl_bin(explicit_path: str | None = None) -> str:
     return str(override_path)
 
 
+def _run_preview_setfacl(
+    executable: str,
+    arguments: list[str],
+    failure_message: str,
+) -> None:
+    try:
+        subprocess.run(
+            [executable, *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() if error.stderr else "no error output"
+        raise RuntimeError(f"{failure_message}: {detail}") from error
+
+
 def ensure_preview_nginx_access(
     clone_root: pathlib.Path,
     worktree_path: pathlib.Path,
     *,
     setfacl_bin: str | None = None,
-    clean_inherited_acl: bool = True,
 ) -> None:
-    """Allow the nginx worker to traverse exactly one preview worktree path."""
+    """Allow nginx to traverse one worktree and read its preview document roots."""
     resolved_clone_root = clone_root.resolve(strict=True)
     resolved_worktree_path = worktree_path.resolve(strict=True)
     repo_clone_root = resolved_worktree_path.parent
@@ -3892,37 +3907,30 @@ def ensure_preview_nginx_access(
 
     executable = resolve_setfacl_bin(setfacl_bin)
 
-    if clean_inherited_acl:
-        inherited_acl_cleanup = [
-            [executable, "-x", "d:u:www-data", "--", str(resolved_worktree_path)]
-        ]
-        worktree_children = sorted(resolved_worktree_path.iterdir(), key=lambda path: path.name)
-        if worktree_children:
-            inherited_acl_cleanup.append(
-                [
-                    executable,
-                    "-R",
-                    "-P",
-                    "-x",
-                    "u:www-data,d:u:www-data",
-                    "--",
-                    *(str(path) for path in worktree_children),
-                ]
-            )
+    _run_preview_setfacl(
+        executable,
+        ["-x", "d:u:www-data", "--", str(resolved_worktree_path)],
+        f"unable to remove inherited Nginx preview ACL from {resolved_worktree_path}",
+    )
 
-        for arguments in inherited_acl_cleanup:
-            try:
-                subprocess.run(
-                    arguments,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as error:
-                detail = error.stderr.strip() if error.stderr else "no error output"
-                raise RuntimeError(
-                    f"unable to grant Nginx preview access to {resolved_worktree_path}: {detail}"
-                ) from error
+    for document_root_name in ("public", "dist"):
+        document_root = resolved_worktree_path / document_root_name
+        if not document_root.exists() and not document_root.is_symlink():
+            continue
+        if document_root.is_symlink() or not document_root.is_dir():
+            raise RuntimeError(f"preview document root is not a physical directory: {document_root}")
+        _run_preview_setfacl(
+            executable,
+            [
+                "-R",
+                "-P",
+                "-m",
+                "u:www-data:rX,d:u:www-data:r-x",
+                "--",
+                str(document_root),
+            ],
+            f"unable to grant Nginx preview content access to {document_root}",
+        )
 
     for path in (
         resolved_clone_root.parent.parent,
@@ -3931,18 +3939,11 @@ def ensure_preview_nginx_access(
         repo_clone_root,
         resolved_worktree_path,
     ):
-        try:
-            subprocess.run(
-                [executable, "-m", "u:www-data:--x", "--", str(path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as error:
-            detail = error.stderr.strip() if error.stderr else "no error output"
-            raise RuntimeError(
-                f"unable to grant Nginx preview access to {path}: {detail}"
-            ) from error
+        _run_preview_setfacl(
+            executable,
+            ["-m", "u:www-data:--x", "--", str(path)],
+            f"unable to grant Nginx preview access to {path}",
+        )
 
 
 def deny_preview_nginx_access(
@@ -3960,18 +3961,31 @@ def deny_preview_nginx_access(
         )
 
     executable = resolve_setfacl_bin(setfacl_bin)
-    try:
-        subprocess.run(
-            [executable, "-m", "u:www-data:---", "--", str(resolved_worktree_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.strip() if error.stderr else "no error output"
-        raise RuntimeError(
-            f"unable to deny Nginx preview access to {resolved_worktree_path}: {detail}"
-        ) from error
+    _run_preview_setfacl(
+        executable,
+        ["-m", "u:www-data:---", "--", str(resolved_worktree_path)],
+        f"unable to deny Nginx preview access to {resolved_worktree_path}",
+    )
+
+
+def deny_preview_nginx_clone_access(
+    clone_root: pathlib.Path,
+    *,
+    setfacl_bin: str | None = None,
+) -> None:
+    """Block existing and future preview repositories at the clone boundary."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    executable = resolve_setfacl_bin(setfacl_bin)
+    _run_preview_setfacl(
+        executable,
+        [
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(resolved_clone_root),
+        ],
+        f"unable to deny Nginx preview access at clone root {resolved_clone_root}",
+    )
 
 
 def deny_preview_nginx_repository_access(
@@ -3991,24 +4005,58 @@ def deny_preview_nginx_repository_access(
         )
 
     executable = resolve_setfacl_bin(setfacl_bin)
-    try:
-        subprocess.run(
-            [
-                executable,
-                "-m",
-                "u:www-data:---,d:u:www-data:---",
-                "--",
-                str(resolved_repo_clone_root),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.strip() if error.stderr else "no error output"
-        raise RuntimeError(
-            f"unable to deny Nginx preview access to repository {resolved_repo_clone_root}: {detail}"
-        ) from error
+    _run_preview_setfacl(
+        executable,
+        [
+            "-m",
+            "u:www-data:---,d:u:www-data:---",
+            "--",
+            str(resolved_repo_clone_root),
+        ],
+        f"unable to deny Nginx preview access to repository {resolved_repo_clone_root}",
+    )
+
+
+def revoke_all_preview_nginx_access(clone_root: pathlib.Path) -> None:
+    """Revoke preview traversal before validation and selective regranting."""
+    resolved_clone_root = clone_root.resolve(strict=True)
+    deny_preview_nginx_clone_access(resolved_clone_root)
+
+    for repo_clone_root in sorted(resolved_clone_root.iterdir(), key=lambda path: path.name):
+        if repo_clone_root.is_symlink():
+            raise RuntimeError(
+                f"preview clone root contains a repository symlink: {repo_clone_root}"
+            )
+        if not repo_clone_root.is_dir():
+            continue
+
+        deny_preview_nginx_repository_access(resolved_clone_root, repo_clone_root)
+        children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        for child in children:
+            if not child.is_symlink() and child.is_dir():
+                deny_preview_nginx_access(resolved_clone_root, child)
+
+        for child in children:
+            if not child.is_symlink():
+                continue
+            try:
+                resolved_target = child.resolve(strict=True)
+            except FileNotFoundError:
+                link_target = pathlib.Path(os.readlink(child))
+                lexical_target = link_target if link_target.is_absolute() else child.parent / link_target
+                normalized_target = pathlib.Path(os.path.abspath(lexical_target))
+                if normalized_target.parent != repo_clone_root:
+                    raise RuntimeError(
+                        f"preview repository contains an unresolved symlink that escapes its root: "
+                        f"{child} -> {normalized_target}"
+                    )
+                continue
+            except OSError as error:
+                raise RuntimeError(f"preview repository contains an unreadable symlink: {child}") from error
+            if resolved_target.parent != repo_clone_root or not resolved_target.is_dir():
+                raise RuntimeError(
+                    f"preview repository contains an escaping symlink: {child} -> {resolved_target}"
+                )
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
@@ -4090,65 +4138,11 @@ def provision_worktrees(
     resolved_db_path = db_path or default_polyscope_db_path()
     failed_provision_worktrees: list[dict[str, str]] = []
 
-    # Revoke the shared repository traversal grant and every physical sibling
-    # before database filtering or validation can exclude a worktree. The
-    # default ACL closes the race for children created during reconciliation.
-    resolved_clone_root = clone_root.resolve()
-    for repo_name, spec in repo_specs.items():
-        preview_prefix = spec.get("preview_prefix")
-        if not isinstance(preview_prefix, str) or not preview_prefix:
-            continue
-        repo_clone_root = resolved_clone_root / str(repo_state[repo_name]["id"])
-        if not repo_clone_root.exists() and not repo_clone_root.is_symlink():
-            continue
-        try:
-            deny_preview_nginx_repository_access(clone_root, repo_clone_root)
-            children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
-            for child in children:
-                if not child.is_symlink() and child.is_dir():
-                    deny_preview_nginx_access(clone_root, child)
-            for child in children:
-                if not child.is_symlink():
-                    continue
-                try:
-                    resolved_target = child.resolve(strict=True)
-                except FileNotFoundError:
-                    continue
-                if resolved_target.parent != repo_clone_root or not resolved_target.is_dir():
-                    raise RuntimeError(
-                        f"preview repository contains an escaping symlink: {child} -> {resolved_target}"
-                    )
-        except (
-            OSError,
-            RuntimeError,
-            subprocess.CalledProcessError,
-            SystemExit,
-        ) as error:
-            error_message = str(error)
-            print(
-                f"Failed to revoke preview access for {repo_name} repository "
-                f"at {repo_clone_root}: {error_message}",
-                file=sys.stderr,
-            )
-            failed_provision_worktrees.append(
-                {
-                    "repo": repo_name,
-                    "workspace": repo_clone_root.name,
-                    "path": str(repo_clone_root),
-                    "error": error_message,
-                }
-            )
-
-    if failed_provision_worktrees:
-        return [], [], failed_provision_worktrees
-
     registered_worktrees = load_registered_worktree_paths(
         resolved_db_path,
         repo_state,
         clone_root,
     )
-
-    validate_repo_instruction_files(repo_specs, validation_cache)
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
@@ -4271,22 +4265,10 @@ def provision_worktrees(
 
                 marker_path = locked_worktree_path / PROVISION_MARKER_FILENAME
                 marker = load_provision_marker(marker_path)
-                preview_acl_policy_current = (
-                    preview_enabled
-                    and marker is not None
-                    and marker.get("preview_acl_policy_version") == PREVIEW_ACL_POLICY_VERSION
-                )
                 if marker is not None and marker.get("setup_hash") == setup_hash:
                     if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
                         if preview_enabled:
-                            ensure_preview_nginx_access(
-                                clone_root,
-                                locked_worktree_path,
-                                clean_inherited_acl=not preview_acl_policy_current,
-                            )
-                            if not preview_acl_policy_current:
-                                marker["preview_acl_policy_version"] = PREVIEW_ACL_POLICY_VERSION
-                                marker_path.write_text(json.dumps(marker, indent=2) + "\n")
+                            ensure_preview_nginx_access(clone_root, locked_worktree_path)
                         continue
 
                 if setup_commands:
@@ -4317,19 +4299,10 @@ def provision_worktrees(
                     marker_payload["preview_storage_target"] = preview_storage_target
                 if linked_setup_context:
                     marker_payload["linked_workspaces"] = linked_setup_context
-                if preview_acl_policy_current:
-                    marker_payload["preview_acl_policy_version"] = PREVIEW_ACL_POLICY_VERSION
 
                 marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
                 if preview_enabled:
-                    ensure_preview_nginx_access(
-                        clone_root,
-                        locked_worktree_path,
-                        clean_inherited_acl=not preview_acl_policy_current,
-                    )
-                    if not preview_acl_policy_current:
-                        marker_payload["preview_acl_policy_version"] = PREVIEW_ACL_POLICY_VERSION
-                        marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
+                    ensure_preview_nginx_access(clone_root, locked_worktree_path)
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)
@@ -5082,8 +5055,25 @@ def main() -> int:
     if direct_mode_result is not None:
         return direct_mode_result
 
+    lock_context = (
+        provision_worktree_lock(args.provision_lock_path)
+        if args.provision_worktrees
+        else contextlib.nullcontext()
+    )
+    with lock_context:
+        return run_rollout(args)
+
+
+def run_rollout(args: argparse.Namespace) -> int:
     repo_specs = build_repo_specs(args.workspace_root)
     validated_instruction_roots: set[pathlib.Path] = set()
+
+    if args.provision_worktrees:
+        try:
+            revoke_all_preview_nginx_access(args.clone_root)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            print(f"Failed to revoke preview access: {error}", file=sys.stderr)
+            return 1
 
     try:
         validate_repo_instruction_files(repo_specs, validated_instruction_roots)
@@ -5131,14 +5121,13 @@ def main() -> int:
     cleaned_preview_storage_targets: list[str] = []
     failed_provision_worktrees: list[dict[str, str]] = []
     if args.provision_worktrees:
-        with provision_worktree_lock(args.provision_lock_path):
-            provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
-                repo_state,
-                repo_specs,
-                args.clone_root,
-                db_path=args.db_path,
-                validated_instruction_roots=validated_instruction_roots,
-            )
+        provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
+            repo_state,
+            repo_specs,
+            args.clone_root,
+            db_path=args.db_path,
+            validated_instruction_roots=validated_instruction_roots,
+        )
 
     summary = build_summary(
         repo_state,
