@@ -7159,10 +7159,11 @@ def run_case(
     *,
     marker_hit: bool,
     setup_fails: bool,
+    grant_fails: bool = False,
     provisionable: bool = True,
     canonical_validation_fails: bool = False,
     registered_worktree_count: int = 1,
-) -> tuple[list[str], list[str], list[dict[str, str]]]:
+) -> tuple[list[str], list[str], list[dict[str, str]], bool]:
     temporary_directory = tempfile.TemporaryDirectory()
     case_root = Path(temporary_directory.name)
     clone_root = case_root / ".polyscope" / "clones"
@@ -7202,6 +7203,8 @@ def run_case(
 
     def grant_access(*_args, **_kwargs) -> None:
         order.append("grant")
+        if grant_fails:
+            raise RuntimeError("expected preview ACL failure")
 
     module.ensure_preview_nginx_access = grant_access
 
@@ -7231,11 +7234,12 @@ def run_case(
         clone_root,
         db_path=case_root / "polyscope.db",
     )
+    marker_exists = (worktree / module.PROVISION_MARKER_FILENAME).exists()
     temporary_directory.cleanup()
-    return order, provisioned, failures
+    return order, provisioned, failures, marker_exists
 
 
-failure_order, failure_provisioned, failure_details = run_case(
+failure_order, failure_provisioned, failure_details, failure_marker_exists = run_case(
     marker_hit=False,
     setup_fails=True,
 )
@@ -7245,8 +7249,9 @@ assert failure_order == [
 ], failure_order
 assert failure_provisioned == []
 assert len(failure_details) == 1
+assert not failure_marker_exists
 
-marker_order, marker_provisioned, marker_failures = run_case(
+marker_order, marker_provisioned, marker_failures, marker_marker_exists = run_case(
     marker_hit=True,
     setup_fails=False,
 )
@@ -7256,8 +7261,9 @@ assert marker_order == [
 ], marker_order
 assert marker_provisioned == []
 assert marker_failures == []
+assert not marker_marker_exists
 
-success_order, success_provisioned, success_failures = run_case(
+success_order, success_provisioned, success_failures, success_marker_exists = run_case(
     marker_hit=False,
     setup_fails=False,
 )
@@ -7268,8 +7274,23 @@ assert success_order == [
 ], success_order
 assert success_provisioned == ["frontend:workspace"]
 assert success_failures == []
+assert success_marker_exists
 
-invalid_order, invalid_provisioned, invalid_failures = run_case(
+acl_failure_order, acl_failure_provisioned, acl_failure_details, acl_failure_marker_exists = run_case(
+    marker_hit=False,
+    setup_fails=False,
+    grant_fails=True,
+)
+assert acl_failure_order == [
+    "validate",
+    "setup",
+    "grant",
+], acl_failure_order
+assert acl_failure_provisioned == []
+assert len(acl_failure_details) == 1
+assert not acl_failure_marker_exists
+
+invalid_order, invalid_provisioned, invalid_failures, invalid_marker_exists = run_case(
     marker_hit=False,
     setup_fails=False,
     provisionable=False,
@@ -7279,8 +7300,9 @@ assert invalid_order == [
 ], invalid_order
 assert invalid_provisioned == []
 assert invalid_failures == []
+assert not invalid_marker_exists
 
-canonical_order, canonical_provisioned, canonical_failures = run_case(
+canonical_order, canonical_provisioned, canonical_failures, canonical_marker_exists = run_case(
     marker_hit=False,
     setup_fails=False,
     canonical_validation_fails=True,
@@ -7292,6 +7314,7 @@ assert canonical_order == [
 ], canonical_order
 assert canonical_provisioned == []
 assert len(canonical_failures) == 2
+assert not canonical_marker_exists
 
 
 def run_revoke_case(
@@ -7496,7 +7519,7 @@ def fail_source_validation(*_args, **_kwargs) -> None:
 
 module.validate_repo_instruction_files = fail_source_validation
 assert module.main() == 1
-assert main_order == ["lock-enter", "revoke", "validate", "lock-exit"], main_order
+assert main_order == ["lock-enter", "validate", "lock-exit"], main_order
 
 main_order.clear()
 module.parse_args = lambda: SimpleNamespace(
@@ -7507,7 +7530,7 @@ module.parse_args = lambda: SimpleNamespace(
     workspace_root=Path("/tmp/unused-workspace-root"),
 )
 assert module.main() == 1
-assert main_order == ["lock-enter", "revoke", "validate", "lock-exit"], main_order
+assert main_order == ["lock-enter", "validate", "lock-exit"], main_order
 
 rollout_order: list[str] = []
 with tempfile.TemporaryDirectory() as temporary_directory:
@@ -7549,12 +7572,45 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 
     assert module.run_rollout(args) == 0
     assert rollout_order == [
-        "revoke",
         "validate",
+        "revoke",
         "provision",
         "manifest",
         "install",
     ], rollout_order
+
+provision_order: list[str] = []
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    args = SimpleNamespace(
+        clone_root=temporary_root / "clones",
+        db_path=temporary_root / "polyscope.db",
+        install_nginx=False,
+        nginx_http2_syntax="modern",
+        nginx_output=temporary_root / "preview.nginx.conf",
+        polyscope_api_base="http://127.0.0.1:4321/api",
+        provision_worktrees=True,
+        repo_state_file=temporary_root / "repo-state.json",
+        skip_db_sync=True,
+        skip_local_configs=True,
+        summary_output=None,
+        workspace_root=temporary_root / "workspace",
+    )
+    args.clone_root.mkdir()
+
+    module.build_repo_specs = lambda _workspace_root: {}
+    module.revoke_all_preview_nginx_access = lambda _clone_root: provision_order.append("revoke")
+    module.validate_repo_instruction_files = lambda *_args: provision_order.append("validate")
+    module.validate_repo_local_configs = lambda _repo_specs: None
+    module.load_repo_state = lambda _path: {}
+    module.render_nginx_config = lambda *_args, **_kwargs: "rendered\n"
+    module.provision_worktrees = lambda *_args, **_kwargs: (
+        provision_order.append("provision") or ([], [], [])
+    )
+    module.build_summary = lambda *_args: {}
+
+    assert module.run_rollout(args) == 0
+    assert provision_order == ["validate", "provision"], provision_order
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"

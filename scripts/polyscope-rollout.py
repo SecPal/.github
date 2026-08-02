@@ -4274,9 +4274,9 @@ def provision_worktrees(
                 if linked_setup_context:
                     marker_payload["linked_workspaces"] = linked_setup_context
 
-                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
                 if preview_enabled:
                     ensure_preview_nginx_access(clone_root, locked_worktree_path)
+                marker_path.write_text(json.dumps(marker_payload, indent=2) + "\n")
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = str(error)
@@ -5053,13 +5053,6 @@ def run_rollout(args: argparse.Namespace) -> int:
     repo_specs = build_repo_specs(args.workspace_root)
     validated_instruction_roots: set[pathlib.Path] = set()
 
-    if args.provision_worktrees or args.install_nginx:
-        try:
-            revoke_all_preview_nginx_access(args.clone_root)
-        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-            print(f"Failed to revoke preview access: {error}", file=sys.stderr)
-            return 1
-
     try:
         validate_repo_instruction_files(repo_specs, validated_instruction_roots)
     except CanonicalInstructionValidationError as error:
@@ -5087,6 +5080,17 @@ def run_rollout(args: argparse.Namespace) -> int:
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
     failed_provision_worktrees: list[dict[str, str]] = []
+    if args.install_nginx:
+        # The routine worktree provisioner must preserve established previews:
+        # new worktrees inherit a deny-by-default ACL, while a global revoke
+        # would let one failed bootstrap take every preview offline. A full
+        # Nginx rollout reconciles that broader boundary only after all its
+        # prerequisites have completed.
+        try:
+            revoke_all_preview_nginx_access(args.clone_root)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            print(f"Failed to revoke preview access: {error}", file=sys.stderr)
+            return 1
     if args.provision_worktrees or args.install_nginx:
         provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
             repo_state,
