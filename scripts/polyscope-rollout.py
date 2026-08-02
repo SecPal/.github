@@ -75,6 +75,7 @@ MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
 NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
 API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
 API_REFRESH_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_REFRESH__"
+FRONTEND_PREVIEW_BUILD_BINARIES = ("cross-env", "vite")
 API_QUEUE_WORKER_COMMAND = (
     "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default "
     "--sleep=3 --tries=3"
@@ -1562,7 +1563,7 @@ for env_name in (".env.local", ".env.preview.local", ".env.production.local"):
     return f"python3 -c {shlex.quote(script)}"
 
 
-def build_verified_npm_ci_command() -> str:
+def build_verified_npm_ci_command(*, required_binaries: tuple[str, ...] = ()) -> str:
     remove_node_modules_script = textwrap.dedent(
         """\
 import os
@@ -1600,9 +1601,11 @@ if last_error is not None:
         """
     ).strip()
 
-    validate_install_script = textwrap.dedent(
-        """\
+    validate_install_script = (
+        textwrap.dedent(
+            """\
 import json
+import os
 from pathlib import Path
 
 package_json = Path("package.json")
@@ -1627,6 +1630,9 @@ required_paths = []
 if declared_packages:
     required_paths.append(Path("node_modules/.package-lock.json"))
 required_paths.extend(Path("node_modules") / package / "package.json" for package in sorted(required_packages))
+required_binary_paths = [
+    Path("node_modules/.bin") / binary for binary in __REQUIRED_BINARIES__
+]
 if "typescript" in declared_packages:
     required_paths.extend(
         [
@@ -1638,10 +1644,16 @@ if "@types/node" in declared_packages:
     required_paths.append(Path("node_modules/@types/node/package.json"))
 
 missing = [str(path) for path in required_paths if not path.is_file()]
-if missing:
+unusable_binaries = [
+    str(path) for path in required_binary_paths if not path.is_file() or not os.access(path, os.X_OK)
+]
+if missing or unusable_binaries:
     raise SystemExit(1)
-        """
-    ).strip()
+            """
+        )
+        .strip()
+        .replace("__REQUIRED_BINARIES__", repr(required_binaries))
+    )
 
     return textwrap.dedent(
         f"""\
@@ -1831,6 +1843,10 @@ with lock_path.open("w") as lock_file:
 
 
 def build_frontend_preview_build_watch_command() -> str:
+    build_binary_paths_source = "\n".join(
+        f'            Path({json.dumps(f"node_modules/.bin/{binary}")}),'
+        for binary in FRONTEND_PREVIEW_BUILD_BINARIES
+    )
     script = textwrap.dedent(
         f"""\
 import hashlib
@@ -1860,8 +1876,7 @@ watch_files = [
             Path("node_modules/.package-lock.json"),
 ]
 build_binary_paths = [
-            Path("node_modules/.bin/cross-env"),
-            Path("node_modules/.bin/vite"),
+{build_binary_paths_source}
 ]
 watch_suffixes = {
             ".css",
@@ -1881,9 +1896,13 @@ watch_suffixes = {
 def iter_watch_paths():
     seen = set()
 
-    # npm may create command shims one at a time. Treat them as one readiness
-    # signal so a partially completed install cannot trigger a premature build.
-    ready_build_binary_paths = build_binary_paths if all(path.is_file() for path in build_binary_paths) else []
+    # npm may create and chmod command shims one at a time. Treat executable
+    # shims as one readiness signal so a partial install cannot trigger a build.
+    ready_build_binary_paths = (
+        build_binary_paths
+        if all(path.is_file() and os.access(path, os.X_OK) for path in build_binary_paths)
+        else []
+    )
 
     for path in [*watch_files, *ready_build_binary_paths]:
         if not path.exists():
@@ -1924,11 +1943,13 @@ def snapshot() -> str:
 
     for path in iter_watch_paths():
         try:
-            stat = path.stat()
+            path_stat = path.stat()
         except OSError:
             continue
 
-        state.append(f"{{path.as_posix()}}:{{stat.st_mtime_ns}}:{{stat.st_size}}")
+        state.append(
+            f"{{path.as_posix()}}:{{path_stat.st_mtime_ns}}:{{path_stat.st_size}}:{{path_stat.st_mode}}"
+        )
 
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
@@ -2443,7 +2464,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     build_frontend_preview_env_setup_command(),
-                    build_verified_npm_ci_command(),
+                    build_verified_npm_ci_command(required_binaries=FRONTEND_PREVIEW_BUILD_BINARIES),
                     build_frontend_preview_build_command(),
                 ],
                 "run": [

@@ -2132,7 +2132,7 @@ if "run" in args and "build" in args:
     if os.environ.get("FAKE_NPM_FAIL_ALWAYS_BUILD_127") == "1" or (
         os.environ.get("FAKE_NPM_FAIL_WITHOUT_BUILD_BINARIES") == "1"
         and not all(
-            Path(f"node_modules/.bin/{binary}").exists()
+            (path := Path(f"node_modules/.bin/{binary}")).is_file() and os.access(path, os.X_OK)
             for binary in ("cross-env", "vite")
         )
     ):
@@ -2305,10 +2305,10 @@ assert watch_publish_source.index('replace_file(deferred_index, live_root / "ind
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
 
-# A single build binary is not enough to retry the build. The watcher must wait
-# until both commands needed by the frontend build are available.
+# A single executable build binary is not enough to retry the build. The
+# watcher must wait until both commands needed by the frontend build are ready.
 snapshot_source = watch_script[watch_script.index("watch_directories =") : watch_script.index("def replace_file")]
-snapshot_scope = {"hashlib": hashlib}
+snapshot_scope = {"hashlib": hashlib, "os": os}
 exec("from pathlib import Path\n" + snapshot_source, snapshot_scope)
 original_cwd = pathlib.Path.cwd()
 try:
@@ -2319,6 +2319,10 @@ try:
     frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
     assert snapshot_scope["snapshot"]() == initial_snapshot
     frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
+    assert snapshot_scope["snapshot"]() == initial_snapshot
+    frontend_worktree.joinpath("node_modules/.bin/cross-env").chmod(0o755)
+    assert snapshot_scope["snapshot"]() == initial_snapshot
+    frontend_worktree.joinpath("node_modules/.bin/vite").chmod(0o755)
     assert snapshot_scope["snapshot"]() != initial_snapshot
 finally:
     os.chdir(original_cwd)
@@ -2354,6 +2358,10 @@ frontend_worktree.joinpath("node_modules").mkdir(exist_ok=True)
 frontend_worktree.joinpath("node_modules/.bin").mkdir(exist_ok=True)
 frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
 frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
+time.sleep(0.2)
+assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1"
+frontend_worktree.joinpath("node_modules/.bin/cross-env").chmod(0o755)
+frontend_worktree.joinpath("node_modules/.bin/vite").chmod(0o755)
 for _ in range(20):
     if frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2":
         break
@@ -4088,7 +4096,7 @@ fixture.mkdir()
 fake_bin.mkdir()
 fixture.joinpath("package.json").write_text(
     '{"name":"retry","version":"1.0.0","dependencies":{"left-pad":"1.3.0"},'
-    '"devDependencies":{"vite":"8.1.5"}}\n'
+    '"devDependencies":{"cross-env":"10.1.0","vite":"8.1.5"}}\n'
 )
 fixture.joinpath("package-lock.json").write_text(
     '{"name":"retry","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"retry","version":"1.0.0"},"node_modules/left-pad":{"version":"1.3.0"}}}\n'
@@ -4105,9 +4113,16 @@ Path("node_modules").mkdir(exist_ok=True)
 Path("node_modules/.package-lock.json").write_text("{}\\n")
 Path("node_modules/left-pad").mkdir(exist_ok=True)
 Path("node_modules/left-pad/package.json").write_text("{}\\n")
+for package in ("cross-env", "vite"):
+    package_path = Path("node_modules") / package
+    package_path.mkdir(exist_ok=True)
+    package_path.joinpath("package.json").write_text("{}\\n")
 if attempt > 1:
-    Path("node_modules/vite").mkdir(exist_ok=True)
-    Path("node_modules/vite/package.json").write_text("{}\\n")
+    Path("node_modules/.bin").mkdir(exist_ok=True)
+    for binary in ("cross-env", "vite"):
+        binary_path = Path("node_modules/.bin") / binary
+        binary_path.write_text("#!/bin/sh\\nexit 0\\n")
+        binary_path.chmod(0o755)
 sys.exit(0)
 """
 )
@@ -4121,7 +4136,12 @@ spec.loader.exec_module(module)
 env = os.environ.copy()
 env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
 result = subprocess.run(
-    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    [
+        "bash",
+        "-c",
+        "set -euo pipefail; "
+        + module.build_verified_npm_ci_command(required_binaries=module.FRONTEND_PREVIEW_BUILD_BINARIES),
+    ],
     cwd=fixture,
     env=env,
     capture_output=True,
@@ -4129,6 +4149,10 @@ result = subprocess.run(
 )
 assert result.returncode == 0, result.stderr
 assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "2"
+for binary in module.FRONTEND_PREVIEW_BUILD_BINARIES:
+    binary_path = fixture / "node_modules/.bin" / binary
+    assert binary_path.is_file()
+    assert os.access(binary_path, os.X_OK)
 PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
@@ -4982,11 +5006,15 @@ cat >"$fake_exec_dir/npm" <<'STUB'
 #!/usr/bin/env bash
 printf 'npm:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
 if [[ "$*" == *" ci"* || "$1" == "ci" ]]; then
-    mkdir -p node_modules/typescript/lib node_modules/@types/node
+    mkdir -p node_modules/typescript/lib node_modules/@types/node node_modules/.bin
     printf '{}\n' > node_modules/.package-lock.json
     printf '// fake lib\n' > node_modules/typescript/lib/lib.es2020.d.ts
     printf '// fake lib\n' > node_modules/typescript/lib/lib.dom.d.ts
     printf '{ "name": "@types/node" }\n' > node_modules/@types/node/package.json
+    for binary in cross-env vite; do
+        printf '#!/usr/bin/env bash\nexit 0\n' > "node_modules/.bin/$binary"
+        chmod +x "node_modules/.bin/$binary"
+    done
 fi
 if [[ "$*" == *"run build"* ]]; then
     out_dir="dist"
