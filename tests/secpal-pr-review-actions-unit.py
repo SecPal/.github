@@ -3720,8 +3720,30 @@ class RegistryTests(TestCase):
         self.assertEqual(deployment["default_branch"], "main")
         self.assertEqual(deployment["allowed_base_repositories"], ["SecPal/deployment"])
         self.assertEqual(deployment["reviewer_identities"], [])
-        self.assertEqual(deployment["focused_validation"], [])
-        self.assertEqual(deployment["required_local_validation"], [])
+        self.assertEqual(
+            deployment["focused_validation"],
+            [
+                {
+                    "argv": ["./scripts/local-integration.sh"],
+                    "working_directory": ".",
+                    "purpose": (
+                        "Build and exercise the complete local API/frontend "
+                        "integration stack"
+                    ),
+                    "execution_policy": "focused-only",
+                }
+            ],
+        )
+        self.assertEqual(
+            deployment["required_local_validation"],
+            [
+                {
+                    "argv": ["./scripts/preflight.sh"],
+                    "working_directory": ".",
+                    "purpose": "Run the deterministic deployment repository preflight",
+                }
+            ],
+        )
         self.assertEqual(
             deployment["signature_policy"],
             {
@@ -4008,6 +4030,27 @@ class RegistryTests(TestCase):
                 ["npm", "run", "test:container"],
                 ["npm", "run", "test:e2e:container"],
             ],
+        )
+
+    def test_deployment_validation_binding_separates_preflight_from_integration(
+        self,
+    ) -> None:
+        repository = actions.select_repository(
+            actions.load_registry(), "SecPal/deployment"
+        )
+
+        self.assertEqual(
+            [command["argv"] for command in actions._complete_validation_commands(repository)],
+            [["./scripts/preflight.sh"]],
+        )
+        binding = actions._fast_registry_binding(repository)
+        self.assertEqual(
+            [command["argv"] for command in binding["validation"]],
+            [["./scripts/preflight.sh"]],
+        )
+        self.assertEqual(
+            [command["argv"] for command in binding["focused_only_validation"]],
+            [["./scripts/local-integration.sh"]],
         )
 
     def test_required_validation_rejects_focused_only_execution(self) -> None:
@@ -6204,6 +6247,18 @@ class FastPathTests(TestCase):
 
 
 class PolicyScriptTests(TestCase):
+    def test_deployment_manual_gate_count_assertion_has_diagnostic(self) -> None:
+        policy = (REPO_ROOT / "tests/secpal-pr-review-skill-policy.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'assert len(deployment["manual_gates"]) == 1, (\n'
+            '    "SecPal/deployment must define exactly one manual gate"\n'
+            ")",
+            policy,
+        )
+
     def test_reuse_precommit_hook_provisions_the_pinned_tool(self) -> None:
         pre_commit = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
         reuse_hook = pre_commit.split("  # Code formatting", 1)[0]

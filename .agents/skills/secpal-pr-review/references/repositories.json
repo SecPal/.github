@@ -560,8 +560,21 @@
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/deployment"],
       "reviewer_identities": [],
-      "focused_validation": [],
-      "required_local_validation": [],
+      "focused_validation": [
+        {
+          "argv": ["./scripts/local-integration.sh"],
+          "working_directory": ".",
+          "purpose": "Build and exercise the complete local API/frontend integration stack",
+          "execution_policy": "focused-only"
+        }
+      ],
+      "required_local_validation": [
+        {
+          "argv": ["./scripts/preflight.sh"],
+          "working_directory": ".",
+          "purpose": "Run the deterministic deployment repository preflight"
+        }
+      ],
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
@@ -573,7 +586,7 @@
         "expected_skipped": "block"
       },
       "manual_gates": [
-        "Do not deploy, access deployment infrastructure, or use environment-connected validation; this repository currently contains only a governance bootstrap."
+        "The deterministic `./scripts/preflight.sh` target is required. The Docker-backed `./scripts/local-integration.sh` target may be selected when Compose, container roles, runtime secrets, PostgreSQL, Valkey, queue, cache, shared storage, gateway, CORS, Sanctum, browser integration, or lifecycle or cleanup behavior is affected, but requires explicit current authorization for Docker daemon access and outbound GitHub, container-registry, and package-registry network access. Authorization from an earlier task does not carry over. Registry login, image publishing, image push, prune, production infrastructure, public exposure, deployment, live systems, and real secrets remain prohibited."
       ],
       "unsupported_operations": [
         "REVIEW_REQUEST",
