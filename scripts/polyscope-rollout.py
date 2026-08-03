@@ -3473,6 +3473,64 @@ def resolve_git_dir(repo_path: pathlib.Path) -> pathlib.Path:
     return git_path
 
 
+def resolve_git_hooks_dir(worktree_path: pathlib.Path) -> pathlib.Path:
+    git = resolve_executable("git")
+    if git is None:
+        raise RuntimeError(f"git is required to resolve hooks for {worktree_path}")
+
+    try:
+        result = subprocess.run(
+            [git, "rev-parse", "--path-format=absolute", "--git-path", "hooks"],
+            cwd=worktree_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"unable to resolve active Git hooks for {worktree_path}") from error
+
+    hooks_path = result.stdout.removesuffix("\n")
+    if not hooks_path:
+        raise RuntimeError(f"git returned an empty hooks path for {worktree_path}")
+    if "\n" in hooks_path or "\r" in hooks_path:
+        raise RuntimeError(f"git returned an invalid hooks path for {worktree_path}")
+
+    hooks_dir = pathlib.Path(hooks_path)
+    if not hooks_dir.is_absolute():
+        raise RuntimeError(f"git returned a non-absolute hooks path for {worktree_path}: {hooks_path}")
+    return hooks_dir
+
+
+def resolve_git_worktree_paths(worktree_path: pathlib.Path) -> set[pathlib.Path]:
+    git = resolve_executable("git")
+    if git is None:
+        raise RuntimeError(f"git is required to resolve worktrees for {worktree_path}")
+
+    try:
+        result = subprocess.run(
+            [git, "worktree", "list", "--porcelain", "-z"],
+            cwd=worktree_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"unable to resolve Git worktrees for {worktree_path}") from error
+
+    worktree_paths: set[pathlib.Path] = set()
+    for field in result.stdout.split("\0"):
+        if not field.startswith("worktree "):
+            continue
+        candidate = pathlib.Path(field.removeprefix("worktree "))
+        if not candidate.is_absolute():
+            raise RuntimeError(f"git returned a non-absolute worktree path for {worktree_path}: {candidate}")
+        worktree_paths.add(candidate.resolve(strict=False))
+
+    if not worktree_paths:
+        raise RuntimeError(f"git returned no worktree paths for {worktree_path}")
+    return worktree_paths
+
+
 def ensure_exclude(repo_path: pathlib.Path, entries: set[str] | None = None) -> None:
     exclude_path = resolve_git_dir(repo_path) / "info" / "exclude"
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4163,7 +4221,7 @@ def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
 
 
 def remove_managed_pre_push_hook(worktree_path: pathlib.Path) -> None:
-    hooks_dir = resolve_git_dir(worktree_path) / "hooks"
+    hooks_dir = resolve_git_hooks_dir(worktree_path)
     hook_path = hooks_dir / "pre-push"
     if not hook_path.is_symlink():
         return
@@ -4173,7 +4231,13 @@ def remove_managed_pre_push_hook(worktree_path: pathlib.Path) -> None:
     except (OSError, RuntimeError):
         return
     managed_target = (worktree_path / "scripts" / "preflight.sh").resolve(strict=False)
-    if linked_target == managed_target:
+    managed_targets = {managed_target}
+    if linked_target != managed_target:
+        managed_targets.update(
+            path.joinpath("scripts", "preflight.sh").resolve(strict=False)
+            for path in resolve_git_worktree_paths(worktree_path)
+        )
+    if linked_target in managed_targets:
         hook_path.unlink()
 
 
