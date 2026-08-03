@@ -3788,6 +3788,258 @@ assert popen_calls[0][1]["stdout"] is subprocess.PIPE, popen_calls
 assert popen_calls[0][1]["stderr"] is subprocess.STDOUT, popen_calls
 PY
 
+# Binding a new physical worktree to pre-existing canonical preview storage must
+# initialize it from scratch once. Retries in the same worktree must retain the
+# reset intent until setup succeeds, then return to incremental migrations.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture_root = workspace / "reused-preview-storage-fixture"
+source_api = fixture_root / "source-api"
+api_worktree = fixture_root / "clones" / "api12345" / "mighty-hyena-1c04a2fb"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text(
+    "DB_CONNECTION=pgsql\n"
+    "DB_HOST=127.0.0.1\n"
+    "DB_PORT=5432\n"
+    "DB_DATABASE=secpal\n"
+    "DB_USERNAME=secpal_app\n"
+    "DB_PASSWORD=\n"
+)
+api_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+module.postgres_role_can_create_databases = lambda env_values, base_database: True
+module.ensure_postgres_preview_database = (
+    lambda env_values, base_database, preview_database: False
+)
+
+ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__mighty_hyena", target
+env_values = module.load_env_assignments(api_worktree / ".env")
+assert env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "1", env_values
+
+calls = []
+
+def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
+    calls.append(tuple(command))
+
+def fail_after_reused_storage_reset(worktree_path, command, *, command_env):
+    calls.append(tuple(command))
+    if command == ["php", "artisan", "db:seed", "--force"]:
+        raise RuntimeError("expected post-migration setup failure")
+
+module.run_api_worktree_bootstrap_command = fail_after_reused_storage_reset
+try:
+    module.bootstrap_api_worktree(api_worktree, source_api)
+except RuntimeError as failure:
+    assert str(failure) == "expected post-migration setup failure", failure
+else:
+    raise AssertionError("expected reused-storage setup failure")
+assert ("php", "artisan", "migrate:fresh", "--force") in calls, calls
+env_values = module.load_env_assignments(api_worktree / ".env")
+assert env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "1", env_values
+
+calls.clear()
+module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
+ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__mighty_hyena", target
+assert ("php", "artisan", "migrate:fresh", "--force") in calls, calls
+assert ("php", "artisan", "migrate", "--force") not in calls, calls
+env_values = module.load_env_assignments(api_worktree / ".env")
+assert env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "", env_values
+
+calls.clear()
+ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__mighty_hyena", target
+assert ("php", "artisan", "migrate", "--force") in calls, calls
+assert ("php", "artisan", "migrate:fresh", "--force") not in calls, calls
+
+created_worktree = fixture_root / "clones" / "api12345" / "new-lynx-9a0b1c2d"
+created_worktree.mkdir(parents=True)
+created_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+module.ensure_postgres_preview_database = (
+    lambda env_values, base_database, preview_database: True
+)
+ready, target = module.ensure_api_worktree_ready(created_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__new_lynx", target
+created_env_values = module.load_env_assignments(created_worktree / ".env")
+assert created_env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "", created_env_values
+
+schema_worktree = fixture_root / "clones" / "api12345" / "schema-owl-3d4e5f6a"
+schema_worktree.mkdir(parents=True)
+schema_worktree.joinpath(".env").write_text(source_api.joinpath(".env").read_text())
+module.postgres_role_can_create_databases = lambda env_values, base_database: False
+module.ensure_postgres_preview_schema = (
+    lambda env_values, base_database, preview_schema: False
+)
+ready, target = module.ensure_api_worktree_ready(schema_worktree, source_api)
+assert ready is True
+assert target == "schema:secpal:secpal__preview__schema_owl", target
+schema_env_values = module.load_env_assignments(schema_worktree / ".env")
+assert schema_env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "1", schema_env_values
+PY
+
+# A migration history can survive while tables disappear from a reused preview
+# database. Bootstrap must recognize that exact isolated-preview drift and retry
+# once from a fresh preview database without masking an actual migration defect.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+source_api = workspace / "schema-drift-recovery-fixture" / "source-api"
+api_worktree = workspace / "schema-drift-recovery-fixture" / "clones" / "api12345" / "mighty-hyena-1c04a2fb"
+source_api.mkdir(parents=True, exist_ok=True)
+api_worktree.mkdir(parents=True, exist_ok=True)
+source_api.joinpath(".env").write_text("DB_CONNECTION=sqlite\n")
+api_worktree.joinpath(".env").write_text(
+    "APP_KEY=base64:preview\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+    "DB_DATABASE=secpal__preview__mighty_hyena\n"
+)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+missing_relation_output = (
+    "SQLSTATE[42P01]: Undefined table: 7 ERROR:  relation \"model_has_roles\" "
+    "does not exist\n"
+)
+calls = []
+migration_attempts = [0]
+
+def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
+    calls.append(tuple(command))
+    if command == ["php", "artisan", "migrate", "--force"]:
+        migration_attempts[0] += 1
+        if migration_attempts[0] == 1:
+            raise subprocess.CalledProcessError(1, command, output=missing_relation_output)
+
+module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
+
+ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
+assert ready is True
+assert target == "database:secpal__preview__mighty_hyena", target
+assert calls == [
+    ("composer", "install"),
+    ("php", "artisan", "config:clear"),
+    ("php", "artisan", "migrate", "--force"),
+    ("composer", "install"),
+    ("php", "artisan", "config:clear"),
+    ("php", "artisan", "migrate:fresh", "--force"),
+    ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
+    ("php", "artisan", "db:seed", "--force"),
+    ("php", "artisan", "tinker", f"--execute={module.build_api_preview_test_user_tinker_script()}"),
+], calls
+
+error = subprocess.CalledProcessError(
+    1,
+    ["php", "artisan", "migrate", "--force"],
+    output=missing_relation_output,
+)
+assert module.is_recoverable_preview_schema_drift(error)
+assert module.is_recoverable_preview_schema_drift(
+    subprocess.CalledProcessError(
+        1,
+        ["php", "artisan", "migrate", "--force"],
+        output=(
+            "SQLSTATE [ 42P01 ]: Undefined table: relation\n"
+            " \"model_has_roles\" does  \n not exist"
+        ),
+    )
+), "console wrapping must not defeat the exact PostgreSQL error-code classification"
+assert module.is_isolated_api_preview_storage_target(
+    "database:secpal__preview__mighty_hyena"
+)
+assert module.is_isolated_api_preview_storage_target(
+    "schema:secpal:secpal__preview__mighty_hyena"
+)
+for unisolated_target in (
+    None,
+    "database:secpal",
+    "database:__preview__mighty_hyena",
+    "database:secpal__preview__",
+    "schema:secpal:public",
+    "schema::secpal__preview__mighty_hyena",
+    "schema:secpal__preview__base:public",
+):
+    assert not module.is_isolated_api_preview_storage_target(unisolated_target), unisolated_target
+
+for ordinary_output in (
+    "ordinary migration failure",
+    "SQLSTATE[23505]: Unique violation: duplicate key value violates unique constraint",
+):
+    assert not module.is_recoverable_preview_schema_drift(
+        subprocess.CalledProcessError(
+            1,
+            ["php", "artisan", "migrate", "--force"],
+            output=ordinary_output,
+        )
+    ), ordinary_output
+
+# Even an exact missing-table failure must remain fatal for a non-preview target.
+api_worktree.joinpath(".env").write_text(
+    "APP_KEY=base64:preview\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=database\n"
+    "DB_DATABASE=secpal\n"
+)
+calls.clear()
+migration_attempts[0] = 0
+try:
+    module.bootstrap_api_worktree(api_worktree, source_api)
+except subprocess.CalledProcessError as failure:
+    assert failure.output == missing_relation_output, failure.output
+else:
+    raise AssertionError("unisolated database must not authorize destructive schema-drift recovery")
+assert ("php", "artisan", "migrate:fresh", "--force") not in calls, calls
+
+# A failed fresh retry must propagate immediately without a third migration attempt.
+api_worktree.joinpath(".env").write_text(
+    "APP_KEY=base64:preview\n"
+    "POLYSCOPE_PREVIEW_STORAGE_MODE=schema\n"
+    "POLYSCOPE_PREVIEW_DATABASE_BASE=secpal\n"
+    "POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__mighty_hyena\n"
+    "DB_DATABASE=secpal\n"
+)
+calls.clear()
+
+def fail_incremental_and_fresh(worktree_path, command, *, command_env):
+    calls.append(tuple(command))
+    if command == ["php", "artisan", "migrate", "--force"]:
+        raise subprocess.CalledProcessError(1, command, output=missing_relation_output)
+    if command == ["php", "artisan", "migrate:fresh", "--force"]:
+        raise subprocess.CalledProcessError(1, command, output="real fresh migration failure")
+
+module.run_api_worktree_bootstrap_command = fail_incremental_and_fresh
+try:
+    module.bootstrap_api_worktree(api_worktree, source_api)
+except subprocess.CalledProcessError as failure:
+    assert failure.output == "real fresh migration failure", failure.output
+else:
+    raise AssertionError("fresh migration failure must propagate")
+assert calls.count(("php", "artisan", "migrate", "--force")) == 1, calls
+assert calls.count(("php", "artisan", "migrate:fresh", "--force")) == 1, calls
+PY
+
 # A stale per-worktree KEK cannot unwrap tenant keys left in an isolated
 # preview database. Bootstrap must recognize that exact failure, discard only
 # the preview key material, and retry once from a fresh preview database.
@@ -4794,6 +5046,13 @@ grep -qF "set \$php_root \$api_public;" "$nginx_output"
 grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
+grep -qF "set \$preview_ready 0;" "$nginx_output"
+grep -qF "set \$preview_ready 1;" "$nginx_output"
+grep -qF "error_page 425 =200 @preview_provisioning;" "$nginx_output"
+grep -qF "location @preview_provisioning {" "$nginx_output"
+grep -qF 'add_header Refresh "2" always;' "$nginx_output"
+grep -qF "if (\$preview_ready = 0) {" "$nginx_output"
+grep -qF "Preview wird vorbereitet" "$nginx_output"
 grep -qF "set \$preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;" "$nginx_output"
 grep -qF "set \$preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;" "$nginx_output"
 grep -qF "disable_symlinks on from=\$preview_worktree;" "$nginx_output"
@@ -4848,6 +5107,26 @@ extract_nginx_block() {
         }
     ' "$2"
 }
+if [[ "$(grep -cF "set \$preview_ready 1;" "$nginx_output")" -ne 1 ]]; then
+    echo "preview readiness must be derived exactly once from the selected repository entrypoint" >&2
+    exit 1
+fi
+grep -qF "set \$preview_entrypoint /home/secpal/.polyscope/__missing_preview_entrypoint__;" "$nginx_output"
+grep -qF "if (-f \$preview_entrypoint) {" "$nginx_output"
+for _repo_entrypoint in \
+    "secpal-app:\$secpal_app_dist/index.html" \
+    "guardguide-de:\$guardguide_de_dist/index.html" \
+    "frontend:\$frontend_dist/index.html" \
+    "guardguide:\$guardguide_public/index.php" \
+    "api:\$api_public/index.php"; do
+    _repo="${_repo_entrypoint%%:*}"
+    _entrypoint="${_repo_entrypoint#*:}"
+    _repo_block="$(extract_nginx_block "if (\$repo = ${_repo}) {" "$nginx_output")"
+    if ! printf '%s\n' "$_repo_block" | grep -qF "set \$preview_entrypoint ${_entrypoint};"; then
+        echo "nginx repository route ${_repo} must select its own readiness entrypoint" >&2
+        exit 1
+    fi
+done
 if grep -qF "ssi on;" "$nginx_output"; then
     echo "preview nginx config must not enable SSI for workspace-controlled preview HTML" >&2
     exit 1
@@ -4864,7 +5143,7 @@ for _shared_loc in "location = / {" "location = /index.html {" "location @previe
     fi
 done
 unset -f extract_nginx_block
-unset _shared_loc _shared_block
+unset _repo_entrypoint _repo _entrypoint _repo_block _shared_loc _shared_block
 # Immutable-asset location blocks must carry the full security header set; nginx add_header
 # inheritance is blocked whenever a location defines its own add_header directives, so each
 # block must repeat every header explicitly rather than relying on the parent server block.
@@ -6966,7 +7245,7 @@ if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polysco
   echo "provision service must expose failures without suppressing them" >&2
   exit 1
 fi
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees --refresh-nginx' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-worktree-provision.path"; then
     echo "worktree provision watcher must not retain an unmanaged repository" >&2
@@ -7789,6 +8068,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         clone_root=temporary_root / "clones",
         db_path=temporary_root / "polyscope.db",
         install_nginx=True,
+        refresh_nginx=False,
         nginx_http2_syntax="modern",
         nginx_manifest_output=temporary_root / "nginx-manifest.json",
         nginx_output=temporary_root / "preview.nginx.conf",
@@ -7801,6 +8081,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         workspace_root=temporary_root / "workspace",
     )
     args.clone_root.mkdir()
+    assert module.build_preview_workspace_redirects({}, args.clone_root) == {}
 
     module.build_repo_specs = lambda _workspace_root: {}
     module.revoke_all_preview_nginx_access = lambda _clone_root: rollout_order.append("revoke")
@@ -7836,6 +8117,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         clone_root=temporary_root / "clones",
         db_path=temporary_root / "polyscope.db",
         install_nginx=False,
+        refresh_nginx=False,
         nginx_http2_syntax="modern",
         nginx_output=temporary_root / "preview.nginx.conf",
         polyscope_api_base="http://127.0.0.1:4321/api",
@@ -7847,6 +8129,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         workspace_root=temporary_root / "workspace",
     )
     args.clone_root.mkdir()
+    assert module.build_preview_workspace_redirects({}, args.clone_root) == {}
 
     module.build_repo_specs = lambda _workspace_root: {}
     module.revoke_all_preview_nginx_access = lambda _clone_root: provision_order.append("revoke")
