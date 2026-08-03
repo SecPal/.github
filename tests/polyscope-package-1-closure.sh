@@ -105,8 +105,12 @@ for executable in ("composer", "npm", "php"):
         f"printf '{executable}:%s\\n' \"$*\" >>\"$NATIVE_SETUP_LOG\"\n"
         f"touch .native-{executable}-invoked\n"
         + (
-            "mkdir -p node_modules\n"
+            "mkdir -p node_modules/.bin\n"
             "printf '{}\\n' >node_modules/.package-lock.json\n"
+            "for binary in cross-env vite; do\n"
+            "    printf '#!/usr/bin/env bash\\nexit 0\\n' >\"node_modules/.bin/$binary\"\n"
+            "    chmod +x \"node_modules/.bin/$binary\"\n"
+            "done\n"
             "if [[ \"${1:-}\" == run && \"${2:-}\" == build && -n \"${VITE_POLYSCOPE_OUTPUT_DIR:-}\" ]]; then\n"
             "    mkdir -p \"$VITE_POLYSCOPE_OUTPUT_DIR\"\n"
             "    printf '<html></html>\\n' >\"$VITE_POLYSCOPE_OUTPUT_DIR/index.html\"\n"

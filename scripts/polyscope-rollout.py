@@ -75,6 +75,7 @@ MODERN_NGINX_HTTP2_VERSION = (1, 25, 1)
 NGINX_HTTP2_SYNTAX_CHOICES = ("modern", "legacy", "auto")
 API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_BOOTSTRAP_SETUP__"
 API_REFRESH_COMMAND_PLACEHOLDER = "__POLYSCOPE_API_REFRESH__"
+FRONTEND_PREVIEW_BUILD_BINARIES = ("cross-env", "vite")
 API_QUEUE_WORKER_COMMAND = (
     "php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default "
     "--sleep=3 --tries=3"
@@ -1562,7 +1563,7 @@ for env_name in (".env.local", ".env.preview.local", ".env.production.local"):
     return f"python3 -c {shlex.quote(script)}"
 
 
-def build_verified_npm_ci_command() -> str:
+def build_verified_npm_ci_command(*, required_binaries: tuple[str, ...] = ()) -> str:
     remove_node_modules_script = textwrap.dedent(
         """\
 import os
@@ -1600,13 +1601,18 @@ if last_error is not None:
         """
     ).strip()
 
-    validate_install_script = textwrap.dedent(
-        """\
+    validate_install_script = (
+        textwrap.dedent(
+            """\
 import json
+import os
 from pathlib import Path
 
 package_json = Path("package.json")
 declared_packages = set()
+required_packages = set()
+optional_packages = set()
+development_packages = set()
 if package_json.is_file():
     try:
         package_data = json.loads(package_json.read_text())
@@ -1617,25 +1623,47 @@ if package_json.is_file():
             section = package_data.get(key, {})
             if isinstance(section, dict):
                 declared_packages.update(name for name in section if isinstance(name, str))
+        section = package_data.get("dependencies", {})
+        if isinstance(section, dict):
+            required_packages.update(name for name in section if isinstance(name, str))
+        section = package_data.get("devDependencies", {})
+        if isinstance(section, dict):
+            development_packages.update(name for name in section if isinstance(name, str))
+        section = package_data.get("optionalDependencies", {})
+        if isinstance(section, dict):
+            optional_packages.update(name for name in section if isinstance(name, str))
+
+required_packages.update(development_packages)
+required_packages.difference_update(optional_packages)
 
 required_paths = []
 if declared_packages:
     required_paths.append(Path("node_modules/.package-lock.json"))
-if "typescript" in declared_packages:
+required_paths.extend(Path("node_modules") / package / "package.json" for package in sorted(required_packages))
+required_binary_paths = [
+    Path("node_modules/.bin") / binary for binary in __REQUIRED_BINARIES__
+]
+if "typescript" in required_packages:
     required_paths.extend(
         [
             Path("node_modules/typescript/lib/lib.es2020.d.ts"),
             Path("node_modules/typescript/lib/lib.dom.d.ts"),
         ]
     )
-if "@types/node" in declared_packages:
+if "@types/node" in required_packages:
     required_paths.append(Path("node_modules/@types/node/package.json"))
 
 missing = [str(path) for path in required_paths if not path.is_file()]
-if missing:
+unusable_binaries = [
+    str(path) for path in required_binary_paths if not path.is_file() or not os.access(path, os.X_OK)
+]
+if missing or unusable_binaries:
     raise SystemExit(1)
-        """
-    ).strip()
+            """
+        )
+        .strip()
+        .replace("__REQUIRED_BINARIES__", repr(required_binaries))
+    )
 
     return textwrap.dedent(
         f"""\
@@ -1825,6 +1853,10 @@ with lock_path.open("w") as lock_file:
 
 
 def build_frontend_preview_build_watch_command() -> str:
+    build_binary_paths_source = "\n".join(
+        f'            Path({json.dumps(f"node_modules/.bin/{binary}")}),'
+        for binary in FRONTEND_PREVIEW_BUILD_BINARIES
+    )
     script = textwrap.dedent(
         f"""\
 import hashlib
@@ -1853,6 +1885,9 @@ watch_files = [
             Path(".env.production.local"),
             Path("node_modules/.package-lock.json"),
 ]
+build_binary_paths = [
+{build_binary_paths_source}
+]
 watch_suffixes = {
             ".css",
             ".html",
@@ -1871,7 +1906,15 @@ watch_suffixes = {
 def iter_watch_paths():
     seen = set()
 
-    for path in watch_files:
+    # npm may create and chmod command shims one at a time. Treat executable
+    # shims as one readiness signal so a partial install cannot trigger a build.
+    ready_build_binary_paths = (
+        build_binary_paths
+        if all(path.is_file() and os.access(path, os.X_OK) for path in build_binary_paths)
+        else []
+    )
+
+    for path in [*watch_files, *ready_build_binary_paths]:
         if not path.exists():
             continue
 
@@ -1910,11 +1953,13 @@ def snapshot() -> str:
 
     for path in iter_watch_paths():
         try:
-            stat = path.stat()
+            path_stat = path.stat()
         except OSError:
             continue
 
-        state.append(f"{{path.as_posix()}}:{{stat.st_mtime_ns}}:{{stat.st_size}}")
+        state.append(
+            f"{{path.as_posix()}}:{{path_stat.st_mtime_ns}}:{{path_stat.st_size}}:{{path_stat.st_mode}}"
+        )
 
     return hashlib.sha256("\\n".join(state).encode("utf-8")).hexdigest()
 
@@ -2429,7 +2474,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [
                     build_frontend_preview_env_setup_command(),
-                    build_verified_npm_ci_command(),
+                    build_verified_npm_ci_command(required_binaries=FRONTEND_PREVIEW_BUILD_BINARIES),
                     build_frontend_preview_build_command(),
                 ],
                 "run": [
@@ -4588,6 +4633,11 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
+
+            # Worktrees are built and published after their preview hostname is
+            # reachable. Do not retain a missing-file or permission result from
+            # that short provisioning window.
+            open_file_cache off;
 
             client_max_body_size 25m;
             index index.html index.php;

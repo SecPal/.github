@@ -1952,6 +1952,7 @@ fi
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
+import hashlib
 import os
 import pathlib
 import shutil
@@ -2131,7 +2132,7 @@ if "run" in args and "build" in args:
     if os.environ.get("FAKE_NPM_FAIL_ALWAYS_BUILD_127") == "1" or (
         os.environ.get("FAKE_NPM_FAIL_WITHOUT_BUILD_BINARIES") == "1"
         and not all(
-            Path(f"node_modules/.bin/{binary}").exists()
+            (path := Path(f"node_modules/.bin/{binary}")).is_file() and os.access(path, os.X_OK)
             for binary in ("cross-env", "vite")
         )
     ):
@@ -2297,16 +2298,38 @@ assert '--outDir' in run_build_source, run_build_source
 assert 'publish_preview_build(stage_dir)' in run_build_source, run_build_source
 assert 'Path("dist")' in watch_script, watch_script
 assert 'Path("node_modules/.package-lock.json")' in watch_script, watch_script
-assert 'Path("node_modules/.bin/cross-env")' not in watch_script, watch_script
-assert 'Path("node_modules/.bin/vite")' not in watch_script, watch_script
+assert 'Path("node_modules/.bin/cross-env")' in watch_script, watch_script
+assert 'Path("node_modules/.bin/vite")' in watch_script, watch_script
 assert watch_publish_source.index('replace_file(deferred_index, live_root / "index.html")') < watch_publish_source.index(
     "prune_live_tree(live_root, stage_dirs, stage_files)"
 ), watch_publish_source
 assert "child.is_symlink()" in watch_script, watch_script
 
-# The watcher can race setup-time npm ci. Dependency installation completes
-# independently after the initial missing-command failure and must trigger one
-# retry via npm's stable hidden lockfile, without a source edit.
+# A single executable build binary is not enough to retry the build. The
+# watcher must wait until both commands needed by the frontend build are ready.
+snapshot_source = watch_script[watch_script.index("watch_directories =") : watch_script.index("def replace_file")]
+snapshot_scope = {"hashlib": hashlib, "os": os}
+exec("from pathlib import Path\n" + snapshot_source, snapshot_scope)
+original_cwd = pathlib.Path.cwd()
+try:
+    os.chdir(frontend_worktree)
+    shutil.rmtree(frontend_worktree / "node_modules", ignore_errors=True)
+    initial_snapshot = snapshot_scope["snapshot"]()
+    frontend_worktree.joinpath("node_modules/.bin").mkdir(parents=True, exist_ok=True)
+    frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
+    assert snapshot_scope["snapshot"]() == initial_snapshot
+    frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
+    assert snapshot_scope["snapshot"]() == initial_snapshot
+    frontend_worktree.joinpath("node_modules/.bin/cross-env").chmod(0o755)
+    assert snapshot_scope["snapshot"]() == initial_snapshot
+    frontend_worktree.joinpath("node_modules/.bin/vite").chmod(0o755)
+    assert snapshot_scope["snapshot"]() != initial_snapshot
+finally:
+    os.chdir(original_cwd)
+
+# The watcher can race setup-time npm ci. When the required build binaries
+# become available after an initial missing-command failure, it must retry once
+# without a source edit.
 frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
 frontend_worktree.joinpath("dist").unlink()
 shutil.rmtree(frontend_worktree / "node_modules", ignore_errors=True)
@@ -2337,7 +2360,15 @@ frontend_worktree.joinpath("node_modules/.bin/cross-env").write_text("ready\\n")
 frontend_worktree.joinpath("node_modules/.bin/vite").write_text("ready\\n")
 time.sleep(0.2)
 assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "1"
-frontend_worktree.joinpath("node_modules/.package-lock.json").write_text("{}\\n")
+frontend_worktree.joinpath("node_modules/.bin/cross-env").chmod(0o755)
+frontend_worktree.joinpath("node_modules/.bin/vite").chmod(0o755)
+for _ in range(20):
+    if frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2":
+        break
+    time.sleep(0.05)
+else:
+    watch_retry_process.kill()
+    raise AssertionError("watcher did not retry after the build binaries became available")
 _watch_retry_stdout, watch_retry_stderr = watch_retry_process.communicate(timeout=5)
 assert watch_retry_process.returncode == 0, watch_retry_stderr
 assert frontend_worktree.joinpath(".fake-npm-build-count").read_text() == "2", watch_retry_stderr
@@ -2348,7 +2379,7 @@ assert "waiting for dependency installation or a source change" in watch_retry_s
 # Permanently unavailable dependencies must wait for a subsequent change, not
 # spin through repeated exit-127 builds.
 frontend_worktree.joinpath(".fake-npm-build-count").write_text("0")
-frontend_worktree.joinpath("node_modules/.package-lock.json").unlink()
+frontend_worktree.joinpath("node_modules/.package-lock.json").unlink(missing_ok=True)
 watch_no_retry_result = subprocess.run(
     ["python3", "-c", bounded_watch_script],
     cwd=frontend_worktree,
@@ -4015,6 +4046,118 @@ result = subprocess.run(
 assert result.returncode == 0, result.stderr
 PY
 
+# An optional dependency overrides a dependency with the same name. npm may
+# therefore complete successfully without installing that package, and the
+# rollout validator must not reject the resulting valid install.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "optional-npm-override-fixture"
+fake_bin = fixture / "fake-bin"
+fixture.mkdir()
+fake_bin.mkdir()
+fixture.joinpath("package.json").write_text(
+    '{"name":"optional-override","version":"1.0.0",'
+    '"dependencies":{"optional-package":"file:./missing-package"},'
+    '"optionalDependencies":{"optional-package":"file:./missing-package"}}\n'
+)
+fixture.joinpath("package-lock.json").write_text(
+    '{"name":"optional-override","version":"1.0.0","lockfileVersion":3,'
+    '"packages":{"":{"name":"optional-override","version":"1.0.0"}}}\n'
+)
+fake_bin.joinpath("npm").write_text(
+    """#!/usr/bin/env python3
+from pathlib import Path
+
+counter_path = Path("npm-ci-attempts.txt")
+attempt = int(counter_path.read_text()) + 1 if counter_path.exists() else 1
+counter_path.write_text(str(attempt))
+Path("node_modules").mkdir(exist_ok=True)
+Path("node_modules/.package-lock.json").write_text("{}\\n")
+"""
+)
+fake_bin.joinpath("npm").chmod(0o755)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    cwd=fixture,
+    env=env,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
+assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "1"
+PY
+
+# npm permits a package to be declared as both a development and optional
+# dependency. The optional edge permits npm ci to succeed without installing
+# that package, so rollout validation must accept the resulting install.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "dev-optional-overlap-fixture"
+fake_bin = fixture / "fake-bin"
+fixture.mkdir()
+fake_bin.mkdir()
+fixture.joinpath("package.json").write_text(
+    '{"name":"dev-optional-overlap","version":"1.0.0",'
+    '"devDependencies":{"required-dev-package":"file:./missing-package"},'
+    '"optionalDependencies":{"required-dev-package":"file:./missing-package"}}\n'
+)
+fixture.joinpath("package-lock.json").write_text(
+    '{"name":"dev-optional-overlap","version":"1.0.0","lockfileVersion":3,'
+    '"packages":{"":{"name":"dev-optional-overlap","version":"1.0.0"}}}\n'
+)
+fake_bin.joinpath("npm").write_text(
+    """#!/usr/bin/env python3
+from pathlib import Path
+
+counter_path = Path("npm-ci-attempts.txt")
+attempt = int(counter_path.read_text()) + 1 if counter_path.exists() else 1
+counter_path.write_text(str(attempt))
+Path("node_modules").mkdir(exist_ok=True)
+Path("node_modules/.package-lock.json").write_text("{}\\n")
+"""
+)
+fake_bin.joinpath("npm").chmod(0o755)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    cwd=fixture,
+    env=env,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 0, result.stderr
+assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "1"
+PY
+
 # GuardGuide preview env setup must write APP_URL for the normalized preview
 # workspace host, not the physical worktree directory basename.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
@@ -4047,8 +4190,9 @@ assert "APP_URL=https://guardguide-steady-otter.preview.secpal.dev" in env_text,
 assert "APP_URL=https://guardguide-Steady Otter.preview.secpal.dev" not in env_text, env_text
 PY
 
-# build_verified_npm_ci_command must retry failed npm ci attempts even though
-# provisioning runs the generated shell under `set -euo pipefail`.
+# build_verified_npm_ci_command must retry a zero-exit npm ci attempt that
+# leaves a declared development dependency incomplete, even though provisioning
+# runs the generated shell under `set -euo pipefail`.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
@@ -4062,7 +4206,10 @@ fixture = workspace / "npm-ci-retry-fixture"
 fake_bin = fixture / "fake-bin"
 fixture.mkdir()
 fake_bin.mkdir()
-fixture.joinpath("package.json").write_text('{"name":"retry","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}\n')
+fixture.joinpath("package.json").write_text(
+    '{"name":"retry","version":"1.0.0","dependencies":{"left-pad":"1.3.0"},'
+    '"devDependencies":{"cross-env":"10.1.0","vite":"8.1.5"}}\n'
+)
 fixture.joinpath("package-lock.json").write_text(
     '{"name":"retry","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"retry","version":"1.0.0"},"node_modules/left-pad":{"version":"1.3.0"}}}\n'
 )
@@ -4074,10 +4221,20 @@ import sys
 counter_path = Path("npm-ci-attempts.txt")
 attempt = int(counter_path.read_text()) + 1 if counter_path.exists() else 1
 counter_path.write_text(str(attempt))
-if attempt == 1:
-    sys.exit(42)
 Path("node_modules").mkdir(exist_ok=True)
 Path("node_modules/.package-lock.json").write_text("{}\\n")
+Path("node_modules/left-pad").mkdir(exist_ok=True)
+Path("node_modules/left-pad/package.json").write_text("{}\\n")
+for package in ("cross-env", "vite"):
+    package_path = Path("node_modules") / package
+    package_path.mkdir(exist_ok=True)
+    package_path.joinpath("package.json").write_text("{}\\n")
+if attempt > 1:
+    Path("node_modules/.bin").mkdir(exist_ok=True)
+    for binary in ("cross-env", "vite"):
+        binary_path = Path("node_modules/.bin") / binary
+        binary_path.write_text("#!/bin/sh\\nexit 0\\n")
+        binary_path.chmod(0o755)
 sys.exit(0)
 """
 )
@@ -4091,7 +4248,12 @@ spec.loader.exec_module(module)
 env = os.environ.copy()
 env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
 result = subprocess.run(
-    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    [
+        "bash",
+        "-c",
+        "set -euo pipefail; "
+        + module.build_verified_npm_ci_command(required_binaries=module.FRONTEND_PREVIEW_BUILD_BINARIES),
+    ],
     cwd=fixture,
     env=env,
     capture_output=True,
@@ -4099,6 +4261,10 @@ result = subprocess.run(
 )
 assert result.returncode == 0, result.stderr
 assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "2"
+for binary in module.FRONTEND_PREVIEW_BUILD_BINARIES:
+    binary_path = fixture / "node_modules/.bin" / binary
+    assert binary_path.is_file()
+    assert os.access(binary_path, os.X_OK)
 PY
 
 # --prepare-api-worktree CLI path: assert --db-path is threaded into ensure_api_worktree_ready
@@ -4952,11 +5118,15 @@ cat >"$fake_exec_dir/npm" <<'STUB'
 #!/usr/bin/env bash
 printf 'npm:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
 if [[ "$*" == *" ci"* || "$1" == "ci" ]]; then
-    mkdir -p node_modules/typescript/lib node_modules/@types/node
+    mkdir -p node_modules/typescript/lib node_modules/@types/node node_modules/.bin
     printf '{}\n' > node_modules/.package-lock.json
     printf '// fake lib\n' > node_modules/typescript/lib/lib.es2020.d.ts
     printf '// fake lib\n' > node_modules/typescript/lib/lib.dom.d.ts
     printf '{ "name": "@types/node" }\n' > node_modules/@types/node/package.json
+    for binary in cross-env vite; do
+        printf '#!/usr/bin/env bash\nexit 0\n' > "node_modules/.bin/$binary"
+        chmod +x "node_modules/.bin/$binary"
+    done
 fi
 if [[ "$*" == *"run build"* ]]; then
     out_dir="dist"

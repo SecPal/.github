@@ -120,6 +120,7 @@ rendered = library.render_nginx_config(loaded)
 assert "preview\\.secpal\\.dev" in rendered
 assert "d35c0cdc" in rendered
 assert "fastcgi_pass unix:/run/php/php8.4-fpm-secpal-preview.sock;" in rendered
+assert "open_file_cache off;" in rendered
 
 invalid_payloads = []
 for key, value in (
