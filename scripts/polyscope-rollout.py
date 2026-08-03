@@ -1611,6 +1611,7 @@ from pathlib import Path
 package_json = Path("package.json")
 declared_packages = set()
 required_packages = set()
+optional_packages = set()
 if package_json.is_file():
     try:
         package_data = json.loads(package_json.read_text())
@@ -1625,6 +1626,11 @@ if package_json.is_file():
             section = package_data.get(key, {})
             if isinstance(section, dict):
                 required_packages.update(name for name in section if isinstance(name, str))
+        section = package_data.get("optionalDependencies", {})
+        if isinstance(section, dict):
+            optional_packages.update(name for name in section if isinstance(name, str))
+
+required_packages.difference_update(optional_packages)
 
 required_paths = []
 if declared_packages:
@@ -1633,14 +1639,14 @@ required_paths.extend(Path("node_modules") / package / "package.json" for packag
 required_binary_paths = [
     Path("node_modules/.bin") / binary for binary in __REQUIRED_BINARIES__
 ]
-if "typescript" in declared_packages:
+if "typescript" in required_packages:
     required_paths.extend(
         [
             Path("node_modules/typescript/lib/lib.es2020.d.ts"),
             Path("node_modules/typescript/lib/lib.dom.d.ts"),
         ]
     )
-if "@types/node" in declared_packages:
+if "@types/node" in required_packages:
     required_paths.append(Path("node_modules/@types/node/package.json"))
 
 missing = [str(path) for path in required_paths if not path.is_file()]
