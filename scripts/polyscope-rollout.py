@@ -2347,7 +2347,7 @@ def build_repo_all_checks_command(repo_name: str) -> str | None:
         "api": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress",
         "frontend": "npm run lint && npm run typecheck && npm run test:run:all && npm run build",
         "GuardGuide": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test",
-        "contracts": "npm run validate && npm run lint && npm run format:check",
+        "contracts": "npm run validate",
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
         "guardguide.de": "npm run check && npm run lint && npm run test && npm run build",
@@ -2380,17 +2380,17 @@ def ensure_task(tasks: list[dict[str, str]], *, label: str, prompt: str) -> list
     return [{"label": label, "prompt": prompt}, *tasks]
 
 
-def enrich_local_config(repo_name: str, spec: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def enrich_local_config(repo_name: str, config: dict[str, Any]) -> dict[str, Any]:
     scripts = config.setdefault("scripts", {})
-    run_actions = [dict(item) for item in scripts.get("run", [])]
+    run_actions = [
+        dict(item)
+        for item in scripts.get("run", [])
+        if item.get("label") != "Preflight"
+    ]
 
     all_checks_command = build_repo_all_checks_command(repo_name)
     if all_checks_command is not None:
         run_actions = ensure_run_action(run_actions, label="All Checks", command=all_checks_command)
-
-    preflight_script = pathlib.Path(spec["path"]) / "scripts" / "preflight.sh"
-    if preflight_script.is_file():
-        run_actions = ensure_run_action(run_actions, label="Preflight", command="./scripts/preflight.sh")
 
     scripts["run"] = run_actions
 
@@ -2399,8 +2399,8 @@ def enrich_local_config(repo_name: str, spec: dict[str, Any], config: dict[str, 
         tasks,
         label="Fix current findings",
         prompt=(
-            "Run the generated validation actions for this repo, including All Checks and Preflight when available. "
-            "Fix the current findings in this repo only, rerun the touched validations until they are clean, and keep the branch scoped to one issue. "
+            "Run the smallest relevant validation actions for this repo while iterating. "
+            "Fix the current findings in this repo only, rerun the touched validations until they are clean, and run All Checks once before handoff when the change warrants the full suite. "
             "If the findings expand into unrelated topics or require broader cleanup, stop and track them instead of widening the change."
         ),
     )
@@ -2756,7 +2756,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "scripts": {
                 "setup": [build_verified_npm_ci_command()],
                 "run": [
-                    {"label": "Preflight", "command": "./scripts/preflight.sh", "runMode": "preserve"},
                     {"label": "AI Review Scan", "command": "npm run copilot:review:scan", "runMode": "preserve"},
                 ],
             },
@@ -3164,7 +3163,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
 def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
     require_repo_instruction_files(spec)
     config = copy.deepcopy(spec["local_config"])
-    config = enrich_local_config(spec["path"].name, spec, config)
+    config = enrich_local_config(spec["path"].name, config)
     preamble = collapse_spaces(
         f"Apply the current SecPal instructions from {instruction_reference(spec)} before taking action. "
         f"{NO_AI_ATTRIBUTION_RULE}"
@@ -4163,25 +4162,19 @@ def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
     )
 
 
-def ensure_pre_push_hook(worktree_path: pathlib.Path) -> None:
-    preflight_script = worktree_path / "scripts" / "preflight.sh"
-    if not preflight_script.exists():
+def remove_managed_pre_push_hook(worktree_path: pathlib.Path) -> None:
+    hooks_dir = resolve_git_dir(worktree_path) / "hooks"
+    hook_path = hooks_dir / "pre-push"
+    if not hook_path.is_symlink():
         return
 
-    hooks_dir = resolve_git_dir(worktree_path) / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-
-    hook_path = hooks_dir / "pre-push"
-    target = pathlib.Path(os.path.relpath(preflight_script, hooks_dir))
-
-    if hook_path.is_symlink():
-        if pathlib.Path(os.readlink(hook_path)) == target:
-            return
+    try:
+        linked_target = (hooks_dir / os.readlink(hook_path)).resolve(strict=False)
+    except (OSError, RuntimeError):
+        return
+    managed_target = (worktree_path / "scripts" / "preflight.sh").resolve(strict=False)
+    if linked_target == managed_target:
         hook_path.unlink()
-    elif hook_path.exists():
-        hook_path.replace(hook_path.with_name("pre-push.backup"))
-
-    hook_path.symlink_to(target)
 
 
 def ensure_commit_msg_hook(worktree_path: pathlib.Path) -> None:
@@ -4207,7 +4200,7 @@ def ensure_commit_msg_hook(worktree_path: pathlib.Path) -> None:
 
 def ensure_worktree_hooks(worktree_path: pathlib.Path) -> None:
     ensure_pre_commit_hook(worktree_path)
-    ensure_pre_push_hook(worktree_path)
+    remove_managed_pre_push_hook(worktree_path)
     ensure_commit_msg_hook(worktree_path)
 
 

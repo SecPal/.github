@@ -56,7 +56,7 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
 
 2. **Set up Git hooks:**
 
-   Install both pre-commit and pre-push hooks:
+   Install the fast pre-commit hooks:
 
    ```bash
    # Install pre-commit (choose one method):
@@ -72,19 +72,21 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
    # Setup pre-commit hooks
    ./scripts/setup-pre-commit.sh
 
-   # Install pre-push hook
-   ./scripts/setup-pre-push.sh
    ```
 
 ### Local Development Workflow
 
-Before pushing your changes, run the preflight script to ensure everything passes:
+While iterating, run the smallest validation relevant to the files you changed.
+Run the complete preflight once before handoff when the change warrants the full
+suite:
 
 ```bash
 ./scripts/preflight.sh
 ```
 
-This script runs automatically before every `git push` via the pre-push hook.
+This script is deliberately not attached to every `git push`; Polyscope exposes
+one `All Checks` action for intentional full validation without repeating it on
+push.
 
 **What the preflight script checks:**
 

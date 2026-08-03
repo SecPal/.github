@@ -51,7 +51,7 @@ create_repo() {
   # commit-msg symlink installation.
   git -C "$workspace/$repo" init -q
 
-  cat >"$workspace/$repo/scripts/setup-pre-push.sh" <<'STUB'
+  cat >"$workspace/$repo/scripts/preflight.sh" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
@@ -61,7 +61,7 @@ STUB
 exit 0
 STUB
 
-  chmod +x "$workspace/$repo/scripts/setup-pre-push.sh" "$workspace/$repo/scripts/setup-pre-commit.sh"
+  chmod +x "$workspace/$repo/scripts/setup-pre-commit.sh"
 }
 
 run_setup_hooks() {
@@ -79,6 +79,20 @@ run_setup_hooks() {
 # ─── Happy path: every documented repo is present ────────────────────────────
 setup_workspace "$happy_workspace" "${ALL_REPOS[@]}"
 
+# Managed full-preflight hooks are retired, while repository-specific hooks
+# remain owned by the repository and must not be overwritten or removed.
+ln -s ../../scripts/preflight.sh "$happy_workspace/api/.git/hooks/pre-push"
+cat >"$happy_workspace/frontend/.git/hooks/pre-push" <<'STUB'
+#!/usr/bin/env bash
+echo custom pre-push
+STUB
+chmod +x "$happy_workspace/frontend/.git/hooks/pre-push"
+cat >"$happy_workspace/contracts/scripts/custom-pre-push.sh" <<'STUB'
+#!/usr/bin/env bash
+echo custom linked pre-push
+STUB
+ln -s ../../scripts/custom-pre-push.sh "$happy_workspace/contracts/.git/hooks/pre-push"
+
 happy_output="$happy_workspace/output.txt"
 if ! run_setup_hooks "$happy_workspace" "$happy_output"; then
   cat "$happy_output"
@@ -86,9 +100,12 @@ if ! run_setup_hooks "$happy_workspace" "$happy_output"; then
   exit 1
 fi
 
-happy_expected_hooks=$(( ${#ALL_REPOS[@]} * 3 ))
+happy_expected_hooks=$(( ${#ALL_REPOS[@]} * 2 ))
 grep -Fq "Successfully installed: ${happy_expected_hooks} hooks" "$happy_output"
 grep -Fq 'All Git hooks have been successfully installed' "$happy_output"
+test ! -e "$happy_workspace/api/.git/hooks/pre-push"
+grep -Fq 'echo custom pre-push' "$happy_workspace/frontend/.git/hooks/pre-push"
+test "$(readlink "$happy_workspace/contracts/.git/hooks/pre-push")" = '../../scripts/custom-pre-push.sh'
 if grep -Fq 'Skipped (missing directory)' "$happy_output"; then
   cat "$happy_output"
   echo "happy-path output should not report skipped repositories" >&2
@@ -120,7 +137,7 @@ grep -Fq 'Skipped (missing directory): 1 repositories' "$warning_output"
 grep -Fq '.github/scripts/install-polyscope-rollout.sh' "$warning_output"
 grep -Fq 'All Git hooks have been successfully installed' "$warning_output"
 
-warning_expected_hooks=$(( ${#warning_present_repos[@]} * 3 ))
+warning_expected_hooks=$(( ${#warning_present_repos[@]} * 2 ))
 grep -Fq "Successfully installed: ${warning_expected_hooks} hooks" "$warning_output"
 
 if grep -q '^Failed: ' "$warning_output"; then
@@ -152,24 +169,24 @@ if grep -q '^Skipped (missing directory): ' "$corrupt_output"; then
 fi
 
 # ─── Failure path: a real installation step fails ────────────────────────────
-# Even with the soft-warn change, breakage in a hook installation step (e.g.
-# setup-pre-push.sh exits non-zero) must still fail the script with exit 1.
+# Even with the soft-warn change, breakage in a hook installation step must
+# still fail the script with exit 1.
 setup_workspace "$failure_workspace" "${ALL_REPOS[@]}"
-cat >"$failure_workspace/api/scripts/setup-pre-push.sh" <<'STUB'
+cat >"$failure_workspace/api/scripts/setup-pre-commit.sh" <<'STUB'
 #!/usr/bin/env bash
 exit 1
 STUB
-chmod +x "$failure_workspace/api/scripts/setup-pre-push.sh"
+chmod +x "$failure_workspace/api/scripts/setup-pre-commit.sh"
 
 failure_output="$failure_workspace/output.txt"
 if run_setup_hooks "$failure_workspace" "$failure_output"; then
   cat "$failure_output"
-  echo "failure-path setup-hooks.sh unexpectedly succeeded (broken pre-push install must exit non-zero)" >&2
+  echo "failure-path setup-hooks.sh unexpectedly succeeded (broken pre-commit install must exit non-zero)" >&2
   exit 1
 fi
 
-grep -Fq 'Pre-push hook installation failed' "$failure_output"
+grep -Fq 'Pre-commit hook installation failed' "$failure_output"
 grep -q '^Failed: 1 repositories' "$failure_output"
-grep -Fq 'api (pre-push)' "$failure_output"
+grep -Fq 'api (pre-commit)' "$failure_output"
 
 echo "tests/setup-hooks.sh: happy, warning, corrupt-path, and failure paths verified."
