@@ -4103,8 +4103,8 @@ assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "1"
 PY
 
 # npm permits a package to be declared as both a development and optional
-# dependency. The development edge takes precedence, so a missing package must
-# still make rollout validation reject the install.
+# dependency. The optional edge permits npm ci to succeed without installing
+# that package, so rollout validation must accept the resulting install.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
 import os
@@ -4154,8 +4154,8 @@ result = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert result.returncode == 1, result.stderr
-assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "3"
+assert result.returncode == 0, result.stderr
+assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "1"
 PY
 
 # GuardGuide preview env setup must write APP_URL for the normalized preview

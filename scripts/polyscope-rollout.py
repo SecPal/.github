@@ -1633,8 +1633,8 @@ if package_json.is_file():
         if isinstance(section, dict):
             optional_packages.update(name for name in section if isinstance(name, str))
 
-required_packages.difference_update(optional_packages)
 required_packages.update(development_packages)
+required_packages.difference_update(optional_packages)
 
 required_paths = []
 if declared_packages:
