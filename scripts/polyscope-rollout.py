@@ -1612,6 +1612,7 @@ package_json = Path("package.json")
 declared_packages = set()
 required_packages = set()
 optional_packages = set()
+development_packages = set()
 if package_json.is_file():
     try:
         package_data = json.loads(package_json.read_text())
@@ -1622,15 +1623,18 @@ if package_json.is_file():
             section = package_data.get(key, {})
             if isinstance(section, dict):
                 declared_packages.update(name for name in section if isinstance(name, str))
-        for key in ("dependencies", "devDependencies"):
-            section = package_data.get(key, {})
-            if isinstance(section, dict):
-                required_packages.update(name for name in section if isinstance(name, str))
+        section = package_data.get("dependencies", {})
+        if isinstance(section, dict):
+            required_packages.update(name for name in section if isinstance(name, str))
+        section = package_data.get("devDependencies", {})
+        if isinstance(section, dict):
+            development_packages.update(name for name in section if isinstance(name, str))
         section = package_data.get("optionalDependencies", {})
         if isinstance(section, dict):
             optional_packages.update(name for name in section if isinstance(name, str))
 
 required_packages.difference_update(optional_packages)
+required_packages.update(development_packages)
 
 required_paths = []
 if declared_packages:

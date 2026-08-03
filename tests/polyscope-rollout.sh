@@ -4102,6 +4102,62 @@ assert result.returncode == 0, result.stderr
 assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "1"
 PY
 
+# npm permits a package to be declared as both a development and optional
+# dependency. The development edge takes precedence, so a missing package must
+# still make rollout validation reject the install.
+python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+
+script_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(sys.argv[2])
+fixture = workspace / "dev-optional-overlap-fixture"
+fake_bin = fixture / "fake-bin"
+fixture.mkdir()
+fake_bin.mkdir()
+fixture.joinpath("package.json").write_text(
+    '{"name":"dev-optional-overlap","version":"1.0.0",'
+    '"devDependencies":{"required-dev-package":"file:./missing-package"},'
+    '"optionalDependencies":{"required-dev-package":"file:./missing-package"}}\n'
+)
+fixture.joinpath("package-lock.json").write_text(
+    '{"name":"dev-optional-overlap","version":"1.0.0","lockfileVersion":3,'
+    '"packages":{"":{"name":"dev-optional-overlap","version":"1.0.0"}}}\n'
+)
+fake_bin.joinpath("npm").write_text(
+    """#!/usr/bin/env python3
+from pathlib import Path
+
+counter_path = Path("npm-ci-attempts.txt")
+attempt = int(counter_path.read_text()) + 1 if counter_path.exists() else 1
+counter_path.write_text(str(attempt))
+Path("node_modules").mkdir(exist_ok=True)
+Path("node_modules/.package-lock.json").write_text("{}\\n")
+"""
+)
+fake_bin.joinpath("npm").chmod(0o755)
+
+spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+env = os.environ.copy()
+env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+result = subprocess.run(
+    ["bash", "-c", "set -euo pipefail; " + module.build_verified_npm_ci_command()],
+    cwd=fixture,
+    env=env,
+    capture_output=True,
+    text=True,
+)
+assert result.returncode == 1, result.stderr
+assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "3"
+PY
+
 # GuardGuide preview env setup must write APP_URL for the normalized preview
 # workspace host, not the physical worktree directory basename.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
