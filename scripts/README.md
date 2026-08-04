@@ -455,8 +455,10 @@ fixed helper, fixed manifest path, system server drop-in, or exact
 authorization is unavailable. The helper check also renders the current
 manifest through the installed root-owned bundle and advertises
 `manifest_schema=2`; the unprivileged producer refuses to replace the last
-manifest unless that capability is present. This permits consumer-first schema
-upgrades without leaving Nginx on an unreadable manifest. The system server's
+manifest unless that capability is present on the same fixed helper used for
+activation. Environment-selected helper paths cannot authorize publication.
+This permits consumer-first schema upgrades without leaving Nginx on an
+unreadable manifest. The system server's
 synchronous startup hook skips repository config and database synchronization;
 it performs only the Nginx convergence needed before the service reports ready.
 Routine instruction/config synchronization also refreshes Nginx without
@@ -497,8 +499,10 @@ restarted when the worktree revision, dirty tracked code, untracked source
 metadata, or source/worktree environment metadata changes. The corresponding
 Polyscope run actions remain available for explicit diagnostics but do not
 autostart, preventing a second scheduler or worker from competing with the
-managed services. Stale unit files are removed only after systemd confirms that
-their services stopped successfully. The paired daily
+managed services. A failed reconciliation preserves existing units only for
+still-registered physical worktrees; units belonging to removed registrations
+remain eligible for pruning. Stale unit files are removed only after systemd
+confirms that their services stopped successfully. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
 checking the live database allowlist, locks, and processes.
 

@@ -4459,6 +4459,12 @@ def should_manage_api_runtime_units(
     )
 
 
+def build_api_runtime_id(worktree_path: pathlib.Path) -> str:
+    """Build the stable unit identifier for one physical API worktree."""
+    resolved_worktree = worktree_path.resolve()
+    return hashlib.sha256(str(resolved_worktree).encode()).hexdigest()[:12]
+
+
 def _update_runtime_revision_path_metadata(
     digest: Any,
     label: str,
@@ -4547,7 +4553,7 @@ def build_api_runtime_unit_specs(
 
     resolved_worktree = worktree_path.resolve()
     resolved_source = source_repo_path.resolve()
-    runtime_id = hashlib.sha256(str(resolved_worktree).encode()).hexdigest()[:12]
+    runtime_id = build_api_runtime_id(resolved_worktree)
     unit_base = f"{API_RUNTIME_UNIT_PREFIX}{workspace}-{runtime_id}"
     roles = {
         "scheduler": API_SCHEDULER_COMMAND,
@@ -4616,8 +4622,12 @@ def reconcile_api_runtime_units(
     unit_directory: pathlib.Path = API_RUNTIME_UNIT_DIRECTORY,
     systemctl_runner: Any = subprocess.run,
     prune: bool = True,
+    preserve_runtime_ids: set[str] | None = None,
 ) -> None:
     """Atomically converge persistent API runtime units and their active state."""
+    preserved_ids = preserve_runtime_ids or set()
+    if any(re.fullmatch(r"[0-9a-f]{12}", runtime_id) is None for runtime_id in preserved_ids):
+        raise ValueError("preserved API runtime ids must be 12 lowercase hexadecimal characters")
     systemctl_env = os.environ.copy()
     runtime_directory = pathlib.Path(f"/run/user/{os.getuid()}")
     systemctl_env.setdefault("XDG_RUNTIME_DIR", str(runtime_directory))
@@ -4632,7 +4642,16 @@ def reconcile_api_runtime_units(
         for path in unit_directory.glob(f"{API_RUNTIME_UNIT_PREFIX}*.service")
         if path.is_file() or path.is_symlink()
     }
-    stale_names = sorted(set(existing_units) - desired_names) if prune else []
+    stale_names: list[str] = []
+    if prune:
+        for existing_name in sorted(set(existing_units) - desired_names):
+            runtime_match = re.fullmatch(
+                rf"{re.escape(API_RUNTIME_UNIT_PREFIX)}[a-z0-9-]+-([0-9a-f]{{12}})-(?:scheduler|queue)\.service",
+                existing_name,
+            )
+            if runtime_match is not None and runtime_match.group(1) in preserved_ids:
+                continue
+            stale_names.append(existing_name)
     changed = bool(stale_names)
 
     for stale_name in stale_names:
@@ -4744,6 +4763,14 @@ def provision_worktrees(
         resolved_db_path,
         repo_state,
         clone_root,
+    )
+    unreconciled_api_runtime_ids = (
+        {
+            build_api_runtime_id(worktree_path)
+            for worktree_path in registered_worktrees["api"]
+        }
+        if manage_api_runtimes
+        else set()
     )
     revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
 
@@ -4891,6 +4918,9 @@ def provision_worktrees(
                                 ),
                             )
                             desired_api_runtime_units.update(runtime_units)
+                            unreconciled_api_runtime_ids.discard(
+                                build_api_runtime_id(locked_worktree_path)
+                            )
                             reconcile_api_runtime_units(runtime_units, prune=False)
                             wait_for_api_scheduler_readiness(
                                 locked_worktree_path,
@@ -4940,6 +4970,9 @@ def provision_worktrees(
                         ),
                     )
                     desired_api_runtime_units.update(runtime_units)
+                    unreconciled_api_runtime_ids.discard(
+                        build_api_runtime_id(locked_worktree_path)
+                    )
                     reconcile_api_runtime_units(runtime_units, prune=False)
                     wait_for_api_scheduler_readiness(
                         locked_worktree_path,
@@ -4978,7 +5011,10 @@ def provision_worktrees(
 
     if manage_api_runtimes:
         try:
-            reconcile_api_runtime_units(desired_api_runtime_units)
+            reconcile_api_runtime_units(
+                desired_api_runtime_units,
+                preserve_runtime_ids=unreconciled_api_runtime_ids,
+            )
         except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
             error_message = f"failed to reconcile API runtime services: {error}"
             print(error_message, file=sys.stderr)
@@ -5647,9 +5683,7 @@ def check_nginx_helper_compatibility(
     helper_path: pathlib.Path | None = None,
 ) -> None:
     sudo_bin = sudo_bin or os.environ.get("POLYSCOPE_SUDO_BIN", "sudo")
-    helper_path = helper_path or pathlib.Path(
-        os.environ.get("POLYSCOPE_NGINX_HELPER", str(DEFAULT_NGINX_HELPER_PATH))
-    )
+    helper_path = helper_path or DEFAULT_NGINX_HELPER_PATH
     if helper_runner is subprocess.run and (
         not helper_path.is_file() or not os.access(helper_path, os.X_OK)
     ):

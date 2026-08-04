@@ -15,8 +15,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - made the privileged Nginx consumer accept both manifest schema 1 and 2,
   advertise its supported schemas, validate its colocated renderer, and reject
-  producer activation before an incompatible manifest can replace the last
-  usable one
+  producer activation through the fixed root-owned helper before an
+  incompatible manifest can replace the last usable one
 - made canonical worktree provisioning refresh Nginx independently of stale
   installed unit flags and added a recurring recovery path through the existing
   provision timer
@@ -33,7 +33,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   heartbeat
 - made those user services the only automatic runtime owner, restart them when
   tracked code, untracked source metadata, or runtime environment metadata
-  changes, and retain stale unit files when stopping their processes fails
+  changes, preserve services for still-registered worktrees across transient
+  reconciliation failures, and retain stale unit files when stopping their
+  processes fails while continuing to prune removed registrations
 - tightened the privileged Nginx manifest boundary so JSON booleans cannot be
   interpreted as integer schema versions
 - completed preview API public-bootstrap configuration so linked web and
