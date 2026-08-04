@@ -32,10 +32,12 @@ TOP_LEVEL_KEYS = {
     "preview_domain",
     "clone_root",
     "repositories",
+    "workspace_redirects",
     "php_upstream",
     "nginx_http2_syntax",
 }
 REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+WORKSPACE_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 def _require_exact_keys(payload: dict[str, Any], expected: set[str], description: str) -> None:
@@ -56,8 +58,8 @@ def validate_manifest_data(payload: Any) -> dict[str, Any]:
         raise ValueError("nginx manifest must be a JSON object")
     _require_exact_keys(payload, TOP_LEVEL_KEYS, "nginx manifest")
 
-    if payload["version"] != 1:
-        raise ValueError("nginx manifest version must be 1")
+    if payload["version"] != 2:
+        raise ValueError("nginx manifest version must be 2")
     if payload["preview_domain"] != EXPECTED_PREVIEW_DOMAIN:
         raise ValueError(f"preview_domain must be exactly {EXPECTED_PREVIEW_DOMAIN}")
     if payload["clone_root"] != EXPECTED_CLONE_ROOT:
@@ -72,6 +74,27 @@ def validate_manifest_data(payload: Any) -> dict[str, Any]:
     for repo_name, repo_id in repositories.items():
         if not isinstance(repo_id, str) or REPOSITORY_ID_PATTERN.fullmatch(repo_id) is None:
             raise ValueError(f"repository id for {repo_name} is unsafe")
+
+    workspace_redirects = payload["workspace_redirects"]
+    if not isinstance(workspace_redirects, dict):
+        raise ValueError("workspace_redirects must be a JSON object")
+    _require_exact_keys(workspace_redirects, set(EXPECTED_REPOSITORIES), "workspace_redirects")
+    for repo_name, redirects in workspace_redirects.items():
+        if not isinstance(redirects, dict):
+            raise ValueError(f"workspace redirects for {repo_name} must be a JSON object")
+        for physical_workspace, canonical_workspace in redirects.items():
+            if (
+                not isinstance(physical_workspace, str)
+                or WORKSPACE_NAME_PATTERN.fullmatch(physical_workspace) is None
+            ):
+                raise ValueError(f"physical workspace redirect for {repo_name} is unsafe")
+            if (
+                not isinstance(canonical_workspace, str)
+                or WORKSPACE_NAME_PATTERN.fullmatch(canonical_workspace) is None
+            ):
+                raise ValueError(f"canonical workspace redirect for {repo_name} is unsafe")
+            if physical_workspace == canonical_workspace:
+                raise ValueError(f"workspace redirect for {repo_name} must not map a workspace to itself")
     upstream = payload["php_upstream"]
     if not isinstance(upstream, dict):
         raise ValueError("php_upstream must be a JSON object")
@@ -131,15 +154,19 @@ def build_manifest(
     repo_state: dict[str, dict[str, Any]],
     *,
     nginx_http2_syntax: str,
+    workspace_redirects: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "version": 1,
+        "version": 2,
         "preview_domain": EXPECTED_PREVIEW_DOMAIN,
         "clone_root": EXPECTED_CLONE_ROOT,
         "repositories": {
             repo_name: str(repo_state[repo_name]["id"])
             for repo_name in EXPECTED_REPOSITORIES
         },
+        "workspace_redirects": workspace_redirects
+        if workspace_redirects is not None
+        else {repo_name: {} for repo_name in EXPECTED_REPOSITORIES},
         "php_upstream": {
             "kind": "unix",
             "path": EXPECTED_UNIX_UPSTREAM,
@@ -205,6 +232,7 @@ def render_nginx_config(payload: dict[str, Any]) -> str:
     rendered = renderer.render_nginx_config(
         repo_state,
         nginx_http2_syntax=manifest["nginx_http2_syntax"],
+        workspace_redirects=manifest["workspace_redirects"],
     )
 
     upstream = manifest["php_upstream"]

@@ -496,8 +496,10 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
+Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
+Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
 ExecStartPre=/usr/bin/sleep 3
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees --refresh-nginx
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF
