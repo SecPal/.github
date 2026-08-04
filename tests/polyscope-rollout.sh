@@ -1861,7 +1861,10 @@ grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-
 grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan schedule:work'" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan pail --timeout=0'" "$workspace_root/api/polyscope.local.json"
-grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'
+if grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'; then
+    echo "preview API scheduler must have only the persistent systemd runtime owner" >&2
+    exit 1
+fi
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
     exit 1
@@ -1888,7 +1891,7 @@ queue_worker_action = next(
     None,
 )
 assert queue_worker_action is not None, api_run_actions
-assert queue_worker_action.get("autostart") is True, queue_worker_action
+assert queue_worker_action.get("autostart") is False, queue_worker_action
 assert "--max-time" not in queue_worker_action["command"], queue_worker_action
 api_run_actions[0]["label"] = "Background Queue"
 api_run_actions[1]["label"] = "Cron Loop"

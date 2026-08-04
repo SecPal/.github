@@ -31,6 +31,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 - added persistent, restartable scheduler and queue-worker user services for
   every registered API preview and gated preview access on a real scheduler
   heartbeat
+- made those user services the only automatic runtime owner, restart them when
+  tracked code, untracked source metadata, or runtime environment metadata
+  changes, and retain stale unit files when stopping their processes fails
+- tightened the privileged Nginx manifest boundary so JSON booleans cannot be
+  interpreted as integer schema versions
 - completed preview API public-bootstrap configuration so linked web and
   Android clients receive a usable workspace-specific bootstrap contract
 

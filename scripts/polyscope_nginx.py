@@ -60,6 +60,8 @@ def validate_manifest_data(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("nginx manifest must be a JSON object")
     version = payload.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError("nginx manifest version must be an integer")
     if version not in SUPPORTED_MANIFEST_VERSIONS:
         raise ValueError("nginx manifest version must be 1 or 2")
     expected_keys = TOP_LEVEL_KEYS if version == 2 else TOP_LEVEL_KEYS - {"workspace_redirects"}

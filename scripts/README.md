@@ -492,7 +492,13 @@ refresh even when an older installed unit does not yet contain
 one scheduler and one combined queue worker. The services resolve database
 credentials at process start through the rollout wrapper, restart on failure,
 disappear when their worktree registration is removed, and must produce a
-scheduler heartbeat before new preview access is granted. The paired daily
+scheduler heartbeat before new preview access is granted. They are also
+restarted when the worktree revision, dirty tracked code, untracked source
+metadata, or source/worktree environment metadata changes. The corresponding
+Polyscope run actions remain available for explicit diagnostics but do not
+autostart, preventing a second scheduler or worker from competing with the
+managed services. Stale unit files are removed only after systemd confirms that
+their services stopped successfully. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
 checking the live database allowlist, locks, and processes.
 

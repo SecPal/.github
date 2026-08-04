@@ -2557,8 +2557,8 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
-                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "autostart": True, "runMode": "replace"},
-                    {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": True, "runMode": "replace"},
+                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "autostart": False, "runMode": "replace"},
+                    {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": False, "runMode": "replace"},
                     {"label": "Pail", "command": API_PAIL_COMMAND, "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
                     # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.
@@ -4459,14 +4459,91 @@ def should_manage_api_runtime_units(
     )
 
 
+def _update_runtime_revision_path_metadata(
+    digest: Any,
+    label: str,
+    path: pathlib.Path,
+) -> None:
+    digest.update(label.encode())
+    digest.update(b"\0")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        digest.update(b"missing\0")
+        return
+
+    digest.update(
+        (
+            f"{path_stat.st_mode}:{path_stat.st_ino}:{path_stat.st_size}:"
+            f"{path_stat.st_mtime_ns}:{path_stat.st_ctime_ns}"
+        ).encode()
+    )
+    digest.update(b"\0")
+    if stat.S_ISLNK(path_stat.st_mode):
+        digest.update(os.readlink(path).encode())
+        digest.update(b"\0")
+
+
+def build_api_runtime_revision(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+) -> str:
+    """Fingerprint code and environment inputs consumed by long-lived API processes."""
+    git = resolve_executable("git")
+    if git is None:
+        raise RuntimeError(f"git is required to fingerprint API runtime state for {worktree_path}")
+
+    digest = hashlib.sha256()
+    commands = (
+        [git, "rev-parse", "HEAD"],
+        [git, "diff", "--binary", "HEAD", "--"],
+        [git, "ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    outputs: list[bytes] = []
+    try:
+        for command in commands:
+            result = subprocess.run(
+                command,
+                cwd=worktree_path,
+                check=True,
+                capture_output=True,
+            )
+            outputs.append(result.stdout)
+            digest.update(len(result.stdout).to_bytes(8, "big"))
+            digest.update(result.stdout)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"unable to fingerprint API runtime state for {worktree_path}") from error
+
+    for raw_relative_path in outputs[-1].split(b"\0"):
+        if not raw_relative_path:
+            continue
+        relative_path = pathlib.Path(os.fsdecode(raw_relative_path))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise RuntimeError(
+                f"git returned an unsafe untracked path for API runtime state: {relative_path}"
+            )
+        _update_runtime_revision_path_metadata(
+            digest,
+            f"untracked:{relative_path.as_posix()}",
+            worktree_path / relative_path,
+        )
+
+    _update_runtime_revision_path_metadata(digest, "worktree-env", worktree_path / ".env")
+    _update_runtime_revision_path_metadata(digest, "source-env", source_repo_path / ".env")
+    return digest.hexdigest()
+
+
 def build_api_runtime_unit_specs(
     worktree_path: pathlib.Path,
     source_repo_path: pathlib.Path,
     *,
     workspace: str,
+    runtime_revision: str,
 ) -> dict[str, str]:
     if re.fullmatch(r"[a-z0-9][a-z0-9-]*", workspace) is None:
         raise ValueError(f"unsafe API runtime workspace name: {workspace}")
+    if re.fullmatch(r"[0-9a-f]{64}", runtime_revision) is None:
+        raise ValueError("API runtime revision must be a lowercase SHA-256 digest")
 
     resolved_worktree = worktree_path.resolve()
     resolved_source = source_repo_path.resolve()
@@ -4495,6 +4572,7 @@ def build_api_runtime_unit_specs(
             f"""
             # SPDX-FileCopyrightText: 2026 SecPal Contributors
             # SPDX-License-Identifier: MIT
+            # RuntimeRevision={runtime_revision}
             [Unit]
             Description=SecPal preview API {role} for {workspace}
             After=network-online.target postgresql.service redis-server.service
@@ -4560,18 +4638,22 @@ def reconcile_api_runtime_units(
     for stale_name in stale_names:
         systemctl_runner(
             ["systemctl", "--user", "disable", "--now", stale_name],
-            check=False,
+            check=True,
             env=systemctl_env,
         )
         existing_units[stale_name].unlink()
 
+    restart_names: set[str] = set()
+    start_names: set[str] = set()
     for unit_name, content in sorted(desired_units.items()):
         if re.fullmatch(rf"{re.escape(API_RUNTIME_UNIT_PREFIX)}[a-z0-9-]+\.service", unit_name) is None:
             raise ValueError(f"unsafe API runtime unit name: {unit_name}")
         unit_path = unit_directory / unit_name
         if not unit_path.is_symlink() and unit_path.exists() and unit_path.read_text() == content:
+            start_names.add(unit_name)
             continue
         _write_text_atomic(unit_path, content)
+        restart_names.add(unit_name)
         changed = True
 
     if changed:
@@ -4582,7 +4664,19 @@ def reconcile_api_runtime_units(
         )
     if desired_names:
         systemctl_runner(
-            ["systemctl", "--user", "enable", "--now", *sorted(desired_names)],
+            ["systemctl", "--user", "enable", *sorted(desired_names)],
+            check=True,
+            env=systemctl_env,
+        )
+    if restart_names:
+        systemctl_runner(
+            ["systemctl", "--user", "restart", *sorted(restart_names)],
+            check=True,
+            env=systemctl_env,
+        )
+    if start_names:
+        systemctl_runner(
+            ["systemctl", "--user", "start", *sorted(start_names)],
             check=True,
             env=systemctl_env,
         )
@@ -4786,6 +4880,10 @@ def provision_worktrees(
                                 locked_worktree_path,
                                 pathlib.Path(spec["path"]),
                                 workspace=workspace,
+                                runtime_revision=build_api_runtime_revision(
+                                    locked_worktree_path,
+                                    pathlib.Path(spec["path"]),
+                                ),
                             )
                             desired_api_runtime_units.update(runtime_units)
                             reconcile_api_runtime_units(runtime_units, prune=False)
@@ -4831,6 +4929,10 @@ def provision_worktrees(
                         locked_worktree_path,
                         pathlib.Path(spec["path"]),
                         workspace=workspace,
+                        runtime_revision=build_api_runtime_revision(
+                            locked_worktree_path,
+                            pathlib.Path(spec["path"]),
+                        ),
                     )
                     desired_api_runtime_units.update(runtime_units)
                     reconcile_api_runtime_units(runtime_units, prune=False)

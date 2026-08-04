@@ -128,6 +128,15 @@ assert normalized_legacy_manifest["workspace_redirects"] == {
     for repository in library.EXPECTED_REPOSITORIES
 }
 
+boolean_version_manifest = copy.deepcopy(legacy_manifest)
+boolean_version_manifest["version"] = True
+try:
+    library.validate_manifest_data(boolean_version_manifest)
+except ValueError as error:
+    assert "version must be an integer" in str(error), error
+else:
+    raise AssertionError("boolean nginx manifest versions must be rejected")
+
 
 def write_manifest(path: pathlib.Path, payload: object, mode: int = 0o600) -> None:
     path.write_text(json.dumps(payload, separators=(",", ":")) + "\n")

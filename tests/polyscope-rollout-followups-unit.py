@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -70,6 +71,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
             worktree,
             source,
             workspace="mighty-hyena",
+            runtime_revision="a" * 64,
         )
 
         self.assertEqual(len(units), 2)
@@ -79,8 +81,54 @@ class PolyscopeRolloutFollowupTests(TestCase):
         self.assertIn("--run-api-worktree", rendered)
         self.assertIn("php artisan schedule:work", rendered)
         self.assertIn("php artisan queue:work", rendered)
+        self.assertIn("RuntimeRevision=" + "a" * 64, rendered)
         self.assertNotIn("DB_PASSWORD", rendered)
         self.assertNotIn("EnvironmentFile=", rendered)
+
+    def test_api_runtime_actions_are_not_autostarted_by_polyscope(self) -> None:
+        api_run_actions = rollout.REPO_SETTINGS["api"]["local_config"]["scripts"]["run"]
+
+        for label in ("Queue Worker", "Scheduler"):
+            action = next(item for item in api_run_actions if item["label"] == label)
+            self.assertFalse(action.get("autostart", False), action)
+
+    def test_api_runtime_revision_changes_with_code_and_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worktree = root / "worktree"
+            source = root / "source"
+            worktree.mkdir()
+            source.mkdir()
+            (worktree / "app.php").write_text("first\n")
+            (worktree / ".env").write_text("APP_ENV=local\n")
+            (source / ".env").write_text("DB_PASSWORD=first\n")
+            subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+            subprocess.run(["git", "add", "app.php"], cwd=worktree, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=SecPal Test",
+                    "-c",
+                    "user.email=test@secpal.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-qm",
+                    "Initial fixture",
+                ],
+                cwd=worktree,
+                check=True,
+            )
+
+            initial = rollout.build_api_runtime_revision(worktree, source)
+            (worktree / "app.php").write_text("second\n")
+            code_changed = rollout.build_api_runtime_revision(worktree, source)
+            (source / ".env").write_text("DB_PASSWORD=second\n")
+            environment_changed = rollout.build_api_runtime_revision(worktree, source)
+
+            self.assertNotEqual(initial, code_changed)
+            self.assertNotEqual(code_changed, environment_changed)
 
     def test_api_runtime_reconciliation_removes_stale_units_and_starts_desired_units(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -128,11 +176,56 @@ class PolyscopeRolloutFollowupTests(TestCase):
                     "systemctl",
                     "--user",
                     "enable",
-                    "--now",
                     *sorted(desired),
                 ],
                 commands,
             )
+            self.assertIn(
+                ["systemctl", "--user", "restart", *sorted(desired)],
+                commands,
+            )
+
+    def test_api_runtime_reconciliation_does_not_restart_unchanged_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            unit_name = "polyscope-api-worktree-mighty-hyena-scheduler.service"
+            content = "scheduler\n"
+            (unit_directory / unit_name).write_text(content)
+            systemctl = mock.Mock()
+
+            rollout.reconcile_api_runtime_units(
+                {unit_name: content},
+                unit_directory=unit_directory,
+                systemctl_runner=systemctl,
+                prune=False,
+            )
+
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertNotIn(["systemctl", "--user", "daemon-reload"], commands)
+            self.assertNotIn(["systemctl", "--user", "restart", unit_name], commands)
+            self.assertIn(["systemctl", "--user", "enable", unit_name], commands)
+            self.assertIn(["systemctl", "--user", "start", unit_name], commands)
+
+    def test_api_runtime_reconciliation_preserves_a_unit_when_stop_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            stale_unit = unit_directory / "polyscope-api-worktree-stale-scheduler.service"
+            stale_unit.write_text("stale\n")
+            systemctl = mock.Mock(
+                side_effect=subprocess.CalledProcessError(
+                    1,
+                    ["systemctl", "--user", "disable", "--now", stale_unit.name],
+                )
+            )
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                rollout.reconcile_api_runtime_units(
+                    {},
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                )
+
+            self.assertTrue(stale_unit.exists())
 
     def test_scheduler_readiness_waits_for_a_real_heartbeat(self) -> None:
         runner = mock.Mock(
