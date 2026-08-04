@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 import pathlib
@@ -27,6 +28,8 @@ EXPECTED_REPOSITORIES = (
     "guardguide.de",
 )
 EXPECTED_UNIX_UPSTREAM = "/run/php/php8.4-fpm-secpal-preview.sock"
+SUPPORTED_MANIFEST_VERSIONS = (1, 2)
+BUNDLE_VERSION = 2
 TOP_LEVEL_KEYS = {
     "version",
     "preview_domain",
@@ -56,10 +59,18 @@ def _require_exact_keys(payload: dict[str, Any], expected: set[str], description
 def validate_manifest_data(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("nginx manifest must be a JSON object")
-    _require_exact_keys(payload, TOP_LEVEL_KEYS, "nginx manifest")
-
-    if payload["version"] != 2:
-        raise ValueError("nginx manifest version must be 2")
+    version = payload.get("version")
+    if version not in SUPPORTED_MANIFEST_VERSIONS:
+        raise ValueError("nginx manifest version must be 1 or 2")
+    expected_keys = TOP_LEVEL_KEYS if version == 2 else TOP_LEVEL_KEYS - {"workspace_redirects"}
+    _require_exact_keys(payload, expected_keys, "nginx manifest")
+    payload = dict(payload)
+    if version == 1:
+        payload["version"] = 2
+        payload["workspace_redirects"] = {
+            repo_name: {}
+            for repo_name in EXPECTED_REPOSITORIES
+        }
     if payload["preview_domain"] != EXPECTED_PREVIEW_DOMAIN:
         raise ValueError(f"preview_domain must be exactly {EXPECTED_PREVIEW_DOMAIN}")
     if payload["clone_root"] != EXPECTED_CLONE_ROOT:
@@ -220,6 +231,19 @@ def _load_rollout_renderer() -> Any:
     renderer = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(renderer)
     return renderer
+
+
+def validate_installed_bundle() -> None:
+    """Prove that the colocated renderer implements this manifest contract."""
+    renderer = _load_rollout_renderer()
+    render_function = getattr(renderer, "render_nginx_config", None)
+    if not callable(render_function):
+        raise RuntimeError("root-owned nginx renderer lacks render_nginx_config")
+    parameters = inspect.signature(render_function).parameters
+    if "workspace_redirects" not in parameters or "nginx_http2_syntax" not in parameters:
+        raise RuntimeError(
+            "root-owned nginx renderer is incompatible with manifest bundle version 2"
+        )
 
 
 def render_nginx_config(payload: dict[str, Any]) -> str:

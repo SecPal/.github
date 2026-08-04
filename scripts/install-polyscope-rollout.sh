@@ -144,8 +144,13 @@ resolve_server_scope() {
 }
 
 can_apply_nginx_non_interactively() {
+    local helper_check_output
+
     [[ -x "$POLYSCOPE_NGINX_HELPER_CHECK" ]] || return 1
-    "$SUDO_BIN" -k -n "$POLYSCOPE_NGINX_HELPER_CHECK" --check >/dev/null 2>&1
+    helper_check_output="$(
+        "$SUDO_BIN" -k -n "$POLYSCOPE_NGINX_HELPER_CHECK" --check 2>/dev/null
+    )" || return 1
+    [[ " $helper_check_output " == *" manifest_schema=2 "* ]]
 }
 
 is_managed_codex_agents_link() {
@@ -353,8 +358,12 @@ if [[ "$server_scope" == "system" ]]; then
             exit 1
         fi
     done
-    if ! grep -qF -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$installed_server_target"; then
+    if ! grep -qF -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx' "$installed_server_target"; then
         echo "Error: reviewed system server drop-in lacks constrained nginx activation: $installed_server_target" >&2
+        exit 1
+    fi
+    if grep -qF -- '--install-nginx' "$installed_server_target"; then
+        echo "Error: reviewed system server drop-in must not run full worktree provisioning: $installed_server_target" >&2
         exit 1
     fi
     if ! grep -qF -- 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/secpal/code/SecPal' "$installed_server_target"; then
@@ -432,7 +441,7 @@ Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
 Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --install-nginx
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --refresh-nginx
 EOF
 
 cat >"$PATH_UNIT" <<EOF
@@ -511,7 +520,6 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 [Path]
 Unit=polyscope-worktree-provision.service
 PathChanged=$HOME/.polyscope/polyscope.db
-PathModified=$HOME/.polyscope/polyscope.db-wal
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json

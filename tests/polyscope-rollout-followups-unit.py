@@ -30,6 +30,143 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_preview_api_environment_enables_complete_public_bootstrap(self) -> None:
+        updates = rollout.build_api_preview_env_updates("mighty-hyena")
+
+        self.assertEqual(updates["BOOTSTRAP_PUBLIC_ENABLED"], "true")
+        self.assertEqual(
+            updates["BOOTSTRAP_INSTANCE_DISPLAY_NAME"],
+            "SecPal Preview (mighty-hyena)",
+        )
+        self.assertEqual(updates["BOOTSTRAP_MINIMUM_SUPPORTED_APP_VERSION"], "1.4.0")
+        self.assertEqual(updates["BOOTSTRAP_MINIMUM_SUPPORTED_APP_BUILD"], "10400")
+
+    def test_nginx_manifest_is_not_replaced_by_an_incompatible_helper(self) -> None:
+        writer = mock.Mock()
+        helper = mock.Mock(
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout="Polyscope nginx helper check passed\n",
+                stderr="",
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "manifest schema 2"):
+            rollout.write_compatible_nginx_manifest(
+                Path("/home/secpal/.local/state/polyscope/nginx-manifest.json"),
+                {"version": 2},
+                writer=writer,
+                helper_runner=helper,
+                service_user=SimpleNamespace(pw_uid=0, pw_gid=0),
+            )
+
+        writer.assert_not_called()
+
+    def test_api_runtime_units_are_persistent_and_contain_no_environment_secrets(self) -> None:
+        worktree = Path("/home/secpal/.polyscope/clones/api-id/mighty-hyena-1c04a2fb")
+        source = Path("/home/secpal/code/SecPal/api")
+
+        units = rollout.build_api_runtime_unit_specs(
+            worktree,
+            source,
+            workspace="mighty-hyena",
+        )
+
+        self.assertEqual(len(units), 2)
+        rendered = "\n".join(units.values())
+        self.assertIn("Restart=on-failure", rendered)
+        self.assertIn(f"ConditionPathIsDirectory={worktree}", rendered)
+        self.assertIn("--run-api-worktree", rendered)
+        self.assertIn("php artisan schedule:work", rendered)
+        self.assertIn("php artisan queue:work", rendered)
+        self.assertNotIn("DB_PASSWORD", rendered)
+        self.assertNotIn("EnvironmentFile=", rendered)
+
+    def test_api_runtime_reconciliation_removes_stale_units_and_starts_desired_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            stale_unit = unit_directory / "polyscope-api-worktree-stale-scheduler.service"
+            stale_unit.write_text("stale\n")
+            stale_target = unit_directory / "stale-target"
+            stale_target.write_text("must survive\n")
+            stale_link = unit_directory / "polyscope-api-worktree-stale-queue.service"
+            stale_link.symlink_to(stale_target)
+            desired_target = unit_directory / "desired-target"
+            desired_target.write_text("scheduler\n")
+            desired_link = unit_directory / "polyscope-api-worktree-mighty-hyena-scheduler.service"
+            desired_link.symlink_to(desired_target)
+            desired = {
+                "polyscope-api-worktree-mighty-hyena-scheduler.service": "scheduler\n",
+                "polyscope-api-worktree-mighty-hyena-queue.service": "queue\n",
+            }
+            systemctl = mock.Mock()
+
+            rollout.reconcile_api_runtime_units(
+                desired,
+                unit_directory=unit_directory,
+                systemctl_runner=systemctl,
+            )
+
+            self.assertFalse(stale_unit.exists())
+            self.assertFalse(stale_link.exists())
+            self.assertTrue(stale_target.exists())
+            for unit_name, content in desired.items():
+                self.assertEqual((unit_directory / unit_name).read_text(), content)
+                self.assertFalse((unit_directory / unit_name).is_symlink())
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertIn(
+                ["systemctl", "--user", "disable", "--now", stale_unit.name],
+                commands,
+            )
+            self.assertIn(
+                ["systemctl", "--user", "disable", "--now", stale_link.name],
+                commands,
+            )
+            self.assertIn(["systemctl", "--user", "daemon-reload"], commands)
+            self.assertIn(
+                [
+                    "systemctl",
+                    "--user",
+                    "enable",
+                    "--now",
+                    *sorted(desired),
+                ],
+                commands,
+            )
+
+    def test_scheduler_readiness_waits_for_a_real_heartbeat(self) -> None:
+        runner = mock.Mock(
+            side_effect=[
+                SimpleNamespace(returncode=1),
+                SimpleNamespace(returncode=0),
+            ]
+        )
+        sleeper = mock.Mock()
+
+        rollout.wait_for_api_scheduler_readiness(
+            Path("/preview/api"),
+            Path("/source/api"),
+            command_runner=runner,
+            sleeper=sleeper,
+            attempts=2,
+            interval_seconds=0.01,
+        )
+
+        self.assertEqual(runner.call_count, 2)
+        sleeper.assert_called_once_with(0.01)
+        command = runner.call_args_list[0].args[0]
+        self.assertEqual(command[:2], ["php", "artisan"])
+        self.assertIn("schedulerReadiness", " ".join(command[2:]))
+        self.assertIn("RuntimeException", " ".join(command[2:]))
+        self.assertNotIn("exit(", " ".join(command[2:]))
+
+    def test_provision_mode_always_refreshes_nginx_without_a_unit_flag(self) -> None:
+        args = SimpleNamespace(provision_worktrees=True, refresh_nginx=False)
+
+        rollout.apply_canonical_reconcile_mode(args)
+
+        self.assertTrue(args.refresh_nginx)
+
     def test_api_health_probe_stays_unsuccessful_while_provisioning(self) -> None:
         repo_state = {
             "api": {"id": "api-id"},

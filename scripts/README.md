@@ -452,7 +452,18 @@ The credential reset ensures the check proves the exact `NOPASSWD` rule rather
 than a cached interactive sudo timestamp. It never tests generic sudo access,
 rejects helper-path overrides, and exits before writing user units when the
 fixed helper, fixed manifest path, system server drop-in, or exact
-authorization is unavailable.
+authorization is unavailable. The helper check also renders the current
+manifest through the installed root-owned bundle and advertises
+`manifest_schema=2`; the unprivileged producer refuses to replace the last
+manifest unless that capability is present. This permits consumer-first schema
+upgrades without leaving Nginx on an unreadable manifest. The system server's
+synchronous startup hook skips repository config and database synchronization;
+it performs only the Nginx convergence needed before the service reports ready.
+Routine instruction/config synchronization also refreshes Nginx without
+reprovisioning every worktree; provisioning remains owned by its path/timer
+service. The path unit deliberately ignores the broad SQLite WAL stream so
+ordinary Polyscope activity cannot create a provisioning loop; the main
+database, generated configs, and periodic timer remain convergence inputs.
 
 `--source-script` accepts a custom rollout implementation only as part of a
 complete source bundle: the script must be executable, have the constrained
@@ -473,7 +484,15 @@ unregistered clone as a setup candidate. The physical hash directory remains
 the database's authoritative deletion path. Stable aliases are direct sibling
 symlinks recorded in a strict per-repository registry; after official deletion
 removes the physical path and registration, the next database-triggered
-reconciliation removes only those recorded broken aliases. The paired daily
+reconciliation removes only those recorded broken aliases.
+
+On the canonical host, `--provision-worktrees` execution always includes Nginx
+refresh even when an older installed unit does not yet contain
+`--refresh-nginx`. Registered API previews receive two managed user services,
+one scheduler and one combined queue worker. The services resolve database
+credentials at process start through the rollout wrapper, restart on failure,
+disappear when their worktree registration is removed, and must produce a
+scheduler heartbeat before new preview access is granted. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
 checking the live database allowlist, locks, and processes.
 

@@ -115,6 +115,18 @@ built_manifest = library.build_manifest(
     active_repo_state,
     nginx_http2_syntax="modern",
 )
+assert library.SUPPORTED_MANIFEST_VERSIONS == (1, 2)
+library.validate_installed_bundle()
+
+legacy_manifest = copy.deepcopy(manifest)
+legacy_manifest["version"] = 1
+legacy_manifest.pop("workspace_redirects")
+normalized_legacy_manifest = library.validate_manifest_data(legacy_manifest)
+assert normalized_legacy_manifest["version"] == 2
+assert normalized_legacy_manifest["workspace_redirects"] == {
+    repository: {}
+    for repository in library.EXPECTED_REPOSITORIES
+}
 
 
 def write_manifest(path: pathlib.Path, payload: object, mode: int = 0o600) -> None:

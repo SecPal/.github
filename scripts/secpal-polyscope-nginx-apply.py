@@ -207,7 +207,15 @@ def main() -> int:
             require_root_ownership=True,
         )
         nginx_library = load_nginx_library(require_root_ownership=True)
-        if not args.check:
+        nginx_library.validate_installed_bundle()
+        if args.check:
+            if MANIFEST_PATH.exists():
+                manifest = nginx_library.load_manifest(
+                    MANIFEST_PATH,
+                    expected_uid=expected_user.pw_uid,
+                )
+                nginx_library.render_nginx_config(manifest)
+        else:
             apply_manifest(
                 manifest_path=MANIFEST_PATH,
                 target=TARGET_PATH,
@@ -216,12 +224,21 @@ def main() -> int:
                 expected_uid=expected_user.pw_uid,
                 nginx_library=nginx_library,
             )
-    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+    except (AttributeError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Polyscope nginx helper failed: {error}", file=sys.stderr)
         return 1
 
-    action = "check passed" if args.check else "configuration applied"
-    print(f"Polyscope nginx helper {action}")
+    if args.check:
+        capabilities = " ".join(
+            f"manifest_schema={version}"
+            for version in nginx_library.SUPPORTED_MANIFEST_VERSIONS
+        )
+        print(
+            f"Polyscope nginx helper check passed bundle={nginx_library.BUNDLE_VERSION} "
+            f"{capabilities}"
+        )
+    else:
+        print("Polyscope nginx helper configuration applied")
     return 0
 
 
