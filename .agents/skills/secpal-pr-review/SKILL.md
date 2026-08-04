@@ -111,18 +111,25 @@ The following state machine applies only to the full feedback-remediation path.
    thread comments. Reactions and unrelated feedback are not thread-resolution
    preconditions. Never infer truth from reviewer identity, keywords, or CI.
 3. Reproduce every valid finding, add a failing test first, make the smallest
-   coherent corrections, and use focused validation while editing. A registry
-   command with `execution_policy: focused-only` is eligible for this explicit
-   selection but is never added to unconditional complete validation.
+   coherent corrections, and use focused validation while editing.
+   Never use a complete, repository-wide, or aggregate suite as focused validation. If the
+   relevant regression is available only through such a suite, isolate the
+   smallest direct test, filter, or fixture before running it. A registry command
+   with `execution_policy: focused-only` is eligible for this explicit selection
+   but is never added to unconditional complete validation.
 4. Perform the one holistic audit across correctness, security, privacy, data
-   integrity, lifecycle, rollout, and avoidable complexity. Fix material
-   in-scope defects before the complete validation.
+   integrity, lifecycle, rollout, and avoidable complexity. Complete all source,
+   provenance, edge-case, and diff inspection here, and fix material in-scope
+   defects before the complete validation.
 5. Stage the finished tree and run the registered unconditional focused commands
    plus every required local validation exactly once through
    `attest-validation`, supplying explicit satisfied evidence for every
    registered manual gate. Preserve its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
-   receipt.
+   receipt. Do not continue discovery or change the tree after this step begins.
+   A failed command produces no receipt; correct only that proven failure with
+   the smallest focused check before starting one new complete attempt. Never
+   repeat a successful complete validation.
 6. When remediation changed the staged tree, create one signed commit containing
    exactly that tree, use the receipt digest as its single
    `SecPal-Validation-Receipt` trailer, and use `attest-validation --bind-commit`

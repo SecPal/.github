@@ -76,6 +76,10 @@ grep -Fq 'normal_stable_feedback_reads: 1' "$CONTRACT" || fail 'stable feedback 
 grep -Fq 'normal_required_check_reads_before_resolution: 0' "$CONTRACT" || fail 'default remediation still reads Required Checks'
 grep -Fq 'normal_complete_validation_runs: 1' "$CONTRACT" || fail 'complete validation limit drifted'
 grep -Fq 'maximum_holistic_audits: 1' "$CONTRACT" || fail 'holistic audit limit drifted'
+grep -Fq 'Focused validation must not invoke a complete, repository-wide, or aggregate suite' "$CONTRACT" \
+  || fail 'focused validation may still consume the complete validation gate'
+grep -Fq 'the tracked tree and holistic-audit result are frozen' "$CONTRACT" \
+  || fail 'complete validation no longer freezes the audited tree'
 grep -Fq 'normal_signed_remediation_commits: 1' "$CONTRACT" || fail 'commit limit drifted'
 grep -Fq 'normal_fast_forward_pushes: 1' "$CONTRACT" || fail 'push limit drifted'
 grep -Fq 'maximum_evidence_replies_total: 10' "$CONTRACT" || fail 'reply limit drifted'
@@ -151,6 +155,10 @@ normal_skill_section="$(sed -n '/^## Run the finite invocation$/,/^## /p' "$SKIL
 test -n "$normal_skill_section" || fail 'normal skill workflow is missing'
 grep -Fq 'scripts/secpal-resolve-fixed-threads.py' <<<"$normal_skill_section" \
   || fail 'review remediation does not use the simple fixed-thread resolver'
+grep -Fq 'Never use a complete, repository-wide, or aggregate suite as focused validation.' <<<"$normal_skill_section" \
+  || fail 'skill permits complete suites during focused iteration'
+grep -Fq 'Do not continue discovery or change the tree after this step begins.' <<<"$normal_skill_section" \
+  || fail 'skill permits another audit or edit after complete validation starts'
 if grep -Eq 'Required Checks|mergeability|branch-protection|pull-request reactions' <<<"$normal_skill_section"; then
   fail 'default remediation still gates resolution on unrelated readiness state'
 fi

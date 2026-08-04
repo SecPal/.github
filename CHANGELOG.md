@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-04 - Bound Review And Publish Validation
+
+**Changed:**
+
+- reserved complete and aggregate suites for the single final review-validation
+  pass instead of allowing them as iterative focused checks
+- finished review discovery before final validation and prohibited repeating a
+  successful complete pass
+- reused successful validation for an exact unchanged tree during publishing
+  and ran only missing required checks once
+
+---
+
 ## 2026-08-03 - Decouple Full Validation From Push
 
 **Changed:**
