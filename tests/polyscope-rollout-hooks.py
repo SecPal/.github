@@ -33,6 +33,46 @@ def assert_managed_hook_is_retired(module: Any, worktree_path: Path, hooks_dir: 
     assert not hook_path.is_symlink(), hook_path
 
 
+def assert_active_pre_commit_hook_is_respected(
+    module: Any,
+    worktree_path: Path,
+    hooks_dir: Path,
+    fake_pre_commit: Path,
+    invocation_marker: Path,
+) -> None:
+    (worktree_path / ".pre-commit-config.yaml").touch()
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hooks_dir / "pre-commit"
+    hook_path.touch()
+    invocation_marker.unlink(missing_ok=True)
+
+    original_resolve_executable = module.resolve_executable
+    module.resolve_executable = lambda name: (
+        fake_pre_commit if name == "pre-commit" else original_resolve_executable(name)
+    )
+    try:
+        module.ensure_pre_commit_hook(worktree_path)
+    finally:
+        module.resolve_executable = original_resolve_executable
+
+    assert not invocation_marker.exists(), invocation_marker
+
+
+def assert_commit_msg_hook_uses_active_directory(
+    module: Any,
+    worktree_path: Path,
+    hooks_dir: Path,
+) -> None:
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hooks_dir / "commit-msg"
+    hook_path.unlink(missing_ok=True)
+
+    module.ensure_commit_msg_hook(worktree_path)
+
+    assert hook_path.is_symlink(), hook_path
+    assert hook_path.resolve() == (Path(module.__file__).parent / "strip-ai-trailers.sh").resolve()
+
+
 def main() -> None:
     script_path = Path(sys.argv[1])
     spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
@@ -88,6 +128,26 @@ def main() -> None:
         assert active_hooks_dir != administrative_hooks_dir
         assert_managed_hook_is_retired(module, linked_worktree_path, active_hooks_dir)
 
+        invocation_marker = temporary_root / "pre-commit-invoked"
+        fake_pre_commit = temporary_root / "pre-commit"
+        fake_pre_commit.write_text(
+            f"#!/usr/bin/env bash\ntouch {invocation_marker}\n",
+            encoding="utf-8",
+        )
+        fake_pre_commit.chmod(0o755)
+        assert_active_pre_commit_hook_is_respected(
+            module,
+            linked_worktree_path,
+            active_hooks_dir,
+            fake_pre_commit,
+            invocation_marker,
+        )
+        assert_commit_msg_hook_uses_active_directory(
+            module,
+            linked_worktree_path,
+            active_hooks_dir,
+        )
+
         primary_managed_target = repository_path / "scripts" / "preflight.sh"
         primary_managed_target.parent.mkdir(parents=True)
         primary_managed_target.touch()
@@ -124,6 +184,18 @@ def main() -> None:
                 )
             )
             assert_managed_hook_is_retired(module, linked_worktree_path, configured_hooks_dir)
+            assert_active_pre_commit_hook_is_respected(
+                module,
+                linked_worktree_path,
+                configured_hooks_dir,
+                fake_pre_commit,
+                invocation_marker,
+            )
+            assert_commit_msg_hook_uses_active_directory(
+                module,
+                linked_worktree_path,
+                configured_hooks_dir,
+            )
 
 
 if __name__ == "__main__":

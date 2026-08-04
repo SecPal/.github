@@ -4205,7 +4205,7 @@ def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
     if not (worktree_path / ".pre-commit-config.yaml").exists():
         return
 
-    hook_path = resolve_git_dir(worktree_path) / "hooks" / "pre-commit"
+    hook_path = resolve_git_hooks_dir(worktree_path) / "pre-commit"
     if hook_path.exists() or hook_path.is_symlink():
         return
 
@@ -4246,7 +4246,7 @@ def ensure_commit_msg_hook(worktree_path: pathlib.Path) -> None:
     if not strip_script.exists():
         return
 
-    hooks_dir = resolve_git_dir(worktree_path) / "hooks"
+    hooks_dir = resolve_git_hooks_dir(worktree_path)
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     hook_path = hooks_dir / "commit-msg"
