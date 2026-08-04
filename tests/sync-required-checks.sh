@@ -41,6 +41,8 @@ assert_payload_contexts_equal() {
   if ! jq -e --argjson expected "$expected" '
     .strict == true and
     (.checks | length) == ($expected | length) and
+    ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
+    ($expected | length) == ($expected | unique | length) and
     ([.checks[].context] | sort) == ($expected | sort) and
     all(.checks[]; .app_id == -1)
   ' >/dev/null <<<"$payload"; then
@@ -49,6 +51,19 @@ assert_payload_contexts_equal() {
     exit 1
   fi
 }
+
+duplicate_payload='{
+  "strict": true,
+  "checks": [
+    {"context": "duplicate", "app_id": -1},
+    {"context": "duplicate", "app_id": -1}
+  ]
+}'
+duplicate_contexts='["duplicate", "duplicate"]'
+if (assert_payload_contexts_equal "$duplicate_payload" "$duplicate_contexts") >/dev/null 2>&1; then
+  echo "Exact payload assertion must reject duplicate payload and expected contexts" >&2
+  exit 1
+fi
 
 if [[ ! -x "$SYNC_SCRIPT" ]]; then
   echo "Expected executable sync script at $SYNC_SCRIPT" >&2
