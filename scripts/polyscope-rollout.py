@@ -3146,7 +3146,13 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        f"Run or re-run the touched checks demanded by the repo instructions, then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
+        "First stage the complete intended change set before evaluating reusable validation evidence. "
+        "Reuse only evidence that identifies the successful commands and binds the current repository, exact HEAD and parent, exact final staged tree, including every newly added path, validation registry, command set, and required manual-gate evidence. "
+        "Treat that evidence as stale if any bound value, staged content, or tracked content changed, and do not stage additional content after deciding to reuse it. "
+        "Recheck the staged-tree identity immediately before committing and pushing. "
+        "Do not rerun a check that already passed for that exact unchanged bound state. "
+        "Run only missing required checks once. "
+        f"Then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
         f"Apply the commit and communication rules: {format_bullets(change_tracking)}. "
         "Do not bypass hooks or force operations."
     )
