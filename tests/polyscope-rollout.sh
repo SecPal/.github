@@ -32,6 +32,15 @@ print(digest.hexdigest())
 PY
 }
 
+assert_no_generated_preflight_action() {
+    local config_path="$1"
+
+    if grep -qF '"label": "Preflight"' "$config_path"; then
+        echo "generated Polyscope config must not expose full preflight as a routine run action: $config_path" >&2
+        exit 1
+    fi
+}
+
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
@@ -47,6 +56,8 @@ grep -qF 'FIXED_SETFACL_BIN = "/usr/bin/setfacl"' "$PYTHON_SOURCE"
 PYTHON_SCRIPT="$PYTHON_SOURCE"
 export POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE=1
 export POLYSCOPE_TEST_SETFACL_BIN="$fake_setfacl"
+
+python3 "$SCRIPT_DIR/polyscope-rollout-hooks.py" "$PYTHON_SCRIPT"
 
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"
@@ -1531,6 +1542,9 @@ spec = importlib.util.spec_from_file_location("polyscope_rollout_background", sc
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
+# This fixture isolates API lock ordering and intentionally uses a minimal Git
+# stub. Real hook layouts are covered by polyscope-rollout-hooks.py.
+module.ensure_worktree_hooks = lambda _worktree_path: None
 original_lock = module.acquire_api_worktree_bootstrap_lock
 
 @contextlib.contextmanager
@@ -1889,9 +1903,9 @@ grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.lo
 grep -qF "python3 $PYTHON_SCRIPT --refresh-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "All Checks"' "$workspace_root/api/polyscope.local.json"
 grep -qF '"command": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress"' "$workspace_root/api/polyscope.local.json"
-grep -qF '"label": "Preflight"' "$workspace_root/api/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/api/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/api/polyscope.local.json"
+grep -qF 'Run the smallest relevant validation actions for this repo while iterating.' "$workspace_root/api/polyscope.local.json"
 grep -qF '"copyGitignored": false' "$workspace_root/api/polyscope.local.json"
 if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API refresh command must use the hardened reseed flow and not raw migrate:fresh --seed" >&2
@@ -1915,7 +1929,7 @@ grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/frontend/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"label": "Workspace Preview CSP Smoke"' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"command": "npm run test:preview:pwa-headers"' "$workspace_root/frontend/polyscope.local.json"
@@ -4558,28 +4572,28 @@ assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_e
 )
 PY
 
-grep -qF '"command": "npm run validate && npm run lint && npm run format:check"' "$workspace_root/contracts/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/contracts/polyscope.local.json"
+grep -qF '"command": "npm run validate"' "$workspace_root/contracts/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/contracts/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/contracts/polyscope.local.json"
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify"' "$workspace_root/android/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/android/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/android/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.local.json"
 grep -q '^sdk\.dir=' "$workspace_root/android/android/local.properties"
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/secpal.app/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'public/og-default.svg' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'public/og-de.png' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/guardguide.de/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '"label": "Build Watch"' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF 'Watching guardguide.de preview sources for changes...' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF 'public/og-default.svg' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF 'public/og-de.png' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/.github/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT"
@@ -4778,7 +4792,7 @@ grep -q 'php artisan db:seed --class=Database.*GuardGuideAccessSeeder --force &&
 grep -qF "firstOrNew" "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF "test@example.com" "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "./scripts/preflight.sh"' "$workspace_root/GuardGuide/polyscope.local.json"
+assert_no_generated_preflight_action "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"label": "Typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -qF '"command": "npm run typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
@@ -5365,6 +5379,9 @@ broken_frontend_clone="$home_dir/.polyscope/clones/fe123456/feat"
 broken_android_clone="$home_dir/.polyscope/clones/an123456/feat"
 android_clone="$home_dir/.polyscope/clones/an123456/auto-hawk"
 mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone" "$broken_android_clone/.git/info" "$broken_android_clone/.git/hooks" "$android_clone/.git/info" "$android_clone/.git/hooks"
+git -C "$api_clone" init --quiet
+git -C "$frontend_clone" init --quiet
+git -C "$android_clone" init --quiet
 printf 'not-a-git-pointer\n' > "$garbled_git_api_clone/.git"
 mkdir -p "$home_dir/.local/bin"
 
@@ -5577,6 +5594,14 @@ exit 0
 EOF
 chmod +x "$frontend_clone/scripts/preflight.sh"
 
+mkdir -p "$api_clone/.git/hooks" "$frontend_clone/.git/hooks"
+ln -s ../../scripts/preflight.sh "$api_clone/.git/hooks/pre-push"
+cat >"$frontend_clone/.git/hooks/pre-push" <<'EOF'
+#!/usr/bin/env bash
+echo custom pre-push
+EOF
+chmod +x "$frontend_clone/.git/hooks/pre-push"
+
 shared_android_sdk_root="$workspace/shared-android-sdk"
 mkdir -p "$shared_android_sdk_root/platform-tools" "$shared_android_sdk_root/cmdline-tools/latest"
 
@@ -5752,13 +5777,12 @@ grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
 grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
 grep -q '^android/local\.properties$' "$android_clone/.git/info/exclude"
 test -x "$api_clone/.git/hooks/pre-commit"
-test -L "$api_clone/.git/hooks/pre-push"
-test "$(readlink "$api_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
+test ! -e "$api_clone/.git/hooks/pre-push"
 test -L "$api_clone/.git/hooks/commit-msg"
 readlink "$api_clone/.git/hooks/commit-msg" | grep -qF 'strip-ai-trailers.sh'
 test -x "$frontend_clone/.git/hooks/pre-commit"
-test -L "$frontend_clone/.git/hooks/pre-push"
-test "$(readlink "$frontend_clone/.git/hooks/pre-push")" = '../../scripts/preflight.sh'
+test -f "$frontend_clone/.git/hooks/pre-push"
+grep -qF 'echo custom pre-push' "$frontend_clone/.git/hooks/pre-push"
 test -L "$frontend_clone/.git/hooks/commit-msg"
 readlink "$frontend_clone/.git/hooks/commit-msg" | grep -qF 'strip-ai-trailers.sh'
 test -f "$api_clone/.polyscope-secpal-provisioned.json"
@@ -5931,6 +5955,7 @@ PY
 
 legacy_hashed_api_clone="$home_dir/.polyscope/clones/api12345/legacy-hawk-165552b7"
 mkdir -p "$legacy_hashed_api_clone/.git/info" "$legacy_hashed_api_clone/.git/hooks" "$legacy_hashed_api_clone/scripts"
+git -C "$legacy_hashed_api_clone" init --quiet
 seed_api_worktree_files "$legacy_hashed_api_clone"
 cat >"$legacy_hashed_api_clone/.env" <<'EOF'
 APP_URL=https://api-legacy-hawk.preview.secpal.dev
@@ -5965,6 +5990,7 @@ PY
 
 stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
 mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
+git -C "$stale_api_clone" init --quiet
 seed_api_worktree_files "$stale_api_clone"
 cp "$workspace_root/api/.env" "$stale_api_clone/.env"
 
@@ -6135,6 +6161,15 @@ mkdir -p "$failing_api_alias_clone/.git/info" "$failing_api_alias_clone/.git/hoo
 mkdir -p "$failing_frontend_manifest_clone/.git/info" "$failing_frontend_manifest_clone/.git/hooks" "$failing_frontend_manifest_clone/scripts"
 mkdir -p "$failing_frontend_io_clone/.git/info" "$failing_frontend_io_clone/.git/hooks" "$failing_frontend_io_clone/scripts"
 mkdir -p "$guardguide_clone/.git/info" "$guardguide_clone/.git/hooks" "$guardguide_clone/database"
+for fixture_repo in \
+    "$failing_api_clone" \
+    "$failing_api_cleanup_clone" \
+    "$failing_api_alias_clone" \
+    "$failing_frontend_manifest_clone" \
+    "$failing_frontend_io_clone" \
+    "$guardguide_clone"; do
+    git -C "$fixture_repo" init --quiet
+done
 
 seed_api_worktree_files "$failing_api_clone"
 seed_api_worktree_files "$failing_api_cleanup_clone"
@@ -6309,6 +6344,8 @@ schema_summary_json="$workspace/schema-summary.json"
 schema_cleanup_summary_json="$workspace/schema-cleanup-summary.json"
 
 mkdir -p "$schema_home_dir/.local/bin" "$schema_api_clone/.git/info" "$schema_api_clone/.git/hooks" "$schema_api_clone/scripts" "$schema_frontend_clone/.git/info" "$schema_frontend_clone/.git/hooks" "$schema_frontend_clone/scripts"
+git -C "$schema_api_clone" init --quiet
+git -C "$schema_frontend_clone" init --quiet
 cp "$home_dir/.local/bin/pre-commit" "$schema_home_dir/.local/bin/pre-commit"
 seed_api_worktree_files "$schema_api_clone"
 seed_node_worktree_files "$schema_frontend_clone" "frontend-schema-badger"

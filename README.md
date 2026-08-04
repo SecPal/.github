@@ -146,23 +146,25 @@ pre-commit autoupdate
 
 - REUSE 3.3 compliance
 
-### Pre-push Hooks
+### Local Validation
 
-We use a pre-push hook to run comprehensive quality checks before pushing to GitHub. This includes formatting, linting, testing, and PR size checks.
+Git hooks intentionally keep the commit and push path short. Pre-commit runs
+fast formatting, linting, and policy checks; SecPal does not install the full
+preflight suite as a pre-push hook.
 
 **Installation:**
 
-Run the setup scripts to install both pre-commit and pre-push hooks:
+Install the pre-commit hooks:
 
 ```bash
 # Install pre-commit hooks (formatting, linting, REUSE compliance)
 ./scripts/setup-pre-commit.sh
 
-# Install pre-push hook (comprehensive quality checks)
-./scripts/setup-pre-push.sh
 ```
 
-The hooks are installed as symlinks in `.git/hooks/`, ensuring they automatically update when scripts change.
+Polyscope rollout and the workspace-level `setup-hooks.sh` also remove only the
+legacy SecPal-managed `pre-push` symlink to `scripts/preflight.sh`. Custom
+repository hooks and regular hook files are preserved.
 
 **What it checks:**
 
@@ -178,7 +180,7 @@ The hooks are installed as symlinks in `.git/hooks/`, ensuring they automaticall
 **Manual Usage:**
 
 ```bash
-# Run preflight checks manually
+# Run the complete local suite deliberately before handoff when warranted
 ./scripts/preflight.sh
 
 # Optional local workflow lint (prefer this to avoid environment-specific hangs)

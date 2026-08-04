@@ -15,8 +15,17 @@ cd "$WORKSPACE_ROOT"
 REPOS=("api" "frontend" "contracts" "android" "secpal.app" "guardguide.de" ".github")
 ROLLOUT_HINT="Run .github/scripts/install-polyscope-rollout.sh (or sync via Polyscope) to provision missing SecPal repositories."
 SUCCESS_COUNT=0
+REMOVED_PRE_PUSH_COUNT=0
 FAILED_REPOS=()
 MISSING_REPOS=()
+
+is_managed_pre_push_hook() {
+        local hook_path="$1"
+        local preflight_path="$2"
+
+        python3 -c 'import os, sys; hook, preflight = sys.argv[1:]; target = os.path.realpath(os.path.join(os.path.dirname(hook), os.readlink(hook))); raise SystemExit(0 if target == os.path.realpath(preflight) else 1)' \
+                "$hook_path" "$preflight_path"
+}
 
 # Check if pre-commit is installed
 if ! command -v pre-commit &>/dev/null; then
@@ -48,19 +57,18 @@ for repo in "${REPOS[@]}"; do
 	echo "────────────────────────────────────────"
 	cd "$repo"
 
-	# Setup pre-push hook
-	if [ -f "scripts/setup-pre-push.sh" ]; then
-		if ./scripts/setup-pre-push.sh; then
-			echo "  ✓ Pre-push hook installed"
-			SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-		else
-			echo "  ✗ Pre-push hook installation failed"
-			FAILED_REPOS+=("$repo (pre-push)")
-		fi
+	# Retire only the legacy full-preflight symlink installed by SecPal.
+	# Repository-specific executable hooks remain untouched.
+	HOOKS_DIR="$(git rev-parse --git-path hooks)"
+	PRE_PUSH_HOOK="$HOOKS_DIR/pre-push"
+	if [ -L "$PRE_PUSH_HOOK" ] \
+		&& is_managed_pre_push_hook "$PRE_PUSH_HOOK" "$PWD/scripts/preflight.sh"; then
+		unlink "$PRE_PUSH_HOOK"
+		echo "  ✓ Retired managed full-preflight pre-push hook"
+		REMOVED_PRE_PUSH_COUNT=$((REMOVED_PRE_PUSH_COUNT + 1))
 	else
-                echo "  ✗ scripts/setup-pre-push.sh not found in $repo"
-                FAILED_REPOS+=("$repo (setup-pre-push.sh missing)")
-        fi
+		echo "  • No managed full-preflight pre-push hook to retire"
+	fi
 
         # Setup pre-commit hook
         if [ -f "scripts/setup-pre-commit.sh" ]; then
@@ -109,6 +117,7 @@ echo "════════════════════════�
 echo "✨ Summary"
 echo "════════════════════════════════════════"
 echo "Successfully installed: $SUCCESS_COUNT hooks"
+echo "Managed pre-push hooks retired: $REMOVED_PRE_PUSH_COUNT"
 
 if command -v actionlint &>/dev/null; then
 	echo "Optional workflow lint binary: actionlint found on PATH"
@@ -141,12 +150,10 @@ echo "✅ All Git hooks have been successfully installed!"
 echo ""
 echo "📝 What's installed:"
 echo "  • Pre-commit hooks: Formatting, linting, REUSE compliance"
-echo "  • Pre-push hooks: Comprehensive quality checks (via scripts/preflight.sh)"
 echo "  • Commit-msg hooks: Strip AI agent attribution trailers (Cursor, Copilot)"
 echo ""
 echo "💡 Usage:"
-echo "  • Hooks run automatically on commit/push"
-echo "  • Test manually: cd <repo> && ./scripts/preflight.sh"
+echo "  • Fast hooks run automatically on commit; pushes do not repeat the full suite"
+echo "  • Run full validation deliberately: cd <repo> && ./scripts/preflight.sh"
 echo "  • Manual workflow lint: pre-commit run actionlint --all-files"
-echo "  • Bypass (emergencies only): git push --no-verify"
 echo ""

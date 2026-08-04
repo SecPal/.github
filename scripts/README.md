@@ -571,8 +571,9 @@ systemctl --user is-active polyscope-clone-reaper.timer
 
 ### `setup-hooks.sh`
 
-Installs pre-push, pre-commit, and commit-msg hooks across every managed
-SecPal repo discovered next to the `.github` checkout.
+Installs pre-commit and commit-msg hooks across every managed SecPal repo
+discovered next to the `.github` checkout. It also retires legacy
+SecPal-managed full-preflight `pre-push` symlinks without touching custom hooks.
 
 **Behavior:**
 
@@ -583,8 +584,8 @@ SecPal repo discovered next to the `.github` checkout.
 - Managed repo paths that exist but are **not directories** are treated as real
   failures because they indicate a corrupted workspace layout, not a repo that
   simply has not been synced yet.
-- Real failures in `setup-pre-push.sh`, `setup-pre-commit.sh`, or the
-  commit-msg symlink still mark the repo as failed and exit `1`.
+- Real failures in `setup-pre-commit.sh` or the commit-msg symlink still mark
+  the repo as failed and exit `1`.
 
 **Usage:**
 

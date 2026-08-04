@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-03 - Decouple Full Validation From Push
+
+**Changed:**
+
+- stopped Polyscope and workspace hook setup from attaching the complete
+  preflight suite to every push
+- added a conservative migration that removes only SecPal-managed preflight
+  symlinks and preserves custom pre-push hooks
+- removed duplicate generated Preflight actions, retained one deliberate All
+  Checks action, and removed redundant Contracts validation commands
+- guided remediation toward focused checks while iterating and one complete
+  local pass before handoff when warranted
+
+---
+
 ## 2026-08-01 - Register Deployment Phase B Validation
 
 **Changed:**
