@@ -5302,6 +5302,63 @@ class FastPathTests(TestCase):
                 ):
                     actions._command_attest_validation(arguments)
 
+    def test_failed_complete_validation_invalidates_a_stale_receipt(self) -> None:
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "receipt.json"
+            output.write_text(
+                json.dumps({"receipt_digest": "stale-successful-receipt"}),
+                encoding="utf-8",
+            )
+            arguments = SimpleNamespace(
+                expected_head=p21.HEAD,
+                repo_root=str(REPO_ROOT),
+                repo="SecPal/.github",
+                reviewed_state="reviewed.json",
+                registry="registry.json",
+                bind_commit=False,
+                receipt=None,
+                output=str(output),
+                manual_gate_evidence=None,
+            )
+
+            with (
+                mock.patch.object(
+                    actions,
+                    "_attestation_local_state",
+                    return_value=(p21.HEAD, ""),
+                ),
+                mock.patch.object(
+                    actions,
+                    "_load_fast_state",
+                    return_value=fast_feedback(),
+                ),
+                mock.patch.object(actions, "load_registry", return_value={}),
+                mock.patch.object(actions, "select_repository", return_value=entry),
+                mock.patch.object(actions, "_staged_tree", return_value="a" * 40),
+                mock.patch.object(
+                    actions,
+                    "_run_registered_validations",
+                    return_value=False,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "complete registered validation failed",
+                ):
+                    actions._command_attest_validation(arguments)
+
+            self.assertEqual(
+                json.loads(output.read_text(encoding="utf-8")),
+                {
+                    "schema_version": "1.0",
+                    "status": "VALIDATION_RECEIPT_INVALIDATED",
+                    "head_sha": p21.HEAD,
+                    "validated_tree_sha": "a" * 40,
+                },
+            )
+
     def test_bound_commit_requires_receipt_for_reviewed_head(self) -> None:
         reviewed = fast_feedback()
         receipt_head = "e" * 40

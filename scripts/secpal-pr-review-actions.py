@@ -4332,6 +4332,16 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         getattr(arguments, "manual_gate_evidence", None), binding
     )
     tree = _staged_tree(repository_root, status)
+    if arguments.output:
+        _write_fast_report(
+            arguments.output,
+            {
+                "schema_version": "1.0",
+                "status": "VALIDATION_RECEIPT_INVALIDATED",
+                "head_sha": head,
+                "validated_tree_sha": tree,
+            },
+        )
     if not _run_registered_validations(entry, repository_root):
         raise fast_path.SecurityBlocker("complete registered validation failed")
     head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
