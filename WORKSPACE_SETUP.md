@@ -33,7 +33,9 @@ This will:
 
 - Install pre-commit (if not already installed)
 - Set up pre-commit hooks in all active repos (formatting, linting, REUSE compliance)
-- Set up pre-push hooks in all active repos (repository preflight checks)
+- Set up commit-message hygiene hooks in all active repos
+- Retire legacy SecPal-managed full-preflight `pre-push` symlinks while
+  preserving custom hooks
 
 ## Individual Repository Setup
 
@@ -48,8 +50,6 @@ pip install --user pre-commit
 # Install pre-commit hooks
 ./scripts/setup-pre-commit.sh
 
-# Install pre-push hooks
-./scripts/setup-pre-push.sh
 ```
 
 ## Android Toolchain
@@ -78,7 +78,8 @@ not preloaded explicitly.
 
 ## Hook Architecture
 
-SecPal uses two types of Git hooks:
+SecPal uses fast commit-time hooks. Full validation remains an explicit action
+instead of blocking every push.
 
 ### Pre-commit Hooks
 
@@ -87,29 +88,19 @@ SecPal uses two types of Git hooks:
 - Checks: Prettier, markdownlint, yamllint, actionlint, ShellCheck, REUSE compliance
 - Configuration: `.pre-commit-config.yaml` in each repo
 
-### Pre-push Hooks
+### Full Validation
 
-- Implemented as symlinks to `scripts/preflight.sh`
-- Runs on every `git push`
-- Comprehensive checks including:
-  - Formatting, markdownlint, REUSE, domain, and conflict-marker checks
-  - Language-specific linting and type checking
-  - Tests (where applicable)
-  - PR size limits
-  - Protection against pushing directly to main/master branches
+- Run the smallest relevant checks while iterating.
+- Use Polyscope's single `All Checks` action or `./scripts/preflight.sh` for an
+  intentional complete local pass before handoff when warranted.
+- Push does not repeat the full suite. Repository-specific custom `pre-push`
+  hooks remain supported and are not removed by SecPal automation.
 
 Workflow linting via `actionlint` is enforced through pre-commit hooks and CI. If you need to run it manually, prefer `pre-commit run actionlint --all-files`, or wrap any direct `actionlint` invocation in a short timeout (e.g. `timeout 30 actionlint`) to avoid environment-specific hangs.
 
 If `./scripts/preflight.sh` reports that `actionlint` is not installed, that only affects direct manual `actionlint` runs. After `./setup-hooks.sh`, the supported local path remains `pre-commit run actionlint --all-files`. Install the standalone binary only if you also want direct CLI usage, for example via `go install github.com/rhysd/actionlint/cmd/actionlint@latest`.
 
-## Bypassing Hooks (Emergencies Only)
-
-```bash
-git commit --no-verify  # Skip pre-commit
-git push --no-verify    # Skip pre-push
-```
-
-**⚠️ Only use in emergencies!** Always follow up with a PR to fix any issues.
+Do not bypass the remaining hooks. Fix a failing commit-time check instead.
 
 ## Documentation
 

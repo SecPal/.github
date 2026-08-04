@@ -324,6 +324,11 @@ for candidate in (valid_candidate, invalid_candidate, unregistered_candidate, ou
         + "\n"
     )
 
+subprocess.run(
+    ["git", "init", "--quiet", "--initial-branch=main", str(valid_candidate)],
+    check=True,
+)
+
 invalid_candidate.joinpath("AGENTS.md").write_text("# Invalid registered candidate\n")
 unregistered_sentinel = unregistered_candidate / "unrelated-sentinel"
 unregistered_sentinel.write_bytes(b"unchanged")
