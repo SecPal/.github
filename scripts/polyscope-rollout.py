@@ -5533,6 +5533,18 @@ def run_rollout(args: argparse.Namespace) -> int:
     if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
         nginx_http2_syntax = detect_nginx_http2_syntax()
 
+    initial_workspace_redirects = build_preview_workspace_redirects(
+        repo_state,
+        args.clone_root,
+    )
+    args.nginx_output.write_text(
+        render_nginx_config(
+            repo_state,
+            nginx_http2_syntax=nginx_http2_syntax,
+            workspace_redirects=initial_workspace_redirects,
+        )
+    )
+
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
     failed_provision_worktrees: list[dict[str, str]] = []

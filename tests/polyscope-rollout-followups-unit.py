@@ -162,6 +162,87 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 {"frontend": {"mighty-hyena-1c04a2fb": "mighty-hyena"}},
             )
 
+    def test_install_validates_redirects_before_mutating_preview_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            revoke_access = mock.Mock()
+            provision = mock.Mock(return_value=([], [], []))
+            args = SimpleNamespace(
+                clone_root=root / "clones",
+                db_path=root / "polyscope.db",
+                install_nginx=True,
+                refresh_nginx=False,
+                nginx_http2_syntax="modern",
+                nginx_output=root / "preview.nginx.conf",
+                polyscope_api_base="http://127.0.0.1:4321/api",
+                provision_worktrees=True,
+                repo_state_file=root / "repo-state.json",
+                skip_db_sync=True,
+                skip_local_configs=True,
+                summary_output=None,
+                workspace_root=root / "workspace",
+            )
+
+            with mock.patch.multiple(
+                rollout,
+                build_repo_specs=mock.Mock(return_value={}),
+                validate_repo_instruction_files=mock.Mock(),
+                validate_repo_local_configs=mock.Mock(),
+                load_repo_state=mock.Mock(return_value={}),
+                detect_nginx_http2_syntax=mock.Mock(return_value="modern"),
+                revoke_all_preview_nginx_access=revoke_access,
+                provision_worktrees=provision,
+                build_preview_workspace_redirects=mock.Mock(
+                    side_effect=RuntimeError("invalid workspace alias registry")
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "invalid workspace alias registry"
+                ):
+                    rollout.run_rollout(args)
+
+            revoke_access.assert_not_called()
+            provision.assert_not_called()
+
+    def test_install_validates_nginx_output_before_mutating_preview_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            revoke_access = mock.Mock()
+            provision = mock.Mock(return_value=([], [], []))
+            args = SimpleNamespace(
+                clone_root=root / "clones",
+                db_path=root / "polyscope.db",
+                install_nginx=True,
+                refresh_nginx=False,
+                nginx_http2_syntax="modern",
+                nginx_output=root / "missing" / "preview.nginx.conf",
+                polyscope_api_base="http://127.0.0.1:4321/api",
+                provision_worktrees=True,
+                repo_state_file=root / "repo-state.json",
+                skip_db_sync=True,
+                skip_local_configs=True,
+                summary_output=None,
+                workspace_root=root / "workspace",
+            )
+
+            with mock.patch.multiple(
+                rollout,
+                build_repo_specs=mock.Mock(return_value={}),
+                validate_repo_instruction_files=mock.Mock(),
+                validate_repo_local_configs=mock.Mock(),
+                load_repo_state=mock.Mock(return_value={}),
+                detect_nginx_http2_syntax=mock.Mock(return_value="modern"),
+                revoke_all_preview_nginx_access=revoke_access,
+                provision_worktrees=provision,
+                build_preview_workspace_redirects=mock.Mock(return_value={}),
+                render_nginx_config=mock.Mock(return_value="valid nginx\n"),
+            ):
+                with self.assertRaises(FileNotFoundError):
+                    rollout.run_rollout(args)
+
+            revoke_access.assert_not_called()
+            provision.assert_not_called()
+
 
 if __name__ == "__main__":
     main()
