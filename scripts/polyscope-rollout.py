@@ -4695,12 +4695,17 @@ def wait_for_api_scheduler_readiness(
     worktree_env = load_optional_env_assignments(worktree_path / ".env")
     source_env = load_optional_env_assignments(source_repo_path / ".env")
     command_env = build_api_worktree_command_env(worktree_env, source_env)
+    tinker_script = " ".join(
+        (
+            "if (! app(\\App\\Services\\RuntimeHeartbeatService::class)->schedulerReadiness()['healthy'])",
+            "{ throw new \\RuntimeException('scheduler heartbeat missing'); }",
+        )
+    )
     command = [
         "php",
         "artisan",
         "tinker",
-        "--execute=if (! app(\\App\\Services\\RuntimeHeartbeatService::class)->schedulerReadiness()['healthy']) "
-        "{ throw new \\RuntimeException('scheduler heartbeat missing'); }",
+        f"--execute={tinker_script}",
     ]
     for attempt in range(attempts):
         result = command_runner(

@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import inspect
+import io
 import json
 import subprocess
 import tempfile
+import tokenize
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
@@ -248,10 +251,37 @@ class PolyscopeRolloutFollowupTests(TestCase):
         self.assertEqual(runner.call_count, 2)
         sleeper.assert_called_once_with(0.01)
         command = runner.call_args_list[0].args[0]
-        self.assertEqual(command[:2], ["php", "artisan"])
+        self.assertEqual(command[:3], ["php", "artisan", "tinker"])
+        self.assertEqual(len(command), 4)
+        self.assertTrue(command[3].startswith("--execute="), command)
         self.assertIn("schedulerReadiness", " ".join(command[2:]))
         self.assertIn("RuntimeException", " ".join(command[2:]))
         self.assertNotIn("exit(", " ".join(command[2:]))
+
+    def test_scheduler_readiness_avoids_implicit_string_concatenation(self) -> None:
+        source = inspect.getsource(rollout.wait_for_api_scheduler_readiness)
+        ignored_tokens = {
+            tokenize.COMMENT,
+            tokenize.DEDENT,
+            tokenize.ENCODING,
+            tokenize.ENDMARKER,
+            tokenize.INDENT,
+            tokenize.NEWLINE,
+            tokenize.NL,
+        }
+        significant_tokens = [
+            token
+            for token in tokenize.generate_tokens(io.StringIO(source).readline)
+            if token.type not in ignored_tokens
+        ]
+
+        adjacent_string_tokens = [
+            (left, right)
+            for left, right in zip(significant_tokens, significant_tokens[1:])
+            if left.type == tokenize.STRING and right.type == tokenize.STRING
+        ]
+
+        self.assertEqual(adjacent_string_tokens, [])
 
     def test_provision_mode_always_refreshes_nginx_without_a_unit_flag(self) -> None:
         args = SimpleNamespace(provision_worktrees=True, refresh_nginx=False)
