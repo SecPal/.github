@@ -49,6 +49,7 @@ PREVIEW_DB_PASSWORD_SOURCE_SHA256_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE_SHA256
 PREVIEW_DB_PASSWORD_SOURCE_VALUE = "source"
 PREVIEW_SCHEMA_ENV_KEY = "POLYSCOPE_PREVIEW_SCHEMA"
 PREVIEW_STORAGE_MODE_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_MODE"
+PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY = "POLYSCOPE_PREVIEW_STORAGE_RESET_REQUIRED"
 POSTGRES_PREVIEW_DATABASE_SEPARATOR = "__preview__"
 POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z0-9_]+)=(.*)$")
@@ -877,16 +878,22 @@ def postgres_role_can_create_databases(env_values: dict[str, str], base_database
     return result.lower() in {"1", "t", "true", "yes", "on"}
 
 
-def ensure_postgres_preview_database(env_values: dict[str, str], base_database: str, preview_database: str) -> None:
+def ensure_postgres_preview_database(
+    env_values: dict[str, str],
+    base_database: str,
+    preview_database: str,
+) -> bool:
+    """Ensure a preview database exists and return whether it was created."""
     exists = run_postgres_command(
         env_values,
         base_database,
         f"SELECT 1 FROM pg_database WHERE datname = '{preview_database}'",
     )
     if exists == "1":
-        return
+        return False
 
     run_postgres_command(env_values, base_database, f'CREATE DATABASE "{preview_database}"')
+    return True
 
 
 def list_postgres_preview_databases(env_values: dict[str, str], base_database: str) -> list[str]:
@@ -917,8 +924,25 @@ def list_postgres_preview_schemas(env_values: dict[str, str], base_database: str
     return [line for line in output.splitlines() if line]
 
 
-def ensure_postgres_preview_schema(env_values: dict[str, str], base_database: str, preview_schema: str) -> None:
+def ensure_postgres_preview_schema(
+    env_values: dict[str, str],
+    base_database: str,
+    preview_schema: str,
+) -> bool:
+    """Ensure a preview schema exists and return whether it was created."""
+    exists = run_postgres_command(
+        env_values,
+        base_database,
+        (
+            "SELECT 1 FROM information_schema.schemata "
+            f"WHERE schema_name = '{preview_schema}'"
+        ),
+    )
+    if exists == "1":
+        return False
+
     run_postgres_command(env_values, base_database, f'CREATE SCHEMA IF NOT EXISTS "{preview_schema}"')
+    return True
 
 
 def drop_postgres_preview_schema(env_values: dict[str, str], base_database: str, preview_schema: str) -> None:
@@ -1164,6 +1188,7 @@ def ensure_api_worktree_ready(
 
     env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
+    previous_preview_storage_target = build_api_preview_storage_target(env_values)
     runtime_env_values = build_api_worktree_runtime_env(env_values, source_env_values)
     workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
     frontend_workspace = resolve_linked_workspace_name(worktree_path, "SecPal/frontend", db_path=db_path)
@@ -1189,13 +1214,23 @@ def ensure_api_worktree_ready(
             raise SystemExit(f"api worktree {worktree_path} is missing DB_DATABASE in .env")
         preview_target = build_preview_database_name(base_database, workspace)
         if postgres_role_can_create_databases(runtime_env_values, base_database):
-            ensure_postgres_preview_database(runtime_env_values, base_database, preview_target)
+            preview_storage_created = ensure_postgres_preview_database(
+                runtime_env_values,
+                base_database,
+                preview_target,
+            )
+            next_preview_storage_target = f"database:{preview_target}"
             updated_values["DB_DATABASE"] = preview_target
             updated_values["DB_URL"] = ""
             updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "database"
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = ""
         else:
-            ensure_postgres_preview_schema(runtime_env_values, base_database, preview_target)
+            preview_storage_created = ensure_postgres_preview_schema(
+                runtime_env_values,
+                base_database,
+                preview_target,
+            )
+            next_preview_storage_target = f"schema:{base_database}:{preview_target}"
             schema_url_env_values = runtime_env_values.copy()
             schema_url_env_values["DB_PASSWORD"] = ""
             updated_values["DB_DATABASE"] = base_database
@@ -1207,6 +1242,10 @@ def ensure_api_worktree_ready(
             updated_values[PREVIEW_STORAGE_MODE_ENV_KEY] = "schema"
             updated_values[PREVIEW_SCHEMA_ENV_KEY] = preview_target
         updated_values[PREVIEW_DATABASE_BASE_ENV_KEY] = base_database
+        if previous_preview_storage_target != next_preview_storage_target:
+            updated_values[PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] = (
+                "1" if preview_storage_created is False else ""
+            )
 
     updated_env_text = upsert_env_assignments(env_text, updated_values)
     if updated_env_text != env_text:
@@ -1263,6 +1302,46 @@ def is_recoverable_preview_tenant_key_failure(error: subprocess.CalledProcessErr
     )
 
 
+def is_isolated_api_preview_storage_target(preview_storage_target: str | None) -> bool:
+    """Return whether a storage target names a disposable API preview."""
+    if not preview_storage_target:
+        return False
+
+    def is_preview_identifier(identifier: str) -> bool:
+        base_identifier, separator, workspace_identifier = identifier.partition(
+            POSTGRES_PREVIEW_DATABASE_SEPARATOR
+        )
+        return bool(base_identifier and separator and workspace_identifier)
+
+    if preview_storage_target.startswith("database:"):
+        preview_database = preview_storage_target.removeprefix("database:")
+        return is_preview_identifier(preview_database)
+
+    if preview_storage_target.startswith("schema:"):
+        target_parts = preview_storage_target.split(":", 2)
+        return (
+            len(target_parts) == 3
+            and bool(target_parts[1])
+            and is_preview_identifier(target_parts[2])
+        )
+
+    return False
+
+
+def is_recoverable_preview_schema_drift(error: subprocess.CalledProcessError) -> bool:
+    """Return whether migration output proves PostgreSQL missing-table drift."""
+    output = error.output
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    if not isinstance(output, str):
+        return False
+
+    # PostgreSQL 42P01 is the exact undefined_table condition. The surrounding
+    # Symfony console rendering may wrap or decorate the human-readable text,
+    # so it is deliberately not used as a second, presentation-dependent gate.
+    return re.search(r"SQLSTATE\s*\[\s*42P01\s*\]", output) is not None
+
+
 def discard_stale_preview_kek(
     worktree_path: pathlib.Path,
     env_values: dict[str, str],
@@ -1291,6 +1370,7 @@ def _bootstrap_api_worktree_locked(
     migration_command: list[str] | None = None,
     migration_label: str = "running migrations",
     allow_tenant_key_recovery: bool = True,
+    allow_schema_drift_recovery: bool = True,
 ) -> tuple[bool, str | None]:
     """Run the API mutation pipeline while the caller holds its worktree lock."""
     env_path = worktree_path / ".env"
@@ -1303,7 +1383,12 @@ def _bootstrap_api_worktree_locked(
     workspace_label = os.environ.get("POLYSCOPE_WORKSPACE_LABEL", workspace)
     prefix = f"[api:{workspace_label}]"
     if migration_command is None:
-        migration_command = ["php", "artisan", "migrate", "--force"]
+        if env_values.get(PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY, "").strip() == "1":
+            migration_command = ["php", "artisan", "migrate:fresh", "--force"]
+            migration_label = "initializing reused preview storage from a clean database"
+            allow_schema_drift_recovery = False
+        else:
+            migration_command = ["php", "artisan", "migrate", "--force"]
 
     if (worktree_path / "vendor" / "autoload.php").is_file():
         print(f"{prefix} Composer dependencies already present")
@@ -1328,11 +1413,32 @@ def _bootstrap_api_worktree_locked(
     )
 
     print(f"{prefix} {migration_label}")
-    run_api_worktree_bootstrap_command(
-        worktree_path,
-        migration_command,
-        command_env=command_env,
-    )
+    try:
+        run_api_worktree_bootstrap_command(
+            worktree_path,
+            migration_command,
+            command_env=command_env,
+        )
+    except subprocess.CalledProcessError as error:
+        if not (
+            allow_schema_drift_recovery
+            and migration_command == ["php", "artisan", "migrate", "--force"]
+            and is_isolated_api_preview_storage_target(preview_storage_target)
+            and is_recoverable_preview_schema_drift(error)
+        ):
+            raise
+
+        print(f"{prefix} recovering isolated preview database schema drift")
+        return _bootstrap_api_worktree_locked(
+            worktree_path,
+            source_repo_path,
+            db_path=db_path,
+            preview_storage_target=preview_storage_target,
+            migration_command=["php", "artisan", "migrate:fresh", "--force"],
+            migration_label="resetting isolated preview database after schema drift",
+            allow_tenant_key_recovery=allow_tenant_key_recovery,
+            allow_schema_drift_recovery=False,
+        )
 
     print(f"{prefix} importing address data when absent")
     run_api_worktree_bootstrap_command(
@@ -1372,6 +1478,7 @@ def _bootstrap_api_worktree_locked(
             migration_command=["php", "artisan", "migrate:fresh", "--force"],
             migration_label="resetting preview database after tenant key recovery",
             allow_tenant_key_recovery=False,
+            allow_schema_drift_recovery=False,
         )
 
     print(f"{prefix} normalizing preview test user")
@@ -1380,6 +1487,15 @@ def _bootstrap_api_worktree_locked(
         ["php", "artisan", "tinker", f"--execute={build_api_preview_test_user_tinker_script()}"],
         command_env=command_env,
     )
+
+    if env_values.get(PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY, "").strip() == "1":
+        current_env_text = env_path.read_text()
+        env_path.write_text(
+            upsert_env_assignments(
+                current_env_text,
+                {PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY: ""},
+            )
+        )
 
     return True, preview_storage_target
 
@@ -1406,6 +1522,7 @@ def bootstrap_api_worktree(
     migration_command: list[str] | None = None,
     migration_label: str = "running migrations",
     allow_tenant_key_recovery: bool = True,
+    allow_schema_drift_recovery: bool = True,
 ) -> tuple[bool, str | None]:
     with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
         ready, preview_storage_target = ensure_api_worktree_ready(
@@ -1423,6 +1540,7 @@ def bootstrap_api_worktree(
             migration_command=migration_command,
             migration_label=migration_label,
             allow_tenant_key_recovery=allow_tenant_key_recovery,
+            allow_schema_drift_recovery=allow_schema_drift_recovery,
         )
 
 
@@ -3903,6 +4021,53 @@ def ensure_workspace_alias(worktree_path: pathlib.Path, *, db_path: pathlib.Path
     record_workspace_alias(alias_path, worktree_path)
 
 
+def build_preview_workspace_redirects(
+    repo_state: dict[str, dict[str, Any]],
+    clone_root: pathlib.Path,
+) -> dict[str, dict[str, str]]:
+    """Map each managed physical clone name to its canonical preview workspace."""
+    redirects: dict[str, dict[str, str]] = {}
+    resolved_clone_root = clone_root.resolve()
+
+    for repo_name, settings in REPO_SETTINGS.items():
+        if not settings.get("preview_prefix"):
+            continue
+        repo_entry = repo_state.get(repo_name)
+        if repo_entry is None:
+            continue
+        repo_clone_root = resolved_clone_root / str(repo_entry["id"])
+        if not repo_clone_root.exists():
+            redirects[repo_name] = {}
+            continue
+        if repo_clone_root.is_symlink() or not repo_clone_root.is_dir():
+            raise RuntimeError(f"preview repository clone root is not a physical directory: {repo_clone_root}")
+
+        repo_redirects: dict[str, str] = {}
+        for canonical_workspace, physical_workspace in load_workspace_alias_registry(repo_clone_root).items():
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", canonical_workspace):
+                raise RuntimeError(f"workspace alias is not a safe preview hostname: {canonical_workspace}")
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", physical_workspace):
+                raise RuntimeError(f"workspace alias target is not a safe preview hostname: {physical_workspace}")
+
+            canonical_path = repo_clone_root / canonical_workspace
+            physical_path = repo_clone_root / physical_workspace
+            # A removed worktree can leave its managed registry entry behind
+            # until the provisioner's normal stale-alias cleanup runs. It must
+            # not prevent active workspaces from receiving their own aliases.
+            if not physical_path.exists():
+                continue
+            if not canonical_path.is_symlink() or os.readlink(canonical_path) != physical_workspace:
+                raise RuntimeError(f"workspace alias no longer points to its registered physical clone: {canonical_path}")
+            if physical_path.is_symlink() or not physical_path.is_dir():
+                raise RuntimeError(f"workspace alias target is not a physical directory: {physical_path}")
+            if physical_workspace in repo_redirects:
+                raise RuntimeError(f"physical preview clone has multiple canonical aliases: {physical_path}")
+            repo_redirects[physical_workspace] = canonical_workspace
+        redirects[repo_name] = dict(sorted(repo_redirects.items()))
+
+    return redirects
+
+
 def sync_worktree_auxiliary_files(repo_name: str, worktree_path: pathlib.Path) -> None:
     sync_repo_auxiliary_files(repo_name, worktree_path)
 
@@ -4660,7 +4825,11 @@ def detect_nginx_http2_syntax() -> str:
     return select_nginx_http2_syntax(nginx_version)
 
 
-def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_syntax: str = "modern") -> str:
+def render_nginx_config(
+    repo_state: dict[str, dict[str, Any]],
+    nginx_http2_syntax: str = "modern",
+    workspace_redirects: dict[str, dict[str, str]] | None = None,
+) -> str:
     if nginx_http2_syntax not in {"modern", "legacy"}:
         raise ValueError(f"unsupported nginx HTTP/2 syntax: {nginx_http2_syntax}")
     api_id = repo_state["api"]["id"]
@@ -4670,6 +4839,26 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
     guardguide_de_id = repo_state["guardguide.de"]["id"]
     http2_listen_suffix = "" if nginx_http2_syntax == "modern" else " http2"
     http2_directive = "\n            http2 on;" if nginx_http2_syntax == "modern" else ""
+    preview_prefixes = {
+        "api": "api",
+        "frontend": "frontend",
+        "GuardGuide": "guardguide",
+        "secpal.app": "secpal-app",
+        "guardguide.de": "guardguide-de",
+    }
+    redirect_lines = ["    default \"\";"]
+    for repo_name, prefix in preview_prefixes.items():
+        for physical_workspace, canonical_workspace in sorted((workspace_redirects or {}).get(repo_name, {}).items()):
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", physical_workspace):
+                raise ValueError(f"unsafe physical workspace redirect for {repo_name}")
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", canonical_workspace):
+                raise ValueError(f"unsafe canonical workspace redirect for {repo_name}")
+            if physical_workspace == canonical_workspace:
+                raise ValueError(f"workspace redirect for {repo_name} maps a workspace to itself")
+            redirect_lines.append(
+                f"    {prefix}-{physical_workspace}.preview.secpal.dev {prefix}-{canonical_workspace}.preview.secpal.dev;"
+            )
+    preview_redirect_map = "\n".join(redirect_lines)
     # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-,
     # or secpal-app- are reserved for per-repository routing (for example,
     # api-WORKSPACE.preview.secpal.dev). Generic workspaces must not use these prefixes
@@ -4677,10 +4866,20 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
     # `http2 on;` requires nginx >= 1.25.1, so install mode version-gates this render option.
     return textwrap.dedent(
         f"""
+        map_hash_bucket_size 128;
+
+        map $host $preview_canonical_host {{
+{preview_redirect_map}
+        }}
+
         server {{
             listen 80;
             listen [::]:80;
             server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+
+            if ($preview_canonical_host) {{
+                return 308 https://$preview_canonical_host$request_uri;
+            }}
 
             location /.well-known/acme-challenge/ {{
                 root /var/www/certbot;
@@ -4693,6 +4892,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             listen 443 ssl{http2_listen_suffix};
             listen [::]:443 ssl{http2_listen_suffix};{http2_directive}
             server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+
+            if ($preview_canonical_host) {{
+                return 308 https://$preview_canonical_host$request_uri;
+            }}
 
             access_log /var/log/nginx/preview.secpal.dev.access.log;
             error_log /var/log/nginx/preview.secpal.dev.error.log;
@@ -4722,8 +4925,10 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             set $guardguide_de_dist $guardguide_de_root/dist;
             set $preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
+            set $preview_entrypoint /home/secpal/.polyscope/__missing_preview_entrypoint__;
             set $php_root $api_public;
             set $route_mode static;
+            set $preview_ready 0;
             set $preview_relaxed_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; worker-src 'self'; upgrade-insecure-requests";
             set $preview_frontend_csp "default-src 'self'; base-uri 'self'; connect-src 'self' https:; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'none'; worker-src 'self'; upgrade-insecure-requests";
             set $secpal_csp $preview_relaxed_csp;
@@ -4732,12 +4937,14 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if (-f $api_public/index.php) {{
                 set $preview_worktree $api_root;
                 set $preview_docroot $api_public;
+                set $preview_entrypoint $api_public/index.php;
                 set $route_mode api;
             }}
 
             if (-f $frontend_dist/index.html) {{
                 set $preview_worktree $frontend_root;
                 set $preview_docroot $frontend_dist;
+                set $preview_entrypoint $frontend_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_frontend_csp;
             }}
@@ -4745,6 +4952,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if (-f $secpal_app_dist/index.html) {{
                 set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
+                set $preview_entrypoint $secpal_app_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
@@ -4752,6 +4960,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if (-f $guardguide_de_dist/index.html) {{
                 set $preview_worktree $guardguide_de_root;
                 set $preview_docroot $guardguide_de_dist;
+                set $preview_entrypoint $guardguide_de_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
@@ -4759,6 +4968,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if ($repo = secpal-app) {{
                 set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
+                set $preview_entrypoint $secpal_app_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
@@ -4766,6 +4976,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if ($repo = guardguide-de) {{
                 set $preview_worktree $guardguide_de_root;
                 set $preview_docroot $guardguide_de_dist;
+                set $preview_entrypoint $guardguide_de_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
@@ -4773,6 +4984,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if ($repo = frontend) {{
                 set $preview_worktree $frontend_root;
                 set $preview_docroot $frontend_dist;
+                set $preview_entrypoint $frontend_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_frontend_csp;
             }}
@@ -4780,6 +4992,7 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if ($repo = guardguide) {{
                 set $preview_worktree $guardguide_root;
                 set $preview_docroot $guardguide_public;
+                set $preview_entrypoint $guardguide_public/index.php;
                 set $php_root $guardguide_public;
                 set $route_mode api;
                 set $secpal_csp $preview_relaxed_csp;
@@ -4788,13 +5001,19 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             if ($repo = api) {{
                 set $preview_worktree $api_root;
                 set $preview_docroot $api_public;
+                set $preview_entrypoint $api_public/index.php;
                 set $php_root $api_public;
                 set $route_mode api;
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
+            if (-f $preview_entrypoint) {{
+                set $preview_ready 1;
+            }}
+
             root $preview_docroot;
             disable_symlinks on from=$preview_worktree;
+            error_page 425 =200 @preview_provisioning;
 
             add_header Content-Security-Policy $secpal_csp always;
             add_header Permissions-Policy $secpal_permissions_policy always;
@@ -4817,10 +5036,16 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             location / {{
+                if ($preview_ready = 0) {{
+                    return 425;
+                }}
                 try_files $uri @preview_router;
             }}
 
             location = / {{
+                if ($preview_ready = 0) {{
+                    return 425;
+                }}
                 if ($route_mode = api) {{
                     rewrite ^ /index.php last;
                 }}
@@ -4841,6 +5066,9 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
             }}
 
             location = /index.html {{
+                if ($preview_ready = 0) {{
+                    return 425;
+                }}
                 add_header Content-Security-Policy $secpal_csp always;
                 add_header Permissions-Policy $secpal_permissions_policy always;
                 add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
@@ -4854,6 +5082,26 @@ def render_nginx_config(repo_state: dict[str, dict[str, Any]], nginx_http2_synta
                 add_header X-Permitted-Cross-Domain-Policies "none" always;
                 add_header Cache-Control "no-cache, no-store, must-revalidate" always;
                 try_files $uri =404;
+            }}
+
+            location @preview_provisioning {{
+                internal;
+                default_type text/html;
+                add_header Content-Security-Policy "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
+                add_header Permissions-Policy $secpal_permissions_policy always;
+                add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header X-XSS-Protection "0" always;
+                add_header X-Frame-Options "DENY" always;
+                add_header Referrer-Policy "no-referrer" always;
+                add_header Cross-Origin-Opener-Policy "same-origin" always;
+                add_header Cross-Origin-Resource-Policy "same-origin" always;
+                add_header Origin-Agent-Cluster "?1" always;
+                add_header X-Permitted-Cross-Domain-Policies "none" always;
+                add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+                add_header Refresh "2" always;
+                add_header X-Robots-Tag "noindex, nofollow" always;
+                return 200 '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preview wird vorbereitet</title></head><body><main><h1>Preview wird vorbereitet</h1><p>Der Workspace wird eingerichtet. Diese Seite aktualisiert sich automatisch.</p></main></body></html>';
             }}
 
             location = /sw.js {{
@@ -5215,6 +5463,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-db-sync", action="store_true")
     parser.add_argument("--install-nginx", action="store_true")
     parser.add_argument("--provision-worktrees", action="store_true")
+    parser.add_argument("--refresh-nginx", action="store_true")
     return parser.parse_args()
 
 
@@ -5234,7 +5483,7 @@ def main() -> int:
 
     lock_context = (
         provision_worktree_lock(args.provision_lock_path)
-        if args.provision_worktrees or args.install_nginx
+        if args.provision_worktrees or args.install_nginx or args.refresh_nginx
         else contextlib.nullcontext()
     )
     with lock_context:
@@ -5264,10 +5513,17 @@ def run_rollout(args: argparse.Namespace) -> int:
         db_backup = sync_repository_metadata(args.db_path, repo_state, repo_specs)
 
     nginx_http2_syntax = args.nginx_http2_syntax
-    if args.install_nginx or nginx_http2_syntax == "auto":
+    if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
         nginx_http2_syntax = detect_nginx_http2_syntax()
 
-    args.nginx_output.write_text(render_nginx_config(repo_state, nginx_http2_syntax=nginx_http2_syntax))
+    initial_workspace_redirects = build_preview_workspace_redirects(repo_state, args.clone_root)
+    args.nginx_output.write_text(
+        render_nginx_config(
+            repo_state,
+            nginx_http2_syntax=nginx_http2_syntax,
+            workspace_redirects=initial_workspace_redirects,
+        )
+    )
 
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
@@ -5292,7 +5548,7 @@ def run_rollout(args: argparse.Namespace) -> int:
             validated_instruction_roots=validated_instruction_roots,
         )
 
-    if args.install_nginx:
+    if args.install_nginx or args.refresh_nginx:
         try:
             import polyscope_nginx
         except ModuleNotFoundError as error:
@@ -5302,6 +5558,7 @@ def run_rollout(args: argparse.Namespace) -> int:
         nginx_manifest = polyscope_nginx.build_manifest(
             repo_state,
             nginx_http2_syntax=nginx_http2_syntax,
+            workspace_redirects=build_preview_workspace_redirects(repo_state, args.clone_root),
         )
         write_nginx_manifest(
             args.nginx_manifest_output,
