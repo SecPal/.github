@@ -58,6 +58,7 @@ export POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE=1
 export POLYSCOPE_TEST_SETFACL_BIN="$fake_setfacl"
 
 python3 "$SCRIPT_DIR/polyscope-rollout-hooks.py" "$PYTHON_SCRIPT"
+python3 "$SCRIPT_DIR/polyscope-rollout-followups-unit.py"
 
 workspace_root="$workspace/SecPal"
 home_dir="$workspace/home"

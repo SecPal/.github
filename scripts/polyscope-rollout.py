@@ -4568,6 +4568,7 @@ def provision_worktrees(
                 )
 
                 preview_storage_target: str | None = None
+                preview_storage_reset_required = False
                 if repo_name == "api":
                     ready, preview_storage_target = ensure_api_worktree_ready(
                         locked_worktree_path,
@@ -4576,11 +4577,20 @@ def provision_worktrees(
                     )
                     if not ready:
                         continue
+                    preview_storage_reset_required = (
+                        load_env_assignments(locked_worktree_path / ".env")
+                        .get(PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY, "")
+                        .strip()
+                        == "1"
+                    )
 
                 marker_path = locked_worktree_path / PROVISION_MARKER_FILENAME
                 marker = load_provision_marker(marker_path)
                 if marker is not None and marker.get("setup_hash") == setup_hash:
-                    if repo_name != "api" or marker.get("preview_storage_target") == preview_storage_target:
+                    if repo_name != "api" or (
+                        marker.get("preview_storage_target") == preview_storage_target
+                        and not preview_storage_reset_required
+                    ):
                         if preview_enabled:
                             ensure_preview_nginx_access(clone_root, locked_worktree_path)
                         continue
@@ -5033,6 +5043,13 @@ def render_nginx_config(
 
             location ~ /\\.(?!well-known) {{
                 deny all;
+            }}
+
+            location = /health/ready {{
+                if ($preview_ready = 0) {{
+                    return 503;
+                }}
+                try_files $uri @preview_router;
             }}
 
             location / {{
@@ -5516,15 +5533,6 @@ def run_rollout(args: argparse.Namespace) -> int:
     if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
         nginx_http2_syntax = detect_nginx_http2_syntax()
 
-    initial_workspace_redirects = build_preview_workspace_redirects(repo_state, args.clone_root)
-    args.nginx_output.write_text(
-        render_nginx_config(
-            repo_state,
-            nginx_http2_syntax=nginx_http2_syntax,
-            workspace_redirects=initial_workspace_redirects,
-        )
-    )
-
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
     failed_provision_worktrees: list[dict[str, str]] = []
@@ -5548,6 +5556,15 @@ def run_rollout(args: argparse.Namespace) -> int:
             validated_instruction_roots=validated_instruction_roots,
         )
 
+    workspace_redirects = build_preview_workspace_redirects(repo_state, args.clone_root)
+    args.nginx_output.write_text(
+        render_nginx_config(
+            repo_state,
+            nginx_http2_syntax=nginx_http2_syntax,
+            workspace_redirects=workspace_redirects,
+        )
+    )
+
     if args.install_nginx or args.refresh_nginx:
         try:
             import polyscope_nginx
@@ -5558,7 +5575,7 @@ def run_rollout(args: argparse.Namespace) -> int:
         nginx_manifest = polyscope_nginx.build_manifest(
             repo_state,
             nginx_http2_syntax=nginx_http2_syntax,
-            workspace_redirects=build_preview_workspace_redirects(repo_state, args.clone_root),
+            workspace_redirects=workspace_redirects,
         )
         write_nginx_manifest(
             args.nginx_manifest_output,
