@@ -50,7 +50,8 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Analyze with CodeQL (javascript-typescript)",
     "Check PR Size / Check PR Size",
     "AI Instructions / Validate AI Instructions",
-    "Markdown Lint / Lint Markdown Files"
+    "Markdown Lint / Lint Markdown Files",
+    "Certificate transparency"
   ],
   "api": [
     "Check REUSE Compliance / Check REUSE Compliance",
