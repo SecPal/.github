@@ -3146,9 +3146,9 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        "First establish whether existing validation evidence identifies the successful commands and covers the exact current Git tree. "
-        "Treat that evidence as stale if tracked content changed. "
-        "Do not rerun a check that already passed for the exact unchanged tree. "
+        "First establish whether existing validation evidence identifies the successful commands and binds the current repository, exact HEAD and parent, Git tree, validation registry, command set, and required manual-gate evidence. "
+        "Treat that evidence as stale if any bound value or tracked content changed. "
+        "Do not rerun a check that already passed for that exact unchanged bound state. "
         "Run only missing required checks once. "
         f"Then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
         f"Apply the commit and communication rules: {format_bullets(change_tracking)}. "

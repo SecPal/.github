@@ -153,10 +153,11 @@ staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
 manual gate. On entry, the tracked tree and holistic-audit result are frozen;
 independent discovery and audit do not continue in or after this state. A failed
-command produces no receipt and permits correction only of that proven failure
-with the smallest affected focused check before one new complete attempt. A
-successful complete validation is never repeated. Time is informational only
-and cannot determine validity.
+command produces no receipt, terminates this invocation, and permits no tree
+change or complete-command retry. A new explicit remediation invocation must
+capture fresh state and audit any correction before its single complete
+validation. A successful complete validation is never repeated. Time is
+informational only and cannot determine validity.
 
 `IF_TRACKED_TREE_CHANGED` selects only between the proven staged tree and the
 reviewed tree. When remediation changes no tracked source file, it takes

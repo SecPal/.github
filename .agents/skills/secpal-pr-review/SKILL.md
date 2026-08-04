@@ -127,9 +127,11 @@ The following state machine applies only to the full feedback-remediation path.
    registered manual gate. Preserve its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
    receipt. Do not continue discovery or change the tree after this step begins.
-   A failed command produces no receipt; correct only that proven failure with
-   the smallest focused check before starting one new complete attempt. Never
-   repeat a successful complete validation.
+   A failed command produces no receipt and is a terminal security blocker for
+   this invocation. Do not change the tree or retry any complete command.
+   Require a new explicit remediation invocation so any correction receives
+   focused validation and a fresh holistic audit before its single complete
+   validation. Never repeat a successful complete validation.
 6. When remediation changed the staged tree, create one signed commit containing
    exactly that tree, use the receipt digest as its single
    `SecPal-Validation-Receipt` trailer, and use `attest-validation --bind-commit`

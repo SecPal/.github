@@ -15,10 +15,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - reserved complete and aggregate suites for the single final review-validation
   pass instead of allowing them as iterative focused checks
-- finished review discovery before final validation and prohibited repeating a
-  successful complete pass
-- reused successful validation for an exact unchanged tree during publishing
-  and ran only missing required checks once
+- made a failed final pass terminal so any correction receives fresh feedback
+  capture, focused validation, and a holistic audit in a new invocation
+- reused successful validation only for an unchanged repository, HEAD, parent,
+  tree, registry, command set, and manual-gate evidence, and ran only missing
+  required checks once
 
 ---
 

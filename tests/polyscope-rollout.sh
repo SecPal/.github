@@ -4991,9 +4991,11 @@ assert 'Keep changes repo-local, minimal, and consistent with the repository sta
 assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
 assert 'Preserve a branch or worktree already supplied by the execution environment.' in org_prompts[0]
 assert 'Run the smallest relevant validation while iterating' in org_prompts[1]
-assert 'Treat that evidence as stale if tracked content changed.' in org_prompts[2]
-assert 'Do not rerun a check that already passed for the exact unchanged tree.' in org_prompts[2]
+assert 'binds the current repository, exact HEAD and parent, Git tree, validation registry, command set, and required manual-gate evidence.' in org_prompts[2]
+assert 'Treat that evidence as stale if any bound value or tracked content changed.' in org_prompts[2]
+assert 'Do not rerun a check that already passed for that exact unchanged bound state.' in org_prompts[2]
 assert 'Run only missing required checks once.' in org_prompts[2]
+assert 'covers the exact current Git tree' not in org_prompts[2]
 assert 'Run or re-run the touched checks' not in org_prompts[2]
 for row in prompt_rows:
     for prompt in row:
