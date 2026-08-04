@@ -112,11 +112,12 @@ The following state machine applies only to the full feedback-remediation path.
    preconditions. Never infer truth from reviewer identity, keywords, or CI.
 3. Reproduce every valid finding, add a failing test first, make the smallest
    coherent corrections, and use focused validation while editing.
-   Never use a complete, repository-wide, or aggregate suite as focused validation. If the
-   relevant regression is available only through such a suite, isolate the
-   smallest direct test, filter, or fixture before running it. A registry command
-   with `execution_policy: focused-only` is eligible for this explicit selection
-   but is never added to unconditional complete validation.
+   Never use a complete, repository-wide, or aggregate suite as focused
+   validation by default. If the relevant regression is available only through
+   such a suite, isolate the smallest direct test, filter, or fixture before
+   running it. A registered focused-only command explicitly authorized by its
+   matching manual gate is the bounded exception. It remains excluded from
+   unconditional complete validation.
 4. Perform the one holistic audit across correctness, security, privacy, data
    integrity, lifecycle, rollout, and avoidable complexity. Complete all source,
    provenance, edge-case, and diff inspection here, and fix material in-scope

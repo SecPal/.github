@@ -5302,49 +5302,62 @@ class FastPathTests(TestCase):
                 ):
                     actions._command_attest_validation(arguments)
 
-    def test_failed_complete_validation_is_terminal_without_a_receipt(self) -> None:
-        arguments = SimpleNamespace(
-            expected_head=p21.HEAD,
-            repo_root=str(REPO_ROOT),
-            repo="SecPal/.github",
-            reviewed_state="reviewed.json",
-            registry="registry.json",
-            bind_commit=False,
-            receipt=None,
-            output="receipt.json",
-            manual_gate_evidence=None,
-        )
+    def test_failed_complete_validation_invalidates_a_stale_receipt(self) -> None:
         entry = registry_entry("SecPal/.github")
         entry["manual_gates"] = []
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "receipt.json"
+            output.write_text(
+                json.dumps({"receipt_digest": "stale-successful-receipt"}),
+                encoding="utf-8",
+            )
+            arguments = SimpleNamespace(
+                expected_head=p21.HEAD,
+                repo_root=str(REPO_ROOT),
+                repo="SecPal/.github",
+                reviewed_state="reviewed.json",
+                registry="registry.json",
+                bind_commit=False,
+                receipt=None,
+                output=str(output),
+                manual_gate_evidence=None,
+            )
 
-        with (
-            mock.patch.object(
-                actions,
-                "_attestation_local_state",
-                return_value=(p21.HEAD, ""),
-            ),
-            mock.patch.object(
-                actions,
-                "_load_fast_state",
-                return_value=fast_feedback(),
-            ),
-            mock.patch.object(actions, "load_registry", return_value={}),
-            mock.patch.object(actions, "select_repository", return_value=entry),
-            mock.patch.object(actions, "_staged_tree", return_value="a" * 40),
-            mock.patch.object(
-                actions,
-                "_run_registered_validations",
-                return_value=False,
-            ),
-            mock.patch.object(actions, "_write_fast_report") as write_report,
-        ):
-            with self.assertRaisesRegex(
-                fast_path.SecurityBlocker,
-                "complete registered validation failed",
+            with (
+                mock.patch.object(
+                    actions,
+                    "_attestation_local_state",
+                    return_value=(p21.HEAD, ""),
+                ),
+                mock.patch.object(
+                    actions,
+                    "_load_fast_state",
+                    return_value=fast_feedback(),
+                ),
+                mock.patch.object(actions, "load_registry", return_value={}),
+                mock.patch.object(actions, "select_repository", return_value=entry),
+                mock.patch.object(actions, "_staged_tree", return_value="a" * 40),
+                mock.patch.object(
+                    actions,
+                    "_run_registered_validations",
+                    return_value=False,
+                ),
             ):
-                actions._command_attest_validation(arguments)
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "complete registered validation failed",
+                ):
+                    actions._command_attest_validation(arguments)
 
-        write_report.assert_not_called()
+            self.assertEqual(
+                json.loads(output.read_text(encoding="utf-8")),
+                {
+                    "schema_version": "1.0",
+                    "status": "VALIDATION_RECEIPT_INVALIDATED",
+                    "head_sha": p21.HEAD,
+                    "validated_tree_sha": "a" * 40,
+                },
+            )
 
     def test_bound_commit_requires_receipt_for_reviewed_head(self) -> None:
         reviewed = fast_feedback()

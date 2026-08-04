@@ -136,11 +136,12 @@ excludes Required Check results and all other volatile readiness values.
 `CLASSIFY_AND_FIX_ALL_CURRENT_FINDINGS` independently proves each classification,
 adds failing regression coverage for valid findings, and implements the smallest
 coherent correction. `FOCUSED_VALIDATION_WHILE_EDITING` runs only affected tests.
-Focused validation must not invoke a complete, repository-wide, or aggregate suite,
-directly or through a wrapper. When the relevant regression is available only
-through such a suite, isolate the smallest direct test, filter, or fixture first.
-Commands marked `execution_policy: focused-only` remain available for that
-explicit selection and are excluded from unconditional complete validation.
+Focused validation must not invoke a complete, repository-wide, or aggregate suite
+by default, directly or through a wrapper. When the relevant regression is
+available only through such a suite, isolate the smallest direct test, filter,
+or fixture first. A registered focused-only command explicitly authorized by
+its matching manual gate is the bounded exception. It remains excluded from
+unconditional complete validation.
 
 `HOLISTIC_AUDIT` runs once and covers correctness, security, privacy, data
 integrity, lifecycle, rollout, user control, and avoidable complexity. All
@@ -153,11 +154,12 @@ staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
 manual gate. On entry, the tracked tree and holistic-audit result are frozen;
 independent discovery and audit do not continue in or after this state. A failed
-command produces no receipt, terminates this invocation, and permits no tree
-change or complete-command retry. A new explicit remediation invocation must
-capture fresh state and audit any correction before its single complete
-validation. A successful complete validation is never repeated. Time is
-informational only and cannot determine validity.
+command produces no receipt; the command invalidates any report already at its
+configured output before validation begins, terminates this invocation, and
+permits no tree change or complete-command retry. A new explicit remediation
+invocation must capture fresh state and audit any correction before its single
+complete validation. A successful complete validation is never repeated. Time
+is informational only and cannot determine validity.
 
 `IF_TRACKED_TREE_CHANGED` selects only between the proven staged tree and the
 reviewed tree. When remediation changes no tracked source file, it takes

@@ -79,8 +79,10 @@ grep -Fq 'normal_complete_validation_runs: 1' "$CONTRACT" || fail 'complete vali
 grep -Fq 'maximum_holistic_audits: 1' "$CONTRACT" || fail 'holistic audit limit drifted'
 grep -Fq 'Focused validation must not invoke a complete, repository-wide, or aggregate suite' "$CONTRACT" \
   || fail 'focused validation may still consume the complete validation gate'
-grep -Fq 'A failed command produces no receipt, terminates this invocation, and permits no tree change or complete-command retry.' <<<"$contract_text" \
-  || fail 'failed complete validation is not terminal'
+grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$contract_text" \
+  || fail 'authorized focused-only aggregate validation has no bounded exception'
+grep -Fq 'A failed command produces no receipt; the command invalidates any report already at its configured output before validation begins, terminates this invocation, and permits no tree change or complete-command retry.' <<<"$contract_text" \
+  || fail 'failed complete validation does not invalidate stale output or terminate'
 grep -Fq 'A new explicit remediation invocation must capture fresh state and audit any correction' <<<"$contract_text" \
   || fail 'failed complete validation may reuse the prior audit'
 if grep -Fq 'one new complete attempt' "$CONTRACT"; then
@@ -162,8 +164,10 @@ test -n "$normal_skill_section" || fail 'normal skill workflow is missing'
 normal_skill_text="$(tr '\n' ' ' <<<"$normal_skill_section" | tr -s '[:space:]' ' ')"
 grep -Fq 'scripts/secpal-resolve-fixed-threads.py' <<<"$normal_skill_section" \
   || fail 'review remediation does not use the simple fixed-thread resolver'
-grep -Fq 'Never use a complete, repository-wide, or aggregate suite as focused validation.' <<<"$normal_skill_section" \
-  || fail 'skill permits complete suites during focused iteration'
+grep -Fq 'Never use a complete, repository-wide, or aggregate suite as focused validation by default.' <<<"$normal_skill_text" \
+  || fail 'skill does not keep aggregate suites forbidden by default'
+grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$normal_skill_text" \
+  || fail 'skill blocks authorized focused-only aggregate validation'
 grep -Fq 'A failed command produces no receipt and is a terminal security blocker for this invocation.' <<<"$normal_skill_text" \
   || fail 'skill does not terminate after failed complete validation'
 grep -Fq 'Require a new explicit remediation invocation so any correction receives focused validation and a fresh holistic audit' <<<"$normal_skill_text" \
