@@ -72,7 +72,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 sync_worktree_auxiliary_files=mock.Mock(),
                 ensure_worktree_hooks=mock.Mock(),
                 acquire_api_worktree_bootstrap_lock=mock.Mock(
-                    side_effect=lambda path: contextlib.nullcontext(path)
+                    side_effect=contextlib.nullcontext
                 ),
                 collect_linked_setup_context=mock.Mock(return_value={}),
                 resolve_current_workspace_name=mock.Mock(return_value="mighty-hyena"),
