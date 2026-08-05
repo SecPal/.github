@@ -162,6 +162,15 @@ if [ -f tests/reusable-workflow-policy.sh ]; then
   }
 fi
 
+if [ -f tests/android-consumed-workflow-action-pins.sh ]; then
+  bash tests/android-consumed-workflow-action-pins.sh || {
+    echo "" >&2
+    echo "❌ Android-consumed reusable workflow action pin validation failed!" >&2
+    echo "Pin every nested external action to a documented full commit SHA before continuing." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/project-automation-core.sh ]; then
   bash tests/project-automation-core.sh || {
     echo "" >&2

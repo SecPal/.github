@@ -65,6 +65,7 @@ workflow_instruction_scope="$(
 )"
 IFS=',' read -r -a workflow_instruction_patterns <<< "$workflow_instruction_scope"
 for direct_fixture in \
+  tests/android-consumed-workflow-action-pins.sh \
   tests/codeql-applicability.sh \
   tests/copilot-review-memory-errors.sh \
   tests/copilot-review-memory.sh \

@@ -32,6 +32,10 @@ workflow templates, and their direct validation fixtures.
 - Cross-repository reusable workflows must use a reviewed 40-character commit
   SHA. A `governance-ref` that selects scripts or dependencies must resolve to
   that same SHA; mixed governance versions are invalid.
+- Reusable workflows published for callers that require full-SHA action pins
+  must also pin every nested external action to a reviewed 40-character commit
+  SHA and retain its version as a same-line comment. Pinning only the reusable
+  workflow does not make mutable action tags inside it immutable.
 - Do not use productive branch references such as `@main` for cross-repository
   reusable workflows.
 - Keep dependency installation reproducible from committed lockfiles. Do not

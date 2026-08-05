@@ -24,7 +24,7 @@ if ! awk '
     }
   }
 
-  /^        uses: actions\/create-github-app-token@v3$/ {
+  /^        uses: actions\/create-github-app-token@[0-9a-f]{40}[[:space:]]+# v3$/ {
     if (in_token_step) {
       validate_token_step()
     }

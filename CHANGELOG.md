@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-05 - Pin Android-Consumed Workflow Actions
+
+**Security:**
+
+- pinned every external action used by reusable workflows consumed by the
+  Android repository to a verified full commit SHA with same-line version
+  documentation
+- added a regression check that rejects mutable tags, abbreviated SHAs,
+  missing version documentation, and removal of GitHub Actions Dependabot
+  coverage for these workflows
+
 ## 2026-08-04 - Make Preview Provisioning Self-Convergent
 
 **Changed:**
