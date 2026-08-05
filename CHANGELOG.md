@@ -19,8 +19,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - bound governance script and lockfile checkouts to the immutable revision of
   the called reusable workflow instead of a caller-selectable branch or ref
 - added a regression check that rejects mutable tags, abbreviated SHAs,
-  incomplete version documentation, and removal of GitHub Actions Dependabot
-  coverage at the workflow root for these workflows
+  incomplete or mismatched version documentation, and removal of GitHub Actions
+  Dependabot coverage at the workflow root for these workflows
 
 ## 2026-08-04 - Make Preview Provisioning Self-Convergent
 

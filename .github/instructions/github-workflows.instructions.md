@@ -36,8 +36,10 @@ workflow templates, and their direct validation fixtures.
   must not be able to select a different governance revision.
 - Reusable workflows published for callers that require full-SHA action pins
   must also pin every nested external action to a reviewed 40-character commit
-  SHA and retain its exact release version as a same-line comment. Pinning only
-  the reusable workflow does not make mutable action tags inside it immutable.
+  SHA and retain its source-verified exact release version as a same-line
+  comment. Regression coverage must reject mismatched SHA/version pairs;
+  pinning only the reusable workflow does not make mutable action tags inside it
+  immutable.
 - Do not use productive branch references such as `@main` for cross-repository
   reusable workflows.
 - Keep dependency installation reproducible from committed lockfiles. Do not
