@@ -6,8 +6,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
-documented_version='^(main|v[0-9]+([.][0-9]+){0,2}([.-][A-Za-z0-9.-]+)?)$'
-github_actions_dependabot='^[[:space:]]*-[[:space:]]+package-ecosystem:[[:space:]]*"github-actions"[[:space:]]*$'
+documented_version='^v[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
 
 is_documented_pin() {
   local reference="$1"
@@ -22,17 +21,47 @@ is_documented_pin() {
 has_github_actions_dependabot() {
   local configuration="$1"
 
-  grep -Eq "$github_actions_dependabot" <<<"$configuration"
+  awk '
+    function indentation(line) {
+      match(line, /[^ ]/)
+      return RSTART - 1
+    }
+
+    function finish_entry() {
+      if (github_actions && root_directory) {
+        found = 1
+      }
+    }
+
+    /^[ ]*-[ ]+package-ecosystem:[ ]*/ {
+      finish_entry()
+      github_actions = $0 ~ /package-ecosystem:[ ]*"github-actions"[ ]*$/
+      root_directory = 0
+      entry_indent = indentation($0)
+      next
+    }
+
+    github_actions &&
+      indentation($0) == entry_indent + 2 &&
+      $0 ~ /^[ ]*directory:[ ]*"\/"[ ]*$/ {
+      root_directory = 1
+    }
+
+    END {
+      finish_entry()
+      exit found ? 0 : 1
+    }
+  ' <<<"$configuration"
 }
 
-is_documented_pin \
-  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'v1'
 is_documented_pin \
   'actions/example@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 'v1.2.3'
 
 for invalid_fixture in \
   'actions/example@v1|v1' \
   'actions/example@abcdef0|v1' \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1' \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1.2' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|version-one'; do
   IFS='|' read -r reference version <<<"$invalid_fixture"
@@ -42,9 +71,13 @@ for invalid_fixture in \
   fi
 done
 
-has_github_actions_dependabot $'updates:\n  - package-ecosystem: "github-actions"'
+has_github_actions_dependabot $'updates:\n  - package-ecosystem: "github-actions"\n    directory: "/"'
 if has_github_actions_dependabot $'updates:\n  # - package-ecosystem: "github-actions"'; then
   echo "Accepted commented-out GitHub Actions Dependabot coverage." >&2
+  exit 1
+fi
+if has_github_actions_dependabot $'updates:\n  - package-ecosystem: "github-actions"\n    directory: "/not-root"'; then
+  echo "Accepted GitHub Actions Dependabot coverage outside the workflow root." >&2
   exit 1
 fi
 
@@ -61,6 +94,25 @@ workflows=(
   draft-pr-reminder.yml
   reusable-pr-size.yml
 )
+
+governance_checkout_workflows=(
+  reusable-ai-instructions.yml
+  reusable-markdown-lint.yml
+)
+
+for workflow in "${governance_checkout_workflows[@]}"; do
+  workflow_path="$repo_root/.github/workflows/$workflow"
+  if ! grep -q '^      governance-ref:$' "$workflow_path"; then
+    echo "$workflow: deprecated governance-ref compatibility input was removed." >&2
+    exit 1
+  fi
+  if grep -Fq "ref: \${{ inputs.governance-ref }}" "$workflow_path"; then
+    echo "$workflow: governance checkout remains caller-selectable." >&2
+    exit 1
+  fi
+  grep -Fq "repository: \${{ fromJSON(toJSON(job)).workflow_repository }}" "$workflow_path"
+  grep -Fq "ref: \${{ fromJSON(toJSON(job)).workflow_sha }}" "$workflow_path"
+done
 
 for workflow in "${workflows[@]}"; do
   workflow_path="$repo_root/.github/workflows/$workflow"

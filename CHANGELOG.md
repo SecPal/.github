@@ -14,11 +14,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Security:**
 
 - pinned every external action used by reusable workflows consumed by the
-  Android repository to a verified full commit SHA with same-line version
-  documentation
+  Android repository to a verified full commit SHA with exact same-line release
+  version documentation
+- bound governance script and lockfile checkouts to the immutable revision of
+  the called reusable workflow instead of a caller-selectable branch or ref
 - added a regression check that rejects mutable tags, abbreviated SHAs,
-  missing version documentation, and removal of GitHub Actions Dependabot
-  coverage for these workflows
+  incomplete version documentation, and removal of GitHub Actions Dependabot
+  coverage at the workflow root for these workflows
 
 ## 2026-08-04 - Make Preview Provisioning Self-Convergent
 

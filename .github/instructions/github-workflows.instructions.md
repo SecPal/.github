@@ -30,12 +30,14 @@ workflow templates, and their direct validation fixtures.
   `actions/*` major-version tags are permitted only where Dependabot manages
   updates and repository policy tests allow them.
 - Cross-repository reusable workflows must use a reviewed 40-character commit
-  SHA. A `governance-ref` that selects scripts or dependencies must resolve to
-  that same SHA; mixed governance versions are invalid.
+  SHA. A reusable workflow that checks out its own governance scripts or
+  dependencies must derive the repository and revision from the called
+  workflow's `job.workflow_repository` and `job.workflow_sha` context; callers
+  must not be able to select a different governance revision.
 - Reusable workflows published for callers that require full-SHA action pins
   must also pin every nested external action to a reviewed 40-character commit
-  SHA and retain its version as a same-line comment. Pinning only the reusable
-  workflow does not make mutable action tags inside it immutable.
+  SHA and retain its exact release version as a same-line comment. Pinning only
+  the reusable workflow does not make mutable action tags inside it immutable.
 - Do not use productive branch references such as `@main` for cross-repository
   reusable workflows.
 - Keep dependency installation reproducible from committed lockfiles. Do not
@@ -57,6 +59,8 @@ workflow templates, and their direct validation fixtures.
 
 - Group compatible minor and patch updates where this reduces noise without
   hiding a coupled dependency risk.
+- Keep the `github-actions` ecosystem configured for the workflow root (`/`) so
+  pinned actions in `.github/workflows` remain covered.
 - Do not automatically merge major updates. Preserve the repository's explicit
   allowlists, security gates, and review requirements.
 
