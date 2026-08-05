@@ -1861,7 +1861,10 @@ grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-
 grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan schedule:work'" "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan pail --timeout=0'" "$workspace_root/api/polyscope.local.json"
-grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'
+if grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'; then
+    echo "preview API scheduler must have only the persistent systemd runtime owner" >&2
+    exit 1
+fi
 if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
     echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
     exit 1
@@ -1888,7 +1891,7 @@ queue_worker_action = next(
     None,
 )
 assert queue_worker_action is not None, api_run_actions
-assert queue_worker_action.get("autostart") is True, queue_worker_action
+assert queue_worker_action.get("autostart") is False, queue_worker_action
 assert "--max-time" not in queue_worker_action["command"], queue_worker_action
 api_run_actions[0]["label"] = "Background Queue"
 api_run_actions[1]["label"] = "Cron Loop"
@@ -5273,7 +5276,7 @@ assert 'Preserve a branch or worktree already supplied by the execution environm
 assert 'Run the smallest relevant validation while iterating' in org_prompts[1]
 assert 'stage the complete intended change set before evaluating reusable validation evidence' in org_prompts[2]
 assert 'exact final staged tree, including every newly added path' in org_prompts[2]
-assert 'recheck the staged-tree identity immediately before committing and pushing' in org_prompts[2]
+assert 'Recheck the staged-tree identity immediately before committing and pushing' in org_prompts[2]
 assert 'Treat that evidence as stale if any bound value, staged content, or tracked content changed' in org_prompts[2]
 assert 'do not stage additional content after deciding to reuse it' in org_prompts[2]
 assert 'Do not rerun a check that already passed for that exact unchanged bound state.' in org_prompts[2]
@@ -6703,7 +6706,11 @@ chmod +x "$fake_sudo_dir/sudo"
 
 cat >"$fake_nginx_helper" <<'STUB'
 #!/usr/bin/env bash
-if [[ $# -eq 0 || ( $# -eq 1 && "$1" == "--check" ) ]]; then
+if [[ $# -eq 0 ]]; then
+    exit 0
+fi
+if [[ $# -eq 1 && "$1" == "--check" ]]; then
+    echo "Polyscope nginx helper check passed bundle=2 manifest_schema=1 manifest_schema=2"
     exit 0
 fi
 exit 64
@@ -7199,6 +7206,38 @@ grep -qF 'reviewed system server drop-in is incomplete' "$stale_system_error"
 test ! -e "$stale_system_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$stale_system_unit_dir/polyscope-rollout-sync.service"
 
+legacy_startup_dropin_dir="$workspace/legacy-startup-service-units/polyscope-server.service.d"
+legacy_startup_bin_dir="$workspace/legacy-startup-bin"
+legacy_startup_unit_dir="$workspace/legacy-startup-user-units"
+legacy_startup_error="$workspace/legacy-startup-install.error"
+mkdir -p "$legacy_startup_dropin_dir"
+cp "$system_dropin_dir/zz-secpal-runtime.conf" \
+    "$legacy_startup_dropin_dir/zz-secpal-runtime.conf"
+sed -i 's/ --skip-if-provision-locked//' \
+    "$legacy_startup_dropin_dir/zz-secpal-runtime.conf"
+legacy_startup_exit=0
+env HOME="$system_home_dir" \
+    CODEX_HOME="$system_home_dir/.codex-legacy-startup" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$system_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$system_sudo_log" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="$system_server_user" \
+    POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$legacy_startup_dropin_dir" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$legacy_startup_bin_dir" --unit-dir "$legacy_startup_unit_dir" --polyscope-server-bin "$fake_server_bin" \
+    2>"$legacy_startup_error" \
+    || legacy_startup_exit=$?
+if [[ "$legacy_startup_exit" -eq 0 ]]; then
+    echo "unprivileged installer must reject a blocking system startup refresh" >&2
+    exit 1
+fi
+grep -qF 'lacks constrained nginx activation' "$legacy_startup_error"
+test ! -e "$legacy_startup_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$legacy_startup_unit_dir/polyscope-rollout-sync.service"
+
 cat >"$system_polyscope_bin_dir/expose-linux-x64" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_EXPOSE_REAL_LOG"
@@ -7225,10 +7264,12 @@ test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 test "$(file_sha256 "$system_dropin_dir/zz-secpal-runtime.conf")" = "$system_dropin_hash_before"
 grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q -- '--refresh-nginx --skip-if-provision-locked' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
+grep -q -- "--clone-root $system_home_dir/.polyscope/clones --provision-lock-path $system_home_dir/.local/state/polyscope/worktree-provision.lock --refresh-nginx" "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
 if grep -Eq '^(daemon-reload|enable --now polyscope-server\.service|restart polyscope-server\.service)$' "$system_systemctl_log"; then
   echo "unprivileged installer must not mutate the system service" >&2
@@ -7255,18 +7296,26 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
+grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
+grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock" "$fake_unit_dir/polyscope-server.service"
+grep -q -- '--refresh-nginx --skip-if-provision-locked' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q 'ExecStart=.* --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'ExecStart=.* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock --refresh-nginx" "$fake_unit_dir/polyscope-rollout-sync.service"
+if grep -q -- '--install-nginx' "$fake_unit_dir/polyscope-rollout-sync.service"; then
+  echo "routine rollout sync must not run full worktree provisioning" >&2
+  exit 1
+fi
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q -- '--nginx-manifest-output .*nginx-manifest.json --install-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- '--nginx-manifest-output .*nginx-manifest.json --clone-root .* --provision-lock-path .* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
@@ -7286,6 +7335,7 @@ if grep -qF '/../' "$fake_unit_dir/polyscope-rollout-sync.path"; then
 fi
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Type=oneshot$' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^TimeoutStartSec=15min$' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^StartLimitIntervalSec=10$' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^StartLimitBurst=5$' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^ExecStartPre=/usr/bin/sleep 3$' "$fake_unit_dir/polyscope-worktree-provision.service"
@@ -7295,6 +7345,10 @@ if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polysco
 fi
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees --refresh-nginx' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
+if grep -q 'polyscope\.db-wal' "$fake_unit_dir/polyscope-worktree-provision.path"; then
+    echo "worktree provision watcher must not react to unrelated SQLite WAL writes" >&2
+    exit 1
+fi
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-worktree-provision.path"; then
     echo "worktree provision watcher must not retain an unmanaged repository" >&2
     exit 1
@@ -7319,7 +7373,6 @@ grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -qE '^PathChanged=.*/\.polyscope/polyscope\.db$' "$fake_unit_dir/polyscope-worktree-provision.path"
-grep -qE '^PathModified=.*/\.polyscope/polyscope\.db-wal$' "$fake_unit_dir/polyscope-worktree-provision.path"
 if grep -qE '^PathModified=.*/\.polyscope/clones$' "$fake_unit_dir/polyscope-worktree-provision.path"; then
   echo "worktree provision path must not watch clone contents it modifies" >&2
   exit 1
@@ -8067,10 +8120,11 @@ main_order: list[str] = []
 
 
 @contextlib.contextmanager
-def observed_provision_lock(_lock_path):
+def observed_provision_lock(_lock_path, *, blocking=True):
+    assert blocking is True
     main_order.append("lock-enter")
     try:
-        yield
+        yield True
     finally:
         main_order.append("lock-exit")
 
@@ -8141,7 +8195,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     module.provision_worktrees = lambda *_args, **_kwargs: (
         rollout_order.append("provision") or ([], [], [])
     )
-    module.write_nginx_manifest = lambda *_args, **_kwargs: rollout_order.append("manifest")
+    module.write_compatible_nginx_manifest = lambda *_args, **_kwargs: rollout_order.append("manifest")
     module.install_nginx_config = lambda _path: rollout_order.append("install")
     module.build_summary = lambda *_args: {}
     sys.modules["polyscope_nginx"] = SimpleNamespace(

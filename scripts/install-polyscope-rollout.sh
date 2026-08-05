@@ -107,7 +107,7 @@ PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
 REAPER_SERVICE_UNIT="$UNIT_DIR/polyscope-clone-reaper.service"
 REAPER_TIMER_UNIT="$UNIT_DIR/polyscope-clone-reaper.timer"
-ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
+ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
     "$SYSTEMCTL_BIN" show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
@@ -144,8 +144,13 @@ resolve_server_scope() {
 }
 
 can_apply_nginx_non_interactively() {
+    local helper_check_output
+
     [[ -x "$POLYSCOPE_NGINX_HELPER_CHECK" ]] || return 1
-    "$SUDO_BIN" -k -n "$POLYSCOPE_NGINX_HELPER_CHECK" --check >/dev/null 2>&1
+    helper_check_output="$(
+        "$SUDO_BIN" -k -n "$POLYSCOPE_NGINX_HELPER_CHECK" --check 2>/dev/null
+    )" || return 1
+    [[ " $helper_check_output " == *" manifest_schema=2 "* ]]
 }
 
 is_managed_codex_agents_link() {
@@ -248,7 +253,7 @@ if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
 fi
 
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
-for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
     _val="${!_var_name}"
     if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
         echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
@@ -353,8 +358,16 @@ if [[ "$server_scope" == "system" ]]; then
             exit 1
         fi
     done
-    if ! grep -qF -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --install-nginx' "$installed_server_target"; then
+    _expected_system_start_post="ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1'"
+    mapfile -t _installed_start_post_lines < <(sed -n '/^ExecStartPost=/p' "$installed_server_target")
+    if [[ "${#_installed_start_post_lines[@]}" -ne 2 \
+        || "${_installed_start_post_lines[0]}" != "ExecStartPost=" \
+        || "${_installed_start_post_lines[1]}" != "$_expected_system_start_post" ]]; then
         echo "Error: reviewed system server drop-in lacks constrained nginx activation: $installed_server_target" >&2
+        exit 1
+    fi
+    if grep -qF -- '--install-nginx' "$installed_server_target"; then
+        echo "Error: reviewed system server drop-in must not run full worktree provisioning: $installed_server_target" >&2
         exit 1
     fi
     if ! grep -qF -- 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/secpal/code/SecPal' "$installed_server_target"; then
@@ -405,6 +418,7 @@ Type=simple
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
+Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
 ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
 Restart=on-failure
@@ -432,7 +446,7 @@ Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
 Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --install-nginx
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --refresh-nginx
 EOF
 
 cat >"$PATH_UNIT" <<EOF
@@ -492,6 +506,7 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
+TimeoutStartSec=15min
 WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
@@ -511,7 +526,6 @@ Description=Watch SecPal Polyscope worktree metadata and generated local config 
 [Path]
 Unit=polyscope-worktree-provision.service
 PathChanged=$HOME/.polyscope/polyscope.db
-PathModified=$HOME/.polyscope/polyscope.db-wal
 PathChanged=$WORKSPACE_ROOT/api/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/frontend/polyscope.local.json
 PathChanged=$WORKSPACE_ROOT/contracts/polyscope.local.json

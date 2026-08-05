@@ -9,6 +9,58 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-04 - Make Preview Provisioning Self-Convergent
+
+**Changed:**
+
+- made the privileged Nginx consumer accept both manifest schema 1 and 2,
+  advertise its supported schemas independently of the active manifest,
+  validate its colocated renderer, invalidate cached sudo credentials during
+  capability checks, and reject producer activation through the fixed
+  root-owned helper before an incompatible manifest can replace the last usable
+  one
+- made canonical worktree provisioning refresh Nginx independently of stale
+  installed unit flags and added a recurring recovery path through the existing
+  provision timer
+- limited both system- and user-scope Polyscope server startup reconciliation
+  to Nginx state so unrelated repository synchronization cannot exhaust the
+  service start timeout, made that startup refresh skip cleanly when the full
+  provisioner already owns the shared lock, and passed the installer-validated
+  sudo binary into the user service
+- separated routine config/Nginx synchronization from full worktree
+  provisioning and corrected the scheduler probe to use PsySH's real success
+  exit status
+- stopped treating every unrelated SQLite WAL write as a worktree change while
+  retaining the main database/config triggers and periodic recovery timer
+- added persistent, restartable scheduler and queue-worker user services for
+  every registered API preview and gated preview access on a real scheduler
+  heartbeat
+- made those user services the only automatic runtime owner, restart them when
+  tracked code, untracked source metadata, or runtime environment metadata
+  changes, inherit the installer-controlled tool path, preserve services for
+  still-registered worktrees across transient reconciliation failures, and
+  retain only stale unit files whose stop or removal fails while continuing to
+  prune independent removed registrations and revoke every unregistered
+  worktree's preview ACL despite independent repository-local failures; stale
+  units are also pruned after canonical-validation failures, invalid desired
+  unit names are rejected before mutation, malformed contents plus ownership or
+  permission drift are replaced, ACL-reconciliation failures no longer skip
+  stale-unit pruning, and independent prune/activation failures remain visible
+  together
+- gave the worktree provision service an explicit 15-minute start budget and
+  revoked an existing API preview ACL whenever runtime-owner activation or
+  scheduler-heartbeat gating fails
+- preserved configured clone-root and provision-lock boundaries across startup
+  and routine refreshes, required the nonblocking startup hook in accepted
+  system drop-ins, and retained Polyscope autostart as the runtime fallback for
+  noncanonical installations
+- tightened the privileged Nginx manifest boundary so JSON booleans cannot be
+  interpreted as integer schema versions
+- completed preview API public-bootstrap configuration so linked web and
+  Android clients receive a usable workspace-specific bootstrap contract
+
+---
+
 ## 2026-08-04 - Bound Review And Publish Validation
 
 **Changed:**

@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -37,6 +38,10 @@ PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
 DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
+CANONICAL_CLONE_ROOT = pathlib.Path("/home/secpal/.polyscope/clones")
+CANONICAL_POLYSCOPE_DB_PATH = pathlib.Path("/home/secpal/.polyscope/polyscope.db")
+API_RUNTIME_UNIT_DIRECTORY = pathlib.Path("/home/secpal/.config/systemd/user")
+API_RUNTIME_UNIT_PREFIX = "polyscope-api-worktree-"
 FIXED_SETFACL_BIN = "/usr/bin/setfacl"
 NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
@@ -116,7 +121,7 @@ def default_api_worktree_bootstrap_lock_directory() -> pathlib.Path:
 
 
 @contextlib.contextmanager
-def provision_worktree_lock(lock_path: pathlib.Path):
+def provision_worktree_lock(lock_path: pathlib.Path, *, blocking: bool = True):
     """Serialize provisioners without making the lock itself a watched input."""
     lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if lock_path.is_symlink():
@@ -133,8 +138,13 @@ def provision_worktree_lock(lock_path: pathlib.Path):
         if lock_stat.st_uid != os.geteuid() or lock_stat.st_nlink != 1:
             raise RuntimeError(f"provision lock must be owned by the caller and have one link: {lock_path}")
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
+        lock_flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(descriptor, lock_flags)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
     finally:
         os.close(descriptor)
 
@@ -1078,6 +1088,10 @@ def build_api_preview_env_updates(
                 "https://app.secpal.dev",
             )
         ),
+        "BOOTSTRAP_PUBLIC_ENABLED": "true",
+        "BOOTSTRAP_INSTANCE_DISPLAY_NAME": f"SecPal Preview ({workspace})",
+        "BOOTSTRAP_MINIMUM_SUPPORTED_APP_VERSION": "1.4.0",
+        "BOOTSTRAP_MINIMUM_SUPPORTED_APP_BUILD": "10400",
     }
     if worktree_path is not None:
         updates["KEK_PATH"] = build_api_preview_kek_path(worktree_path)
@@ -2548,8 +2562,8 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     API_BOOTSTRAP_SETUP_COMMAND_PLACEHOLDER,
                 ],
                 "run": [
-                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "autostart": True, "runMode": "replace"},
-                    {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": True, "runMode": "replace"},
+                    {"label": "Queue Worker", "command": API_QUEUE_WORKER_COMMAND, "autostart": False, "runMode": "replace"},
+                    {"label": "Scheduler", "command": API_SCHEDULER_COMMAND, "autostart": False, "runMode": "replace"},
                     {"label": "Pail", "command": API_PAIL_COMMAND, "runMode": "replace"},
                     # Preview-only safety note: this destructive reset is for SecPal preview/dev workspaces only.
                     # It intentionally reseeds the canonical E2E login `test@example.com` / `password` and must never target production.
@@ -3693,6 +3707,14 @@ def render_worktree_local_config(
     db_path: pathlib.Path | None = None,
 ) -> str:
     config = render_local_config(spec)
+    if spec["path"].name == "api":
+        manages_runtime_units = should_manage_api_runtime_units(
+            worktree_path.parent.parent,
+            db_path or default_polyscope_db_path(),
+        )
+        for action in config.get("scripts", {}).get("run", []):
+            if action.get("label") in {"Queue Worker", "Scheduler"}:
+                action["autostart"] = not manages_runtime_units
     preview = config.get("preview")
     if isinstance(preview, dict) and "url" in preview:
         workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
@@ -4352,24 +4374,50 @@ def revoke_unregistered_preview_nginx_access(
         for repo_worktrees in registered_worktrees.values()
         for worktree_path in repo_worktrees
     }
+    reconciliation_failures: list[tuple[pathlib.Path, Exception]] = []
 
     for repo_clone_root in sorted(resolved_clone_root.iterdir(), key=lambda path: path.name):
         if repo_clone_root.is_symlink():
-            raise RuntimeError(
-                f"preview clone root contains a repository symlink: {repo_clone_root}"
+            reconciliation_failures.append(
+                (
+                    repo_clone_root,
+                    RuntimeError(
+                        f"preview clone root contains a repository symlink: {repo_clone_root}"
+                    ),
+                )
             )
+            continue
         if not repo_clone_root.is_dir():
             continue
 
-        registered_aliases = load_workspace_alias_registry(repo_clone_root)
-        children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        try:
+            children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        except OSError as error:
+            reconciliation_failures.append((repo_clone_root, error))
+            continue
         for child in children:
             if child.is_symlink() or not child.is_dir():
                 continue
-            if child.resolve(strict=True) not in registered_paths:
-                deny_preview_nginx_access(resolved_clone_root, child)
+            try:
+                if child.resolve(strict=True) not in registered_paths:
+                    deny_preview_nginx_access(resolved_clone_root, child)
+            except (OSError, RuntimeError) as error:
+                reconciliation_failures.append((child, error))
 
-        validate_preview_nginx_workspace_aliases(repo_clone_root, registered_aliases, children)
+        try:
+            registered_aliases = load_workspace_alias_registry(repo_clone_root)
+            validate_preview_nginx_workspace_aliases(repo_clone_root, registered_aliases, children)
+        except (OSError, RuntimeError) as error:
+            reconciliation_failures.append((repo_clone_root, error))
+
+    if reconciliation_failures:
+        details = "; ".join(
+            f"{path}: {error}"
+            for path, error in reconciliation_failures
+        )
+        raise RuntimeError(
+            f"failed to reconcile unregistered preview access: {details}"
+        ) from reconciliation_failures[0][1]
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
@@ -4439,6 +4487,407 @@ def ensure_worktree_hooks(worktree_path: pathlib.Path) -> None:
     ensure_commit_msg_hook(worktree_path)
 
 
+def should_manage_api_runtime_units(
+    clone_root: pathlib.Path,
+    db_path: pathlib.Path,
+) -> bool:
+    """Keep persistent runtime management bound to the reviewed host clone root."""
+    return (
+        clone_root.resolve() == CANONICAL_CLONE_ROOT
+        and db_path.resolve() == CANONICAL_POLYSCOPE_DB_PATH
+    )
+
+
+def build_api_runtime_id(worktree_path: pathlib.Path) -> str:
+    """Build the stable unit identifier for one physical API worktree."""
+    resolved_worktree = worktree_path.resolve()
+    return hashlib.sha256(str(resolved_worktree).encode()).hexdigest()[:12]
+
+
+def _update_runtime_revision_path_metadata(
+    digest: Any,
+    label: str,
+    path: pathlib.Path,
+) -> None:
+    digest.update(label.encode())
+    digest.update(b"\0")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        digest.update(b"missing\0")
+        return
+
+    digest.update(
+        (
+            f"{path_stat.st_mode}:{path_stat.st_ino}:{path_stat.st_size}:"
+            f"{path_stat.st_mtime_ns}:{path_stat.st_ctime_ns}"
+        ).encode()
+    )
+    digest.update(b"\0")
+    if stat.S_ISLNK(path_stat.st_mode):
+        digest.update(os.readlink(path).encode())
+        digest.update(b"\0")
+
+
+def build_api_runtime_revision(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+) -> str:
+    """Fingerprint code and environment inputs consumed by long-lived API processes."""
+    git = resolve_executable("git")
+    if git is None:
+        raise RuntimeError(f"git is required to fingerprint API runtime state for {worktree_path}")
+
+    digest = hashlib.sha256()
+    commands = (
+        [git, "rev-parse", "HEAD"],
+        [git, "diff", "--binary", "HEAD", "--"],
+        [git, "ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    outputs: list[bytes] = []
+    try:
+        for command in commands:
+            result = subprocess.run(
+                command,
+                cwd=worktree_path,
+                check=True,
+                capture_output=True,
+            )
+            outputs.append(result.stdout)
+            digest.update(len(result.stdout).to_bytes(8, "big"))
+            digest.update(result.stdout)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"unable to fingerprint API runtime state for {worktree_path}") from error
+
+    for raw_relative_path in outputs[-1].split(b"\0"):
+        if not raw_relative_path:
+            continue
+        relative_path = pathlib.Path(os.fsdecode(raw_relative_path))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise RuntimeError(
+                f"git returned an unsafe untracked path for API runtime state: {relative_path}"
+            )
+        _update_runtime_revision_path_metadata(
+            digest,
+            f"untracked:{relative_path.as_posix()}",
+            worktree_path / relative_path,
+        )
+
+    _update_runtime_revision_path_metadata(digest, "worktree-env", worktree_path / ".env")
+    _update_runtime_revision_path_metadata(digest, "source-env", source_repo_path / ".env")
+    return digest.hexdigest()
+
+
+def build_api_runtime_unit_specs(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    workspace: str,
+    runtime_revision: str,
+    service_path: str | None = None,
+) -> dict[str, str]:
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", workspace) is None:
+        raise ValueError(f"unsafe API runtime workspace name: {workspace}")
+    if re.fullmatch(r"[0-9a-f]{64}", runtime_revision) is None:
+        raise ValueError("API runtime revision must be a lowercase SHA-256 digest")
+    runtime_service_path = os.environ.get("PATH", "") if service_path is None else service_path
+    if re.fullmatch(r"[a-zA-Z0-9/_.:+-]+", runtime_service_path) is None:
+        raise ValueError("API runtime service PATH contains unsafe characters")
+
+    resolved_worktree = worktree_path.resolve()
+    resolved_source = source_repo_path.resolve()
+    runtime_id = build_api_runtime_id(resolved_worktree)
+    unit_base = f"{API_RUNTIME_UNIT_PREFIX}{workspace}-{runtime_id}"
+    roles = {
+        "scheduler": API_SCHEDULER_COMMAND,
+        "queue": API_QUEUE_WORKER_COMMAND,
+    }
+    units: dict[str, str] = {}
+    for role, shell_command in roles.items():
+        unit_name = f"{unit_base}-{role}.service"
+        exec_start = " ".join(
+            shlex.quote(argument)
+            for argument in (
+                str(ROLLOUT_SCRIPT_PATH),
+                "--run-api-worktree",
+                str(resolved_worktree),
+                "--source-repo-path",
+                str(resolved_source),
+                "--shell-command",
+                shell_command,
+            )
+        )
+        units[unit_name] = textwrap.dedent(
+            f"""
+            # SPDX-FileCopyrightText: 2026 SecPal Contributors
+            # SPDX-License-Identifier: MIT
+            # RuntimeRevision={runtime_revision}
+            [Unit]
+            Description=SecPal preview API {role} for {workspace}
+            After=network-online.target postgresql.service redis-server.service
+            Wants=network-online.target
+            ConditionPathIsDirectory={resolved_worktree}
+
+            [Service]
+            Type=simple
+            WorkingDirectory={resolved_worktree}
+            Environment=PATH={runtime_service_path}
+            ExecStart={exec_start}
+            Restart=on-failure
+            RestartSec=5s
+            TimeoutStopSec=30s
+            KillMode=mixed
+
+            [Install]
+            WantedBy=default.target
+            """
+        ).lstrip()
+    return units
+
+
+def _write_text_atomic(path: pathlib.Path, content: str, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
+    temporary_path = pathlib.Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def reconcile_api_runtime_units(
+    desired_units: dict[str, str],
+    *,
+    unit_directory: pathlib.Path = API_RUNTIME_UNIT_DIRECTORY,
+    systemctl_runner: Any = subprocess.run,
+    prune: bool = True,
+    preserve_runtime_ids: set[str] | None = None,
+) -> None:
+    """Atomically converge persistent API runtime units and their active state."""
+    preserved_ids = preserve_runtime_ids or set()
+    if any(re.fullmatch(r"[0-9a-f]{12}", runtime_id) is None for runtime_id in preserved_ids):
+        raise ValueError("preserved API runtime ids must be 12 lowercase hexadecimal characters")
+    for unit_name in desired_units:
+        if re.fullmatch(rf"{re.escape(API_RUNTIME_UNIT_PREFIX)}[a-z0-9-]+\.service", unit_name) is None:
+            raise ValueError(f"unsafe API runtime unit name: {unit_name}")
+    systemctl_env = os.environ.copy()
+    runtime_directory = pathlib.Path(f"/run/user/{os.getuid()}")
+    systemctl_env.setdefault("XDG_RUNTIME_DIR", str(runtime_directory))
+    systemctl_env.setdefault(
+        "DBUS_SESSION_BUS_ADDRESS",
+        f"unix:path={runtime_directory}/bus",
+    )
+    unit_directory.mkdir(parents=True, exist_ok=True)
+    desired_names = set(desired_units)
+    existing_units = {
+        path.name: path
+        for path in unit_directory.glob(f"{API_RUNTIME_UNIT_PREFIX}*.service")
+        if path.is_file() or path.is_symlink()
+    }
+    stale_names: list[str] = []
+    if prune:
+        for existing_name in sorted(set(existing_units) - desired_names):
+            runtime_match = re.fullmatch(
+                rf"{re.escape(API_RUNTIME_UNIT_PREFIX)}[a-z0-9-]+-([0-9a-f]{{12}})-(?:scheduler|queue)\.service",
+                existing_name,
+            )
+            if runtime_match is not None and runtime_match.group(1) in preserved_ids:
+                continue
+            stale_names.append(existing_name)
+    changed = False
+    prune_failures: list[tuple[str, Exception]] = []
+
+    for stale_name in stale_names:
+        try:
+            systemctl_runner(
+                ["systemctl", "--user", "disable", "--now", stale_name],
+                check=True,
+                env=systemctl_env,
+            )
+            existing_units[stale_name].unlink()
+        except (OSError, subprocess.CalledProcessError) as error:
+            prune_failures.append((stale_name, error))
+            continue
+        changed = True
+
+    try:
+        restart_names: set[str] = set()
+        start_names: set[str] = set()
+        for unit_name, content in sorted(desired_units.items()):
+            unit_path = unit_directory / unit_name
+            existing_content: str | None = None
+            if not unit_path.is_symlink() and unit_path.exists():
+                try:
+                    unit_metadata = unit_path.lstat()
+                    if (
+                        stat.S_ISREG(unit_metadata.st_mode)
+                        and unit_metadata.st_uid == os.geteuid()
+                        and stat.S_IMODE(unit_metadata.st_mode) == 0o644
+                    ):
+                        existing_content = unit_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    existing_content = None
+            if existing_content == content:
+                start_names.add(unit_name)
+                continue
+            _write_text_atomic(unit_path, content)
+            restart_names.add(unit_name)
+            changed = True
+
+        if changed:
+            systemctl_runner(
+                ["systemctl", "--user", "daemon-reload"],
+                check=True,
+                env=systemctl_env,
+            )
+        if desired_names:
+            systemctl_runner(
+                ["systemctl", "--user", "enable", *sorted(desired_names)],
+                check=True,
+                env=systemctl_env,
+            )
+        if restart_names:
+            systemctl_runner(
+                ["systemctl", "--user", "restart", *sorted(restart_names)],
+                check=True,
+                env=systemctl_env,
+            )
+        if start_names:
+            systemctl_runner(
+                ["systemctl", "--user", "start", *sorted(start_names)],
+                check=True,
+                env=systemctl_env,
+            )
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as activation_error:
+        if not prune_failures:
+            raise
+        prune_details = "; ".join(
+            f"{unit_name}: {error}"
+            for unit_name, error in prune_failures
+        )
+        raise RuntimeError(
+            f"failed to reconcile API runtime units: prune failures: {prune_details}; "
+            f"activation failure: {activation_error}"
+        ) from activation_error
+    if prune_failures:
+        details = "; ".join(
+            f"{unit_name}: {error}"
+            for unit_name, error in prune_failures
+        )
+        raise RuntimeError(f"failed to prune API runtime units: {details}") from prune_failures[0][1]
+
+
+def wait_for_api_scheduler_readiness(
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    command_runner: Any = subprocess.run,
+    sleeper: Any = time.sleep,
+    attempts: int = 40,
+    interval_seconds: float = 2.0,
+) -> None:
+    """Gate preview exposure on a heartbeat produced by the supervised scheduler."""
+    worktree_env = load_optional_env_assignments(worktree_path / ".env")
+    source_env = load_optional_env_assignments(source_repo_path / ".env")
+    command_env = build_api_worktree_command_env(worktree_env, source_env)
+    tinker_script = " ".join(
+        (
+            "if (! app(\\App\\Services\\RuntimeHeartbeatService::class)->schedulerReadiness()['healthy'])",
+            "{ throw new \\RuntimeException('scheduler heartbeat missing'); }",
+        )
+    )
+    command = [
+        "php",
+        "artisan",
+        "tinker",
+        f"--execute={tinker_script}",
+    ]
+    for attempt in range(attempts):
+        result = command_runner(
+            command,
+            cwd=worktree_path,
+            env=command_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        if attempt + 1 < attempts:
+            sleeper(interval_seconds)
+    raise RuntimeError(
+        f"API scheduler for {worktree_path} did not produce a readiness heartbeat "
+        f"within {attempts * interval_seconds:g} seconds"
+    )
+
+
+def wait_for_api_scheduler_readiness_or_revoke_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    preview_enabled: bool,
+) -> None:
+    """Fail closed when a supervised API scheduler does not become ready."""
+    try:
+        wait_for_api_scheduler_readiness(worktree_path, source_repo_path)
+    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+        if not preview_enabled:
+            raise
+        try:
+            deny_preview_nginx_access(clone_root, worktree_path)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as rollback_error:
+            raise RuntimeError(
+                f"{error}; additionally failed to revoke preview access: {rollback_error}"
+            ) from rollback_error
+        raise
+
+
+def ensure_api_runtime_owner(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    workspace: str,
+    preview_enabled: bool,
+) -> dict[str, str]:
+    """Converge one persistent API runtime owner before allowing preview access."""
+    try:
+        runtime_units = build_api_runtime_unit_specs(
+            worktree_path,
+            source_repo_path,
+            workspace=workspace,
+            runtime_revision=build_api_runtime_revision(
+                worktree_path,
+                source_repo_path,
+            ),
+        )
+        reconcile_api_runtime_units(runtime_units, prune=False)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError, SystemExit) as error:
+        if not preview_enabled:
+            raise
+        try:
+            deny_preview_nginx_access(clone_root, worktree_path)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as rollback_error:
+            raise RuntimeError(
+                f"{error}; additionally failed to revoke preview access: {rollback_error}"
+            ) from rollback_error
+        raise
+
+    wait_for_api_scheduler_readiness_or_revoke_access(
+        clone_root,
+        worktree_path,
+        source_repo_path,
+        preview_enabled=preview_enabled,
+    )
+    return runtime_units
+
+
 def provision_worktrees(
     repo_state: dict[str, dict[str, Any]],
     repo_specs: dict[str, dict[str, Any]],
@@ -4450,13 +4899,58 @@ def provision_worktrees(
     validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
     resolved_db_path = db_path or default_polyscope_db_path()
     failed_provision_worktrees: list[dict[str, str]] = []
+    manage_api_runtimes = should_manage_api_runtime_units(clone_root, resolved_db_path)
+    desired_api_runtime_units: dict[str, str] = {}
 
     registered_worktrees = load_registered_worktree_paths(
         resolved_db_path,
         repo_state,
         clone_root,
     )
-    revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
+    unreconciled_api_runtime_ids = (
+        {
+            build_api_runtime_id(worktree_path)
+            for worktree_path in registered_worktrees["api"]
+        }
+        if manage_api_runtimes
+        else set()
+    )
+
+    def prune_api_runtime_units_after_blocking_failure() -> None:
+        if not manage_api_runtimes:
+            return
+        try:
+            reconcile_api_runtime_units(
+                {},
+                preserve_runtime_ids=unreconciled_api_runtime_ids,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+            error_message = f"failed to prune API runtime services: {error}"
+            print(error_message, file=sys.stderr)
+            failed_provision_worktrees.append(
+                {
+                    "repo": "api",
+                    "workspace": "runtime-services",
+                    "path": str(API_RUNTIME_UNIT_DIRECTORY),
+                    "error": error_message,
+                }
+            )
+
+    try:
+        revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
+    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+        error_message = f"failed to reconcile preview access: {error}"
+        print(error_message, file=sys.stderr)
+        failed_provision_worktrees.append(
+            {
+                "repo": "preview",
+                "workspace": "access-reconciliation",
+                "path": str(clone_root),
+                "error": error_message,
+            }
+        )
+        prune_api_runtime_units_after_blocking_failure()
+        return [], [], failed_provision_worktrees
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
@@ -4520,6 +5014,7 @@ def provision_worktrees(
             )
 
     if canonical_validation_failed:
+        prune_api_runtime_units_after_blocking_failure()
         return [], [], failed_provision_worktrees
 
     removed_workspace_aliases = cleanup_removed_workspace_aliases(
@@ -4591,6 +5086,18 @@ def provision_worktrees(
                         marker.get("preview_storage_target") == preview_storage_target
                         and not preview_storage_reset_required
                     ):
+                        if repo_name == "api" and manage_api_runtimes:
+                            runtime_units = ensure_api_runtime_owner(
+                                clone_root,
+                                locked_worktree_path,
+                                pathlib.Path(spec["path"]),
+                                workspace=workspace,
+                                preview_enabled=preview_enabled,
+                            )
+                            desired_api_runtime_units.update(runtime_units)
+                            unreconciled_api_runtime_ids.discard(
+                                build_api_runtime_id(locked_worktree_path)
+                            )
                         if preview_enabled:
                             ensure_preview_nginx_access(clone_root, locked_worktree_path)
                         continue
@@ -4624,6 +5131,19 @@ def provision_worktrees(
                 if linked_setup_context:
                     marker_payload["linked_workspaces"] = linked_setup_context
 
+                if repo_name == "api" and manage_api_runtimes:
+                    runtime_units = ensure_api_runtime_owner(
+                        clone_root,
+                        locked_worktree_path,
+                        pathlib.Path(spec["path"]),
+                        workspace=workspace,
+                        preview_enabled=preview_enabled,
+                    )
+                    desired_api_runtime_units.update(runtime_units)
+                    unreconciled_api_runtime_ids.discard(
+                        build_api_runtime_id(locked_worktree_path)
+                    )
+
                 if preview_enabled:
                     try:
                         ensure_preview_nginx_access(clone_root, locked_worktree_path)
@@ -4650,6 +5170,24 @@ def provision_worktrees(
                     "repo": repo_name,
                     "workspace": worktree_path.name,
                     "path": str(worktree_path),
+                    "error": error_message,
+                }
+            )
+
+    if manage_api_runtimes:
+        try:
+            reconcile_api_runtime_units(
+                desired_api_runtime_units,
+                preserve_runtime_ids=unreconciled_api_runtime_ids,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+            error_message = f"failed to reconcile API runtime services: {error}"
+            print(error_message, file=sys.stderr)
+            failed_provision_worktrees.append(
+                {
+                    "repo": "api",
+                    "workspace": "runtime-services",
+                    "path": str(API_RUNTIME_UNIT_DIRECTORY),
                     "error": error_message,
                 }
             )
@@ -5302,6 +5840,40 @@ def install_nginx_config(
     subprocess.run(command, check=True)
 
 
+def check_nginx_helper_compatibility(
+    manifest_version: int,
+    *,
+    helper_runner: Any = subprocess.run,
+    sudo_bin: str | None = None,
+    helper_path: pathlib.Path | None = None,
+) -> None:
+    sudo_bin = sudo_bin or os.environ.get("POLYSCOPE_SUDO_BIN", "sudo")
+    helper_path = helper_path or DEFAULT_NGINX_HELPER_PATH
+    if helper_runner is subprocess.run and (
+        not helper_path.is_file() or not os.access(helper_path, os.X_OK)
+    ):
+        raise RuntimeError(f"constrained Polyscope nginx helper is missing or not executable: {helper_path}")
+
+    command = [str(helper_path), "--check"] if os.geteuid() == 0 else [
+        sudo_bin,
+        "-k",
+        "-n",
+        str(helper_path),
+        "--check",
+    ]
+    result = helper_runner(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "helper check failed without output").strip()
+        raise RuntimeError(f"privileged nginx helper compatibility check failed: {details}")
+
+    capability = f"manifest_schema={manifest_version}"
+    if capability not in result.stdout.split():
+        raise RuntimeError(
+            f"privileged nginx helper does not advertise support for manifest schema {manifest_version}; "
+            "install the matching root-owned Polyscope system-component bundle before retrying"
+        )
+
+
 def write_nginx_manifest(
     manifest_path: pathlib.Path,
     payload: dict[str, Any],
@@ -5349,6 +5921,26 @@ def write_nginx_manifest(
             os.setegid(original_egid)
         if groups_changed:
             os.setgroups(original_groups)
+
+
+def write_compatible_nginx_manifest(
+    manifest_path: pathlib.Path,
+    payload: dict[str, Any],
+    *,
+    writer: Any,
+    helper_runner: Any = subprocess.run,
+    service_user: Any | None = None,
+) -> None:
+    version = payload.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError("nginx manifest version must be an integer")
+    check_nginx_helper_compatibility(version, helper_runner=helper_runner)
+    write_nginx_manifest(
+        manifest_path,
+        payload,
+        writer=writer,
+        service_user=service_user,
+    )
 
 
 def validate_direct_api_worktree_roots(
@@ -5481,11 +6073,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--install-nginx", action="store_true")
     parser.add_argument("--provision-worktrees", action="store_true")
     parser.add_argument("--refresh-nginx", action="store_true")
+    parser.add_argument("--skip-if-provision-locked", action="store_true")
     return parser.parse_args()
+
+
+def apply_canonical_reconcile_mode(args: argparse.Namespace) -> None:
+    """Make the production provisioner a complete reconcile regardless of unit drift."""
+    clone_root = getattr(args, "clone_root", None)
+    db_path = getattr(args, "db_path", None)
+    if args.provision_worktrees and (
+        clone_root is None
+        or db_path is None
+        or (
+            pathlib.Path(clone_root).resolve() == CANONICAL_CLONE_ROOT
+            and pathlib.Path(db_path).resolve() == CANONICAL_POLYSCOPE_DB_PATH
+        )
+    ):
+        args.refresh_nginx = True
 
 
 def main() -> int:
     args = parse_args()
+    apply_canonical_reconcile_mode(args)
+
+    skip_if_provision_locked = getattr(args, "skip_if_provision_locked", False)
+    if skip_if_provision_locked and (
+        not args.refresh_nginx or args.provision_worktrees or args.install_nginx
+    ):
+        raise SystemExit(
+            "--skip-if-provision-locked requires refresh-only mode and cannot be used "
+            "with --provision-worktrees or --install-nginx"
+        )
 
     try:
         validation_only_result = dispatch_validation_only_direct_mode(args)
@@ -5499,11 +6117,17 @@ def main() -> int:
         return direct_mode_result
 
     lock_context = (
-        provision_worktree_lock(args.provision_lock_path)
+        provision_worktree_lock(
+            args.provision_lock_path,
+            blocking=not skip_if_provision_locked,
+        )
         if args.provision_worktrees or args.install_nginx or args.refresh_nginx
         else contextlib.nullcontext()
     )
-    with lock_context:
+    with lock_context as lock_acquired:
+        if lock_acquired is False:
+            print("Skipping startup Nginx refresh because provisioning is already in progress")
+            return 0
         return run_rollout(args)
 
 
@@ -5589,7 +6213,7 @@ def run_rollout(args: argparse.Namespace) -> int:
             nginx_http2_syntax=nginx_http2_syntax,
             workspace_redirects=workspace_redirects,
         )
-        write_nginx_manifest(
+        write_compatible_nginx_manifest(
             args.nginx_manifest_output,
             nginx_manifest,
             writer=polyscope_nginx.write_manifest_atomic,
