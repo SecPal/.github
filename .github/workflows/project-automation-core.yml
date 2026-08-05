@@ -42,13 +42,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Setup Node.js for Octokit
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -58,7 +58,7 @@ jobs:
       - name: Add issue to project (if opened/reopened)
         id: add-to-project
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -173,7 +173,7 @@ jobs:
       - name: Get project item ID for status update
         id: get-item-id
         if: github.event.action == 'closed'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -226,7 +226,7 @@ jobs:
         if: |
           (steps.add-to-project.outputs.success == 'true' && steps.determine-status.outputs.statusId) ||
           (steps.get-item-id.outputs.found == 'true' && steps.determine-closed-status.outputs.statusId)
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -269,7 +269,7 @@ jobs:
 
       - name: Comment on issue
         if: contains(fromJSON('["opened", "reopened"]'), github.event.action)
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -325,13 +325,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Setup Node.js for Octokit
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -340,7 +340,7 @@ jobs:
 
       - name: Extract linked issues
         id: linked-issues
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -408,7 +408,7 @@ jobs:
 
       - name: Update linked issues status
         if: steps.linked-issues.outputs.count != '0' && steps.pr-status.outputs.shouldUpdate == 'true'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -501,13 +501,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Setup Node.js for Octokit
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -516,7 +516,7 @@ jobs:
 
       - name: Extract linked issues
         id: linked-issues
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -537,7 +537,7 @@ jobs:
 
       - name: Update linked issues to In Progress
         if: steps.linked-issues.outputs.count != '0'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROJECT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROJECT_ID: ${{ env.PROJECT_ID }}
