@@ -7,6 +7,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
 documented_version='^(main|v[0-9]+([.][0-9]+){0,2}([.-][A-Za-z0-9.-]+)?)$'
+github_actions_dependabot='^[[:space:]]*-[[:space:]]+package-ecosystem:[[:space:]]*"github-actions"[[:space:]]*$'
 
 is_documented_pin() {
   local reference="$1"
@@ -16,6 +17,12 @@ is_documented_pin() {
   [[ "$reference" == *@* ]] &&
     [[ "$revision" =~ $full_commit_sha ]] &&
     [[ "$version" =~ $documented_version ]]
+}
+
+has_github_actions_dependabot() {
+  local configuration="$1"
+
+  grep -Eq "$github_actions_dependabot" <<<"$configuration"
 }
 
 is_documented_pin \
@@ -34,6 +41,12 @@ for invalid_fixture in \
     exit 1
   fi
 done
+
+has_github_actions_dependabot $'updates:\n  - package-ecosystem: "github-actions"'
+if has_github_actions_dependabot $'updates:\n  # - package-ecosystem: "github-actions"'; then
+  echo "Accepted commented-out GitHub Actions Dependabot coverage." >&2
+  exit 1
+fi
 
 workflows=(
   reusable-reuse.yml
@@ -72,6 +85,6 @@ for workflow in "${workflows[@]}"; do
   done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$workflow_path")
 done
 
-grep -q 'package-ecosystem: "github-actions"' "$repo_root/.github/dependabot.yml"
+has_github_actions_dependabot "$(<"$repo_root/.github/dependabot.yml")"
 
 echo "Android-consumed reusable workflow action pins verified."
