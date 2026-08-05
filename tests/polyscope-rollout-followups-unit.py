@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import inspect
@@ -295,7 +296,9 @@ class PolyscopeRolloutFollowupTests(TestCase):
             unit_directory = Path(temporary_directory)
             unit_name = "polyscope-api-worktree-mighty-hyena-scheduler.service"
             content = "scheduler\n"
-            (unit_directory / unit_name).write_text(content)
+            unit_path = unit_directory / unit_name
+            unit_path.write_text(content)
+            unit_path.chmod(0o644)
             systemctl = mock.Mock()
 
             rollout.reconcile_api_runtime_units(
@@ -439,6 +442,71 @@ class PolyscopeRolloutFollowupTests(TestCase):
             commands = [call.args[0] for call in systemctl.call_args_list]
             self.assertIn(["systemctl", "--user", "daemon-reload"], commands)
             self.assertIn(["systemctl", "--user", "restart", unit_name], commands)
+
+    def test_api_runtime_reconciliation_restores_desired_unit_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            unit_name = "polyscope-api-worktree-mighty-hyena-scheduler.service"
+            unit_path = unit_directory / unit_name
+            unit_path.write_text("desired\n")
+            unit_path.chmod(0o600)
+            systemctl = mock.Mock()
+
+            rollout.reconcile_api_runtime_units(
+                {unit_name: "desired\n"},
+                unit_directory=unit_directory,
+                systemctl_runner=systemctl,
+                prune=False,
+            )
+
+            self.assertEqual(unit_path.stat().st_mode & 0o777, 0o644)
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertIn(["systemctl", "--user", "daemon-reload"], commands)
+            self.assertIn(["systemctl", "--user", "restart", unit_name], commands)
+
+    def test_api_runtime_reconciliation_restores_desired_unit_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            unit_name = "polyscope-api-worktree-mighty-hyena-scheduler.service"
+            unit_path = unit_directory / unit_name
+            unit_path.write_text("desired\n")
+            unit_path.chmod(0o644)
+            systemctl = mock.Mock()
+            original_lstat = Path.lstat
+
+            def lstat(path):
+                metadata = original_lstat(path)
+                if path == unit_path:
+                    return SimpleNamespace(
+                        st_mode=metadata.st_mode,
+                        st_uid=rollout.os.geteuid() + 1,
+                    )
+                return metadata
+
+            with mock.patch.object(Path, "lstat", new=lstat):
+                rollout.reconcile_api_runtime_units(
+                    {unit_name: "desired\n"},
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                    prune=False,
+                )
+
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertIn(["systemctl", "--user", "daemon-reload"], commands)
+            self.assertIn(["systemctl", "--user", "restart", unit_name], commands)
+
+    def test_api_runtime_reconciliation_has_no_empty_exception_handler(self) -> None:
+        source = inspect.getsource(rollout.reconcile_api_runtime_units)
+        tree = compile(source, "reconcile_api_runtime_units", "exec", ast.PyCF_ONLY_AST)
+        empty_handlers = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ExceptHandler)
+            and len(node.body) == 1
+            and isinstance(node.body[0], ast.Pass)
+        ]
+
+        self.assertEqual(empty_handlers, [])
 
     def test_api_runtime_reconciliation_reports_prune_and_activation_failures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -43,8 +43,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   prune independent removed registrations and revoke every unregistered
   worktree's preview ACL despite independent repository-local failures; stale
   units are also pruned after canonical-validation failures, invalid desired
-  unit names are rejected before mutation, malformed unit contents are replaced,
-  and independent prune/activation failures remain visible together
+  unit names are rejected before mutation, malformed contents plus ownership or
+  permission drift are replaced, and independent prune/activation failures
+  remain visible together
 - gave the worktree provision service an explicit 15-minute start budget and
   revoked an existing API preview ACL whenever scheduler-heartbeat gating fails
 - tightened the privileged Nginx manifest boundary so JSON booleans cannot be

@@ -512,9 +512,10 @@ still-registered physical worktrees; units belonging to removed registrations
 remain eligible for pruning. Stale unit files are removed only after systemd
 confirms that their services stopped successfully; a failure preserves that
 unit without blocking later independent stale-unit cleanup. Desired unit names
-are validated before cleanup starts, unreadable unit contents are replaced, and
-independent cleanup and activation failures are reported together. Routine preview ACL
-reconciliation likewise attempts every unregistered physical worktree before
+are validated before cleanup starts, unreadable contents plus ownership or
+permission drift are replaced, and independent cleanup and activation failures
+are reported together. Routine preview ACL reconciliation likewise attempts every
+unregistered physical worktree before
 reporting any individual denial or repository-integrity failures. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
 checking the live database allowlist, locks, and processes.

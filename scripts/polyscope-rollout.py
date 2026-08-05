@@ -4715,9 +4715,15 @@ def reconcile_api_runtime_units(
             existing_content: str | None = None
             if not unit_path.is_symlink() and unit_path.exists():
                 try:
-                    existing_content = unit_path.read_text()
-                except UnicodeError:
-                    pass
+                    unit_metadata = unit_path.lstat()
+                    if (
+                        stat.S_ISREG(unit_metadata.st_mode)
+                        and unit_metadata.st_uid == os.geteuid()
+                        and stat.S_IMODE(unit_metadata.st_mode) == 0o644
+                    ):
+                        existing_content = unit_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    existing_content = None
             if existing_content == content:
                 start_names.add(unit_name)
                 continue
