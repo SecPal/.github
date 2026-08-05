@@ -4361,24 +4361,50 @@ def revoke_unregistered_preview_nginx_access(
         for repo_worktrees in registered_worktrees.values()
         for worktree_path in repo_worktrees
     }
+    reconciliation_failures: list[tuple[pathlib.Path, Exception]] = []
 
     for repo_clone_root in sorted(resolved_clone_root.iterdir(), key=lambda path: path.name):
         if repo_clone_root.is_symlink():
-            raise RuntimeError(
-                f"preview clone root contains a repository symlink: {repo_clone_root}"
+            reconciliation_failures.append(
+                (
+                    repo_clone_root,
+                    RuntimeError(
+                        f"preview clone root contains a repository symlink: {repo_clone_root}"
+                    ),
+                )
             )
+            continue
         if not repo_clone_root.is_dir():
             continue
 
-        registered_aliases = load_workspace_alias_registry(repo_clone_root)
-        children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        try:
+            children = sorted(repo_clone_root.iterdir(), key=lambda path: path.name)
+        except OSError as error:
+            reconciliation_failures.append((repo_clone_root, error))
+            continue
         for child in children:
             if child.is_symlink() or not child.is_dir():
                 continue
-            if child.resolve(strict=True) not in registered_paths:
-                deny_preview_nginx_access(resolved_clone_root, child)
+            try:
+                if child.resolve(strict=True) not in registered_paths:
+                    deny_preview_nginx_access(resolved_clone_root, child)
+            except (OSError, RuntimeError) as error:
+                reconciliation_failures.append((child, error))
 
-        validate_preview_nginx_workspace_aliases(repo_clone_root, registered_aliases, children)
+        try:
+            registered_aliases = load_workspace_alias_registry(repo_clone_root)
+            validate_preview_nginx_workspace_aliases(repo_clone_root, registered_aliases, children)
+        except (OSError, RuntimeError) as error:
+            reconciliation_failures.append((repo_clone_root, error))
+
+    if reconciliation_failures:
+        details = "; ".join(
+            f"{path}: {error}"
+            for path, error in reconciliation_failures
+        )
+        raise RuntimeError(
+            f"failed to reconcile unregistered preview access: {details}"
+        ) from reconciliation_failures[0][1]
 
 
 def ensure_pre_commit_hook(worktree_path: pathlib.Path) -> None:
@@ -4657,15 +4683,21 @@ def reconcile_api_runtime_units(
             if runtime_match is not None and runtime_match.group(1) in preserved_ids:
                 continue
             stale_names.append(existing_name)
-    changed = bool(stale_names)
+    changed = False
+    prune_failures: list[tuple[str, Exception]] = []
 
     for stale_name in stale_names:
-        systemctl_runner(
-            ["systemctl", "--user", "disable", "--now", stale_name],
-            check=True,
-            env=systemctl_env,
-        )
-        existing_units[stale_name].unlink()
+        try:
+            systemctl_runner(
+                ["systemctl", "--user", "disable", "--now", stale_name],
+                check=True,
+                env=systemctl_env,
+            )
+            existing_units[stale_name].unlink()
+        except (OSError, subprocess.CalledProcessError) as error:
+            prune_failures.append((stale_name, error))
+            continue
+        changed = True
 
     restart_names: set[str] = set()
     start_names: set[str] = set()
@@ -4704,6 +4736,12 @@ def reconcile_api_runtime_units(
             check=True,
             env=systemctl_env,
         )
+    if prune_failures:
+        details = "; ".join(
+            f"{unit_name}: {error}"
+            for unit_name, error in prune_failures
+        )
+        raise RuntimeError(f"failed to prune API runtime units: {details}") from prune_failures[0][1]
 
 
 def wait_for_api_scheduler_readiness(

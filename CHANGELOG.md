@@ -37,8 +37,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   tracked code, untracked source metadata, or runtime environment metadata
   changes, inherit the installer-controlled tool path, preserve services for
   still-registered worktrees across transient reconciliation failures, and
-  retain stale unit files when stopping their processes fails while continuing
-  to prune removed registrations
+  retain only stale unit files whose stop or removal fails while continuing to
+  prune independent removed registrations and revoke every unregistered
+  worktree's preview ACL despite independent repository-local failures
 - tightened the privileged Nginx manifest boundary so JSON booleans cannot be
   interpreted as integer schema versions
 - completed preview API public-bootstrap configuration so linked web and

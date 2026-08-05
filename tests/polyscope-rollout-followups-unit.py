@@ -264,7 +264,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 )
             )
 
-            with self.assertRaises(subprocess.CalledProcessError):
+            with self.assertRaisesRegex(RuntimeError, stale_unit.name):
                 rollout.reconcile_api_runtime_units(
                     {},
                     unit_directory=unit_directory,
@@ -272,6 +272,77 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 )
 
             self.assertTrue(stale_unit.exists())
+
+    def test_api_runtime_reconciliation_continues_pruning_after_stop_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            failed_unit = unit_directory / "polyscope-api-worktree-aaa-scheduler.service"
+            later_unit = unit_directory / "polyscope-api-worktree-zzz-scheduler.service"
+            failed_unit.write_text("failed\n")
+            later_unit.write_text("later\n")
+
+            def run_systemctl(command, **_kwargs):
+                if command[-1] == failed_unit.name:
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0)
+
+            systemctl = mock.Mock(side_effect=run_systemctl)
+
+            with self.assertRaisesRegex(RuntimeError, failed_unit.name):
+                rollout.reconcile_api_runtime_units(
+                    {},
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                )
+
+            self.assertTrue(failed_unit.exists())
+            self.assertFalse(later_unit.exists())
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertIn(
+                ["systemctl", "--user", "disable", "--now", failed_unit.name],
+                commands,
+            )
+            self.assertIn(
+                ["systemctl", "--user", "disable", "--now", later_unit.name],
+                commands,
+            )
+
+    def test_api_runtime_reconciliation_continues_pruning_after_unlink_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            failed_unit = unit_directory / "polyscope-api-worktree-aaa-scheduler.service"
+            later_unit = unit_directory / "polyscope-api-worktree-zzz-scheduler.service"
+            failed_unit.write_text("failed\n")
+            later_unit.write_text("later\n")
+            systemctl = mock.Mock(return_value=SimpleNamespace(returncode=0))
+            original_unlink = Path.unlink
+
+            def unlink(path, *args, **kwargs):
+                if path == failed_unit:
+                    raise OSError("simulated unit removal failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(Path, "unlink", new=unlink),
+                self.assertRaisesRegex(RuntimeError, failed_unit.name),
+            ):
+                rollout.reconcile_api_runtime_units(
+                    {},
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                )
+
+            self.assertTrue(failed_unit.exists())
+            self.assertFalse(later_unit.exists())
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertIn(
+                ["systemctl", "--user", "disable", "--now", failed_unit.name],
+                commands,
+            )
+            self.assertIn(
+                ["systemctl", "--user", "disable", "--now", later_unit.name],
+                commands,
+            )
 
     def test_api_runtime_failure_preserves_only_the_registered_runtime_units(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -367,6 +438,91 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 ["systemctl", "--user", "disable", "--now", removed_unit.name],
                 commands,
             )
+
+    def test_acl_reconciliation_continues_revoking_after_one_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            clone_root = Path(temporary_directory) / "clones"
+            repo_root = clone_root / "frontend-id"
+            first_orphan = repo_root / "aaa-orphan"
+            later_orphan = repo_root / "zzz-orphan"
+            first_orphan.mkdir(parents=True)
+            later_orphan.mkdir()
+            denied: list[Path] = []
+
+            def deny(_clone_root, worktree_path, **_kwargs):
+                denied.append(worktree_path)
+                if worktree_path == first_orphan:
+                    raise RuntimeError("simulated ACL denial failure")
+
+            with (
+                mock.patch.object(rollout, "deny_preview_nginx_access", new=deny),
+                self.assertRaisesRegex(RuntimeError, first_orphan.name),
+            ):
+                rollout.revoke_unregistered_preview_nginx_access(
+                    clone_root,
+                    {"frontend": []},
+                )
+
+            self.assertEqual(denied, [first_orphan, later_orphan])
+
+    def test_acl_reconciliation_revokes_worktrees_despite_bad_alias_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            clone_root = Path(temporary_directory) / "clones"
+            first_repo = clone_root / "aaa-repo"
+            later_repo = clone_root / "zzz-repo"
+            first_orphan = first_repo / "orphan"
+            later_orphan = later_repo / "orphan"
+            first_orphan.mkdir(parents=True)
+            later_orphan.mkdir(parents=True)
+            (first_repo / rollout.WORKSPACE_ALIAS_REGISTRY_FILENAME).write_text("{bad-json\n")
+            denied: list[Path] = []
+
+            with (
+                mock.patch.object(
+                    rollout,
+                    "deny_preview_nginx_access",
+                    side_effect=lambda _root, worktree, **_kwargs: denied.append(worktree),
+                ),
+                self.assertRaisesRegex(RuntimeError, "workspace alias registry"),
+            ):
+                rollout.revoke_unregistered_preview_nginx_access(
+                    clone_root,
+                    {"frontend": []},
+                )
+
+            self.assertEqual(denied, [first_orphan, later_orphan])
+
+    def test_acl_reconciliation_continues_after_repository_listing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            clone_root = Path(temporary_directory) / "clones"
+            first_repo = clone_root / "aaa-repo"
+            later_repo = clone_root / "zzz-repo"
+            first_repo.mkdir(parents=True)
+            later_orphan = later_repo / "orphan"
+            later_orphan.mkdir(parents=True)
+            denied: list[Path] = []
+            original_iterdir = Path.iterdir
+
+            def iterdir(path):
+                if path == first_repo:
+                    raise OSError("simulated repository listing failure")
+                return original_iterdir(path)
+
+            with (
+                mock.patch.object(Path, "iterdir", new=iterdir),
+                mock.patch.object(
+                    rollout,
+                    "deny_preview_nginx_access",
+                    side_effect=lambda _root, worktree, **_kwargs: denied.append(worktree),
+                ),
+                self.assertRaisesRegex(RuntimeError, first_repo.name),
+            ):
+                rollout.revoke_unregistered_preview_nginx_access(
+                    clone_root,
+                    {"frontend": []},
+                )
+
+            self.assertEqual(denied, [later_orphan])
 
     def test_scheduler_readiness_waits_for_a_real_heartbeat(self) -> None:
         runner = mock.Mock(

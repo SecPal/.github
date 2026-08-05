@@ -504,7 +504,10 @@ autostart, preventing a second scheduler or worker from competing with the
 managed services. A failed reconciliation preserves existing units only for
 still-registered physical worktrees; units belonging to removed registrations
 remain eligible for pruning. Stale unit files are removed only after systemd
-confirms that their services stopped successfully. The paired daily
+confirms that their services stopped successfully; a failure preserves that
+unit without blocking later independent stale-unit cleanup. Routine preview ACL
+reconciliation likewise attempts every unregistered physical worktree before
+reporting any individual denial or repository-integrity failures. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
 checking the live database allowlist, locks, and processes.
 
