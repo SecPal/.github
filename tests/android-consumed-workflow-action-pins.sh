@@ -8,29 +8,6 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
 documented_version='^v[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
 
-# Keep this offline provenance allowlist synchronized with source-verified
-# upstream release tags. Annotated tags use their peeled commit SHA.
-verified_action_releases=(
-  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1|v7.0.1'
-  'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1|v3.2.0'
-  'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3|v9.0.0'
-  'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020|v7.0.0'
-  'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97|v7.0.0'
-  'fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5|v6.0.0'
-)
-
-is_verified_action_release() {
-  local candidate="$1|$2"
-  local verified_release
-
-  for verified_release in "${verified_action_releases[@]}"; do
-    if [[ "$verified_release" == "$candidate" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 is_documented_pin() {
   local reference="$1"
   local version="$2"
@@ -38,8 +15,7 @@ is_documented_pin() {
 
   [[ "$reference" == *@* ]] &&
     [[ "$revision" =~ $full_commit_sha ]] &&
-    [[ "$version" =~ $documented_version ]] &&
-    is_verified_action_release "$reference" "$version"
+    [[ "$version" =~ $documented_version ]]
 }
 
 has_github_actions_dependabot() {
@@ -78,15 +54,20 @@ has_github_actions_dependabot() {
   ' <<<"$configuration"
 }
 
-is_documented_pin \
-  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' 'v7.0.1'
+# Dependabot owns action references and their version comments. The structural
+# guard must accept a valid updated pair without requiring a second fixture.
+if ! is_documented_pin \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'v1.2.3'; then
+  echo "Rejected a structurally documented action pin." >&2
+  exit 1
+fi
 
 for invalid_fixture in \
   'actions/example@v1|v1' \
   'actions/example@abcdef0|v1' \
+  'actions/example@AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|v1.2.3' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1.2' \
-  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1|v7.0.0' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|version-one'; do
   IFS='|' read -r reference version <<<"$invalid_fixture"
