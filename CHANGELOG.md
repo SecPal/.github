@@ -14,15 +14,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Changed:**
 
 - made the privileged Nginx consumer accept both manifest schema 1 and 2,
-  advertise its supported schemas, validate its colocated renderer, and reject
-  producer activation through the fixed root-owned helper before an
-  incompatible manifest can replace the last usable one
+  advertise its supported schemas independently of the active manifest,
+  validate its colocated renderer, invalidate cached sudo credentials during
+  capability checks, and reject producer activation through the fixed
+  root-owned helper before an incompatible manifest can replace the last usable
+  one
 - made canonical worktree provisioning refresh Nginx independently of stale
   installed unit flags and added a recurring recovery path through the existing
   provision timer
-- limited the Polyscope server's synchronous startup reconciliation to Nginx
-  state so unrelated repository synchronization cannot exhaust the service
-  start timeout
+- limited both system- and user-scope Polyscope server startup reconciliation
+  to Nginx state so unrelated repository synchronization cannot exhaust the
+  service start timeout
 - separated routine config/Nginx synchronization from full worktree
   provisioning and corrected the scheduler probe to use PsySH's real success
   exit status
@@ -33,9 +35,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   heartbeat
 - made those user services the only automatic runtime owner, restart them when
   tracked code, untracked source metadata, or runtime environment metadata
-  changes, preserve services for still-registered worktrees across transient
-  reconciliation failures, and retain stale unit files when stopping their
-  processes fails while continuing to prune removed registrations
+  changes, inherit the installer-controlled tool path, preserve services for
+  still-registered worktrees across transient reconciliation failures, and
+  retain stale unit files when stopping their processes fails while continuing
+  to prune removed registrations
 - tightened the privileged Nginx manifest boundary so JSON booleans cannot be
   interpreted as integer schema versions
 - completed preview API public-bootstrap configuration so linked web and

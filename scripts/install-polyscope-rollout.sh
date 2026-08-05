@@ -107,7 +107,7 @@ PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
 REAPER_SERVICE_UNIT="$UNIT_DIR/polyscope-clone-reaper.service"
 REAPER_TIMER_UNIT="$UNIT_DIR/polyscope-clone-reaper.timer"
-ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
+ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --skip-local-configs --skip-db-sync --refresh-nginx; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
     "$SYSTEMCTL_BIN" show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true

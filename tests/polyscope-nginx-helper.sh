@@ -11,12 +11,16 @@ trap 'rm -rf "$WORKSPACE"' EXIT
 
 python3 -B - "$REPO_ROOT" "$WORKSPACE" <<'PY'
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import pathlib
 import subprocess
 import sys
+from types import SimpleNamespace
+from unittest import mock
 
 repo_root = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
@@ -260,6 +264,26 @@ except ValueError as error:
     assert "utf-8 json" in str(error).lower(), error
 else:
     raise AssertionError("malformed manifest accepted")
+
+# Capability checks must remain usable when the active manifest is malformed,
+# so the unprivileged producer can replace it with a compatible manifest.
+with (
+    mock.patch.object(helper, "MANIFEST_PATH", malformed),
+    mock.patch.object(helper, "parse_args", return_value=SimpleNamespace(check=True)),
+    mock.patch.object(helper.os, "geteuid", return_value=0),
+    mock.patch.object(
+        helper.pwd,
+        "getpwnam",
+        return_value=SimpleNamespace(pw_uid=os.getuid()),
+    ),
+    mock.patch.object(helper, "validate_invoker"),
+    mock.patch.object(helper, "check_helper_components"),
+    mock.patch.object(helper, "load_nginx_library", return_value=library),
+    mock.patch.dict(os.environ, {"PATH": os.environ["PATH"]}),
+    contextlib.redirect_stdout(io.StringIO()),
+    contextlib.redirect_stderr(io.StringIO()),
+):
+    assert helper.main() == 0
 
 fake_bin = workspace / "fake-bin"
 fake_bin.mkdir()

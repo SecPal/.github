@@ -34,6 +34,22 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_user_server_startup_uses_lightweight_nginx_convergence(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+        ready_command = next(
+            line
+            for line in installer.splitlines()
+            if line.startswith("ROLLOUT_READY_COMMAND=")
+        )
+
+        for argument in (
+            "--nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST",
+            "--skip-local-configs",
+            "--skip-db-sync",
+            "--refresh-nginx",
+        ):
+            self.assertIn(argument, ready_command)
+
     def test_preview_api_environment_enables_complete_public_bootstrap(self) -> None:
         updates = rollout.build_api_preview_env_updates("mighty-hyena")
 
@@ -78,6 +94,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
 
         with (
             mock.patch.object(rollout, "DEFAULT_NGINX_HELPER_PATH", fixed_helper),
+            mock.patch.object(rollout.os, "geteuid", return_value=1000),
             mock.patch.dict(
                 rollout.os.environ,
                 {"POLYSCOPE_NGINX_HELPER": "/tmp/unreviewed-nginx-helper"},
@@ -86,6 +103,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
             rollout.check_nginx_helper_compatibility(2, helper_runner=helper)
 
         command = helper.call_args.args[0]
+        self.assertEqual(command[:3], ["sudo", "-k", "-n"])
         self.assertEqual(command[-2:], [str(fixed_helper), "--check"])
         self.assertNotIn("/tmp/unreviewed-nginx-helper", command)
 
@@ -98,6 +116,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
             source,
             workspace="mighty-hyena",
             runtime_revision="a" * 64,
+            service_path="/opt/pinned-node/bin:/usr/bin",
         )
 
         self.assertEqual(len(units), 2)
@@ -108,6 +127,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
         self.assertIn("php artisan schedule:work", rendered)
         self.assertIn("php artisan queue:work", rendered)
         self.assertIn("RuntimeRevision=" + "a" * 64, rendered)
+        self.assertIn("Environment=PATH=/opt/pinned-node/bin:/usr/bin", rendered)
         self.assertNotIn("DB_PASSWORD", rendered)
         self.assertNotIn("EnvironmentFile=", rendered)
 

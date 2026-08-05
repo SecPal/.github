@@ -4545,11 +4545,15 @@ def build_api_runtime_unit_specs(
     *,
     workspace: str,
     runtime_revision: str,
+    service_path: str | None = None,
 ) -> dict[str, str]:
     if re.fullmatch(r"[a-z0-9][a-z0-9-]*", workspace) is None:
         raise ValueError(f"unsafe API runtime workspace name: {workspace}")
     if re.fullmatch(r"[0-9a-f]{64}", runtime_revision) is None:
         raise ValueError("API runtime revision must be a lowercase SHA-256 digest")
+    runtime_service_path = os.environ.get("PATH", "") if service_path is None else service_path
+    if re.fullmatch(r"[a-zA-Z0-9/_.:+-]+", runtime_service_path) is None:
+        raise ValueError("API runtime service PATH contains unsafe characters")
 
     resolved_worktree = worktree_path.resolve()
     resolved_source = source_repo_path.resolve()
@@ -4588,6 +4592,7 @@ def build_api_runtime_unit_specs(
             [Service]
             Type=simple
             WorkingDirectory={resolved_worktree}
+            Environment=PATH={runtime_service_path}
             ExecStart={exec_start}
             Restart=on-failure
             RestartSec=5s
@@ -5691,6 +5696,7 @@ def check_nginx_helper_compatibility(
 
     command = [str(helper_path), "--check"] if os.geteuid() == 0 else [
         sudo_bin,
+        "-k",
         "-n",
         str(helper_path),
         "--check",

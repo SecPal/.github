@@ -208,14 +208,7 @@ def main() -> int:
         )
         nginx_library = load_nginx_library(require_root_ownership=True)
         nginx_library.validate_installed_bundle()
-        if args.check:
-            if MANIFEST_PATH.exists():
-                manifest = nginx_library.load_manifest(
-                    MANIFEST_PATH,
-                    expected_uid=expected_user.pw_uid,
-                )
-                nginx_library.render_nginx_config(manifest)
-        else:
+        if not args.check:
             apply_manifest(
                 manifest_path=MANIFEST_PATH,
                 target=TARGET_PATH,

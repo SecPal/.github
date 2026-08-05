@@ -452,15 +452,16 @@ The credential reset ensures the check proves the exact `NOPASSWD` rule rather
 than a cached interactive sudo timestamp. It never tests generic sudo access,
 rejects helper-path overrides, and exits before writing user units when the
 fixed helper, fixed manifest path, system server drop-in, or exact
-authorization is unavailable. The helper check also renders the current
-manifest through the installed root-owned bundle and advertises
-`manifest_schema=2`; the unprivileged producer refuses to replace the last
-manifest unless that capability is present on the same fixed helper used for
-activation. Environment-selected helper paths cannot authorize publication.
-This permits consumer-first schema upgrades without leaving Nginx on an
-unreadable manifest. The system server's
-synchronous startup hook skips repository config and database synchronization;
-it performs only the Nginx convergence needed before the service reports ready.
+authorization is unavailable. The helper check validates the installed
+root-owned bundle independently of the current manifest and advertises
+`manifest_schema=2`; the unprivileged producer refuses to publish unless that
+capability is present on the same fixed helper used for activation.
+Environment-selected helper paths cannot authorize publication. This permits
+consumer-first schema upgrades and allows a malformed active manifest to be
+replaced without leaving Nginx on an unreadable manifest. Both system- and
+user-scope server startup hooks skip repository config and database
+synchronization; they perform only the Nginx convergence needed before the
+service reports ready.
 Routine instruction/config synchronization also refreshes Nginx without
 reprovisioning every worktree; provisioning remains owned by its path/timer
 service. The path unit deliberately ignores the broad SQLite WAL stream so
@@ -491,12 +492,13 @@ reconciliation removes only those recorded broken aliases.
 On the canonical host, `--provision-worktrees` execution always includes Nginx
 refresh even when an older installed unit does not yet contain
 `--refresh-nginx`. Registered API previews receive two managed user services,
-one scheduler and one combined queue worker. The services resolve database
-credentials at process start through the rollout wrapper, restart on failure,
-disappear when their worktree registration is removed, and must produce a
-scheduler heartbeat before new preview access is granted. They are also
-restarted when the worktree revision, dirty tracked code, untracked source
-metadata, or source/worktree environment metadata changes. The corresponding
+one scheduler and one combined queue worker. The services inherit the
+installer-controlled tool `PATH`, resolve database credentials at process start
+through the rollout wrapper, restart on failure, disappear when their worktree
+registration is removed, and must produce a scheduler heartbeat before new
+preview access is granted. They are also restarted when the worktree revision,
+dirty tracked code, untracked source metadata, or source/worktree environment
+metadata changes. The corresponding
 Polyscope run actions remain available for explicit diagnostics but do not
 autostart, preventing a second scheduler or worker from competing with the
 managed services. A failed reconciliation preserves existing units only for
