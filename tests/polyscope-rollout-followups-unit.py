@@ -45,12 +45,43 @@ class PolyscopeRolloutFollowupTests(TestCase):
 
         for argument in (
             "--nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST",
+            "--clone-root $POLYSCOPE_CLONE_ROOT",
+            "--provision-lock-path $POLYSCOPE_PROVISION_LOCK",
             "--skip-local-configs",
             "--skip-db-sync",
             "--refresh-nginx",
             "--skip-if-provision-locked",
         ):
             self.assertIn(argument, ready_command)
+
+    def test_routine_sync_uses_the_configured_provision_lock(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+        sync_unit = installer.split('cat >"$SERVICE_UNIT" <<EOF', 1)[1].split("EOF", 1)[0]
+
+        self.assertIn(
+            "--provision-lock-path $POLYSCOPE_PROVISION_LOCK",
+            sync_unit,
+        )
+        self.assertIn("--clone-root $POLYSCOPE_CLONE_ROOT", sync_unit)
+
+    def test_system_dropin_validator_requires_nonblocking_startup_refresh(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+
+        self.assertIn(
+            "--skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked",
+            installer,
+        )
+        self.assertIn("_installed_start_post_lines[0]", installer)
+        self.assertIn("_installed_start_post_lines[1]", installer)
+
+    def test_shell_embedded_clone_root_is_restricted_to_safe_characters(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+        validation_block = installer.split(
+            "# Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.",
+            1,
+        )[1].split("done", 1)[0]
+
+        self.assertIn("POLYSCOPE_CLONE_ROOT", validation_block)
 
     def test_user_server_startup_receives_the_validated_sudo_binary(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
@@ -197,6 +228,74 @@ class PolyscopeRolloutFollowupTests(TestCase):
         for label in ("Queue Worker", "Scheduler"):
             action = next(item for item in api_run_actions if item["label"] == label)
             self.assertFalse(action.get("autostart", False), action)
+
+    def test_api_runtime_actions_autostart_without_a_persistent_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            spec = {
+                "path": root / "api",
+                "local_config": {
+                    "scripts": {
+                        "run": [
+                            {
+                                "label": "Queue Worker",
+                                "command": "queue",
+                                "autostart": False,
+                                "runMode": "replace",
+                            },
+                            {
+                                "label": "Scheduler",
+                                "command": "scheduler",
+                                "autostart": False,
+                                "runMode": "replace",
+                            },
+                        ]
+                    },
+                    "tasks": [],
+                },
+            }
+            worktree = root / "clones" / "api-id" / "mighty-hyena"
+
+            with mock.patch.multiple(
+                rollout,
+                require_repo_instruction_files=mock.Mock(),
+                instruction_reference=mock.Mock(return_value="AGENTS.md"),
+            ):
+                rendered = json.loads(
+                    rollout.render_worktree_local_config(
+                        spec,
+                        worktree,
+                        db_path=root / "polyscope.db",
+                    )
+                )
+                with mock.patch.object(
+                    rollout,
+                    "should_manage_api_runtime_units",
+                    return_value=True,
+                ):
+                    managed_rendered = json.loads(
+                        rollout.render_worktree_local_config(
+                            spec,
+                            worktree,
+                            db_path=root / "polyscope.db",
+                        )
+                    )
+
+            runtime_actions = {
+                action["label"]: action
+                for action in rendered["scripts"]["run"]
+                if action["label"] in {"Queue Worker", "Scheduler"}
+            }
+            self.assertEqual(set(runtime_actions), {"Queue Worker", "Scheduler"})
+            self.assertTrue(runtime_actions["Queue Worker"]["autostart"])
+            self.assertTrue(runtime_actions["Scheduler"]["autostart"])
+            managed_runtime_actions = {
+                action["label"]: action
+                for action in managed_rendered["scripts"]["run"]
+                if action["label"] in {"Queue Worker", "Scheduler"}
+            }
+            self.assertFalse(managed_runtime_actions["Queue Worker"]["autostart"])
+            self.assertFalse(managed_runtime_actions["Scheduler"]["autostart"])
 
     def test_api_runtime_revision_changes_with_code_and_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -584,6 +683,79 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 preview_enabled=True,
             )
 
+    def test_runtime_owner_failure_revokes_existing_preview_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            clone_root = root / "clones"
+            worktree = clone_root / "api-id" / "mighty-hyena-1c04a2fb"
+            worktree.mkdir(parents=True)
+            (worktree / ".env").write_text("")
+            deny_access = mock.Mock()
+
+            with mock.patch.multiple(
+                rollout,
+                should_manage_api_runtime_units=mock.Mock(return_value=True),
+                load_registered_worktree_paths=mock.Mock(
+                    return_value={"api": [worktree]}
+                ),
+                revoke_unregistered_preview_nginx_access=mock.Mock(),
+                is_provisionable_worktree=mock.Mock(return_value=True),
+                cleanup_removed_workspace_aliases=mock.Mock(return_value=[]),
+                cleanup_removed_api_preview_databases=mock.Mock(return_value=[]),
+                preserve_registered_workspace_physical_path=mock.Mock(),
+                render_worktree_local_config=mock.Mock(return_value="{}\n"),
+                sync_worktree_local_config=mock.Mock(),
+                ensure_workspace_alias=mock.Mock(),
+                sync_worktree_auxiliary_files=mock.Mock(),
+                ensure_worktree_hooks=mock.Mock(),
+                acquire_api_worktree_bootstrap_lock=mock.Mock(
+                    side_effect=contextlib.nullcontext
+                ),
+                collect_linked_setup_context=mock.Mock(return_value={}),
+                resolve_current_workspace_name=mock.Mock(
+                    return_value="mighty-hyena"
+                ),
+                build_setup_hash=mock.Mock(return_value="setup-hash"),
+                ensure_api_worktree_ready=mock.Mock(
+                    return_value=(True, "database:preview")
+                ),
+                load_provision_marker=mock.Mock(
+                    return_value={
+                        "setup_hash": "setup-hash",
+                        "preview_storage_target": "database:preview",
+                    }
+                ),
+                build_api_runtime_revision=mock.Mock(return_value="a" * 64),
+                build_api_runtime_unit_specs=mock.Mock(
+                    return_value={"runtime.service": "runtime\n"}
+                ),
+                deny_preview_nginx_access=deny_access,
+                reconcile_api_runtime_units=mock.Mock(
+                    side_effect=RuntimeError("runtime owner preparation failed")
+                ),
+            ):
+                _provisioned, _cleaned, failures = rollout.provision_worktrees(
+                    {"api": {"id": "api-id"}},
+                    {
+                        "api": {
+                            rollout.NATIVE_SETUP_COMMANDS_KEY: ["bootstrap-api"],
+                            "path": root / "source-api",
+                            "preview_prefix": "api",
+                        }
+                    },
+                    clone_root,
+                    db_path=root / "polyscope.db",
+                )
+
+            self.assertTrue(
+                any(
+                    "runtime owner preparation failed" in failure["error"]
+                    for failure in failures
+                ),
+                failures,
+            )
+            deny_access.assert_called_once_with(clone_root, worktree)
+
     def test_canonical_validation_failure_still_prunes_removed_api_units(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -639,6 +811,64 @@ class PolyscopeRolloutFollowupTests(TestCase):
 
             self.assertEqual(len(failures), 1)
             self.assertIn("invalid canonical instructions", failures[0]["error"])
+            self.assertTrue(registered_unit.exists())
+            self.assertFalse(removed_unit.exists())
+
+    def test_acl_reconciliation_failure_still_prunes_removed_api_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            clone_root = root / "clones"
+            worktree = clone_root / "api-id" / "mighty-hyena-1c04a2fb"
+            worktree.mkdir(parents=True)
+            runtime_id = rollout.build_api_runtime_id(worktree)
+            unit_directory = root / "units"
+            unit_directory.mkdir()
+            registered_unit = unit_directory / (
+                f"polyscope-api-worktree-mighty-hyena-{runtime_id}-scheduler.service"
+            )
+            removed_unit = unit_directory / (
+                "polyscope-api-worktree-removed-workspace-bbbbbbbbbbbb-scheduler.service"
+            )
+            registered_unit.write_text("registered\n")
+            removed_unit.write_text("removed\n")
+            systemctl = mock.Mock()
+            reconcile_runtime_units = rollout.reconcile_api_runtime_units
+
+            def reconcile(desired_units, **kwargs):
+                reconcile_runtime_units(
+                    desired_units,
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                    **kwargs,
+                )
+
+            with mock.patch.multiple(
+                rollout,
+                should_manage_api_runtime_units=mock.Mock(return_value=True),
+                load_registered_worktree_paths=mock.Mock(
+                    return_value={"api": [worktree]}
+                ),
+                revoke_unregistered_preview_nginx_access=mock.Mock(
+                    side_effect=RuntimeError("simulated ACL reconciliation failure")
+                ),
+                is_provisionable_worktree=mock.Mock(),
+                reconcile_api_runtime_units=mock.Mock(side_effect=reconcile),
+            ):
+                _provisioned, _cleaned, failures = rollout.provision_worktrees(
+                    {"api": {"id": "api-id"}},
+                    {
+                        "api": {
+                            rollout.NATIVE_SETUP_COMMANDS_KEY: ["bootstrap-api"],
+                            "path": root / "source-api",
+                            "preview_prefix": "api",
+                        }
+                    },
+                    clone_root,
+                    db_path=root / "polyscope.db",
+                )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("ACL reconciliation failure", failures[0]["error"])
             self.assertTrue(registered_unit.exists())
             self.assertFalse(removed_unit.exists())
 

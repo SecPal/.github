@@ -44,10 +44,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   worktree's preview ACL despite independent repository-local failures; stale
   units are also pruned after canonical-validation failures, invalid desired
   unit names are rejected before mutation, malformed contents plus ownership or
-  permission drift are replaced, and independent prune/activation failures
-  remain visible together
+  permission drift are replaced, ACL-reconciliation failures no longer skip
+  stale-unit pruning, and independent prune/activation failures remain visible
+  together
 - gave the worktree provision service an explicit 15-minute start budget and
-  revoked an existing API preview ACL whenever scheduler-heartbeat gating fails
+  revoked an existing API preview ACL whenever runtime-owner activation or
+  scheduler-heartbeat gating fails
+- preserved configured clone-root and provision-lock boundaries across startup
+  and routine refreshes, required the nonblocking startup hook in accepted
+  system drop-ins, and retained Polyscope autostart as the runtime fallback for
+  noncanonical installations
 - tightened the privileged Nginx manifest boundary so JSON booleans cannot be
   interpreted as integer schema versions
 - completed preview API public-bootstrap configuration so linked web and

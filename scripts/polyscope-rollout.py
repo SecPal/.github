@@ -3707,6 +3707,14 @@ def render_worktree_local_config(
     db_path: pathlib.Path | None = None,
 ) -> str:
     config = render_local_config(spec)
+    if spec["path"].name == "api":
+        manages_runtime_units = should_manage_api_runtime_units(
+            worktree_path.parent.parent,
+            db_path or default_polyscope_db_path(),
+        )
+        for action in config.get("scripts", {}).get("run", []):
+            if action.get("label") in {"Queue Worker", "Scheduler"}:
+                action["autostart"] = not manages_runtime_units
     preview = config.get("preview")
     if isinstance(preview, dict) and "url" in preview:
         workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
@@ -4840,6 +4848,46 @@ def wait_for_api_scheduler_readiness_or_revoke_access(
         raise
 
 
+def ensure_api_runtime_owner(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    workspace: str,
+    preview_enabled: bool,
+) -> dict[str, str]:
+    """Converge one persistent API runtime owner before allowing preview access."""
+    try:
+        runtime_units = build_api_runtime_unit_specs(
+            worktree_path,
+            source_repo_path,
+            workspace=workspace,
+            runtime_revision=build_api_runtime_revision(
+                worktree_path,
+                source_repo_path,
+            ),
+        )
+        reconcile_api_runtime_units(runtime_units, prune=False)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError, SystemExit) as error:
+        if not preview_enabled:
+            raise
+        try:
+            deny_preview_nginx_access(clone_root, worktree_path)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as rollback_error:
+            raise RuntimeError(
+                f"{error}; additionally failed to revoke preview access: {rollback_error}"
+            ) from rollback_error
+        raise
+
+    wait_for_api_scheduler_readiness_or_revoke_access(
+        clone_root,
+        worktree_path,
+        source_repo_path,
+        preview_enabled=preview_enabled,
+    )
+    return runtime_units
+
+
 def provision_worktrees(
     repo_state: dict[str, dict[str, Any]],
     repo_specs: dict[str, dict[str, Any]],
@@ -4867,7 +4915,42 @@ def provision_worktrees(
         if manage_api_runtimes
         else set()
     )
-    revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
+
+    def prune_api_runtime_units_after_blocking_failure() -> None:
+        if not manage_api_runtimes:
+            return
+        try:
+            reconcile_api_runtime_units(
+                {},
+                preserve_runtime_ids=unreconciled_api_runtime_ids,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+            error_message = f"failed to prune API runtime services: {error}"
+            print(error_message, file=sys.stderr)
+            failed_provision_worktrees.append(
+                {
+                    "repo": "api",
+                    "workspace": "runtime-services",
+                    "path": str(API_RUNTIME_UNIT_DIRECTORY),
+                    "error": error_message,
+                }
+            )
+
+    try:
+        revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
+    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+        error_message = f"failed to reconcile preview access: {error}"
+        print(error_message, file=sys.stderr)
+        failed_provision_worktrees.append(
+            {
+                "repo": "preview",
+                "workspace": "access-reconciliation",
+                "path": str(clone_root),
+                "error": error_message,
+            }
+        )
+        prune_api_runtime_units_after_blocking_failure()
+        return [], [], failed_provision_worktrees
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
@@ -4931,23 +5014,7 @@ def provision_worktrees(
             )
 
     if canonical_validation_failed:
-        if manage_api_runtimes:
-            try:
-                reconcile_api_runtime_units(
-                    {},
-                    preserve_runtime_ids=unreconciled_api_runtime_ids,
-                )
-            except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
-                error_message = f"failed to prune API runtime services: {error}"
-                print(error_message, file=sys.stderr)
-                failed_provision_worktrees.append(
-                    {
-                        "repo": "api",
-                        "workspace": "runtime-services",
-                        "path": str(API_RUNTIME_UNIT_DIRECTORY),
-                        "error": error_message,
-                    }
-                )
+        prune_api_runtime_units_after_blocking_failure()
         return [], [], failed_provision_worktrees
 
     removed_workspace_aliases = cleanup_removed_workspace_aliases(
@@ -5020,25 +5087,16 @@ def provision_worktrees(
                         and not preview_storage_reset_required
                     ):
                         if repo_name == "api" and manage_api_runtimes:
-                            runtime_units = build_api_runtime_unit_specs(
+                            runtime_units = ensure_api_runtime_owner(
+                                clone_root,
                                 locked_worktree_path,
                                 pathlib.Path(spec["path"]),
                                 workspace=workspace,
-                                runtime_revision=build_api_runtime_revision(
-                                    locked_worktree_path,
-                                    pathlib.Path(spec["path"]),
-                                ),
+                                preview_enabled=preview_enabled,
                             )
                             desired_api_runtime_units.update(runtime_units)
                             unreconciled_api_runtime_ids.discard(
                                 build_api_runtime_id(locked_worktree_path)
-                            )
-                            reconcile_api_runtime_units(runtime_units, prune=False)
-                            wait_for_api_scheduler_readiness_or_revoke_access(
-                                clone_root,
-                                locked_worktree_path,
-                                pathlib.Path(spec["path"]),
-                                preview_enabled=preview_enabled,
                             )
                         if preview_enabled:
                             ensure_preview_nginx_access(clone_root, locked_worktree_path)
@@ -5074,25 +5132,16 @@ def provision_worktrees(
                     marker_payload["linked_workspaces"] = linked_setup_context
 
                 if repo_name == "api" and manage_api_runtimes:
-                    runtime_units = build_api_runtime_unit_specs(
+                    runtime_units = ensure_api_runtime_owner(
+                        clone_root,
                         locked_worktree_path,
                         pathlib.Path(spec["path"]),
                         workspace=workspace,
-                        runtime_revision=build_api_runtime_revision(
-                            locked_worktree_path,
-                            pathlib.Path(spec["path"]),
-                        ),
+                        preview_enabled=preview_enabled,
                     )
                     desired_api_runtime_units.update(runtime_units)
                     unreconciled_api_runtime_ids.discard(
                         build_api_runtime_id(locked_worktree_path)
-                    )
-                    reconcile_api_runtime_units(runtime_units, prune=False)
-                    wait_for_api_scheduler_readiness_or_revoke_access(
-                        clone_root,
-                        locked_worktree_path,
-                        pathlib.Path(spec["path"]),
-                        preview_enabled=preview_enabled,
                     )
 
                 if preview_enabled:

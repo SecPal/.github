@@ -7206,6 +7206,38 @@ grep -qF 'reviewed system server drop-in is incomplete' "$stale_system_error"
 test ! -e "$stale_system_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$stale_system_unit_dir/polyscope-rollout-sync.service"
 
+legacy_startup_dropin_dir="$workspace/legacy-startup-service-units/polyscope-server.service.d"
+legacy_startup_bin_dir="$workspace/legacy-startup-bin"
+legacy_startup_unit_dir="$workspace/legacy-startup-user-units"
+legacy_startup_error="$workspace/legacy-startup-install.error"
+mkdir -p "$legacy_startup_dropin_dir"
+cp "$system_dropin_dir/zz-secpal-runtime.conf" \
+    "$legacy_startup_dropin_dir/zz-secpal-runtime.conf"
+sed -i 's/ --skip-if-provision-locked//' \
+    "$legacy_startup_dropin_dir/zz-secpal-runtime.conf"
+legacy_startup_exit=0
+env HOME="$system_home_dir" \
+    CODEX_HOME="$system_home_dir/.codex-legacy-startup" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$system_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$system_sudo_log" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_FRAGMENT="$system_fragment_path" \
+    FAKE_SYSTEM_POLYSCOPE_SERVER_USER="$system_server_user" \
+    POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="$legacy_startup_dropin_dir" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" --bin-dir "$legacy_startup_bin_dir" --unit-dir "$legacy_startup_unit_dir" --polyscope-server-bin "$fake_server_bin" \
+    2>"$legacy_startup_error" \
+    || legacy_startup_exit=$?
+if [[ "$legacy_startup_exit" -eq 0 ]]; then
+    echo "unprivileged installer must reject a blocking system startup refresh" >&2
+    exit 1
+fi
+grep -qF 'lacks constrained nginx activation' "$legacy_startup_error"
+test ! -e "$legacy_startup_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$legacy_startup_unit_dir/polyscope-rollout-sync.service"
+
 cat >"$system_polyscope_bin_dir/expose-linux-x64" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_EXPOSE_REAL_LOG"
@@ -7237,6 +7269,7 @@ grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin
 grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
+grep -q -- "--clone-root $system_home_dir/.polyscope/clones --provision-lock-path $system_home_dir/.local/state/polyscope/worktree-provision.lock --refresh-nginx" "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
 if grep -Eq '^(daemon-reload|enable --now polyscope-server\.service|restart polyscope-server\.service)$' "$system_systemctl_log"; then
   echo "unprivileged installer must not mutate the system service" >&2
@@ -7265,11 +7298,13 @@ grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-s
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
+grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock" "$fake_unit_dir/polyscope-server.service"
 grep -q -- '--refresh-nginx --skip-if-provision-locked' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock --refresh-nginx" "$fake_unit_dir/polyscope-rollout-sync.service"
 if grep -q -- '--install-nginx' "$fake_unit_dir/polyscope-rollout-sync.service"; then
   echo "routine rollout sync must not run full worktree provisioning" >&2
   exit 1
@@ -7280,7 +7315,7 @@ grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-r
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q -- '--nginx-manifest-output .*nginx-manifest.json --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- '--nginx-manifest-output .*nginx-manifest.json --clone-root .* --provision-lock-path .* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
