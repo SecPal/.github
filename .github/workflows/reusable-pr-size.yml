@@ -179,12 +179,16 @@ jobs:
           fi
 
           CHANGED=$((INSERTIONS + DELETIONS))
-          SIZE_REPORT="PR size: $CHANGED changed lines ($INSERTIONS insertions, $DELETIONS deletions; advisory threshold: $ADVISORY_THRESHOLD)"
+          SIZE_REPORT="PR size: $CHANGED changed lines \
+          ($INSERTIONS insertions, $DELETIONS deletions; \
+          advisory threshold: $ADVISORY_THRESHOLD)"
 
           echo "$SIZE_REPORT"
 
           if [ "$CHANGED" -gt "$ADVISORY_THRESHOLD" ]; then
-            echo "::warning::PR size advisory threshold exceeded ($CHANGED > $ADVISORY_THRESHOLD). Keep this pull request focused on one logical topic and make the review plan explicit."
+            echo "::warning::PR size advisory threshold exceeded \
+            ($CHANGED > $ADVISORY_THRESHOLD). Keep this pull request focused \
+            on one logical topic and make the review plan explicit."
           else
             echo "✅ PR size is within the advisory threshold ($CHANGED <= $ADVISORY_THRESHOLD lines)"
           fi
