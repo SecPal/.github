@@ -47,8 +47,67 @@ class PolyscopeRolloutFollowupTests(TestCase):
             "--skip-local-configs",
             "--skip-db-sync",
             "--refresh-nginx",
+            "--skip-if-provision-locked",
         ):
             self.assertIn(argument, ready_command)
+
+    def test_user_server_startup_receives_the_validated_sudo_binary(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+        server_unit = installer.split('cat >"$SERVER_UNIT" <<EOF', 1)[1].split("EOF", 1)[0]
+
+        self.assertIn("Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN", server_unit)
+
+    def test_system_server_startup_skips_refresh_while_provisioning(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-system-components.sh").read_text()
+        system_dropin = installer.split('cat >"$TEMP_DIR/zz-secpal-runtime.conf" <<EOF', 1)[
+            1
+        ].split("EOF", 1)[0]
+
+        self.assertIn("--refresh-nginx --skip-if-provision-locked", system_dropin)
+
+    def test_provision_service_allows_the_scheduler_gate_to_finish(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+        provision_unit = installer.split('cat >"$PROVISION_SERVICE_UNIT" <<EOF', 1)[1].split(
+            "EOF", 1
+        )[0]
+
+        self.assertIn("TimeoutStartSec=15min", provision_unit)
+
+    def test_nonblocking_provision_lock_reports_contention(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            lock_path = Path(temporary_directory) / "provision.lock"
+
+            with rollout.provision_worktree_lock(lock_path) as acquired:
+                self.assertTrue(acquired)
+                with rollout.provision_worktree_lock(lock_path, blocking=False) as acquired_again:
+                    self.assertFalse(acquired_again)
+
+    def test_startup_refresh_skips_cleanly_when_provisioning_holds_the_lock(self) -> None:
+        args = SimpleNamespace(
+            install_nginx=False,
+            provision_lock_path=Path("/tmp/provision.lock"),
+            provision_worktrees=False,
+            refresh_nginx=True,
+            skip_if_provision_locked=True,
+        )
+        run_rollout = mock.Mock(return_value=0)
+
+        @contextlib.contextmanager
+        def contended_lock(_path, *, blocking=True):
+            self.assertFalse(blocking)
+            yield False
+
+        with mock.patch.multiple(
+            rollout,
+            parse_args=mock.Mock(return_value=args),
+            dispatch_validation_only_direct_mode=mock.Mock(return_value=None),
+            dispatch_instruction_dependent_direct_api_mode=mock.Mock(return_value=None),
+            provision_worktree_lock=contended_lock,
+            run_rollout=run_rollout,
+        ):
+            self.assertEqual(rollout.main(), 0)
+
+        run_rollout.assert_not_called()
 
     def test_preview_api_environment_enables_complete_public_bootstrap(self) -> None:
         updates = rollout.build_api_preview_env_updates("mighty-hyena")
@@ -343,6 +402,177 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 ["systemctl", "--user", "disable", "--now", later_unit.name],
                 commands,
             )
+
+    def test_api_runtime_reconciliation_validates_desired_names_before_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            stale_unit = unit_directory / "polyscope-api-worktree-stale-scheduler.service"
+            stale_unit.write_text("stale\n")
+            systemctl = mock.Mock()
+
+            with self.assertRaisesRegex(ValueError, "unsafe API runtime unit name"):
+                rollout.reconcile_api_runtime_units(
+                    {"unmanaged.service": "unsafe\n"},
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                )
+
+            self.assertTrue(stale_unit.exists())
+            systemctl.assert_not_called()
+
+    def test_api_runtime_reconciliation_replaces_non_utf8_desired_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            unit_name = "polyscope-api-worktree-mighty-hyena-scheduler.service"
+            unit_path = unit_directory / unit_name
+            unit_path.write_bytes(b"\xff\xfe")
+            systemctl = mock.Mock()
+
+            rollout.reconcile_api_runtime_units(
+                {unit_name: "desired\n"},
+                unit_directory=unit_directory,
+                systemctl_runner=systemctl,
+                prune=False,
+            )
+
+            self.assertEqual(unit_path.read_text(), "desired\n")
+            commands = [call.args[0] for call in systemctl.call_args_list]
+            self.assertIn(["systemctl", "--user", "daemon-reload"], commands)
+            self.assertIn(["systemctl", "--user", "restart", unit_name], commands)
+
+    def test_api_runtime_reconciliation_reports_prune_and_activation_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            unit_directory = Path(temporary_directory)
+            stale_unit = unit_directory / "polyscope-api-worktree-stale-scheduler.service"
+            stale_unit.write_text("stale\n")
+            desired_name = "polyscope-api-worktree-mighty-hyena-scheduler.service"
+
+            def run_systemctl(command, **_kwargs):
+                if command[-1] == stale_unit.name:
+                    raise subprocess.CalledProcessError(1, command)
+                if command[-1] == "daemon-reload":
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                f"{stale_unit.name}.*daemon-reload",
+            ):
+                rollout.reconcile_api_runtime_units(
+                    {desired_name: "desired\n"},
+                    unit_directory=unit_directory,
+                    systemctl_runner=run_systemctl,
+                )
+
+    def test_scheduler_failure_revokes_existing_preview_access(self) -> None:
+        worktree = Path("/home/secpal/.polyscope/clones/api-id/mighty-hyena-1c04a2fb")
+        clone_root = worktree.parents[1]
+        source = Path("/home/secpal/code/SecPal/api")
+        deny_access = mock.Mock()
+
+        with (
+            mock.patch.object(
+                rollout,
+                "wait_for_api_scheduler_readiness",
+                side_effect=RuntimeError("scheduler heartbeat missing"),
+            ),
+            mock.patch.object(rollout, "deny_preview_nginx_access", new=deny_access),
+            self.assertRaisesRegex(RuntimeError, "scheduler heartbeat missing"),
+        ):
+            rollout.wait_for_api_scheduler_readiness_or_revoke_access(
+                clone_root,
+                worktree,
+                source,
+                preview_enabled=True,
+            )
+
+        deny_access.assert_called_once_with(clone_root, worktree)
+
+    def test_scheduler_failure_reports_preview_revocation_failure(self) -> None:
+        worktree = Path("/home/secpal/.polyscope/clones/api-id/mighty-hyena-1c04a2fb")
+        clone_root = worktree.parents[1]
+        source = Path("/home/secpal/code/SecPal/api")
+
+        with (
+            mock.patch.object(
+                rollout,
+                "wait_for_api_scheduler_readiness",
+                side_effect=RuntimeError("scheduler heartbeat missing"),
+            ),
+            mock.patch.object(
+                rollout,
+                "deny_preview_nginx_access",
+                side_effect=RuntimeError("ACL update failed"),
+            ),
+            self.assertRaisesRegex(
+                RuntimeError,
+                "scheduler heartbeat missing; additionally failed to revoke preview access: ACL update failed",
+            ),
+        ):
+            rollout.wait_for_api_scheduler_readiness_or_revoke_access(
+                clone_root,
+                worktree,
+                source,
+                preview_enabled=True,
+            )
+
+    def test_canonical_validation_failure_still_prunes_removed_api_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            clone_root = root / "clones"
+            worktree = clone_root / "api-id" / "mighty-hyena-1c04a2fb"
+            worktree.mkdir(parents=True)
+            runtime_id = rollout.build_api_runtime_id(worktree)
+            unit_directory = root / "units"
+            unit_directory.mkdir()
+            registered_unit = unit_directory / (
+                f"polyscope-api-worktree-mighty-hyena-{runtime_id}-scheduler.service"
+            )
+            removed_unit = unit_directory / (
+                "polyscope-api-worktree-removed-workspace-bbbbbbbbbbbb-scheduler.service"
+            )
+            registered_unit.write_text("registered\n")
+            removed_unit.write_text("removed\n")
+            systemctl = mock.Mock()
+            reconcile_runtime_units = rollout.reconcile_api_runtime_units
+
+            def reconcile(desired_units, **kwargs):
+                reconcile_runtime_units(
+                    desired_units,
+                    unit_directory=unit_directory,
+                    systemctl_runner=systemctl,
+                    **kwargs,
+                )
+
+            with mock.patch.multiple(
+                rollout,
+                should_manage_api_runtime_units=mock.Mock(return_value=True),
+                load_registered_worktree_paths=mock.Mock(return_value={"api": [worktree]}),
+                revoke_unregistered_preview_nginx_access=mock.Mock(),
+                is_provisionable_worktree=mock.Mock(
+                    side_effect=rollout.CanonicalInstructionValidationError(
+                        "invalid canonical instructions"
+                    )
+                ),
+                reconcile_api_runtime_units=mock.Mock(side_effect=reconcile),
+            ):
+                _provisioned, _cleaned, failures = rollout.provision_worktrees(
+                    {"api": {"id": "api-id"}},
+                    {
+                        "api": {
+                            rollout.NATIVE_SETUP_COMMANDS_KEY: ["bootstrap-api"],
+                            "path": root / "source-api",
+                            "preview_prefix": "api",
+                        }
+                    },
+                    clone_root,
+                    db_path=root / "polyscope.db",
+                )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("invalid canonical instructions", failures[0]["error"])
+            self.assertTrue(registered_unit.exists())
+            self.assertFalse(removed_unit.exists())
 
     def test_api_runtime_failure_preserves_only_the_registered_runtime_units(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -461,7 +461,10 @@ consumer-first schema upgrades and allows a malformed active manifest to be
 replaced without leaving Nginx on an unreadable manifest. Both system- and
 user-scope server startup hooks skip repository config and database
 synchronization; they perform only the Nginx convergence needed before the
-service reports ready.
+service reports ready. If the full provisioner already holds the shared lock,
+the startup hook exits successfully because that in-flight provisioner performs
+the same final Nginx convergence. User-scope startup also receives the exact
+sudo binary validated by the installer.
 Routine instruction/config synchronization also refreshes Nginx without
 reprovisioning every worktree; provisioning remains owned by its path/timer
 service. The path unit deliberately ignores the broad SQLite WAL stream so
@@ -496,7 +499,10 @@ one scheduler and one combined queue worker. The services inherit the
 installer-controlled tool `PATH`, resolve database credentials at process start
 through the rollout wrapper, restart on failure, disappear when their worktree
 registration is removed, and must produce a scheduler heartbeat before new
-preview access is granted. They are also restarted when the worktree revision,
+preview access is granted. A failed heartbeat revokes any access retained from
+an earlier successful provision, and stale services for removed registrations
+are still pruned when another worktree fails canonical instruction validation.
+They are also restarted when the worktree revision,
 dirty tracked code, untracked source metadata, or source/worktree environment
 metadata changes. The corresponding
 Polyscope run actions remain available for explicit diagnostics but do not
@@ -505,7 +511,9 @@ managed services. A failed reconciliation preserves existing units only for
 still-registered physical worktrees; units belonging to removed registrations
 remain eligible for pruning. Stale unit files are removed only after systemd
 confirms that their services stopped successfully; a failure preserves that
-unit without blocking later independent stale-unit cleanup. Routine preview ACL
+unit without blocking later independent stale-unit cleanup. Desired unit names
+are validated before cleanup starts, unreadable unit contents are replaced, and
+independent cleanup and activation failures are reported together. Routine preview ACL
 reconciliation likewise attempts every unregistered physical worktree before
 reporting any individual denial or repository-integrity failures. The paired daily
 `polyscope-clone-reaper.timer` removes only aged orphan clone roots after
@@ -521,6 +529,9 @@ hook, alias, setup, and marker writes.
 
 The worktree provision service waits three seconds before each activation to
 coalesce SQLite event bursts and takes a process-shared lock before provisioning.
+Its 15-minute start budget leaves the provisioner time to record scheduler
+readiness failures and perform final ACL/runtime cleanup before systemd ends the
+oneshot.
 The path and fallback timer both target that serialized service. Five starts per
 ten seconds cannot be exhausted by the three-second activations, while genuine
 service failures remain visible. A deliberate user-installer convergence clears

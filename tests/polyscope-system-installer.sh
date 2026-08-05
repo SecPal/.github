@@ -123,7 +123,7 @@ if grep -qF 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$dropin
     echo "system installer must not depend on a target created by the later user installer" >&2
     exit 1
 fi
-grep -q -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx' "$dropin"
+grep -q -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked' "$dropin"
 if grep -q -- '--install-nginx' "$dropin"; then
     echo "system startup must not run full worktree provisioning" >&2
     exit 1

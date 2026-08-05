@@ -121,7 +121,7 @@ def default_api_worktree_bootstrap_lock_directory() -> pathlib.Path:
 
 
 @contextlib.contextmanager
-def provision_worktree_lock(lock_path: pathlib.Path):
+def provision_worktree_lock(lock_path: pathlib.Path, *, blocking: bool = True):
     """Serialize provisioners without making the lock itself a watched input."""
     lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if lock_path.is_symlink():
@@ -138,8 +138,13 @@ def provision_worktree_lock(lock_path: pathlib.Path):
         if lock_stat.st_uid != os.geteuid() or lock_stat.st_nlink != 1:
             raise RuntimeError(f"provision lock must be owned by the caller and have one link: {lock_path}")
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
+        lock_flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(descriptor, lock_flags)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
     finally:
         os.close(descriptor)
 
@@ -4659,6 +4664,9 @@ def reconcile_api_runtime_units(
     preserved_ids = preserve_runtime_ids or set()
     if any(re.fullmatch(r"[0-9a-f]{12}", runtime_id) is None for runtime_id in preserved_ids):
         raise ValueError("preserved API runtime ids must be 12 lowercase hexadecimal characters")
+    for unit_name in desired_units:
+        if re.fullmatch(rf"{re.escape(API_RUNTIME_UNIT_PREFIX)}[a-z0-9-]+\.service", unit_name) is None:
+            raise ValueError(f"unsafe API runtime unit name: {unit_name}")
     systemctl_env = os.environ.copy()
     runtime_directory = pathlib.Path(f"/run/user/{os.getuid()}")
     systemctl_env.setdefault("XDG_RUNTIME_DIR", str(runtime_directory))
@@ -4699,43 +4707,59 @@ def reconcile_api_runtime_units(
             continue
         changed = True
 
-    restart_names: set[str] = set()
-    start_names: set[str] = set()
-    for unit_name, content in sorted(desired_units.items()):
-        if re.fullmatch(rf"{re.escape(API_RUNTIME_UNIT_PREFIX)}[a-z0-9-]+\.service", unit_name) is None:
-            raise ValueError(f"unsafe API runtime unit name: {unit_name}")
-        unit_path = unit_directory / unit_name
-        if not unit_path.is_symlink() and unit_path.exists() and unit_path.read_text() == content:
-            start_names.add(unit_name)
-            continue
-        _write_text_atomic(unit_path, content)
-        restart_names.add(unit_name)
-        changed = True
+    try:
+        restart_names: set[str] = set()
+        start_names: set[str] = set()
+        for unit_name, content in sorted(desired_units.items()):
+            unit_path = unit_directory / unit_name
+            existing_content: str | None = None
+            if not unit_path.is_symlink() and unit_path.exists():
+                try:
+                    existing_content = unit_path.read_text()
+                except UnicodeError:
+                    pass
+            if existing_content == content:
+                start_names.add(unit_name)
+                continue
+            _write_text_atomic(unit_path, content)
+            restart_names.add(unit_name)
+            changed = True
 
-    if changed:
-        systemctl_runner(
-            ["systemctl", "--user", "daemon-reload"],
-            check=True,
-            env=systemctl_env,
+        if changed:
+            systemctl_runner(
+                ["systemctl", "--user", "daemon-reload"],
+                check=True,
+                env=systemctl_env,
+            )
+        if desired_names:
+            systemctl_runner(
+                ["systemctl", "--user", "enable", *sorted(desired_names)],
+                check=True,
+                env=systemctl_env,
+            )
+        if restart_names:
+            systemctl_runner(
+                ["systemctl", "--user", "restart", *sorted(restart_names)],
+                check=True,
+                env=systemctl_env,
+            )
+        if start_names:
+            systemctl_runner(
+                ["systemctl", "--user", "start", *sorted(start_names)],
+                check=True,
+                env=systemctl_env,
+            )
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as activation_error:
+        if not prune_failures:
+            raise
+        prune_details = "; ".join(
+            f"{unit_name}: {error}"
+            for unit_name, error in prune_failures
         )
-    if desired_names:
-        systemctl_runner(
-            ["systemctl", "--user", "enable", *sorted(desired_names)],
-            check=True,
-            env=systemctl_env,
-        )
-    if restart_names:
-        systemctl_runner(
-            ["systemctl", "--user", "restart", *sorted(restart_names)],
-            check=True,
-            env=systemctl_env,
-        )
-    if start_names:
-        systemctl_runner(
-            ["systemctl", "--user", "start", *sorted(start_names)],
-            check=True,
-            env=systemctl_env,
-        )
+        raise RuntimeError(
+            f"failed to reconcile API runtime units: prune failures: {prune_details}; "
+            f"activation failure: {activation_error}"
+        ) from activation_error
     if prune_failures:
         details = "; ".join(
             f"{unit_name}: {error}"
@@ -4786,6 +4810,28 @@ def wait_for_api_scheduler_readiness(
         f"API scheduler for {worktree_path} did not produce a readiness heartbeat "
         f"within {attempts * interval_seconds:g} seconds"
     )
+
+
+def wait_for_api_scheduler_readiness_or_revoke_access(
+    clone_root: pathlib.Path,
+    worktree_path: pathlib.Path,
+    source_repo_path: pathlib.Path,
+    *,
+    preview_enabled: bool,
+) -> None:
+    """Fail closed when a supervised API scheduler does not become ready."""
+    try:
+        wait_for_api_scheduler_readiness(worktree_path, source_repo_path)
+    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+        if not preview_enabled:
+            raise
+        try:
+            deny_preview_nginx_access(clone_root, worktree_path)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as rollback_error:
+            raise RuntimeError(
+                f"{error}; additionally failed to revoke preview access: {rollback_error}"
+            ) from rollback_error
+        raise
 
 
 def provision_worktrees(
@@ -4879,6 +4925,23 @@ def provision_worktrees(
             )
 
     if canonical_validation_failed:
+        if manage_api_runtimes:
+            try:
+                reconcile_api_runtime_units(
+                    {},
+                    preserve_runtime_ids=unreconciled_api_runtime_ids,
+                )
+            except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+                error_message = f"failed to prune API runtime services: {error}"
+                print(error_message, file=sys.stderr)
+                failed_provision_worktrees.append(
+                    {
+                        "repo": "api",
+                        "workspace": "runtime-services",
+                        "path": str(API_RUNTIME_UNIT_DIRECTORY),
+                        "error": error_message,
+                    }
+                )
         return [], [], failed_provision_worktrees
 
     removed_workspace_aliases = cleanup_removed_workspace_aliases(
@@ -4965,9 +5028,11 @@ def provision_worktrees(
                                 build_api_runtime_id(locked_worktree_path)
                             )
                             reconcile_api_runtime_units(runtime_units, prune=False)
-                            wait_for_api_scheduler_readiness(
+                            wait_for_api_scheduler_readiness_or_revoke_access(
+                                clone_root,
                                 locked_worktree_path,
                                 pathlib.Path(spec["path"]),
+                                preview_enabled=preview_enabled,
                             )
                         if preview_enabled:
                             ensure_preview_nginx_access(clone_root, locked_worktree_path)
@@ -5017,9 +5082,11 @@ def provision_worktrees(
                         build_api_runtime_id(locked_worktree_path)
                     )
                     reconcile_api_runtime_units(runtime_units, prune=False)
-                    wait_for_api_scheduler_readiness(
+                    wait_for_api_scheduler_readiness_or_revoke_access(
+                        clone_root,
                         locked_worktree_path,
                         pathlib.Path(spec["path"]),
+                        preview_enabled=preview_enabled,
                     )
 
                 if preview_enabled:
@@ -5951,6 +6018,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--install-nginx", action="store_true")
     parser.add_argument("--provision-worktrees", action="store_true")
     parser.add_argument("--refresh-nginx", action="store_true")
+    parser.add_argument("--skip-if-provision-locked", action="store_true")
     return parser.parse_args()
 
 
@@ -5973,6 +6041,15 @@ def main() -> int:
     args = parse_args()
     apply_canonical_reconcile_mode(args)
 
+    skip_if_provision_locked = getattr(args, "skip_if_provision_locked", False)
+    if skip_if_provision_locked and (
+        not args.refresh_nginx or args.provision_worktrees or args.install_nginx
+    ):
+        raise SystemExit(
+            "--skip-if-provision-locked requires refresh-only mode and cannot be used "
+            "with --provision-worktrees or --install-nginx"
+        )
+
     try:
         validation_only_result = dispatch_validation_only_direct_mode(args)
         if validation_only_result is not None:
@@ -5985,11 +6062,17 @@ def main() -> int:
         return direct_mode_result
 
     lock_context = (
-        provision_worktree_lock(args.provision_lock_path)
+        provision_worktree_lock(
+            args.provision_lock_path,
+            blocking=not skip_if_provision_locked,
+        )
         if args.provision_worktrees or args.install_nginx or args.refresh_nginx
         else contextlib.nullcontext()
     )
-    with lock_context:
+    with lock_context as lock_acquired:
+        if lock_acquired is False:
+            print("Skipping startup Nginx refresh because provisioning is already in progress")
+            return 0
         return run_rollout(args)
 
 

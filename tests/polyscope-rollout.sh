@@ -7232,6 +7232,7 @@ test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 test "$(file_sha256 "$system_dropin_dir/zz-secpal-runtime.conf")" = "$system_dropin_hash_before"
 grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q -- '--refresh-nginx --skip-if-provision-locked' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
@@ -7262,7 +7263,9 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
+grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
+grep -q -- '--refresh-nginx --skip-if-provision-locked' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
@@ -7297,6 +7300,7 @@ if grep -qF '/../' "$fake_unit_dir/polyscope-rollout-sync.path"; then
 fi
 grep -q 'After=polyscope-rollout-sync.service' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Type=oneshot$' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q '^TimeoutStartSec=15min$' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^StartLimitIntervalSec=10$' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^StartLimitBurst=5$' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^ExecStartPre=/usr/bin/sleep 3$' "$fake_unit_dir/polyscope-worktree-provision.service"
@@ -8081,10 +8085,11 @@ main_order: list[str] = []
 
 
 @contextlib.contextmanager
-def observed_provision_lock(_lock_path):
+def observed_provision_lock(_lock_path, *, blocking=True):
+    assert blocking is True
     main_order.append("lock-enter")
     try:
-        yield
+        yield True
     finally:
         main_order.append("lock-exit")
 

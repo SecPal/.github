@@ -166,7 +166,7 @@ User=secpal
 ExecStart=
 ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321
 ExecStartPost=
-ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
+ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
 Environment=PATH=$SYSTEM_SERVICE_PATH
 Environment=SSH_AUTH_SOCK=/run/user/$SECPAL_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git

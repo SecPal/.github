@@ -24,7 +24,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   provision timer
 - limited both system- and user-scope Polyscope server startup reconciliation
   to Nginx state so unrelated repository synchronization cannot exhaust the
-  service start timeout
+  service start timeout, made that startup refresh skip cleanly when the full
+  provisioner already owns the shared lock, and passed the installer-validated
+  sudo binary into the user service
 - separated routine config/Nginx synchronization from full worktree
   provisioning and corrected the scheduler probe to use PsySH's real success
   exit status
@@ -39,7 +41,12 @@ Log of notable changes to SecPal organization defaults (newest first).
   still-registered worktrees across transient reconciliation failures, and
   retain only stale unit files whose stop or removal fails while continuing to
   prune independent removed registrations and revoke every unregistered
-  worktree's preview ACL despite independent repository-local failures
+  worktree's preview ACL despite independent repository-local failures; stale
+  units are also pruned after canonical-validation failures, invalid desired
+  unit names are rejected before mutation, malformed unit contents are replaced,
+  and independent prune/activation failures remain visible together
+- gave the worktree provision service an explicit 15-minute start budget and
+  revoked an existing API preview ACL whenever scheduler-heartbeat gating fails
 - tightened the privileged Nginx manifest boundary so JSON booleans cannot be
   interpreted as integer schema versions
 - completed preview API public-bootstrap configuration so linked web and
