@@ -423,6 +423,10 @@ assert_contains \
   "$large_workflow_output" \
   "::warning::PR size advisory threshold exceeded" \
   "reusable workflow must emit a GitHub warning above the threshold"
+assert_contains \
+  "$large_workflow_output" \
+  "::warning::PR size advisory threshold exceeded (601 > 600). Keep this pull request focused on one logical topic and make the review plan explicit." \
+  "reusable workflow must preserve the advisory warning text exactly"
 
 excluded_workflow_repo="$workspace/workflow-excluded"
 excluded_workflow_output="$workspace/workflow-excluded.out"
