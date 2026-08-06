@@ -7,16 +7,23 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
 documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+documented_release='^v?[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
 
 is_documented_pin() {
   local reference="$1"
   local version="$2"
   local revision="${reference##*@}"
 
-  [[ "$reference" == *@* ]] &&
-    [[ "$revision" =~ $full_commit_sha ]] &&
+  [[ "$reference" == *@* ]] || return 1
+  [[ "$revision" =~ $full_commit_sha ]] || return 1
+
+  if [[ "${reference%@*}" == */.github/workflows/*.yml ]] ||
+    [[ "${reference%@*}" == */.github/workflows/*.yaml ]]; then
     [[ "$version" =~ $documented_source ]] &&
-    [[ ! "$version" =~ $full_commit_sha ]]
+      [[ ! "$version" =~ $full_commit_sha ]]
+  else
+    [[ "$version" =~ $documented_release ]]
+  fi
 }
 
 has_github_actions_dependabot() {
@@ -64,8 +71,8 @@ if ! is_documented_pin \
 fi
 
 if ! is_documented_pin \
-  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'v1'; then
-  echo "Rejected a documented major-version action pin." >&2
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' '1.2.3'; then
+  echo "Rejected an exact release without a v prefix." >&2
   exit 1
 fi
 
@@ -79,6 +86,8 @@ for invalid_fixture in \
   'actions/example@v1|v1' \
   'actions/example@abcdef0|v1' \
   'actions/example@AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|v1.2.3' \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1' \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|main' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|#v1'; do

@@ -163,7 +163,7 @@ if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WO
   exit 1
 fi
 
-grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40} # main$' "$CALLER_WORKFLOW" || {
+grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$' "$CALLER_WORKFLOW" || {
   echo "Dependabot caller workflow must keep auto-merge decisions on a reviewed immutable reusable workflow revision documented as main." >&2
   exit 1
 }

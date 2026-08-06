@@ -86,7 +86,7 @@ grep -q '^  cancel-in-progress: false$' "$REUSABLE_WORKFLOW" || {
   exit 1
 }
 
-grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-deploy-main\.yml@[0-9a-f]{40} # main$' "$CALLER_WORKFLOW" || {
+grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-deploy-main\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$' "$CALLER_WORKFLOW" || {
   echo "Deploy caller workflow must invoke an immutable reusable deploy workflow revision documented as main." >&2
   exit 1
 }
