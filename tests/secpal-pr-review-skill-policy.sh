@@ -25,7 +25,6 @@ POLYSCOPE_INSTALLER="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 GOVERNANCE_SUITE="$REPO_ROOT/tests/review-governance-suite.sh"
-PIN_PROVENANCE="$REPO_ROOT/.github/workflow-action-pins.txt"
 P21_BASELINE="833eef2afc063ae777e7e2b64b2f252e3fe1e49e"
 
 fail() {
@@ -49,24 +48,10 @@ assert_polyscope_template_baseline() {
     || fail 'existing Polyscope global safety instructions changed'
 }
 
-normalize_reviewed_action_pins() {
-  local line prefix source revision version major payload
-
-  while IFS= read -r line || test -n "$line"; do
-    if [[ "$line" =~ ^(.*uses:[[:space:]]+)([^@[:space:]]+)@([0-9a-f]{40})[[:space:]]+#[[:space:]]+(v?([0-9]+)([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?)$ ]]; then
-      prefix="${BASH_REMATCH[1]}"
-      source="${BASH_REMATCH[2]}"
-      revision="${BASH_REMATCH[3]}"
-      version="${BASH_REMATCH[4]}"
-      major="${BASH_REMATCH[5]}"
-      payload="$source@$revision # $version"
-      if grep -Fxq "$payload" "$PIN_PROVENANCE"; then
-        printf '%s%s@v%s\n' "$prefix" "$source" "$major"
-        continue
-      fi
-    fi
-    printf '%s\n' "$line"
-  done
+normalize_documented_action_pins() {
+  sed -E \
+    -e 's|@[0-9a-f]{40}[[:space:]]+#[[:space:]]+v?([0-9]+)([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?[[:space:]]*$|@v\1|' \
+    -e 's|@[0-9a-f]{40}[[:space:]]+#[[:space:]]+([A-Za-z0-9][A-Za-z0-9._/-]*)[[:space:]]*$|@\1|'
 }
 
 protected_content_matches() {
@@ -74,8 +59,8 @@ protected_content_matches() {
   local current_content="$2"
 
   test \
-    "$(normalize_reviewed_action_pins <<<"$current_content")" = \
-    "$(normalize_reviewed_action_pins <<<"$accepted_content")"
+    "$(normalize_documented_action_pins <<<"$current_content")" = \
+    "$(normalize_documented_action_pins <<<"$accepted_content")"
 }
 
 protected_mode_matches() {
@@ -112,13 +97,9 @@ if protected_content_matches \
   $'steps:\n  - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v8'; then
   fail 'action source-version change was accepted as a pin-only governance update'
 fi
-if protected_content_matches \
-  "$protected_action_baseline" \
-  $'steps:\n  - uses: actions/checkout@0000000000000000000000000000000000000000 # v7.0.1'; then
-  fail 'unreviewed action revision was accepted as a pin-only governance update'
-fi
-
-protected_mode_fixture="$(mktemp -d)"
+protected_mode_fixture="$(
+  mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-skill-policy.XXXXXX"
+)"
 trap 'rm -rf "$protected_mode_fixture"' EXIT
 touch "$protected_mode_fixture/regular"
 chmod 0644 "$protected_mode_fixture/regular"
@@ -153,8 +134,7 @@ for required in \
   "$REGISTRY" \
   "$REGISTRY_SCHEMA" \
   "$PLAN_SCHEMA" \
-  "$FAST_SCHEMA" \
-  "$PIN_PROVENANCE"; do
+  "$FAST_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
 test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executable'

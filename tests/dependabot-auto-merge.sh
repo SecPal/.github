@@ -173,20 +173,14 @@ caller_revision="$(
     's|^[[:space:]]+uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@([0-9a-f]{40})[[:space:]]+#.*$|\1|p' \
     "$CALLER_WORKFLOW"
 )"
-pinned_reusable_workflow="$(
-  git -C "$REPO_ROOT" show \
-    "$caller_revision:.github/workflows/reusable-dependabot-auto-merge.yml"
-)" || {
-  echo "Dependabot caller workflow revision must exist in the governance repository." >&2
+main_revision="$(git -C "$REPO_ROOT" rev-parse refs/remotes/origin/main)" || {
+  echo "Dependabot caller workflow validation requires the fetched main branch." >&2
   exit 1
 }
-while IFS= read -r action_reference; do
-  if [[ ! "$action_reference" =~ @[0-9a-f]{40}[[:space:]]+#[[:space:]]+v?[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$ ]]; then
-    echo "Pinned Dependabot callee must document every nested action's exact release: $action_reference" >&2
-    exit 1
-  fi
-done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' <<<"$pinned_reusable_workflow")
-
+git -C "$REPO_ROOT" merge-base --is-ancestor "$caller_revision" "$main_revision" || {
+  echo "Dependabot caller workflow revision must already be reachable from main." >&2
+  exit 1
+}
 if awk '
   /^  auto-merge:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
