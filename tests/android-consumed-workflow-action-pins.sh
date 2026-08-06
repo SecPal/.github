@@ -9,6 +9,7 @@ full_commit_sha='^[0-9a-f]{40}$'
 null_commit_sha='^0{40}$'
 documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
 documented_release='^v?[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
+immutable_docker_reference='^docker://[^@[:space:]]+@sha256:[0-9a-f]{64}$'
 
 is_documented_pin() {
   local reference="$1"
@@ -44,6 +45,10 @@ is_accepted_action_pin() {
   else
     verify_action_release_pin "$reference" "$version"
   fi
+}
+
+is_immutable_docker_pin() {
+  [[ "$1" =~ $immutable_docker_reference ]]
 }
 
 release_pin_matches_refs() {
@@ -120,93 +125,150 @@ verify_reusable_workflow_pin() {
 
 list_yaml_action_references() {
   local action_definition_path="$1"
-  local parser=()
-  local yaml_json
+  local parser_module="$repo_root/node_modules/js-yaml"
 
-  if [[ -x "$repo_root/node_modules/.bin/js-yaml" ]]; then
-    parser=("$repo_root/node_modules/.bin/js-yaml")
-  elif command -v npx >/dev/null 2>&1; then
-    parser=(npx --yes js-yaml@4.2.0)
-  else
-    echo "Action reference validation requires npm dependencies or npx." >&2
+  if [[ ! -d "$parser_module" ]]; then
+    echo "Action reference validation requires dependencies installed with npm ci." >&2
     return 1
   fi
 
-  yaml_json="$("${parser[@]}" "$action_definition_path")" || return 1
   # shellcheck disable=SC2016 # JavaScript template literals are intentionally passed verbatim.
-  printf '%s\n' "$yaml_json" |
-    node -e '
+  node - "$repo_root" "$action_definition_path" <<'NODE'
       const fs = require("node:fs");
-      const sourceName = process.argv[1];
-      const definition = JSON.parse(fs.readFileSync(0, "utf8"));
+      const path = require("node:path");
+      const repoRoot = process.argv[2];
+      const sourceName = process.argv[3];
+      const yaml = require(path.join(repoRoot, "node_modules/js-yaml"));
+      const source = fs.readFileSync(sourceName, "utf8");
       const references = [];
 
-      function addReference(value, location) {
-        if (typeof value !== "string" || value.includes("\n")) {
+      function parseNode(events, state) {
+        const event = events[state.cursor++];
+        if (!event) throw new Error(`${sourceName}: incomplete YAML event stream`);
+        if (event.type === yaml.EVENT_SCALAR) {
+          return {
+            kind: "scalar",
+            event,
+            value: source.slice(event.valueStart, event.valueEnd),
+          };
+        }
+        if (event.type === yaml.EVENT_ALIAS) return { kind: "alias", event };
+        if (event.type === yaml.EVENT_MAPPING) {
+          const entries = [];
+          while (events[state.cursor]?.type !== yaml.EVENT_POP) {
+            entries.push({
+              key: parseNode(events, state),
+              value: parseNode(events, state),
+            });
+          }
+          state.cursor += 1;
+          return { kind: "mapping", entries };
+        }
+        if (event.type === yaml.EVENT_SEQUENCE) {
+          const items = [];
+          while (events[state.cursor]?.type !== yaml.EVENT_POP) {
+            items.push(parseNode(events, state));
+          }
+          state.cursor += 1;
+          return { kind: "sequence", items };
+        }
+        throw new Error(`${sourceName}: unsupported YAML event ${event.type}`);
+      }
+
+      function mappingEntry(mapping, key) {
+        if (!mapping || mapping.kind !== "mapping") return undefined;
+        return mapping.entries.find((entry) =>
+          entry.key.kind === "scalar" && entry.key.value === key);
+      }
+
+      function addReference(entry, location) {
+        if (!entry || entry.value.kind !== "scalar" || entry.value.value.includes("\n")) {
           process.stderr.write(`${sourceName}: ${location} must be a single-line string\n`);
           process.exitCode = 1;
           return;
         }
-        references.push(value);
-      }
 
-      function visit(value, location) {
-        if (!value || typeof value !== "object") return;
-        if (Array.isArray(value)) {
-          value.forEach((item, index) => visit(item, `${location}[${index}]`));
+        const lineStart = source.lastIndexOf("\n", entry.key.event.valueStart - 1) + 1;
+        const nextLine = source.indexOf("\n", entry.key.event.valueStart);
+        const lineEnd = nextLine === -1 ? source.length : nextLine;
+        const line = source.slice(lineStart, lineEnd);
+        const match = line.match(
+          /^[ \t]*(?:-[ \t]+)?uses:[ \t]+([^ \t#]+)(?:[ \t]+#[ \t]+([^ \t#]+))?[ \t]*$/,
+        );
+        if (!match || match[1] !== entry.value.value) {
+          process.stderr.write(
+            `${sourceName}: ${location} must use canonical uses YAML with same-line provenance\n`,
+          );
+          process.exitCode = 1;
           return;
         }
-        for (const [key, child] of Object.entries(value)) {
-          const childLocation = location ? `${location}.${key}` : key;
-          if (key === "uses") addReference(child, childLocation);
-          visit(child, childLocation);
+        references.push([entry.value.value, match[2] || ""]);
+      }
+
+      function collectSteps(steps, location) {
+        if (!steps || steps.kind !== "sequence") return;
+        steps.items.forEach((step, index) => {
+          const uses = mappingEntry(step, "uses");
+          if (uses) addReference(uses, `${location}[${index}].uses`);
+        });
+      }
+
+      let events;
+      try {
+        yaml.load(source);
+        events = yaml.parseEvents(source);
+      } catch (error) {
+        process.stderr.write(`${sourceName}: ${error.message}\n`);
+        process.exit(1);
+      }
+      const state = { cursor: 0 };
+      if (events[state.cursor]?.type === yaml.EVENT_DOCUMENT) state.cursor += 1;
+      const definition = parseNode(events, state);
+      if (definition.kind !== "mapping") {
+        process.stderr.write(`${sourceName}: action definition must be a mapping\n`);
+        process.exit(1);
+      }
+
+      const jobs = mappingEntry(definition, "jobs")?.value;
+      if (jobs?.kind === "mapping") {
+        for (const jobEntry of jobs.entries) {
+          const job = jobEntry.value;
+          const jobId = jobEntry.key.kind === "scalar" ? jobEntry.key.value : "<job>";
+          const uses = mappingEntry(job, "uses");
+          if (uses) addReference(uses, `jobs.${jobId}.uses`);
+          collectSteps(mappingEntry(job, "steps")?.value, `jobs.${jobId}.steps`);
         }
       }
 
-      visit(definition, "");
+      const runs = mappingEntry(definition, "runs")?.value;
+      collectSteps(mappingEntry(runs, "steps")?.value, "runs.steps");
 
-      if (!process.exitCode) process.stdout.write(references.join("\n"));
-    ' "$action_definition_path"
+      if (!process.exitCode) {
+        process.stdout.write(references.map((item) => item.join("\t")).join("\n"));
+      }
+NODE
 }
 
 validate_action_definition_pins() {
   local action_definition_path="$1"
   local action_definition="${2:-${action_definition_path#"$repo_root"/}}"
-  local parsed_references documented_references parsed_sorted documented_sorted
-  local line payload reference version
+  local action_references reference version
 
-  parsed_references="$(list_yaml_action_references "$action_definition_path")" || return 1
-  if ! documented_references="$({
-    while IFS= read -r line; do
-      payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
-      reference="${payload%%[[:space:]#]*}"
-      if [[ "$reference" == ./* ]]; then
-        printf '%s\n' "$reference"
-        continue
-      fi
-      if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
-        echo "$action_definition: external action lacks same-line version documentation: $payload" >&2
-        return 1
-      fi
-
-      reference="${BASH_REMATCH[1]}"
-      version="${BASH_REMATCH[2]}"
-      if ! is_accepted_action_pin "$reference" "$version"; then
-        echo "$action_definition: external action is not a verified documented full-SHA pin: $payload" >&2
-        return 1
-      fi
-      printf '%s\n' "$reference"
-    done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$action_definition_path" || true)
-  })"; then
-    return 1
-  fi
-
-  parsed_sorted="$(printf '%s\n' "$parsed_references" | sed '/^$/d' | LC_ALL=C sort)"
-  documented_sorted="$(printf '%s\n' "$documented_references" | sed '/^$/d' | LC_ALL=C sort)"
-  if [[ "$parsed_sorted" != "$documented_sorted" ]]; then
-    echo "$action_definition: every uses reference must use canonical 'uses:' YAML with required same-line provenance." >&2
-    return 1
-  fi
+  action_references="$(list_yaml_action_references "$action_definition_path")" || return 1
+  while IFS=$'\t' read -r reference version; do
+    [[ -n "$reference" ]] || continue
+    if [[ "$reference" == ./* ]] || is_immutable_docker_pin "$reference"; then
+      continue
+    fi
+    if [[ -z "$version" ]]; then
+      echo "$action_definition: external action lacks same-line version documentation: $reference" >&2
+      return 1
+    fi
+    if ! is_accepted_action_pin "$reference" "$version"; then
+      echo "$action_definition: external action is not a verified documented full-SHA pin: $reference # $version" >&2
+      return 1
+    fi
+  done <<<"$action_references"
 }
 
 has_github_actions_dependabot() {
