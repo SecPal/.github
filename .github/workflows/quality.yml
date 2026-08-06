@@ -28,6 +28,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  workflow-pins:
+    name: Verify Workflow Pin Provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify external workflow references
+        env:
+          SECPAL_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.sha }}
+          VERIFY_ACTION_PIN_PROVENANCE: "true"
+        run: bash tests/android-consumed-workflow-action-pins.sh
+
   pr-review-workflow:
     name: Finite PR Review Workflow
     runs-on: ubuntu-latest

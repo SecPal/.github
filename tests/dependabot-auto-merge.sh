@@ -23,6 +23,42 @@ WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
 ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
 
+resolve_base_revision() {
+  local repository="$1"
+  local candidate revision
+
+  if [[ -n "${SECPAL_BASE_REVISION:-}" ]]; then
+    git -C "$repository" rev-parse --verify "$SECPAL_BASE_REVISION^{commit}"
+    return
+  fi
+
+  for candidate in refs/heads/main refs/remotes/origin/main; do
+    if revision="$(git -C "$repository" rev-parse --verify "$candidate^{commit}" 2>/dev/null)"; then
+      printf '%s\n' "$revision"
+      return 0
+    fi
+  done
+  return 1
+}
+
+base_fixture="$(mktemp -d "${TMPDIR:-/tmp}/dependabot-auto-merge.XXXXXX")"
+trap 'rm -rf "$base_fixture"' EXIT
+git -C "$base_fixture" init --quiet --initial-branch=main
+git -C "$base_fixture" \
+  -c user.name='SecPal Tests' \
+  -c user.email='tests@secpal.dev' \
+  -c commit.gpgsign=false \
+  commit --quiet --allow-empty --message='Create test baseline'
+fixture_main_revision="$(git -C "$base_fixture" rev-parse refs/heads/main)"
+if [[ "$(SECPAL_BASE_REVISION='' resolve_base_revision "$base_fixture" 2>/dev/null || true)" != "$fixture_main_revision" ]]; then
+  echo "Dependabot caller workflow validation must support a local main branch without an origin remote." >&2
+  exit 1
+fi
+if [[ "$(SECPAL_BASE_REVISION="$fixture_main_revision" resolve_base_revision "$base_fixture")" != "$fixture_main_revision" ]]; then
+  echo "Dependabot caller workflow validation must honor an explicit base revision." >&2
+  exit 1
+fi
+
 for workflow in "$CALLER_WORKFLOW" "$REUSABLE_WORKFLOW"; do
   if [ ! -f "$workflow" ]; then
     echo "Expected workflow was not found: $workflow" >&2
@@ -173,8 +209,8 @@ caller_revision="$(
     's|^[[:space:]]+uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@([0-9a-f]{40})[[:space:]]+#.*$|\1|p' \
     "$CALLER_WORKFLOW"
 )"
-main_revision="$(git -C "$REPO_ROOT" rev-parse refs/remotes/origin/main)" || {
-  echo "Dependabot caller workflow validation requires the fetched main branch." >&2
+main_revision="$(resolve_base_revision "$REPO_ROOT")" || {
+  echo "Dependabot caller workflow validation requires an explicit or locally available main revision." >&2
   exit 1
 }
 git -C "$REPO_ROOT" merge-base --is-ancestor "$caller_revision" "$main_revision" || {

@@ -32,7 +32,90 @@ is_accepted_action_pin() {
   local reference="$1"
   local version="$2"
 
-  is_documented_pin "$reference" "$version"
+  is_documented_pin "$reference" "$version" || return 1
+
+  if [[ "${VERIFY_ACTION_PIN_PROVENANCE:-false}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ "${reference%@*}" == */.github/workflows/*.yml ]] ||
+    [[ "${reference%@*}" == */.github/workflows/*.yaml ]]; then
+    verify_reusable_workflow_pin "$reference" "$version"
+  else
+    verify_action_release_pin "$reference" "$version"
+  fi
+}
+
+release_pin_matches_refs() {
+  local reference="$1"
+  local version="$2"
+  local direct_revision=""
+  local peeled_revision=""
+  local candidate_revision candidate_ref
+  local tag_ref="refs/tags/$version"
+
+  is_documented_pin "$reference" "$version" || return 1
+
+  while IFS=$'\t' read -r candidate_revision candidate_ref; do
+    [[ "$candidate_revision" =~ $full_commit_sha ]] || continue
+    case "$candidate_ref" in
+      "$tag_ref") direct_revision="$candidate_revision" ;;
+      "$tag_ref^{}") peeled_revision="$candidate_revision" ;;
+    esac
+  done
+
+  [[ -n "${peeled_revision:-$direct_revision}" ]] || return 1
+  [[ "${reference##*@}" == "${peeled_revision:-$direct_revision}" ]]
+}
+
+verified_release_pins=()
+
+verify_action_release_pin() {
+  local reference="$1"
+  local version="$2"
+  local source="${reference%@*}"
+  local cache_key="$reference|$version"
+  local cached_key owner repository remote_source tag_refs
+
+  [[ "$source" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || return 1
+  IFS='/' read -r owner repository _ <<<"$source"
+  remote_source="$owner/$repository"
+  for cached_key in "${verified_release_pins[@]}"; do
+    [[ "$cached_key" == "$cache_key" ]] && return 0
+  done
+
+  tag_refs="$(
+    git ls-remote --tags "https://github.com/$remote_source.git" \
+      "refs/tags/$version" "refs/tags/$version^{}"
+  )" || return 1
+  release_pin_matches_refs "$reference" "$version" <<<"$tag_refs" || return 1
+  verified_release_pins+=("$cache_key")
+}
+
+verify_reusable_workflow_pin() {
+  local reference="$1"
+  local branch="$2"
+  local workflow_source="${reference%@*}"
+  local repository_source="${workflow_source%%/.github/workflows/*}"
+  local expected_repository="${GITHUB_REPOSITORY:-SecPal/.github}"
+  local base_revision="${SECPAL_BASE_REVISION:-}"
+  local candidate
+
+  [[ "$repository_source" == "$expected_repository" ]] || return 1
+
+  if [[ -n "$base_revision" ]]; then
+    base_revision="$(git -C "$repo_root" rev-parse --verify "$base_revision^{commit}")" || return 1
+  else
+    for candidate in "refs/heads/$branch" "refs/remotes/origin/$branch"; do
+      if base_revision="$(git -C "$repo_root" rev-parse --verify "$candidate^{commit}" 2>/dev/null)"; then
+        break
+      fi
+      base_revision=""
+    done
+  fi
+
+  [[ -n "$base_revision" ]] || return 1
+  git -C "$repo_root" merge-base --is-ancestor "${reference##*@}" "$base_revision"
 }
 
 has_github_actions_dependabot() {
@@ -108,9 +191,37 @@ for invalid_fixture in \
   fi
 done
 
-if ! is_accepted_action_pin \
+if ! is_documented_pin \
   'actions/cache@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 'v6.1.1'; then
   echo "Rejected a structurally valid Dependabot-managed action update." >&2
+  exit 1
+fi
+
+lightweight_tag_refs=$'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v6.1.1'
+if ! release_pin_matches_refs \
+  'actions/cache@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+  'v6.1.1' <<<"$lightweight_tag_refs"; then
+  echo "Rejected a release pin that matches its lightweight tag." >&2
+  exit 1
+fi
+if release_pin_matches_refs \
+  'actions/cache@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+  'v6.1.1' <<<"$lightweight_tag_refs"; then
+  echo "Accepted a release pin whose SHA does not match its documented tag." >&2
+  exit 1
+fi
+
+annotated_tag_refs=$'cccccccccccccccccccccccccccccccccccccccc\trefs/tags/v6.1.1\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v6.1.1^{}'
+if ! release_pin_matches_refs \
+  'actions/cache@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+  'v6.1.1' <<<"$annotated_tag_refs"; then
+  echo "Rejected a release pin that matches an annotated tag commit." >&2
+  exit 1
+fi
+if release_pin_matches_refs \
+  'actions/cache@cccccccccccccccccccccccccccccccccccccccc' \
+  'v6.1.1' <<<"$annotated_tag_refs"; then
+  echo "Accepted an annotated tag object instead of its commit." >&2
   exit 1
 fi
 
@@ -159,7 +270,7 @@ while IFS= read -r workflow_path; do
     reference="${BASH_REMATCH[1]}"
     version="${BASH_REMATCH[2]}"
     if ! is_accepted_action_pin "$reference" "$version"; then
-      echo "$workflow: external action is not a documented full-SHA pin: $payload" >&2
+      echo "$workflow: external action is not a verified documented full-SHA pin: $payload" >&2
       exit 1
     fi
   done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$workflow_path")
@@ -168,4 +279,8 @@ done < <(find "$repo_root/.github/workflows" -maxdepth 1 -type f \
 
 has_github_actions_dependabot "$(<"$repo_root/.github/dependabot.yml")"
 
-echo "Workflow external action and reusable-workflow pins verified."
+if [[ "${VERIFY_ACTION_PIN_PROVENANCE:-false}" == "true" ]]; then
+  echo "Workflow external action and reusable-workflow pin provenance verified."
+else
+  echo "Workflow external action and reusable-workflow pin structure verified."
+fi
