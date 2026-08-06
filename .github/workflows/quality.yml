@@ -42,7 +42,9 @@ jobs:
         env:
           SECPAL_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.sha }}
           VERIFY_ACTION_PIN_PROVENANCE: "true"
-        run: bash tests/android-consumed-workflow-action-pins.sh
+        run: |
+          bash tests/android-consumed-workflow-action-pins.sh
+          bash tests/dependabot-auto-merge.sh
 
   pr-review-workflow:
     name: Finite PR Review Workflow

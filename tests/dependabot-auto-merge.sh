@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=tests/android-consumed-workflow-action-pins.sh
+source "$SCRIPT_DIR/android-consumed-workflow-action-pins.sh"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
 DEPENDABOT_CONFIG="$REPO_ROOT/.github/dependabot.yml"
@@ -22,6 +24,7 @@ WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instruct
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
 ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
+QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 
 resolve_base_revision() {
   local repository="$1"
@@ -238,6 +241,18 @@ if [[ "$normalized_workflow_instructions" != *'A reusable-workflow caller job us
   echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
   exit 1
 fi
+
+awk '
+  /^      - name: Verify external workflow references$/ { in_step = 1; next }
+  in_step && /^      - name:/ { in_step = 0 }
+  in_step && /^          VERIFY_ACTION_PIN_PROVENANCE: "true"$/ { verifies_provenance = 1 }
+  in_step && /^          bash tests\/android-consumed-workflow-action-pins\.sh$/ { validates_working_tree = 1 }
+  in_step && /^          bash tests\/dependabot-auto-merge\.sh$/ { validates_pinned_snapshot = 1 }
+  END { exit !(verifies_provenance && validates_working_tree && validates_pinned_snapshot) }
+' "$QUALITY_WORKFLOW" || {
+  echo "Workflow pin validation must verify both the working tree and pinned Dependabot snapshot with live provenance enabled." >&2
+  exit 1
+}
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.
@@ -343,41 +358,10 @@ validate_immutable_action_references() {
 
 validate_documented_action_release_pins() {
   local source_name="$1"
-  local line payload reference version revision
-  local documented_release='^v?[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
-  local documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+  local fixture_path="$base_fixture/action-pin-definition.yml"
 
-  while IFS= read -r line; do
-    payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
-    reference="${payload%%[[:space:]#]*}"
-    if [[ "$reference" == ./* ]] || [[ "$reference" == docker://* ]]; then
-      continue
-    fi
-
-    if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
-      echo "$source_name: external reference lacks same-line provenance: $payload" >&2
-      return 1
-    fi
-
-    reference="${BASH_REMATCH[1]}"
-    version="${BASH_REMATCH[2]}"
-    revision="${reference##*@}"
-    if [[ ! "$reference" == *@* ]] || [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]] ||
-      [[ "$revision" =~ ^0{40}$ ]]; then
-      echo "$source_name: external action lacks a documented full-SHA pin: $payload" >&2
-      return 1
-    fi
-    if [[ "${reference%@*}" == */.github/workflows/*.yml ]] ||
-      [[ "${reference%@*}" == */.github/workflows/*.yaml ]]; then
-      if [[ ! "$version" =~ $documented_source ]] || [[ "$version" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "$source_name: reusable workflow lacks a documented source ref: $payload" >&2
-        return 1
-      fi
-    elif [[ ! "$version" =~ $documented_release ]]; then
-      echo "$source_name: external action lacks an exact same-line release: $payload" >&2
-      return 1
-    fi
-  done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' || true)
+  cat >"$fixture_path"
+  validate_action_definition_pins "$fixture_path" "$source_name"
 }
 
 immutable_action_fixture='jobs:
@@ -414,22 +398,61 @@ done
 
 documented_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3'
 if ! printf '%s\n' "$documented_release_fixture" |
-  validate_documented_action_release_pins "documented release fixture"; then
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "documented release fixture"; then
   echo "Documented action release validation must accept exact releases." >&2
   exit 1
 fi
 
 documented_workflow_source_fixture=$'jobs:\n  fixture:\n    uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567 # main'
 if ! printf '%s\n' "$documented_workflow_source_fixture" |
-  validate_documented_action_release_pins "documented workflow source fixture"; then
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "documented workflow source fixture"; then
   echo "Documented reusable workflow validation must accept source refs." >&2
   exit 1
 fi
 
 major_only_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1'
 if printf '%s\n' "$major_only_release_fixture" |
-  validate_documented_action_release_pins "major-only release fixture" 2>/dev/null; then
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "major-only release fixture" 2>/dev/null; then
   echo "Documented action release validation accepted a mutable major-only label." >&2
+  exit 1
+fi
+
+spaced_uses_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses : actions/example@0123456789abcdef0123456789abcdef01234567'
+if printf '%s\n' "$spaced_uses_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "spaced uses fixture" 2>/dev/null; then
+  echo "Documented action release validation ignored a spaced uses key without provenance." >&2
+  exit 1
+fi
+
+inline_uses_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - { name: Example, uses: actions/example@0123456789abcdef0123456789abcdef01234567 }'
+if printf '%s\n' "$inline_uses_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "inline uses fixture" 2>/dev/null; then
+  echo "Documented action release validation ignored an inline uses key without provenance." >&2
+  exit 1
+fi
+
+decoy_documentation_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    env:\n      uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3\n    steps:\n      - uses : actions/example@0123456789abcdef0123456789abcdef01234567'
+if printf '%s\n' "$decoy_documentation_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "decoy documentation fixture" 2>/dev/null; then
+  echo "Documented action release validation matched provenance from a different YAML location." >&2
+  exit 1
+fi
+
+mismatched_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@1111111111111111111111111111111111111111 # v1.2.3'
+if (
+  # shellcheck disable=SC2329 # The validation function invokes this provenance hook indirectly.
+  verify_action_release_pin() { return 1; }
+  VERIFY_ACTION_PIN_PROVENANCE=true \
+    validate_documented_action_release_pins \
+      "mismatched release fixture" <<<"$mismatched_release_fixture" 2>/dev/null
+); then
+  echo "Pinned action provenance validation accepted a SHA that was not verified against its documented release." >&2
   exit 1
 fi
 

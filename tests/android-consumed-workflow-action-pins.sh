@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
 null_commit_sha='^0{40}$'
 documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
@@ -118,6 +118,97 @@ verify_reusable_workflow_pin() {
   git -C "$repo_root" merge-base --is-ancestor "${reference##*@}" "$base_revision"
 }
 
+list_yaml_action_references() {
+  local action_definition_path="$1"
+  local parser=()
+  local yaml_json
+
+  if [[ -x "$repo_root/node_modules/.bin/js-yaml" ]]; then
+    parser=("$repo_root/node_modules/.bin/js-yaml")
+  elif command -v npx >/dev/null 2>&1; then
+    parser=(npx --yes js-yaml@4.2.0)
+  else
+    echo "Action reference validation requires npm dependencies or npx." >&2
+    return 1
+  fi
+
+  yaml_json="$("${parser[@]}" "$action_definition_path")" || return 1
+  # shellcheck disable=SC2016 # JavaScript template literals are intentionally passed verbatim.
+  printf '%s\n' "$yaml_json" |
+    node -e '
+      const fs = require("node:fs");
+      const sourceName = process.argv[1];
+      const definition = JSON.parse(fs.readFileSync(0, "utf8"));
+      const references = [];
+
+      function addReference(value, location) {
+        if (typeof value !== "string" || value.includes("\n")) {
+          process.stderr.write(`${sourceName}: ${location} must be a single-line string\n`);
+          process.exitCode = 1;
+          return;
+        }
+        references.push(value);
+      }
+
+      function visit(value, location) {
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value)) {
+          value.forEach((item, index) => visit(item, `${location}[${index}]`));
+          return;
+        }
+        for (const [key, child] of Object.entries(value)) {
+          const childLocation = location ? `${location}.${key}` : key;
+          if (key === "uses") addReference(child, childLocation);
+          visit(child, childLocation);
+        }
+      }
+
+      visit(definition, "");
+
+      if (!process.exitCode) process.stdout.write(references.join("\n"));
+    ' "$action_definition_path"
+}
+
+validate_action_definition_pins() {
+  local action_definition_path="$1"
+  local action_definition="${2:-${action_definition_path#"$repo_root"/}}"
+  local parsed_references documented_references parsed_sorted documented_sorted
+  local line payload reference version
+
+  parsed_references="$(list_yaml_action_references "$action_definition_path")" || return 1
+  if ! documented_references="$({
+    while IFS= read -r line; do
+      payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
+      reference="${payload%%[[:space:]#]*}"
+      if [[ "$reference" == ./* ]]; then
+        printf '%s\n' "$reference"
+        continue
+      fi
+      if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
+        echo "$action_definition: external action lacks same-line version documentation: $payload" >&2
+        return 1
+      fi
+
+      reference="${BASH_REMATCH[1]}"
+      version="${BASH_REMATCH[2]}"
+      if ! is_accepted_action_pin "$reference" "$version"; then
+        echo "$action_definition: external action is not a verified documented full-SHA pin: $payload" >&2
+        return 1
+      fi
+      printf '%s\n' "$reference"
+    done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$action_definition_path" || true)
+  })"; then
+    return 1
+  fi
+
+  parsed_sorted="$(printf '%s\n' "$parsed_references" | sed '/^$/d' | LC_ALL=C sort)"
+  documented_sorted="$(printf '%s\n' "$documented_references" | sed '/^$/d' | LC_ALL=C sort)"
+  if [[ "$parsed_sorted" != "$documented_sorted" ]]; then
+    echo "$action_definition: every uses reference must use canonical 'uses:' YAML with required same-line provenance." >&2
+    return 1
+  fi
+}
+
 has_github_actions_dependabot() {
   local configuration="$1"
 
@@ -154,8 +245,9 @@ has_github_actions_dependabot() {
   ' <<<"$configuration"
 }
 
-# Dependabot owns action references and their version comments. The structural
-# guard must accept a valid updated pair without requiring a second fixture.
+main() {
+  # Dependabot owns action references and their version comments. The structural
+  # guard must accept a valid updated pair without requiring a second fixture.
 if ! is_documented_pin \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'v1.2.3'; then
   echo "Rejected a structurally documented action pin." >&2
@@ -255,31 +347,15 @@ for workflow in "${governance_checkout_workflows[@]}"; do
 done
 
 while IFS= read -r action_definition_path; do
-  action_definition="${action_definition_path#"$repo_root"/}"
-
-  while IFS= read -r line; do
-    payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
-    if [[ "$payload" == ./* ]]; then
-      continue
-    fi
-    if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
-      echo "$action_definition: external action lacks same-line version documentation: $payload" >&2
-      exit 1
-    fi
-
-    reference="${BASH_REMATCH[1]}"
-    version="${BASH_REMATCH[2]}"
-    if ! is_accepted_action_pin "$reference" "$version"; then
-      echo "$action_definition: external action is not a verified documented full-SHA pin: $payload" >&2
-      exit 1
-    fi
-  done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$action_definition_path")
+  validate_action_definition_pins "$action_definition_path" || exit 1
 done < <(
-  find "$repo_root/.github/workflows" -maxdepth 1 -type f \
-    \( -name '*.yml' -o -name '*.yaml' \) -print
-  find "$repo_root/.github/actions" -type f \
-    \( -name 'action.yml' -o -name 'action.yaml' \) -print
-  ) | sort
+  {
+    find "$repo_root/.github/workflows" -maxdepth 1 -type f \
+      \( -name '*.yml' -o -name '*.yaml' \) -print
+    find "$repo_root/.github/actions" -type f \
+      \( -name 'action.yml' -o -name 'action.yaml' \) -print
+  } | sort
+)
 
 has_github_actions_dependabot "$(<"$repo_root/.github/dependabot.yml")"
 
@@ -287,4 +363,9 @@ if [[ "${VERIFY_ACTION_PIN_PROVENANCE:-false}" == "true" ]]; then
   echo "Workflow and composite-action external pin provenance verified."
 else
   echo "Workflow and composite-action external pin structure verified."
+fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
