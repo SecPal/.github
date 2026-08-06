@@ -48,6 +48,76 @@ assert_polyscope_template_baseline() {
     || fail 'existing Polyscope global safety instructions changed'
 }
 
+normalize_documented_action_pins() {
+  sed -E \
+    -e 's|@[0-9a-f]{40}[[:space:]]+#[[:space:]]+v?([0-9]+)([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?[[:space:]]*$|@v\1|' \
+    -e 's|@[0-9a-f]{40}[[:space:]]+#[[:space:]]+([A-Za-z0-9][A-Za-z0-9._/-]*)[[:space:]]*$|@\1|'
+}
+
+protected_content_matches() {
+  local accepted_content="$1"
+  local current_content="$2"
+
+  test \
+    "$(normalize_documented_action_pins <<<"$current_content")" = \
+    "$(normalize_documented_action_pins <<<"$accepted_content")"
+}
+
+protected_mode_matches() {
+  local accepted_mode="$1"
+  local path="$2"
+
+  case "$accepted_mode" in
+    100644)
+      test -f "$path" && test ! -L "$path" && test ! -x "$path"
+      ;;
+    100755)
+      test -f "$path" && test ! -L "$path" && test -x "$path"
+      ;;
+    120000)
+      test -L "$path"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+protected_action_baseline=$'steps:\n  - uses: actions/checkout@v7'
+protected_action_pin=$'steps:\n  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
+protected_content_matches "$protected_action_baseline" "$protected_action_pin" \
+  || fail 'reviewed protected action pin was rejected'
+if protected_content_matches \
+  "$protected_action_baseline" \
+  $'steps:\n  - uses: actions/setup-node@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v7'; then
+  fail 'action identity change was accepted as a pin-only governance update'
+fi
+if protected_content_matches \
+  "$protected_action_baseline" \
+  $'steps:\n  - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v8'; then
+  fail 'action source-version change was accepted as a pin-only governance update'
+fi
+protected_mode_fixture="$(
+  mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-skill-policy.XXXXXX"
+)"
+trap 'rm -rf "$protected_mode_fixture"' EXIT
+touch "$protected_mode_fixture/regular"
+chmod 0644 "$protected_mode_fixture/regular"
+protected_mode_matches 100644 "$protected_mode_fixture/regular" \
+  || fail 'protected regular-file mode was rejected'
+if protected_mode_matches 100755 "$protected_mode_fixture/regular"; then
+  fail 'protected executable mode drift was accepted'
+fi
+chmod 0755 "$protected_mode_fixture/regular"
+protected_mode_matches 100755 "$protected_mode_fixture/regular" \
+  || fail 'protected executable-file mode was rejected'
+ln -s regular "$protected_mode_fixture/link"
+protected_mode_matches 120000 "$protected_mode_fixture/link" \
+  || fail 'protected symbolic-link mode was rejected'
+if protected_mode_matches 100644 "$protected_mode_fixture/link"; then
+  fail 'protected file-type drift was accepted'
+fi
+
 for required in \
   "$SKILL" \
   "$CONTRACT" \
@@ -288,12 +358,22 @@ protected_paths=(
   "$REPO_ROOT"/docs/*-review-automation.md
   "$REPO_ROOT"/AGENTS.md
 )
-relative_paths=()
 for path in "${protected_paths[@]}"; do
-  relative_paths+=("${path#"$REPO_ROOT"/}")
+  relative_path="${path#"$REPO_ROOT"/}"
+  accepted_mode="$(
+    git -C "$REPO_ROOT" ls-tree "$P21_BASELINE" -- "$relative_path" |
+      awk 'NR == 1 { print $1 }'
+  )"
+  test -n "$accepted_mode" \
+    || fail "accepted protected-file mode is unavailable: $relative_path"
+  protected_mode_matches "$accepted_mode" "$path" \
+    || fail "existing review governance file type or mode changed: $relative_path"
+  accepted_content="$(git -C "$REPO_ROOT" show "$P21_BASELINE:$relative_path")" \
+    || fail "accepted protected-file baseline is unavailable: $relative_path"
+  current_content="$(<"$path")"
+  protected_content_matches "$accepted_content" "$current_content" \
+    || fail 'existing review governance or instruction routing changed'
 done
-test "$(git -C "$REPO_ROOT" diff --name-only "$P21_BASELINE" -- "${relative_paths[@]}" | wc -l)" -eq 0 \
-  || fail 'existing review governance or instruction routing changed'
 
 python3 - "$PLAN_SCHEMA" "$FAST_SCHEMA" "$REGISTRY" "$REGISTRY_SCHEMA" <<'PY'
 import json

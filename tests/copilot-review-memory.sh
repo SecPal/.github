@@ -38,7 +38,7 @@ grep -q '^  pull_request_review:$' "$WORKFLOW" || {
   exit 1
 }
 
-grep -q '^        uses: actions/create-github-app-token@v3$' "$WORKFLOW" || {
+grep -qE '^        uses: actions/create-github-app-token@[0-9a-f]{40}[[:space:]]+#[[:space:]]+v3\.2\.0$' "$WORKFLOW" || {
   echo "Copilot review memory workflow must keep the GitHub App token step under regression coverage." >&2
   exit 1
 }

@@ -38,5 +38,12 @@ for path in "$REPO_ROOT"/tests/*.sh; do
   # shellcheck disable=SC2016
   expected='mktemp -d "${TMPDIR:-/tmp}/'"$slug"'.XXXXXX"'
   assert_contains "$path" "$expected"
+  while IFS= read -r invocation; do
+    # shellcheck disable=SC2016
+    if [[ "$invocation" != *'mktemp -d "${TMPDIR:-/tmp}/'*'.XXXXXX"'* ]]; then
+      printf 'Non-portable mktemp -d usage in tests/%s: %s\n' "$base" "$invocation" >&2
+      exit 1
+    fi
+  done < <(grep -F 'mktemp -d' "$path")
 done
 shopt -u nullglob

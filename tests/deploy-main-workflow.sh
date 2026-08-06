@@ -75,6 +75,7 @@ grep -q '^  workflow_call:$' "$REUSABLE_WORKFLOW" || {
   exit 1
 }
 
+# shellcheck disable=SC2016 # Literal GitHub expression expected in workflow YAML.
 grep -q '^  group: deploy-main-\${{ github.event.repository.name }}$' "$REUSABLE_WORKFLOW" || {
   echo "Reusable deploy workflow must scope concurrency by repository name." >&2
   exit 1
@@ -85,8 +86,8 @@ grep -q '^  cancel-in-progress: false$' "$REUSABLE_WORKFLOW" || {
   exit 1
 }
 
-grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-deploy-main\.yml@main$' "$CALLER_WORKFLOW" || {
-  echo "Deploy caller workflow must invoke the reusable deploy workflow from @main." >&2
+grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-deploy-main\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$' "$CALLER_WORKFLOW" || {
+  echo "Deploy caller workflow must invoke an immutable reusable deploy workflow revision documented as main." >&2
   exit 1
 }
 
@@ -105,7 +106,7 @@ done
 if awk '
   /^  deploy:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
-  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-deploy-main\.yml@main$/ {
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-deploy-main\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$/ {
     reusable_job = 1
   }
   in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
@@ -152,16 +153,19 @@ grep -Fq 'grep -Eq '\''^[A-Za-z0-9._-]+$'\''' "$REUSABLE_WORKFLOW" || {
   exit 1
 }
 
+# shellcheck disable=SC2016 # Literal shell snippet expected in workflow YAML.
 grep -Fq '"deploy $REPO_NAME"' "$REUSABLE_WORKFLOW" || {
   echo "Reusable deploy workflow must invoke the remote deploy wrapper directly with the validated repository name." >&2
   exit 1
 }
 
+# shellcheck disable=SC2016 # Literal shell snippet expected in workflow YAML.
 if grep -Fq '"deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW"; then
   echo "Reusable deploy workflow must not quote the repository name into the direct deploy command." >&2
   exit 1
 fi
 
+# shellcheck disable=SC2016 # Literal shell snippet expected in workflow YAML.
 if grep -Fq '"sh -c '\''deploy \"\$1\"'\'' deploy $REMOTE_REPO_NAME"' "$REUSABLE_WORKFLOW"; then
   echo "Reusable deploy workflow must not wrap the remote deploy command in sh -c." >&2
   exit 1
