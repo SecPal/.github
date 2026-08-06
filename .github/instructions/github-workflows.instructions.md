@@ -1,15 +1,16 @@
 ---
 # SPDX-FileCopyrightText: 2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
-name: GitHub Workflow Rules
+name: GitHub Workflow and Action Rules
 description: Applies focused security and validation criteria to GitHub automation.
-applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/dependabot.yml,.github/dependabot.yaml,workflow-templates/**/*.yml,workflow-templates/**/*.yaml,EXAMPLE_workflow_for_other_repos.yml,tests/*workflow*.sh,tests/dependabot-auto-merge.sh,tests/codeql-applicability.sh,tests/copilot-review-memory*.sh,tests/license-compatibility.sh,tests/prettier-version-alignment.sh,tests/project-automation-core.sh,tests/pull-request-*.sh,tests/reusable-markdown-lint-scope.sh"
+applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/actions/**/action.yml,.github/actions/**/action.yaml,.github/dependabot.yml,.github/dependabot.yaml,workflow-templates/**/*.yml,workflow-templates/**/*.yaml,EXAMPLE_workflow_for_other_repos.yml,tests/*workflow*.sh,tests/dependabot-auto-merge.sh,tests/codeql-applicability.sh,tests/copilot-review-memory*.sh,tests/license-compatibility.sh,tests/prettier-version-alignment.sh,tests/project-automation-core.sh,tests/pull-request-*.sh,tests/reusable-markdown-lint-scope.sh"
 ---
 
-# GitHub Workflow Review Rules
+# GitHub Workflow and Action Review Rules
 
-Apply these criteria only to GitHub Actions workflows, Dependabot configuration,
-workflow templates, and their direct validation fixtures.
+Apply these criteria only to GitHub Actions workflows, composite action
+manifests, Dependabot configuration, workflow templates, and their direct
+validation fixtures.
 
 ## Permissions and Execution Bounds
 

@@ -254,8 +254,8 @@ for workflow in "${governance_checkout_workflows[@]}"; do
   grep -Fq "ref: \${{ fromJSON(toJSON(job)).workflow_sha }}" "$workflow_path"
 done
 
-while IFS= read -r workflow_path; do
-  workflow="${workflow_path##*/}"
+while IFS= read -r action_definition_path; do
+  action_definition="${action_definition_path#"$repo_root"/}"
 
   while IFS= read -r line; do
     payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
@@ -263,24 +263,28 @@ while IFS= read -r workflow_path; do
       continue
     fi
     if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
-      echo "$workflow: external action lacks same-line version documentation: $payload" >&2
+      echo "$action_definition: external action lacks same-line version documentation: $payload" >&2
       exit 1
     fi
 
     reference="${BASH_REMATCH[1]}"
     version="${BASH_REMATCH[2]}"
     if ! is_accepted_action_pin "$reference" "$version"; then
-      echo "$workflow: external action is not a verified documented full-SHA pin: $payload" >&2
+      echo "$action_definition: external action is not a verified documented full-SHA pin: $payload" >&2
       exit 1
     fi
-  done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$workflow_path")
-done < <(find "$repo_root/.github/workflows" -maxdepth 1 -type f \
-  \( -name '*.yml' -o -name '*.yaml' \) -print | sort)
+  done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$action_definition_path")
+done < <(
+  find "$repo_root/.github/workflows" -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) -print
+  find "$repo_root/.github/actions" -type f \
+    \( -name 'action.yml' -o -name 'action.yaml' \) -print
+  ) | sort
 
 has_github_actions_dependabot "$(<"$repo_root/.github/dependabot.yml")"
 
 if [[ "${VERIFY_ACTION_PIN_PROVENANCE:-false}" == "true" ]]; then
-  echo "Workflow external action and reusable-workflow pin provenance verified."
+  echo "Workflow and composite-action external pin provenance verified."
 else
-  echo "Workflow external action and reusable-workflow pin structure verified."
+  echo "Workflow and composite-action external pin structure verified."
 fi

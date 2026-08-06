@@ -101,6 +101,7 @@ workflow_instruction_scope="$(
 )"
 IFS=',' read -r -a workflow_instruction_patterns <<< "$workflow_instruction_scope"
 for direct_fixture in \
+  .github/actions/setup-node-with-deps/action.yml \
   tests/android-consumed-workflow-action-pins.sh \
   tests/codeql-applicability.sh \
   tests/copilot-review-memory-errors.sh \
@@ -340,6 +341,45 @@ validate_immutable_action_references() {
   ' "$source_name"
 }
 
+validate_documented_action_release_pins() {
+  local source_name="$1"
+  local line payload reference version revision
+  local documented_release='^v?[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
+  local documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+
+  while IFS= read -r line; do
+    payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
+    reference="${payload%%[[:space:]#]*}"
+    if [[ "$reference" == ./* ]] || [[ "$reference" == docker://* ]]; then
+      continue
+    fi
+
+    if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
+      echo "$source_name: external reference lacks same-line provenance: $payload" >&2
+      return 1
+    fi
+
+    reference="${BASH_REMATCH[1]}"
+    version="${BASH_REMATCH[2]}"
+    revision="${reference##*@}"
+    if [[ ! "$reference" == *@* ]] || [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]] ||
+      [[ "$revision" =~ ^0{40}$ ]]; then
+      echo "$source_name: external action lacks a documented full-SHA pin: $payload" >&2
+      return 1
+    fi
+    if [[ "${reference%@*}" == */.github/workflows/*.yml ]] ||
+      [[ "${reference%@*}" == */.github/workflows/*.yaml ]]; then
+      if [[ ! "$version" =~ $documented_source ]] || [[ "$version" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$source_name: reusable workflow lacks a documented source ref: $payload" >&2
+        return 1
+      fi
+    elif [[ ! "$version" =~ $documented_release ]]; then
+      echo "$source_name: external action lacks an exact same-line release: $payload" >&2
+      return 1
+    fi
+  done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' || true)
+}
+
 immutable_action_fixture='jobs:
   reusable-workflow:
     uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567
@@ -372,6 +412,27 @@ for movable_action_fixture in \
   fi
 done
 
+documented_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3'
+if ! printf '%s\n' "$documented_release_fixture" |
+  validate_documented_action_release_pins "documented release fixture"; then
+  echo "Documented action release validation must accept exact releases." >&2
+  exit 1
+fi
+
+documented_workflow_source_fixture=$'jobs:\n  fixture:\n    uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567 # main'
+if ! printf '%s\n' "$documented_workflow_source_fixture" |
+  validate_documented_action_release_pins "documented workflow source fixture"; then
+  echo "Documented reusable workflow validation must accept source refs." >&2
+  exit 1
+fi
+
+major_only_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1'
+if printf '%s\n' "$major_only_release_fixture" |
+  validate_documented_action_release_pins "major-only release fixture" 2>/dev/null; then
+  echo "Documented action release validation accepted a mutable major-only label." >&2
+  exit 1
+fi
+
 # Cross-repository callers pin this reusable workflow to a commit, but that
 # pin is only meaningful when every action it invokes is also immutable.
 # Require a full commit SHA for repository actions and a canonical SHA-256
@@ -379,6 +440,24 @@ done
 # silently change the code executed by consumers.
 if ! validate_immutable_action_references "$REUSABLE_WORKFLOW"; then
   echo "Reusable Dependabot workflow must pin every nested repository action to a full commit SHA and every Docker action to a canonical SHA-256 digest; caller-local references are not allowed." >&2
+  exit 1
+fi
+
+pinned_reusable_workflow="$(
+  git -C "$REPO_ROOT" show \
+    "$caller_revision:.github/workflows/reusable-dependabot-auto-merge.yml"
+)" || {
+  echo "Pinned Dependabot reusable workflow is unavailable from the reviewed revision." >&2
+  exit 1
+}
+if ! printf '%s\n' "$pinned_reusable_workflow" |
+  validate_immutable_action_references; then
+  echo "Pinned Dependabot reusable workflow must keep every nested action immutable." >&2
+  exit 1
+fi
+if ! printf '%s\n' "$pinned_reusable_workflow" |
+  validate_documented_action_release_pins "pinned Dependabot reusable workflow"; then
+  echo "Pinned Dependabot reusable workflow must retain exact release provenance for every nested action." >&2
   exit 1
 fi
 
