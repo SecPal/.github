@@ -6,7 +6,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
-documented_version='^v[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
+documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
 
 is_documented_pin() {
   local reference="$1"
@@ -15,7 +15,8 @@ is_documented_pin() {
 
   [[ "$reference" == *@* ]] &&
     [[ "$revision" =~ $full_commit_sha ]] &&
-    [[ "$version" =~ $documented_version ]]
+    [[ "$version" =~ $documented_source ]] &&
+    [[ ! "$version" =~ $full_commit_sha ]]
 }
 
 has_github_actions_dependabot() {
@@ -62,14 +63,25 @@ if ! is_documented_pin \
   exit 1
 fi
 
+if ! is_documented_pin \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'v1'; then
+  echo "Rejected a documented major-version action pin." >&2
+  exit 1
+fi
+
+if ! is_documented_pin \
+  'example/workflows/.github/workflows/check.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'main'; then
+  echo "Rejected a documented branch workflow pin." >&2
+  exit 1
+fi
+
 for invalid_fixture in \
   'actions/example@v1|v1' \
   'actions/example@abcdef0|v1' \
   'actions/example@AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|v1.2.3' \
-  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1' \
-  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|v1.2' \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|' \
-  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|version-one'; do
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+  'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|#v1'; do
   IFS='|' read -r reference version <<<"$invalid_fixture"
   if is_documented_pin "$reference" "$version"; then
     echo "Accepted an invalid action pin fixture: $invalid_fixture" >&2
@@ -86,20 +98,6 @@ if has_github_actions_dependabot $'updates:\n  - package-ecosystem: "github-acti
   echo "Accepted GitHub Actions Dependabot coverage outside the workflow root." >&2
   exit 1
 fi
-
-workflows=(
-  reusable-reuse.yml
-  reusable-license-compatibility.yml
-  reusable-prettier.yml
-  reusable-markdown-lint.yml
-  reusable-ai-instructions.yml
-  reusable-node-lint.yml
-  reusable-node-build.yml
-  reusable-check-conflict-markers.yml
-  project-automation-core.yml
-  draft-pr-reminder.yml
-  reusable-pr-size.yml
-)
 
 governance_checkout_workflows=(
   reusable-ai-instructions.yml
@@ -120,9 +118,8 @@ for workflow in "${governance_checkout_workflows[@]}"; do
   grep -Fq "ref: \${{ fromJSON(toJSON(job)).workflow_sha }}" "$workflow_path"
 done
 
-for workflow in "${workflows[@]}"; do
-  workflow_path="$repo_root/.github/workflows/$workflow"
-  test -f "$workflow_path"
+while IFS= read -r workflow_path; do
+  workflow="${workflow_path##*/}"
 
   while IFS= read -r line; do
     payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
@@ -141,8 +138,9 @@ for workflow in "${workflows[@]}"; do
       exit 1
     fi
   done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$workflow_path")
-done
+done < <(find "$repo_root/.github/workflows" -maxdepth 1 -type f \
+  \( -name '*.yml' -o -name '*.yaml' \) -print | sort)
 
 has_github_actions_dependabot "$(<"$repo_root/.github/dependabot.yml")"
 
-echo "Android-consumed reusable workflow action pins verified."
+echo "Workflow external action and reusable-workflow pins verified."

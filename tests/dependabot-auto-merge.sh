@@ -163,15 +163,15 @@ if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WO
   exit 1
 fi
 
-grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@main$' "$CALLER_WORKFLOW" || {
-  echo "Dependabot caller workflow must keep auto-merge decisions on the reviewed main-branch reusable workflow." >&2
+grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40} # main$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must keep auto-merge decisions on a reviewed immutable reusable workflow revision documented as main." >&2
   exit 1
 }
 
 if awk '
   /^  auto-merge:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
-  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@main$/ {
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$/ {
     reusable_job = 1
   }
   in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }
@@ -207,7 +207,7 @@ awk '
   exit 1
 }
 
-grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98$' "$REUSABLE_WORKFLOW" || {
+grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0$' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
   exit 1
 }
