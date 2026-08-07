@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=tests/android-consumed-workflow-action-pins.sh
+source "$SCRIPT_DIR/android-consumed-workflow-action-pins.sh"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
 DEPENDABOT_CONFIG="$REPO_ROOT/.github/dependabot.yml"
@@ -22,6 +24,7 @@ WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instruct
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
 ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
+QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 
 resolve_base_revision() {
   local repository="$1"
@@ -101,6 +104,7 @@ workflow_instruction_scope="$(
 )"
 IFS=',' read -r -a workflow_instruction_patterns <<< "$workflow_instruction_scope"
 for direct_fixture in \
+  .github/actions/setup-node-with-deps/action.yml \
   tests/android-consumed-workflow-action-pins.sh \
   tests/codeql-applicability.sh \
   tests/copilot-review-memory-errors.sh \
@@ -237,6 +241,26 @@ if [[ "$normalized_workflow_instructions" != *'A reusable-workflow caller job us
   echo "Workflow instructions must document the reusable-workflow caller timeout-minutes exception." >&2
   exit 1
 fi
+
+awk '
+  /^  workflow-pins:$/ { in_job = 1; next }
+  in_job && /^  [A-Za-z0-9_-]+:$/ { in_job = 0 }
+  in_job && /^      - name: Setup Node\.js$/ { sets_up_node = 1 }
+  in_job && /^      - name: Install Node dependencies$/ { installs_dependencies = 1 }
+  in_job && /^        run: npm ci$/ { uses_lockfile = 1 }
+  in_job && /^      - name: Verify external workflow references$/ { in_step = 1; next }
+  in_step && /^      - name:/ { in_step = 0 }
+  in_step && /^          VERIFY_ACTION_PIN_PROVENANCE: "true"$/ { verifies_provenance = 1 }
+  in_step && /^          bash tests\/android-consumed-workflow-action-pins\.sh$/ { validates_working_tree = 1 }
+  in_step && /^          bash tests\/dependabot-auto-merge\.sh$/ { validates_pinned_snapshot = 1 }
+  END {
+    exit !(sets_up_node && installs_dependencies && uses_lockfile &&
+      verifies_provenance && validates_working_tree && validates_pinned_snapshot)
+  }
+' "$QUALITY_WORKFLOW" || {
+  echo "Workflow pin validation must install locked Node dependencies and verify both the working tree and pinned Dependabot snapshot with live provenance enabled." >&2
+  exit 1
+}
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
 # gate on the PR author so the same maintainer-triggered events are not
 # skipped when other repositories invoke this reusable workflow directly.
@@ -272,10 +296,8 @@ validate_immutable_action_references() {
 
   if [[ -x "$REPO_ROOT/node_modules/.bin/js-yaml" ]]; then
     parser=("$REPO_ROOT/node_modules/.bin/js-yaml")
-  elif command -v npx >/dev/null 2>&1; then
-    parser=(npx --yes js-yaml@4.2.0)
   else
-    echo "Immutable action reference validation requires npm dependencies or npx." >&2
+    echo "Immutable action reference validation requires dependencies installed with npm ci." >&2
     return 1
   fi
 
@@ -340,6 +362,14 @@ validate_immutable_action_references() {
   ' "$source_name"
 }
 
+validate_documented_action_release_pins() {
+  local source_name="$1"
+  local fixture_path="$base_fixture/action-pin-definition.yml"
+
+  cat >"$fixture_path"
+  validate_action_definition_pins "$fixture_path" "$source_name"
+}
+
 immutable_action_fixture='jobs:
   reusable-workflow:
     uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567
@@ -372,6 +402,127 @@ for movable_action_fixture in \
   fi
 done
 
+documented_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3'
+if ! printf '%s\n' "$documented_release_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "documented release fixture"; then
+  echo "Documented action release validation must accept exact releases." >&2
+  exit 1
+fi
+
+documented_workflow_source_fixture=$'jobs:\n  fixture:\n    uses: actions/example/.github/workflows/example.yml@0123456789abcdef0123456789abcdef01234567 # main'
+if ! printf '%s\n' "$documented_workflow_source_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "documented workflow source fixture"; then
+  echo "Documented reusable workflow validation must accept source refs." >&2
+  exit 1
+fi
+
+fake_parser_bin="$base_fixture/fake-parser-bin"
+unlocked_fixture_root="$base_fixture/unlocked-repository"
+mkdir -p "$fake_parser_bin" "$unlocked_fixture_root"
+cat >"$fake_parser_bin/npx" <<'EOF'
+#!/usr/bin/env bash
+printf '{}\n'
+EOF
+chmod +x "$fake_parser_bin/npx"
+rejects_unlocked_action_parser() {
+  local repo_root="$unlocked_fixture_root"
+  local PATH="$fake_parser_bin:$PATH"
+
+  ! list_yaml_action_references "$base_fixture/action-pin-definition.yml" >/dev/null 2>&1
+}
+if ! rejects_unlocked_action_parser; then
+  echo "Action reference validation downloaded a parser outside the repository lockfile." >&2
+  exit 1
+fi
+rejects_unlocked_immutable_parser() {
+  local REPO_ROOT="$unlocked_fixture_root"
+  local PATH="$fake_parser_bin:$PATH"
+
+  ! validate_immutable_action_references "$base_fixture/action-pin-definition.yml" >/dev/null 2>&1
+}
+if ! rejects_unlocked_immutable_parser; then
+  echo "Immutable reference validation downloaded a parser outside the repository lockfile." >&2
+  exit 1
+fi
+
+documented_docker_digest_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+if ! printf '%s\n' "$documented_docker_digest_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "documented Docker digest fixture"; then
+  echo "Documented action validation must accept canonical Docker digests." >&2
+  exit 1
+fi
+
+unrelated_uses_fixture=$'inputs:\n  uses:\n    description: Ordinary composite action input\nenv:\n  uses: ordinary-value\nruns:\n  using: composite\n  steps:\n    - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3'
+if ! printf '%s\n' "$unrelated_uses_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "unrelated uses fixture"; then
+  echo "Action reference validation must ignore uses keys outside action-bearing schema locations." >&2
+  exit 1
+fi
+
+major_only_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1'
+if printf '%s\n' "$major_only_release_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "major-only release fixture" 2>/dev/null; then
+  echo "Documented action release validation accepted a mutable major-only label." >&2
+  exit 1
+fi
+
+spaced_uses_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses : actions/example@0123456789abcdef0123456789abcdef01234567'
+if printf '%s\n' "$spaced_uses_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "spaced uses fixture" 2>/dev/null; then
+  echo "Documented action release validation ignored a spaced uses key without provenance." >&2
+  exit 1
+fi
+
+inline_uses_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - { name: Example, uses: actions/example@0123456789abcdef0123456789abcdef01234567 }'
+if printf '%s\n' "$inline_uses_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "inline uses fixture" 2>/dev/null; then
+  echo "Documented action release validation ignored an inline uses key without provenance." >&2
+  exit 1
+fi
+
+decoy_documentation_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    env:\n      uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3\n    steps:\n      - uses : actions/example@0123456789abcdef0123456789abcdef01234567'
+if printf '%s\n' "$decoy_documentation_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "decoy documentation fixture" 2>/dev/null; then
+  echo "Documented action release validation matched provenance from a different YAML location." >&2
+  exit 1
+fi
+
+duplicate_jobs_fixture=$'jobs:\n  verified:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3\njobs:\n  movable:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@main'
+if printf '%s\n' "$duplicate_jobs_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "duplicate jobs fixture" 2>/dev/null; then
+  echo "Action reference validation accepted duplicate mappings that hide a movable reference." >&2
+  exit 1
+fi
+
+multiple_documents_fixture=$'jobs:\n  verified:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@0123456789abcdef0123456789abcdef01234567 # v1.2.3\n---\njobs:\n  movable:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@main'
+if printf '%s\n' "$multiple_documents_fixture" |
+  VERIFY_ACTION_PIN_PROVENANCE=false \
+    validate_documented_action_release_pins "multiple documents fixture" 2>/dev/null; then
+  echo "Action reference validation accepted an unchecked additional YAML document." >&2
+  exit 1
+fi
+
+mismatched_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@1111111111111111111111111111111111111111 # v1.2.3'
+if (
+  # shellcheck disable=SC2329 # The validation function invokes this provenance hook indirectly.
+  verify_action_release_pin() { return 1; }
+  VERIFY_ACTION_PIN_PROVENANCE=true \
+    validate_documented_action_release_pins \
+      "mismatched release fixture" <<<"$mismatched_release_fixture" 2>/dev/null
+); then
+  echo "Pinned action provenance validation accepted a SHA that was not verified against its documented release." >&2
+  exit 1
+fi
+
 # Cross-repository callers pin this reusable workflow to a commit, but that
 # pin is only meaningful when every action it invokes is also immutable.
 # Require a full commit SHA for repository actions and a canonical SHA-256
@@ -379,6 +530,24 @@ done
 # silently change the code executed by consumers.
 if ! validate_immutable_action_references "$REUSABLE_WORKFLOW"; then
   echo "Reusable Dependabot workflow must pin every nested repository action to a full commit SHA and every Docker action to a canonical SHA-256 digest; caller-local references are not allowed." >&2
+  exit 1
+fi
+
+pinned_reusable_workflow="$(
+  git -C "$REPO_ROOT" show \
+    "$caller_revision:.github/workflows/reusable-dependabot-auto-merge.yml"
+)" || {
+  echo "Pinned Dependabot reusable workflow is unavailable from the reviewed revision." >&2
+  exit 1
+}
+if ! printf '%s\n' "$pinned_reusable_workflow" |
+  validate_immutable_action_references; then
+  echo "Pinned Dependabot reusable workflow must keep every nested action immutable." >&2
+  exit 1
+fi
+if ! printf '%s\n' "$pinned_reusable_workflow" |
+  validate_documented_action_release_pins "pinned Dependabot reusable workflow"; then
+  echo "Pinned Dependabot reusable workflow must retain exact release provenance for every nested action." >&2
   exit 1
 fi
 

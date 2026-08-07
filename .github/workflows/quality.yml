@@ -38,11 +38,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+
+      - name: Install Node dependencies
+        run: npm ci
+
       - name: Verify external workflow references
         env:
           SECPAL_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.sha }}
           VERIFY_ACTION_PIN_PROVENANCE: "true"
-        run: bash tests/android-consumed-workflow-action-pins.sh
+        run: |
+          bash tests/android-consumed-workflow-action-pins.sh
+          bash tests/dependabot-auto-merge.sh
 
   pr-review-workflow:
     name: Finite PR Review Workflow

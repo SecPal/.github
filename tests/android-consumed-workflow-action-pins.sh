@@ -4,11 +4,12 @@
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 full_commit_sha='^[0-9a-f]{40}$'
 null_commit_sha='^0{40}$'
 documented_source='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
 documented_release='^v?[0-9]+([.][0-9]+){2}([-+][A-Za-z0-9.-]+)?$'
+immutable_docker_reference='^docker://[^@[:space:]]+@sha256:[0-9a-f]{64}$'
 
 is_documented_pin() {
   local reference="$1"
@@ -44,6 +45,10 @@ is_accepted_action_pin() {
   else
     verify_action_release_pin "$reference" "$version"
   fi
+}
+
+is_immutable_docker_pin() {
+  [[ "$1" =~ $immutable_docker_reference ]]
 }
 
 release_pin_matches_refs() {
@@ -118,6 +123,154 @@ verify_reusable_workflow_pin() {
   git -C "$repo_root" merge-base --is-ancestor "${reference##*@}" "$base_revision"
 }
 
+list_yaml_action_references() {
+  local action_definition_path="$1"
+  local parser_module="$repo_root/node_modules/js-yaml"
+
+  if [[ ! -d "$parser_module" ]]; then
+    echo "Action reference validation requires dependencies installed with npm ci." >&2
+    return 1
+  fi
+
+  # shellcheck disable=SC2016 # JavaScript template literals are intentionally passed verbatim.
+  node - "$repo_root" "$action_definition_path" <<'NODE'
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const repoRoot = process.argv[2];
+      const sourceName = process.argv[3];
+      const yaml = require(path.join(repoRoot, "node_modules/js-yaml"));
+      const source = fs.readFileSync(sourceName, "utf8");
+      const references = [];
+
+      function parseNode(events, state) {
+        const event = events[state.cursor++];
+        if (!event) throw new Error(`${sourceName}: incomplete YAML event stream`);
+        if (event.type === yaml.EVENT_SCALAR) {
+          return {
+            kind: "scalar",
+            event,
+            value: source.slice(event.valueStart, event.valueEnd),
+          };
+        }
+        if (event.type === yaml.EVENT_ALIAS) return { kind: "alias", event };
+        if (event.type === yaml.EVENT_MAPPING) {
+          const entries = [];
+          while (events[state.cursor]?.type !== yaml.EVENT_POP) {
+            entries.push({
+              key: parseNode(events, state),
+              value: parseNode(events, state),
+            });
+          }
+          state.cursor += 1;
+          return { kind: "mapping", entries };
+        }
+        if (event.type === yaml.EVENT_SEQUENCE) {
+          const items = [];
+          while (events[state.cursor]?.type !== yaml.EVENT_POP) {
+            items.push(parseNode(events, state));
+          }
+          state.cursor += 1;
+          return { kind: "sequence", items };
+        }
+        throw new Error(`${sourceName}: unsupported YAML event ${event.type}`);
+      }
+
+      function mappingEntry(mapping, key) {
+        if (!mapping || mapping.kind !== "mapping") return undefined;
+        return mapping.entries.find((entry) =>
+          entry.key.kind === "scalar" && entry.key.value === key);
+      }
+
+      function addReference(entry, location) {
+        if (!entry || entry.value.kind !== "scalar" || entry.value.value.includes("\n")) {
+          process.stderr.write(`${sourceName}: ${location} must be a single-line string\n`);
+          process.exitCode = 1;
+          return;
+        }
+
+        const lineStart = source.lastIndexOf("\n", entry.key.event.valueStart - 1) + 1;
+        const nextLine = source.indexOf("\n", entry.key.event.valueStart);
+        const lineEnd = nextLine === -1 ? source.length : nextLine;
+        const line = source.slice(lineStart, lineEnd);
+        const match = line.match(
+          /^[ \t]*(?:-[ \t]+)?uses:[ \t]+([^ \t#]+)(?:[ \t]+#[ \t]+([^ \t#]+))?[ \t]*$/,
+        );
+        if (!match || match[1] !== entry.value.value) {
+          process.stderr.write(
+            `${sourceName}: ${location} must use canonical uses YAML with same-line provenance\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        references.push([entry.value.value, match[2] || ""]);
+      }
+
+      function collectSteps(steps, location) {
+        if (!steps || steps.kind !== "sequence") return;
+        steps.items.forEach((step, index) => {
+          const uses = mappingEntry(step, "uses");
+          if (uses) addReference(uses, `${location}[${index}].uses`);
+        });
+      }
+
+      let events;
+      try {
+        yaml.load(source);
+        events = yaml.parseEvents(source);
+      } catch (error) {
+        process.stderr.write(`${sourceName}: ${error.message}\n`);
+        process.exit(1);
+      }
+      const state = { cursor: 0 };
+      if (events[state.cursor]?.type === yaml.EVENT_DOCUMENT) state.cursor += 1;
+      const definition = parseNode(events, state);
+      if (definition.kind !== "mapping") {
+        process.stderr.write(`${sourceName}: action definition must be a mapping\n`);
+        process.exit(1);
+      }
+
+      const jobs = mappingEntry(definition, "jobs")?.value;
+      if (jobs?.kind === "mapping") {
+        for (const jobEntry of jobs.entries) {
+          const job = jobEntry.value;
+          const jobId = jobEntry.key.kind === "scalar" ? jobEntry.key.value : "<job>";
+          const uses = mappingEntry(job, "uses");
+          if (uses) addReference(uses, `jobs.${jobId}.uses`);
+          collectSteps(mappingEntry(job, "steps")?.value, `jobs.${jobId}.steps`);
+        }
+      }
+
+      const runs = mappingEntry(definition, "runs")?.value;
+      collectSteps(mappingEntry(runs, "steps")?.value, "runs.steps");
+
+      if (!process.exitCode) {
+        process.stdout.write(references.map((item) => item.join("\t")).join("\n"));
+      }
+NODE
+}
+
+validate_action_definition_pins() {
+  local action_definition_path="$1"
+  local action_definition="${2:-${action_definition_path#"$repo_root"/}}"
+  local action_references reference version
+
+  action_references="$(list_yaml_action_references "$action_definition_path")" || return 1
+  while IFS=$'\t' read -r reference version; do
+    [[ -n "$reference" ]] || continue
+    if [[ "$reference" == ./* ]] || is_immutable_docker_pin "$reference"; then
+      continue
+    fi
+    if [[ -z "$version" ]]; then
+      echo "$action_definition: external action lacks same-line version documentation: $reference" >&2
+      return 1
+    fi
+    if ! is_accepted_action_pin "$reference" "$version"; then
+      echo "$action_definition: external action is not a verified documented full-SHA pin: $reference # $version" >&2
+      return 1
+    fi
+  done <<<"$action_references"
+}
+
 has_github_actions_dependabot() {
   local configuration="$1"
 
@@ -154,8 +307,9 @@ has_github_actions_dependabot() {
   ' <<<"$configuration"
 }
 
-# Dependabot owns action references and their version comments. The structural
-# guard must accept a valid updated pair without requiring a second fixture.
+main() {
+  # Dependabot owns action references and their version comments. The structural
+  # guard must accept a valid updated pair without requiring a second fixture.
 if ! is_documented_pin \
   'actions/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'v1.2.3'; then
   echo "Rejected a structurally documented action pin." >&2
@@ -254,33 +408,26 @@ for workflow in "${governance_checkout_workflows[@]}"; do
   grep -Fq "ref: \${{ fromJSON(toJSON(job)).workflow_sha }}" "$workflow_path"
 done
 
-while IFS= read -r workflow_path; do
-  workflow="${workflow_path##*/}"
-
-  while IFS= read -r line; do
-    payload="$(sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' <<<"$line")"
-    if [[ "$payload" == ./* ]]; then
-      continue
-    fi
-    if [[ ! "$payload" =~ ^([^[:space:]#]+)[[:space:]]+#[[:space:]]+([^[:space:]#]+)[[:space:]]*$ ]]; then
-      echo "$workflow: external action lacks same-line version documentation: $payload" >&2
-      exit 1
-    fi
-
-    reference="${BASH_REMATCH[1]}"
-    version="${BASH_REMATCH[2]}"
-    if ! is_accepted_action_pin "$reference" "$version"; then
-      echo "$workflow: external action is not a verified documented full-SHA pin: $payload" >&2
-      exit 1
-    fi
-  done < <(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$workflow_path")
-done < <(find "$repo_root/.github/workflows" -maxdepth 1 -type f \
-  \( -name '*.yml' -o -name '*.yaml' \) -print | sort)
+while IFS= read -r action_definition_path; do
+  validate_action_definition_pins "$action_definition_path" || exit 1
+done < <(
+  {
+    find "$repo_root/.github/workflows" -maxdepth 1 -type f \
+      \( -name '*.yml' -o -name '*.yaml' \) -print
+    find "$repo_root/.github/actions" -type f \
+      \( -name 'action.yml' -o -name 'action.yaml' \) -print
+  } | sort
+)
 
 has_github_actions_dependabot "$(<"$repo_root/.github/dependabot.yml")"
 
 if [[ "${VERIFY_ACTION_PIN_PROVENANCE:-false}" == "true" ]]; then
-  echo "Workflow external action and reusable-workflow pin provenance verified."
+  echo "Workflow and composite-action external pin provenance verified."
 else
-  echo "Workflow external action and reusable-workflow pin structure verified."
+  echo "Workflow and composite-action external pin structure verified."
+fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
