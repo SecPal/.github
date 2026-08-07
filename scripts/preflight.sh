@@ -168,6 +168,15 @@ if [ -f tests/reusable-workflow-policy.sh ]; then
   }
 fi
 
+if [ -f tests/reusable-copilot-instructions-provenance.sh ]; then
+  bash tests/reusable-copilot-instructions-provenance.sh || {
+    echo "" >&2
+    echo "❌ Reusable Copilot workflow provenance regression test failed!" >&2
+    echo "Bind governance code to the called workflow revision and pin every external action." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/android-consumed-workflow-action-pins.sh ]; then
   bash tests/android-consumed-workflow-action-pins.sh || {
     echo "" >&2

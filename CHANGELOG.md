@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-07 - Harden Copilot Reusable Workflow Provenance
+
+**Security:**
+
+- bound the Copilot governance checkout to the immutable repository and commit
+  selected for the called workflow, retaining `governance-ref` only as a
+  deprecated compatibility input
+- added positive and negative regression coverage for immutable governance
+  checkout and external-action pin invariants
+
+---
+
 ## 2026-08-07 - Expose Failed Review Validation Entries
 
 **Fixed:**
