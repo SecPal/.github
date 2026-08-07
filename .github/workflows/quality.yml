@@ -52,6 +52,7 @@ jobs:
           VERIFY_ACTION_PIN_PROVENANCE: "true"
         run: |
           bash tests/android-consumed-workflow-action-pins.sh
+          bash tests/reusable-copilot-instructions-provenance.sh
           bash tests/dependabot-auto-merge.sh
 
   pr-review-workflow:

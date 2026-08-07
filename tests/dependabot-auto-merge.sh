@@ -16,6 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=tests/android-consumed-workflow-action-pins.sh
+# shellcheck disable=SC1091 # Source path is resolved through SCRIPT_DIR at runtime.
 source "$SCRIPT_DIR/android-consumed-workflow-action-pins.sh"
 CALLER_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-dependabot-auto-merge.yml"
@@ -117,6 +118,7 @@ for direct_fixture in \
   tests/pull-request-commit-signatures.sh \
   tests/pull-request-english.sh \
   tests/pull-request-evidence.sh \
+  tests/reusable-copilot-instructions-provenance.sh \
   tests/reusable-markdown-lint-scope.sh \
   tests/reusable-workflow-policy.sh \
   tests/reusable-workflow-timeouts.sh; do
@@ -252,13 +254,15 @@ awk '
   in_step && /^      - name:/ { in_step = 0 }
   in_step && /^          VERIFY_ACTION_PIN_PROVENANCE: "true"$/ { verifies_provenance = 1 }
   in_step && /^          bash tests\/android-consumed-workflow-action-pins\.sh$/ { validates_working_tree = 1 }
+  in_step && /^          bash tests\/reusable-copilot-instructions-provenance\.sh$/ { validates_copilot_provenance = 1 }
   in_step && /^          bash tests\/dependabot-auto-merge\.sh$/ { validates_pinned_snapshot = 1 }
   END {
     exit !(sets_up_node && installs_dependencies && uses_lockfile &&
-      verifies_provenance && validates_working_tree && validates_pinned_snapshot)
+      verifies_provenance && validates_working_tree && validates_copilot_provenance &&
+      validates_pinned_snapshot)
   }
 ' "$QUALITY_WORKFLOW" || {
-  echo "Workflow pin validation must install locked Node dependencies and verify both the working tree and pinned Dependabot snapshot with live provenance enabled." >&2
+  echo "Workflow pin validation must install locked Node dependencies and verify action pins, Copilot provenance, and the pinned Dependabot snapshot with live provenance enabled." >&2
   exit 1
 }
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
@@ -427,6 +431,7 @@ printf '{}\n'
 EOF
 chmod +x "$fake_parser_bin/npx"
 rejects_unlocked_action_parser() {
+  # shellcheck disable=SC2034 # The sourced helper reads this dynamically scoped value.
   local repo_root="$unlocked_fixture_root"
   local PATH="$fake_parser_bin:$PATH"
 
@@ -513,7 +518,7 @@ fi
 
 mismatched_release_fixture=$'jobs:\n  fixture:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/example@1111111111111111111111111111111111111111 # v1.2.3'
 if (
-  # shellcheck disable=SC2329 # The validation function invokes this provenance hook indirectly.
+  # shellcheck disable=SC2317,SC2329 # The validation function invokes this provenance hook indirectly.
   verify_action_release_pin() { return 1; }
   VERIFY_ACTION_PIN_PROVENANCE=true \
     validate_documented_action_release_pins \
