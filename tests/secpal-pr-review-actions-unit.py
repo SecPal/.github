@@ -3964,6 +3964,210 @@ class RegistryTests(TestCase):
                 },
             )
 
+    def test_registered_validation_nonzero_exit_identifies_the_exact_entry(self) -> None:
+        repository = registry_entry("SecPal/.github")
+        completed = [
+            SimpleNamespace(returncode=0),
+            SimpleNamespace(
+                returncode=17,
+                stdout="token=github_pat_command_output_must_not_leak",
+                stderr="secret=command-output-must-not-leak",
+            ),
+        ]
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                side_effect=completed,
+            ) as run,
+        ):
+            result = actions._run_registered_validations(repository, REPO_ROOT)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "non-zero exit",
+                "index": 2,
+                "purpose": "Run lint",
+            },
+        )
+        self.assertNotIn("command-output", str(result.failure_report()))
+        self.assertEqual(run.call_count, 2)
+
+    def test_registered_validation_timeout_reports_no_command_output(self) -> None:
+        repository = registry_entry("SecPal/.github")
+        timeout = actions.subprocess.TimeoutExpired(
+            ["npm", "run", "test"],
+            30,
+            output="github_pat_timeout_output_must_not_leak",
+            stderr="secret=timeout-output-must-not-leak",
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                side_effect=timeout,
+            ) as run,
+        ):
+            result = actions._run_registered_validations(repository, REPO_ROOT)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "timeout",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        self.assertNotIn("timeout-output", str(result.failure_report()))
+        self.assertEqual(run.call_count, 1)
+
+    def test_registered_validation_unavailable_executable_is_actionable(self) -> None:
+        repository = registry_entry("SecPal/.github")
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                side_effect=actions.RegistryError(
+                    "unavailable secret=resolution-detail-must-not-leak"
+                ),
+            ),
+            mock.patch.object(actions.subprocess, "run") as run,
+        ):
+            result = actions._run_registered_validations(repository, REPO_ROOT)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "unavailable executable",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        self.assertNotIn("resolution-detail", str(result.failure_report()))
+        run.assert_not_called()
+
+    def test_registered_validation_unavailable_working_directory_is_actionable(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        repository["focused_validation"] = []
+        repository["required_local_validation"] = [
+            {
+                "argv": ["npm", "run", "test"],
+                "working_directory": "missing",
+                "purpose": "Run tests",
+            }
+        ]
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            mock.patch.object(actions, "_validation_executable") as executable,
+            mock.patch.object(actions.subprocess, "run") as run,
+        ):
+            result = actions._run_registered_validations(
+                repository,
+                Path(temporary_directory),
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "unavailable working directory",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        executable.assert_not_called()
+        run.assert_not_called()
+
+    def test_registered_validation_unsafe_working_directory_stays_blocked(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        repository["focused_validation"] = []
+        repository["required_local_validation"] = [
+            {
+                "argv": ["npm", "run", "test"],
+                "working_directory": "linked-outside",
+                "purpose": "Run tests",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            repository_root = temporary / "repository"
+            outside = temporary / "outside"
+            repository_root.mkdir()
+            outside.mkdir()
+            (repository_root / "linked-outside").symlink_to(
+                outside,
+                target_is_directory=True,
+            )
+            with (
+                mock.patch.object(actions, "_validation_executable") as executable,
+                mock.patch.object(actions.subprocess, "run") as run,
+            ):
+                result = actions._run_registered_validations(
+                    repository,
+                    repository_root,
+                )
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "unsafe working directory",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        executable.assert_not_called()
+        run.assert_not_called()
+
+    def test_registered_validation_execution_error_discards_details_and_stops(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        execution_error = OSError("secret=execution-detail-must-not-leak")
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                side_effect=execution_error,
+            ) as run,
+        ):
+            result = actions._run_registered_validations(repository, REPO_ROOT)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "execution error",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        self.assertNotIn("execution-detail", str(result.failure_report()))
+        self.assertEqual(run.call_count, 1)
+
     def test_complete_validation_excludes_focused_only_commands(self) -> None:
         repository = actions.select_repository(
             actions.load_registry(), "SecPal/frontend"
@@ -5349,6 +5553,87 @@ class FastPathTests(TestCase):
                 ):
                     actions._command_attest_validation(arguments)
 
+            self.assertEqual(
+                json.loads(output.read_text(encoding="utf-8")),
+                {
+                    "schema_version": "1.0",
+                    "status": "VALIDATION_RECEIPT_INVALIDATED",
+                    "head_sha": p21.HEAD,
+                    "validated_tree_sha": "a" * 40,
+                },
+            )
+
+    def test_attestation_cli_reports_failed_entry_without_output_or_retry(self) -> None:
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        completed = SimpleNamespace(
+            returncode=9,
+            stdout="github_pat_cli_output_must_not_leak",
+            stderr="secret=cli-output-must-not-leak",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "receipt.json"
+            error_output = io.StringIO()
+            with (
+                mock.patch.object(
+                    actions,
+                    "_attestation_local_state",
+                    return_value=(p21.HEAD, ""),
+                ),
+                mock.patch.object(
+                    actions,
+                    "_load_fast_state",
+                    return_value=fast_feedback(),
+                ),
+                mock.patch.object(actions, "load_registry", return_value={}),
+                mock.patch.object(actions, "select_repository", return_value=entry),
+                mock.patch.object(actions, "_staged_tree", return_value="a" * 40),
+                mock.patch.object(
+                    actions,
+                    "_validation_executable",
+                    return_value="/usr/bin/true",
+                ),
+                mock.patch.object(
+                    actions.subprocess,
+                    "run",
+                    return_value=completed,
+                ) as run,
+                mock.patch.object(actions.sys, "stderr", error_output),
+            ):
+                returncode = actions.main(
+                    [
+                        "attest-validation",
+                        "--repo",
+                        "SecPal/.github",
+                        "--expected-head",
+                        p21.HEAD,
+                        "--reviewed-state",
+                        "reviewed.json",
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            diagnostic_text = error_output.getvalue()
+            diagnostic = json.loads(diagnostic_text)
+            self.assertEqual(returncode, 3)
+            self.assertEqual(diagnostic["status"], "BLOCKED_SECURITY")
+            self.assertFalse(diagnostic["retry_performed"])
+            self.assertEqual(
+                diagnostic["registered_validation_failure"],
+                {
+                    "category": "non-zero exit",
+                    "index": 1,
+                    "purpose": "Run tests",
+                },
+            )
+            self.assertNotIn("cli-output", diagnostic_text)
+            self.assertNotIn("github_pat_", diagnostic_text)
+            self.assertEqual(run.call_count, 1)
+            self.assertIsInstance(run.call_args.args[0], list)
+            self.assertNotIn("shell", run.call_args.kwargs)
             self.assertEqual(
                 json.loads(output.read_text(encoding="utf-8")),
                 {

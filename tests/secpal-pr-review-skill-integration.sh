@@ -189,6 +189,126 @@ assert calls[4][calls[4].index("--method") + 1] == "POST"
 assert calls[4][3] == "repos/SecPal/.github/pulls/comments/21/reactions"
 PY
 
+# A failed complete validation identifies the exact registered entry while
+# keeping command output secret, invalidating the receipt, and stopping once.
+validation_repo="$workspace/validation-repository"
+mkdir -p "$validation_repo"
+git -C "$validation_repo" init -q -b main
+git -C "$validation_repo" config user.name "SecPal Integration Fixture"
+git -C "$validation_repo" config user.email "fixture@secpal.dev"
+git -C "$validation_repo" remote add origin https://github.com/SecPal/.github.git
+printf '#!/bin/sh\nprintf "first\\n" >>"%s"\nprintf "secret=integration-command-output-must-not-leak\\n" >&2\nexit 9\n' \
+  "$workspace/validation-runs.log" >"$validation_repo/validation-fail.sh"
+printf '#!/bin/sh\nprintf "second\\n" >>"%s"\n' \
+  "$workspace/validation-runs.log" >"$validation_repo/validation-must-not-run.sh"
+chmod 0700 \
+  "$validation_repo/validation-fail.sh" \
+  "$validation_repo/validation-must-not-run.sh"
+git -C "$validation_repo" add validation-fail.sh validation-must-not-run.sh
+git -C "$validation_repo" -c commit.gpgsign=false commit -q -m "test: add validation fixtures"
+validation_head="$(git -C "$validation_repo" rev-parse HEAD)"
+
+python3 - "$ACTIONS" "$workspace" "$validation_head" <<'PY'
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+helper = Path(sys.argv[1])
+workspace = Path(sys.argv[2])
+head = sys.argv[3]
+spec = importlib.util.spec_from_file_location("validation_actions_fixture", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+entry = module.select_repository(module.load_registry(), "SecPal/.github")
+entry["focused_validation"] = []
+entry["required_local_validation"] = [
+    {
+        "argv": ["./validation-fail.sh"],
+        "working_directory": ".",
+        "purpose": "Run integration failure probe",
+    },
+    {
+        "argv": ["./validation-must-not-run.sh"],
+        "working_directory": ".",
+        "purpose": "Reject validation retries",
+    },
+]
+entry["manual_gates"] = []
+(workspace / "validation-registry.json").write_text(
+    json.dumps(
+        {"schema_version": "1.0", "repositories": [entry]},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n",
+    encoding="utf-8",
+)
+reviewed = module.fast_path.StableFeedbackState.from_payload(
+    {
+        "repository": "SecPal/.github",
+        "pull_request_number": 1,
+        "head_sha": head,
+        "base_ref": "main",
+        "base_sha": "b" * 40,
+        "pr_state": "OPEN",
+        "pull_request_reactions": [],
+        "reviews": [],
+        "conversation_comments": [],
+        "threads": [],
+    }
+)
+(workspace / "validation-reviewed.json").write_text(
+    json.dumps(reviewed.to_dict(), sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+
+set +e
+python3 "$ACTIONS" attest-validation \
+  --repo SecPal/.github \
+  --expected-head "$validation_head" \
+  --reviewed-state "$workspace/validation-reviewed.json" \
+  --repo-root "$validation_repo" \
+  --registry "$workspace/validation-registry.json" \
+  --output "$workspace/validation-receipt.json" \
+  2>"$workspace/validation-diagnostic.json"
+validation_status=$?
+set -e
+test "$validation_status" -eq 3
+
+python3 - \
+  "$workspace/validation-diagnostic.json" \
+  "$workspace/validation-receipt.json" \
+  "$workspace/validation-runs.log" \
+  "$validation_head" <<'PY'
+import json
+import sys
+
+diagnostic_text = open(sys.argv[1], encoding="utf-8").read()
+diagnostic = json.loads(diagnostic_text)
+receipt = json.load(open(sys.argv[2], encoding="utf-8"))
+runs = open(sys.argv[3], encoding="utf-8").read().splitlines()
+assert diagnostic["status"] == "BLOCKED_SECURITY", diagnostic
+assert diagnostic["retry_performed"] is False, diagnostic
+assert diagnostic["registered_validation_failure"] == {
+    "category": "non-zero exit",
+    "index": 1,
+    "purpose": "Run integration failure probe",
+}, diagnostic
+assert "integration-command-output" not in diagnostic_text, diagnostic_text
+assert "secret=" not in diagnostic_text, diagnostic_text
+assert runs == ["first"], runs
+assert receipt == {
+    "head_sha": sys.argv[4],
+    "schema_version": "1.0",
+    "status": "VALIDATION_RECEIPT_INVALIDATED",
+    "validated_tree_sha": receipt["validated_tree_sha"],
+}, receipt
+PY
+
 # Installer fixtures 70-79: clean install, idempotency, correct link, wrong-link
 # refusal/repair, non-link refusal, parent creation, missing source, direct link,
 # sibling-style user discovery and isolated user configuration.
