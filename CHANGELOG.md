@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-07 - Expose Failed Review Validation Entries
+
+**Fixed:**
+
+- made failed registered review validation report the command's one-based
+  registry index, purpose, and safe failure category while retaining terminal
+  receipt invalidation, discarded command output, single execution, no retry,
+  and no-shell process isolation
+- added unit and subprocess integration coverage for non-zero exits, timeouts,
+  unavailable executables, secret-like command output, and later-command
+  suppression
+
+---
+
 ## 2026-08-07 - Install Locked Workflow Validation Dependencies First
 
 **Fixed:**

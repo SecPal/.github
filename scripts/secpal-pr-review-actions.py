@@ -269,6 +269,54 @@ class RegistryError(ValueError):
     """The production registry is invalid or does not support a repository."""
 
 
+class RegisteredValidationResult:
+    """Secret-safe outcome of one complete registered-validation run."""
+
+    def __init__(
+        self,
+        failure_index: int | None = None,
+        failure_purpose: str | None = None,
+        failure_category: str | None = None,
+    ) -> None:
+        self.failure_index = failure_index
+        self.failure_purpose = (
+            evidence.redact_diagnostic(failure_purpose)
+            if failure_purpose is not None
+            else None
+        )
+        self.failure_category = failure_category
+
+    def __bool__(self) -> bool:
+        return self.failure_category is None
+
+    def failure_report(self) -> dict[str, Any] | None:
+        if (
+            self.failure_index is None
+            or self.failure_purpose is None
+            or self.failure_category is None
+        ):
+            return None
+        return {
+            "index": self.failure_index,
+            "purpose": self.failure_purpose,
+            "category": self.failure_category,
+        }
+
+
+class RegisteredValidationFailure(fast_path.SecurityBlocker):
+    """A registered command failed with an actionable secret-safe identity."""
+
+    def __init__(self, result: RegisteredValidationResult) -> None:
+        report = result.failure_report()
+        if report is None:
+            raise ValueError("registered validation failure details are incomplete")
+        self.report = report
+        super().__init__(
+            "complete registered validation failed at "
+            f"entry {report['index']} ({report['purpose']}): {report['category']}"
+        )
+
+
 class MutationBlocked(RuntimeError):
     """Current GitHub or remediation evidence blocks the intended mutation."""
 
@@ -1107,19 +1155,23 @@ def _complete_validation_commands(
 
 def _run_registered_validations(
     repository: dict[str, Any], repository_root: Path
-) -> bool:
-    """Run unconditional validation once, without a shell or diagnostic output."""
+) -> RegisteredValidationResult:
+    """Run unconditional validation once without a shell or command output."""
 
     repository_root = repository_root.resolve()
     if not repository_root.is_dir():
-        return False
+        return RegisteredValidationResult(
+            failure_category="validation root unavailable"
+        )
     commands = _complete_validation_commands(repository)
     try:
         validation_home = tempfile.TemporaryDirectory(
             prefix="secpal-pr-review-validation-"
         )
     except OSError:
-        return False
+        return RegisteredValidationResult(
+            failure_category="validation environment unavailable"
+        )
     with validation_home:
         sandbox = Path(validation_home.name)
         environment = {
@@ -1149,20 +1201,38 @@ def _run_registered_validations(
             "XDG_CONFIG_HOME": str(sandbox / ".config"),
             "XDG_DATA_HOME": str(sandbox / ".local/share"),
         }
-        for command in commands:
+        for index, command in enumerate(commands, start=1):
             _validate_command(command)
-            working_directory = (
-                repository_root / command["working_directory"]
-            ).resolve()
+            try:
+                working_directory = (
+                    repository_root / command["working_directory"]
+                ).resolve()
+            except (OSError, RuntimeError):
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "unavailable working directory",
+                )
             if (
                 working_directory != repository_root
                 and repository_root not in working_directory.parents
             ):
-                return False
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "unsafe working directory",
+                )
             try:
                 executable = _validation_executable(
                     command, working_directory, repository_root
                 )
+            except RegistryError:
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "unavailable executable",
+                )
+            try:
                 completed = subprocess.run(
                     [executable, *command["argv"][1:]],
                     cwd=working_directory,
@@ -1173,11 +1243,25 @@ def _run_registered_validations(
                     check=False,
                     timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
                 )
-            except (OSError, subprocess.TimeoutExpired, RegistryError):
-                return False
+            except subprocess.TimeoutExpired:
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "timeout",
+                )
+            except OSError:
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "execution error",
+                )
             if completed.returncode != 0:
-                return False
-    return True
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "non-zero exit",
+                )
+    return RegisteredValidationResult()
 
 
 FAST_PATH_PREFLIGHT_QUERY = r"""
@@ -3827,9 +3911,14 @@ def build_resolution_evidence(
             if registered is None:
                 raise RegistryError("repository has no validated registry entry")
             runner = validation_runner or _run_registered_validations
-            result["registered_validation_verified"] = runner(
+            validation_result = runner(
                 registered, Path(local["repository_root"])
-            ) is True
+            )
+            result["registered_validation_verified"] = (
+                bool(validation_result)
+                if isinstance(validation_result, RegisteredValidationResult)
+                else validation_result is True
+            )
         except (OSError, RegistryError):
             result["registered_validation_verified"] = False
     if result["registered_validation_verified"]:
@@ -4342,7 +4431,13 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "validated_tree_sha": tree,
             },
         )
-    if not _run_registered_validations(entry, repository_root):
+    validation_result = _run_registered_validations(entry, repository_root)
+    if not validation_result:
+        if (
+            isinstance(validation_result, RegisteredValidationResult)
+            and validation_result.failure_report() is not None
+        ):
+            raise RegisteredValidationFailure(validation_result)
         raise fast_path.SecurityBlocker("complete registered validation failed")
     head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
     tree_after = _staged_tree(repository_root, status_after)
@@ -4458,6 +4553,8 @@ def main(argv: list[str] | None = None) -> int:
             "blocker": evidence.redact_diagnostic(str(exc)),
             "retry_performed": False,
         }
+        if isinstance(exc, RegisteredValidationFailure):
+            report["registered_validation_failure"] = exc.report
         print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
         return 3
     except MutationFailure as exc:

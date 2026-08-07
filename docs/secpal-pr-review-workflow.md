@@ -212,6 +212,13 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --apply
 ```
 
+If a registered command fails during the complete validation run, the terminal
+JSON diagnostic includes `registered_validation_failure` with the command's
+one-based `index`, registry `purpose`, and a safe `category` such as
+`non-zero exit`, `timeout`, or `unavailable executable`. The helper still
+discards the command's stdout and stderr, leaves only the invalidated receipt
+placeholder, and does not run later commands or retry the failed command.
+
 `manual-gates.json` is an ordered JSON array with exactly one
 `{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object
 per registered gate. Evidence containing a token prefix, bearer authorization,
