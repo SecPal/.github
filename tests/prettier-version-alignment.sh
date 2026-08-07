@@ -100,6 +100,28 @@ assert_quality_workflow_uses_package_lock_step() {
   fi
 }
 
+assert_preflight_installs_dependencies_before_pin_validators() {
+  local path="$1"
+  local npm_install_count npm_install_line android_validator_line dependabot_validator_line
+
+  npm_install_count="$(grep -Ec '^[[:space:]]+npm ci$' "$path" || true)"
+  npm_install_line="$(grep -nE '^[[:space:]]+npm ci$' "$path" | head -n 1 | cut -d: -f1 || true)"
+  android_validator_line="$(grep -nF 'bash tests/android-consumed-workflow-action-pins.sh' "$path" | head -n 1 | cut -d: -f1 || true)"
+  dependabot_validator_line="$(grep -nF 'bash tests/dependabot-auto-merge.sh' "$path" | head -n 1 | cut -d: -f1 || true)"
+
+  if [ "$npm_install_count" -ne 1 ] || [ -z "$npm_install_line" ] ||
+    [ -z "$android_validator_line" ] || [ -z "$dependabot_validator_line" ]; then
+    echo "Preflight must install locked Node dependencies exactly once and invoke both pin validators: $path" >&2
+    return 1
+  fi
+
+  if [ "$npm_install_line" -ge "$android_validator_line" ] ||
+    [ "$npm_install_line" -ge "$dependabot_validator_line" ]; then
+    echo "Preflight must install locked Node dependencies before invoking pin validators: $path" >&2
+    return 1
+  fi
+}
+
 check_alignment() {
   local expected_version="$1"
   local package_json_path="$2"
@@ -126,6 +148,7 @@ check_alignment() {
 
   assert_contains_expected_pin "$pre_commit_config_path" "$expected_version" ".pre-commit-config.yaml" || return 1
   assert_contains_expected_pin "$preflight_script_path" "$expected_version" "scripts/preflight.sh" || return 1
+  assert_preflight_installs_dependencies_before_pin_validators "$preflight_script_path" || return 1
   assert_quality_workflow_uses_package_lock_step "$quality_workflow_path" || return 1
 }
 
@@ -178,6 +201,39 @@ run_negative_scenario() {
   fi
 }
 
+run_dependency_order_negative_scenario() {
+  local scratch late_install_fixture output_file
+
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/preflight-dependency-order.XXXXXX")"
+  trap 'rm -rf "'"$scratch"'"' RETURN EXIT
+  late_install_fixture="$scratch/late-install-preflight.sh"
+  output_file="$scratch/negative-output.txt"
+
+  cat >"$late_install_fixture" <<'EOF'
+if [ -f tests/android-consumed-workflow-action-pins.sh ]; then
+  bash tests/android-consumed-workflow-action-pins.sh
+fi
+if [ -f tests/dependabot-auto-merge.sh ]; then
+  bash tests/dependabot-auto-merge.sh
+fi
+if [ -f package-lock.json ]; then
+  npm ci
+fi
+EOF
+
+  if assert_preflight_installs_dependencies_before_pin_validators \
+    "$late_install_fixture" >"$output_file" 2>&1; then
+    echo "Negative scenario failed: late dependency installation unexpectedly passed preflight ordering checks." >&2
+    return 1
+  fi
+
+  if ! grep -Fq 'Preflight must install locked Node dependencies before invoking pin validators' "$output_file"; then
+    echo "Negative scenario failed: late dependency installation did not produce the expected ordering message." >&2
+    cat "$output_file" >&2
+    return 1
+  fi
+}
+
 main() {
   local expected_version
   expected_version="$(extract_package_prettier_version "$PACKAGE_JSON_PATH")"
@@ -195,6 +251,8 @@ main() {
     "$PRE_COMMIT_CONFIG_PATH" \
     "$PREFLIGHT_SCRIPT_PATH" \
     "$QUALITY_WORKFLOW_PATH"
+
+  run_dependency_order_negative_scenario
 }
 
 main "$@"

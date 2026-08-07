@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-07 - Install Locked Workflow Validation Dependencies First
+
+**Fixed:**
+
+- moved the committed Node dependency installation ahead of local workflow and
+  action pin validators in `scripts/preflight.sh`, then reused that installation
+  for the later Node checks so a fresh checkout cannot fail before its locked
+  YAML parser is available
+- added positive ordering enforcement and a late-install negative fixture to
+  keep the full local preflight aligned with the hosted workflow-pin job
+
+---
+
 ## 2026-08-05 - Pin Android-Consumed Workflow Actions
 
 **Security:**

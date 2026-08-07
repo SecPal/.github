@@ -73,6 +73,12 @@ echo "Using base branch: $BASE"
 # Fetch base branch for PR size check (failure is handled later)
 git fetch origin "$BASE" 2>/dev/null || true
 
+# Install the committed Node dependency graph before any validator that imports
+# repository-owned tooling. The later Node phase reuses this exact install.
+if [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then
+  npm ci
+fi
+
 # 0) Formatting & Compliance
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
@@ -451,7 +457,6 @@ if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
   pnpm run --if-present typecheck
   pnpm run --if-present test
 elif [ -f package-lock.json ] && command -v npm >/dev/null 2>&1; then
-  npm ci
   npm run --if-present lint
   npm run --if-present typecheck
   npm run --if-present test
