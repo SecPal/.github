@@ -1222,6 +1222,12 @@ def _run_registered_validations(
                     command["purpose"],
                     "unsafe working directory",
                 )
+            if not working_directory.is_dir():
+                return RegisteredValidationResult(
+                    index,
+                    command["purpose"],
+                    "unavailable working directory",
+                )
             try:
                 executable = _validation_executable(
                     command, working_directory, repository_root

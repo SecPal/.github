@@ -4060,6 +4060,114 @@ class RegistryTests(TestCase):
         self.assertNotIn("resolution-detail", str(result.failure_report()))
         run.assert_not_called()
 
+    def test_registered_validation_unavailable_working_directory_is_actionable(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        repository["focused_validation"] = []
+        repository["required_local_validation"] = [
+            {
+                "argv": ["npm", "run", "test"],
+                "working_directory": "missing",
+                "purpose": "Run tests",
+            }
+        ]
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            mock.patch.object(actions, "_validation_executable") as executable,
+            mock.patch.object(actions.subprocess, "run") as run,
+        ):
+            result = actions._run_registered_validations(
+                repository,
+                Path(temporary_directory),
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "unavailable working directory",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        executable.assert_not_called()
+        run.assert_not_called()
+
+    def test_registered_validation_unsafe_working_directory_stays_blocked(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        repository["focused_validation"] = []
+        repository["required_local_validation"] = [
+            {
+                "argv": ["npm", "run", "test"],
+                "working_directory": "linked-outside",
+                "purpose": "Run tests",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            repository_root = temporary / "repository"
+            outside = temporary / "outside"
+            repository_root.mkdir()
+            outside.mkdir()
+            (repository_root / "linked-outside").symlink_to(
+                outside,
+                target_is_directory=True,
+            )
+            with (
+                mock.patch.object(actions, "_validation_executable") as executable,
+                mock.patch.object(actions.subprocess, "run") as run,
+            ):
+                result = actions._run_registered_validations(
+                    repository,
+                    repository_root,
+                )
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "unsafe working directory",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        executable.assert_not_called()
+        run.assert_not_called()
+
+    def test_registered_validation_execution_error_discards_details_and_stops(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        execution_error = OSError("secret=execution-detail-must-not-leak")
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                side_effect=execution_error,
+            ) as run,
+        ):
+            result = actions._run_registered_validations(repository, REPO_ROOT)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "execution error",
+                "index": 1,
+                "purpose": "Run tests",
+            },
+        )
+        self.assertNotIn("execution-detail", str(result.failure_report()))
+        self.assertEqual(run.call_count, 1)
+
     def test_complete_validation_excludes_focused_only_commands(self) -> None:
         repository = actions.select_repository(
             actions.load_registry(), "SecPal/frontend"
