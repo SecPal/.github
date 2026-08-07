@@ -33,7 +33,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout governance repository
-        if: ${{ github.repository != 'SecPal/.github' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
@@ -46,26 +45,12 @@ jobs:
           node-version: ${{ inputs.node-version }}
 
       - name: Install governance Node dependencies
+        working-directory: .secpal-governance
         run: |
-          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
-            npm ci
-            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
-          else
-            cd .secpal-governance
-            npm ci
-            echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
-          fi
-
-      - name: Select validator path
-        id: validator
-        run: |
-          if [ "${{ github.repository }}" = "SecPal/.github" ]; then
-            echo "path=./scripts/validate-copilot-instructions.sh" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=./.secpal-governance/scripts/validate-copilot-instructions.sh" >> "$GITHUB_OUTPUT"
-          fi
+          npm ci
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Run validation script
         env:
-          VALIDATOR_PATH: ${{ steps.validator.outputs.path }}
+          VALIDATOR_PATH: ./.secpal-governance/scripts/validate-copilot-instructions.sh
         run: "$VALIDATOR_PATH"
