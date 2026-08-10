@@ -9,6 +9,29 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-10 - Restore Dependabot Update Classification
+
+**Changed:**
+
+- grouped versioned GitHub Actions updates into explicit PATCH, MINOR, and
+  MAJOR pull requests so Dependabot produces readable titles and the existing
+  phased auto-merge policy can act on homogeneous update types
+- separated unversioned SecPal reusable-workflow commit pins into a readable
+  manual-review group and kept unknown or mismatched groups fail-closed
+- verified every grouped metadata entry and the normalized github_actions
+  ecosystem before auto-merge, including executable regression cases for
+  PATCH, MINOR, MAJOR, unversioned, mixed, unknown, and mismatched groups
+- moved the Dependabot caller to the write-capable pull_request_target event
+  while forbidding checkout of pull-request-controlled code, so eligible
+  updates can actually enable GitHub auto-merge
+
+**Fixed:**
+
+- aligned the Copilot provenance test's portable mktemp prefix with its script
+  basename so the repository-wide portability guard passes
+
+---
+
 ## 2026-08-07 - Harden Copilot Reusable Workflow Provenance
 
 **Security:**

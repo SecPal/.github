@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: CC0-1.0
 
+---
 # Dependabot configuration for SecPal .github repository
 # Automatically creates PRs for ALL dependency updates (including Major versions)
 # Security updates are prioritized and checked daily in early morning hours
@@ -13,6 +14,37 @@ updates:
       interval: "daily"
       time: "04:00"
       timezone: "Europe/Berlin"
+    groups:
+      # These refs intentionally track a branch commit rather than a release,
+      # so Dependabot cannot assign them a semantic update type. Give them a
+      # readable title while keeping them on the manual-review path.
+      shared-workflow-pins:
+        patterns:
+          - "SecPal/.github/.github/workflows/*"
+      # Keep each versioned action group semver-homogeneous. The reusable
+      # auto-merge workflow verifies the group, ecosystem, and every member's
+      # update type before trusting the classification.
+      github-actions-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "SecPal/.github/.github/workflows/*"
+        update-types:
+          - "patch"
+      github-actions-minor:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "SecPal/.github/.github/workflows/*"
+        update-types:
+          - "minor"
+      github-actions-major:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "SecPal/.github/.github/workflows/*"
+        update-types:
+          - "major"
     commit-message:
       prefix: "chore"
       include: "scope"

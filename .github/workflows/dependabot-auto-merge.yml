@@ -10,7 +10,10 @@
 name: Dependabot Auto-Merge
 
 on:
-  pull_request:
+  # Dependabot pull_request runs receive a read-only token. The target event is
+  # safe here because this caller executes only the immutable reusable workflow
+  # below, which never checks out or executes pull-request-controlled code.
+  pull_request_target:
     types:
       - opened
       - synchronize
@@ -35,7 +38,9 @@ jobs:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     # Keep auto-merge decisions on the reviewed immutable workflow revision so
     # Dependabot PRs cannot execute unreviewed policy changes from the same PR.
+    # yamllint disable rule:line-length
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@acc10acef174a4dcc1c79c9edb4fc3a5c8365c12 # main
+    # yamllint enable rule:line-length
     with:
       # Phase 1: Only PATCH updates auto-merge
       phase: "1"

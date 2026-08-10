@@ -86,6 +86,21 @@ grep -q '^name: Dependabot Auto-Merge$' "$CALLER_WORKFLOW" || {
   exit 1
 }
 
+grep -q '^  pull_request_target:$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must use pull_request_target so its explicitly scoped token can enable auto-merge." >&2
+  exit 1
+}
+
+if grep -q '^  pull_request:$' "$CALLER_WORKFLOW"; then
+  echo "Dependabot caller workflow must not use the read-only pull_request token path." >&2
+  exit 1
+fi
+
+if grep -qE '^[[:space:]]+uses: actions/checkout@' "$REUSABLE_WORKFLOW"; then
+  echo "Dependabot pull_request_target workflow must not check out pull-request-controlled code." >&2
+  exit 1
+fi
+
 if ! awk '
   /^---$/ { marker = NR; next }
   /^name: Dependabot Auto-Merge$/ { name = NR }
@@ -288,6 +303,170 @@ grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3f
   echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
   exit 1
 }
+
+YAML_PARSER="$REPO_ROOT/node_modules/.bin/js-yaml"
+if [[ ! -x "$YAML_PARSER" ]]; then
+  echo "Dependabot configuration validation requires dependencies installed with npm ci." >&2
+  exit 1
+fi
+
+dependabot_config_json="$("$YAML_PARSER" "$DEPENDABOT_CONFIG")"
+printf '%s\n' "$dependabot_config_json" | node -e '
+  const fs = require("node:fs");
+  const config = JSON.parse(fs.readFileSync(0, "utf8"));
+  const githubActions = config.updates?.find(
+    (entry) => entry["package-ecosystem"] === "github-actions" && entry.directory === "/",
+  );
+  const groups = githubActions?.groups;
+  const workflowPattern = "SecPal/.github/.github/workflows/*";
+
+  function sameValues(actual, expected) {
+    return Array.isArray(actual) &&
+      actual.length === expected.length &&
+      actual.every((value, index) => value === expected[index]);
+  }
+
+  const requiredGroups = [
+    "shared-workflow-pins",
+    "github-actions-patch",
+    "github-actions-minor",
+    "github-actions-major",
+  ];
+  if (!groups || !requiredGroups.every((groupName) => Object.hasOwn(groups, groupName))) {
+    throw new Error("GitHub Actions Dependabot groups must include every reviewed classification");
+  }
+
+  if (!sameValues(groups["shared-workflow-pins"].patterns, [workflowPattern]) ||
+      Object.hasOwn(groups["shared-workflow-pins"], "update-types")) {
+    throw new Error("Unversioned shared workflow pins must use their own non-semver group");
+  }
+
+  for (const updateType of ["patch", "minor", "major"]) {
+    const group = groups["github-actions-" + updateType];
+    if (!sameValues(group.patterns, ["*"]) ||
+        !sameValues(group["exclude-patterns"], [workflowPattern]) ||
+        !sameValues(group["update-types"], [updateType])) {
+      throw new Error(
+        "GitHub Actions " + updateType +
+        " group must be semver-homogeneous and exclude shared workflow pins",
+      );
+    }
+  }
+'
+
+eligibility_script="$("$YAML_PARSER" "$REUSABLE_WORKFLOW" |
+  node -e '
+    const fs = require("node:fs");
+    const workflow = JSON.parse(fs.readFileSync(0, "utf8"));
+    const step = workflow.jobs["check-eligibility"].steps.find(
+      (candidate) => candidate.id === "check",
+    );
+    if (!step || typeof step.run !== "string") {
+      throw new Error("Dependabot eligibility script was not found");
+    }
+    process.stdout.write(step.run);
+  '
+)"
+
+assert_eligibility() {
+  local dependency_group="$1"
+  local dependency_names="$2"
+  local update_type="$3"
+  local phase="$4"
+  local expected_auto_merge="$5"
+  local expected_classification="$6"
+  local package_ecosystem="${7:-github_actions}"
+  local updated_dependencies_json="${8:-}"
+  local output_file actual_auto_merge actual_classification
+
+  if [[ -z "$updated_dependencies_json" ]]; then
+    updated_dependencies_json="$(
+      jq -cn \
+        --arg group "$dependency_group" \
+        --arg ecosystem "$package_ecosystem" \
+        --arg update_type "$update_type" \
+        '[
+          {
+            dependencyName: "actions/one",
+            dependencyGroup: $group,
+            packageEcosystem: $ecosystem,
+            updateType: $update_type
+          },
+          {
+            dependencyName: "actions/two",
+            dependencyGroup: $group,
+            packageEcosystem: $ecosystem,
+            updateType: $update_type
+          }
+        ]'
+    )"
+  fi
+
+  output_file="$base_fixture/eligibility-output"
+  : >"$output_file"
+  DEPENDENCY_GROUP="$dependency_group" \
+    DEPENDENCY_NAMES="$dependency_names" \
+    UPDATE_TYPE_RAW="$update_type" \
+    PHASE="$phase" \
+    GITHUB_OUTPUT="$output_file" \
+    PR_TITLE="chore(deps): fixture" \
+    PR_LABELS='["dependencies"]' \
+    METADATA_STEP_OUTCOME="success" \
+    MAINTAINER_CHANGES="false" \
+    UPDATED_DEPENDENCIES_JSON="$updated_dependencies_json" \
+    PACKAGE_ECOSYSTEM="$package_ecosystem" \
+    PREVIOUS_VERSION="1.2.3" \
+    NEW_VERSION="1.2.4" \
+    bash -euo pipefail -c "$eligibility_script" >/dev/null
+
+  actual_auto_merge="$(awk -F= '$1 == "should-auto-merge" { value = $2 } END { print value }' "$output_file")"
+  actual_classification="$(awk -F= '$1 == "update-type" { value = $2 } END { print value }' "$output_file")"
+  if [[ "$actual_auto_merge" != "$expected_auto_merge" ||
+        "$actual_classification" != "$expected_classification" ]]; then
+    echo "Unexpected eligibility for group '$dependency_group' / type '$update_type' / phase '$phase': auto-merge='$actual_auto_merge', classification='$actual_classification'." >&2
+    exit 1
+  fi
+}
+
+assert_eligibility "github-actions-patch" "actions/one,actions/two" \
+  "version-update:semver-patch" "1" "true" "patch"
+assert_eligibility "github-actions-minor" "actions/one,actions/two" \
+  "version-update:semver-minor" "1" "false" "minor"
+assert_eligibility "github-actions-minor" "actions/one,actions/two" \
+  "version-update:semver-minor" "2" "true" "minor"
+assert_eligibility "github-actions-major" "actions/one,actions/two" \
+  "version-update:semver-major" "3" "false" "major"
+assert_eligibility "shared-workflow-pins" \
+  "SecPal/.github/.github/workflows/reusable-example.yml" "" "3" \
+  "false" "grouped-update"
+assert_eligibility "" "actions/example" "" "3" \
+  "false" "github-actions-non-semver"
+assert_eligibility "unreviewed-group" "actions/one,actions/two" \
+  "version-update:semver-patch" "3" "false" "grouped-update"
+assert_eligibility "github-actions-patch" "actions/one,actions/two" \
+  "version-update:semver-minor" "3" "false" "grouped-update"
+assert_eligibility "github-actions-patch" "actions/one,actions/two" \
+  "version-update:semver-patch" "3" "false" "grouped-update" \
+  "npm_and_yarn"
+mixed_group_json="$(
+  jq -cn '[
+    {
+      dependencyName: "actions/one",
+      dependencyGroup: "github-actions-patch",
+      packageEcosystem: "github_actions",
+      updateType: "version-update:semver-patch"
+    },
+    {
+      dependencyName: "SecPal/.github/.github/workflows/reusable-example.yml",
+      dependencyGroup: "github-actions-patch",
+      packageEcosystem: "github_actions",
+      updateType: ""
+    }
+  ]'
+)"
+assert_eligibility "github-actions-patch" "actions/one,shared-workflow" \
+  "version-update:semver-patch" "3" "false" "grouped-update" \
+  "github_actions" "$mixed_group_json"
 
 validate_immutable_action_references() {
   local parser=()
@@ -703,7 +882,12 @@ grep -Fq 'Fallback to PR title parsing only when fetch-metadata returns empty ou
 # Keep every metadata-empty GitHub Actions update on manual review, even when
 # the PR title still looks semver-shaped. Title parsing is only allowed for
 # non-GitHub-Actions ecosystems with empty fetch-metadata outputs.
-grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
+grep -Fq 'if [[ "${PACKAGE_ECOSYSTEM}" == "github_actions" ]] &&' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must recognize fetch-metadata's normalized GitHub Actions ecosystem." >&2
+  exit 1
+}
+
+grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" ]] && fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must restrict the metadata-empty PR title fallback to non-GitHub-Actions ecosystems." >&2
   exit 1
 }
