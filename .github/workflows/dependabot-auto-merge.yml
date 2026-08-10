@@ -35,7 +35,7 @@ jobs:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     # Keep auto-merge decisions on the reviewed immutable workflow revision so
     # Dependabot PRs cannot execute unreviewed policy changes from the same PR.
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@acc10acef174a4dcc1c79c9edb4fc3a5c8365c12 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@afb8cdde9ed711a5792171815ab284cf440af477 # main
     with:
       # Phase 1: Only PATCH updates auto-merge
       phase: "1"
