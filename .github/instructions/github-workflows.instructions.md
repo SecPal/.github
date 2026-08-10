@@ -63,6 +63,14 @@ validation fixtures.
 
 - Group compatible minor and patch updates where this reduces noise without
   hiding a coupled dependency risk.
+- Keep GitHub Actions groups semver-homogeneous and use distinct PATCH, MINOR,
+  and MAJOR group identifiers so titles and automation preserve the update
+  class. Verify every grouped metadata entry before auto-merge, exclude
+  unversioned shared-workflow commit pins from those groups, and keep them on
+  manual review.
+- A Dependabot auto-merge caller may use pull_request_target for its explicitly
+  scoped write token only when it executes immutable reviewed code and never
+  checks out or runs pull-request-controlled content.
 - Keep the `github-actions` ecosystem configured for the workflow root (`/`) so
   pinned actions in `.github/workflows` remain covered.
 - Do not automatically merge major updates. Preserve the repository's explicit

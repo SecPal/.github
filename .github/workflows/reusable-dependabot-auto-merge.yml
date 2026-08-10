@@ -123,6 +123,36 @@ jobs:
             [[ -n "${DEPENDENCY_GROUP}" || "${DEPENDENCY_NAMES}" == *,* ]]
           }
 
+          is_reviewed_semver_group() {
+            case "${DEPENDENCY_GROUP}:${PACKAGE_ECOSYSTEM}:${UPDATE_TYPE_RAW}" in
+              github-actions-patch:github_actions:version-update:semver-patch | \
+                github-actions-minor:github_actions:version-update:semver-minor | \
+                github-actions-major:github_actions:version-update:semver-major)
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+
+            jq -e \
+              --arg dependency_group "${DEPENDENCY_GROUP}" \
+              --arg package_ecosystem "${PACKAGE_ECOSYSTEM}" \
+              --arg update_type "${UPDATE_TYPE_RAW}" \
+              '
+                if type != "array" or length == 0 then
+                  false
+                else
+                  all(
+                    .[];
+                    type == "object" and
+                    .dependencyGroup == $dependency_group and
+                    .packageEcosystem == $package_ecosystem and
+                    .updateType == $update_type
+                  )
+                end
+              ' <<<"${UPDATED_DEPENDENCIES_JSON}" >/dev/null
+          }
+
           echo "PR Labels: ${PR_LABELS}"
           echo "Auto-merge Phase: ${PHASE}"
           echo "Metadata step outcome: ${METADATA_STEP_OUTCOME}"
@@ -157,10 +187,13 @@ jobs:
             exit 0
           fi
 
-          if is_grouped_update; then
+          # fetch-metadata reports only the highest aggregate update type.
+          # Verify every JSON member against the reviewed group/type contract;
+          # unknown, unversioned, mixed, or mismatched groups fail closed.
+          if is_grouped_update && ! is_reviewed_semver_group; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=grouped-update" >> "${GITHUB_OUTPUT}"
-            echo "❌ Not eligible: Grouped Dependabot PR requires per-dependency manual review"
+            echo "❌ Not eligible: Dependabot group is not a reviewed homogeneous semver group"
             exit 0
           fi
 
@@ -187,13 +220,13 @@ jobs:
               ;;
             "")
               echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
-              if [[ "${PACKAGE_ECOSYSTEM}" == "github-actions" ]] &&
+              if [[ "${PACKAGE_ECOSYSTEM}" == "github_actions" ]] &&
                 [[ -n "${PREVIOUS_VERSION}" && -n "${NEW_VERSION}" ]]; then
                 echo "update-type=github-actions-non-semver" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: GitHub Actions reference update does not expose a semver update-type"
               # Fallback to PR title parsing only when fetch-metadata returns empty outputs
               # for non-GitHub-Actions ecosystems.
-              elif [[ "${PACKAGE_ECOSYSTEM}" != "github-actions" ]] && fallback_from_pr_title; then
+              elif [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" ]] && fallback_from_pr_title; then
                 :
               else
                 echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
@@ -388,10 +421,9 @@ jobs:
             } else if (updateType === 'grouped-update') {
               emoji = '🧩';
               title = 'Grouped Dependabot PR requires manual review';
-              reason = 'This Dependabot PR updates multiple dependencies or uses a Dependabot dependency group.\n\n' +
-                       'The metadata action exposes only the highest semver change for grouped PRs, ' +
-                       'so the auto-merge workflow cannot prove that every dependency in the group ' +
-                       'is semver-safe.\n\n' +
+              reason = 'This Dependabot PR uses an unversioned, unknown, or mismatched dependency group.\n\n' +
+                       'Only the configured homogeneous PATCH, MINOR, and MAJOR groups are trusted ' +
+                       'for semver policy decisions.\n\n' +
                        '**Action required:**\n' +
                        '1. Review each dependency in the group\n' +
                        '2. Confirm there are no SHA-pinned or non-semver updates\n' +

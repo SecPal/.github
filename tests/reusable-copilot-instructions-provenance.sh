@@ -70,7 +70,7 @@ NODE
 
 assert_immutable_provenance "$workflow_path"
 
-workspace="$(mktemp -d "${TMPDIR:-/tmp}/reusable-copilot-provenance.XXXXXX")"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/reusable-copilot-instructions-provenance.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
 assert_rejected() {
