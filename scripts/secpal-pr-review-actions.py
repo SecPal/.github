@@ -3995,6 +3995,7 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--bind-commit", action="store_true")
     attestation_parser.add_argument("--receipt")
     attestation_parser.add_argument("--manual-gate-evidence")
+    attestation_parser.add_argument("--eligibility-evidence")
     batch_parser = subparsers.add_parser("resolve-batch")
     batch_parser.add_argument("--repo", required=True)
     batch_parser.add_argument("--pr", required=True, type=_positive_integer)
@@ -4294,6 +4295,7 @@ def _validation_receipt(
     binding: dict[str, Any],
     reviewed: Any,
     manual_gate_evidence: Any,
+    eligibility_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     return fast_path.create_validation_receipt(
         repository=repository,
@@ -4304,7 +4306,93 @@ def _validation_receipt(
         successful_result=True,
         reviewed_state=reviewed,
         manual_gate_evidence=manual_gate_evidence,
+        eligibility_evidence_digest=eligibility_evidence_digest,
     )
+
+
+def _resolution_eligibility_digest(
+    path: str,
+    repository: str,
+    reviewed: Any,
+) -> str:
+    payload = _read_json(path, "resolution eligibility evidence")
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "reviewed_head_sha",
+        "reviewed_state_digest",
+        "eligible_threads",
+    }
+    threads = payload.get("eligible_threads") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or payload.get("schema_version") != "1.0"
+        or payload.get("repository") != repository
+        or payload.get("pull_request_number") != reviewed.pull_request_number
+        or isinstance(payload.get("pull_request_number"), bool)
+        or payload.get("reviewed_head_sha") != reviewed.head_sha
+        or payload.get("reviewed_state_digest") != reviewed.state_digest
+        or not isinstance(threads, list)
+        or not threads
+    ):
+        raise fast_path.SecurityBlocker(
+            "resolution eligibility evidence is invalid or stale"
+        )
+    reviewed_threads = {
+        item.get("node_id"): item
+        for item in reviewed.feedback.get("threads", [])
+        if isinstance(item, dict)
+    }
+    observed_thread_ids: list[str] = []
+    for item in threads:
+        if not isinstance(item, dict) or set(item) != {
+            "thread_id",
+            "classification",
+            "disposition",
+            "finding_ids",
+            "evidence_digest",
+        }:
+            raise fast_path.SecurityBlocker(
+                "resolution eligibility evidence thread is malformed"
+            )
+        thread_id = item.get("thread_id")
+        classification = item.get("classification")
+        disposition = item.get("disposition")
+        finding_ids = item.get("finding_ids")
+        reviewed_thread = reviewed_threads.get(thread_id)
+        if (
+            not isinstance(thread_id, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+            or not isinstance(classification, str)
+            or disposition
+            not in fast_path.CLASSIFICATION_DISPOSITIONS.get(
+                classification, frozenset()
+            )
+            or not isinstance(finding_ids, list)
+            or not finding_ids
+            or any(
+                not isinstance(finding_id, str)
+                or not fast_path.IDENTITY.fullmatch(finding_id)
+                or fast_path.SECRET_VALUE.search(finding_id)
+                for finding_id in finding_ids
+            )
+            or len(finding_ids) != len(set(finding_ids))
+            or not isinstance(item.get("evidence_digest"), str)
+            or not fast_path.DIGEST.fullmatch(item["evidence_digest"])
+            or not isinstance(reviewed_thread, dict)
+            or reviewed_thread.get("is_resolved") is not False
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolution eligibility evidence thread is ineligible"
+            )
+        observed_thread_ids.append(thread_id)
+    if len(observed_thread_ids) != len(set(observed_thread_ids)):
+        raise fast_path.SecurityBlocker(
+            "resolution eligibility evidence contains duplicate threads"
+        )
+    return fast_path.digest_json(payload)
 
 
 def _command_attest_validation(arguments: argparse.Namespace) -> int:
@@ -4350,6 +4438,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             reviewed=reviewed,
             manual_gate_evidence=receipt.get("manual_gate_evidence"),
+            eligibility_evidence_digest=receipt.get(
+                "eligibility_evidence_digest"
+            ),
         )
         if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
@@ -4374,6 +4465,15 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         ) != receipt["manual_gate_evidence"]:
             raise fast_path.SecurityBlocker(
                 "manual-gate evidence differs from the validated receipt"
+            )
+        supplied_eligibility = getattr(arguments, "eligibility_evidence", None)
+        if supplied_eligibility and _resolution_eligibility_digest(
+            supplied_eligibility,
+            arguments.repo,
+            reviewed,
+        ) != receipt.get("eligibility_evidence_digest"):
+            raise fast_path.SecurityBlocker(
+                "eligibility evidence differs from the validated receipt"
             )
         commit_object = _run_attestation_git(
             repository_root, ["cat-file", "commit", head], allow_failure=True
@@ -4426,6 +4526,16 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     manual_gate_evidence = _load_fast_manual_gate_evidence(
         getattr(arguments, "manual_gate_evidence", None), binding
     )
+    eligibility_evidence = getattr(arguments, "eligibility_evidence", None)
+    eligibility_evidence_digest = (
+        _resolution_eligibility_digest(
+            eligibility_evidence,
+            arguments.repo,
+            reviewed,
+        )
+        if eligibility_evidence
+        else None
+    )
     tree = _staged_tree(repository_root, status)
     if arguments.output:
         _write_fast_report(
@@ -4451,6 +4561,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "local head, staged tree, or worktree changed during complete validation"
         )
+    if eligibility_evidence and _resolution_eligibility_digest(
+        eligibility_evidence,
+        arguments.repo,
+        reviewed,
+    ) != eligibility_evidence_digest:
+        raise fast_path.SecurityBlocker(
+            "eligibility evidence changed during complete validation"
+        )
     receipt = _validation_receipt(
         repository=arguments.repo,
         head_sha=head,
@@ -4458,6 +4576,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         binding=binding,
         reviewed=reviewed,
         manual_gate_evidence=manual_gate_evidence,
+        eligibility_evidence_digest=eligibility_evidence_digest,
     )
     _write_fast_report(arguments.output, receipt)
     return 0

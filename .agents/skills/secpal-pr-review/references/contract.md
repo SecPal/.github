@@ -76,9 +76,11 @@ successful validation evidence bound to the verified fix commit, local
 repository root, and per-thread eligibility evidence, plus thread IDs. It
 verifies the registered origin, local head, validated tree, accepted local
 commit signature, and, for a new fix commit, the sole parent and validation
-receipt trailer before any GitHub read. It also requires the eligibility
-manifest to cover the requested threads exactly and bind their allowed
-classifications/dispositions, finding IDs, evidence digests, and fix commit.
+receipt trailer before any GitHub read. The receipt and final attestation must
+authenticate the canonical eligibility-manifest digest. It also requires the
+eligibility manifest to cover the requested threads exactly and bind their allowed
+classifications/dispositions, finding IDs, evidence digests, reviewed head, and
+reviewed-state digest.
 It then reads every named target
 completely, and requires its comment
 identities, body digests, reply relationships, and resolution state to match the
@@ -163,9 +165,14 @@ commands and every required local command once and returns a deterministic
 receipt binding repository, parent head,
 staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
-manual gate. On entry, the tracked tree and holistic-audit result are frozen;
-independent discovery and audit do not continue in or after this state. A failed
-command produces no receipt; the command invalidates any report already at its
+manual gate and the canonical digest of the finalized eligibility manifest.
+The manifest is finalized after classification and before this state; it binds
+the reviewed head/state and every eligible thread's classification,
+disposition, finding IDs, and evidence digest without referring to the not-yet-
+created fix commit. On entry, the tracked tree, eligibility manifest, and
+holistic-audit result are frozen; independent discovery and audit do not
+continue in or after this state. A failed command produces no receipt; the
+command invalidates any report already at its
 configured output before validation begins, terminates this invocation, and
 permits no tree change or complete-command retry. A new explicit remediation
 invocation must capture fresh state and audit any correction before its single
@@ -194,7 +201,8 @@ remote, and PR head equality.
 `RESOLVE_FIXED_THREADS` invokes `scripts/secpal-resolve-fixed-threads.py` for
 the exact eligible thread IDs, current head, reviewed-state file and captured
 digest, successful validation evidence bound to the verified fix commit, local
-commit proof, and exact per-thread eligibility evidence. Resolution depends
+commit proof, and exact per-thread eligibility evidence authenticated by the
+signed validation receipt. Resolution depends
 only on those inputs, the open PR, exact head, target
 membership, equality with the
 reviewed target-comment identities and digests, two equal complete current
@@ -320,12 +328,14 @@ classifications, signed validation-receipt trailer, and validation-attestation
 identity. It is read at most once only under the explicit CI and readiness path.
 
 A validation receipt is produced by the single complete run and binds its staged
-tree and normalized satisfied evidence for every registered manual gate. After
+tree, canonical eligibility-manifest digest, and normalized satisfied evidence
+for every registered manual gate. After
 the signed commit, that receipt may be bound once only when the commit's parent,
 tree, and single `SecPal-Validation-Receipt` trailer match exactly. The final
 validation attestation contains at least `repository`, `head_sha`,
 `registry_digest`, `command_set_digest`, `successful_result`, validated tree,
-receipt digest, and manual-gate evidence. It also binds the reviewed state and
+receipt digest, manual-gate evidence, and authenticated eligibility digest. It
+also binds the reviewed state and
 feedback digests. The batch independently reconstructs the receipt from the
 live signed commit and rejects a caller-authored attestation file that lacks the
 matching signed trailer. Canonical JSON and SHA-256 make it deterministic;

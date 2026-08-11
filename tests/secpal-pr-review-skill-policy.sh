@@ -332,6 +332,12 @@ grep -Fq 'expected current head OID' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation is not head-bound'
 grep -Fq 'every requested thread belongs to that PR' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation is not target-bound'
+grep -Fq 'canonical eligibility-manifest digest' "$CONTRACT" \
+  || fail 'contract does not authenticate per-thread eligibility evidence'
+grep -Fq 'signed validation receipt and final attestation' "$SKILL" \
+  || fail 'skill does not authenticate the eligibility manifest before resolution'
+grep -Fq 'attest-validation --eligibility-evidence' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation omits eligibility attestation'
 jq -e '
   .fixed_thread_resolution == {
     "resolver": "scripts/secpal-resolve-fixed-threads.py",

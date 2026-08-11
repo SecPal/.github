@@ -387,6 +387,9 @@ LOADED_MODULE_ATTRIBUTES = {
         },
         "fast_path": {
             "BatchRequest",
+            "CLASSIFICATION_DISPOSITIONS",
+            "DIGEST",
+            "IDENTITY",
             "ReadinessState",
             "RecoverableLocalError",
             "SECRET_VALUE",
@@ -471,6 +474,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'manual_gate_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'eligibility_evidence', None)",
         ),
     },
     "secpal-resolve-fixed-threads.py": {

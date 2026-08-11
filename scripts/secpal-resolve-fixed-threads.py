@@ -207,6 +207,7 @@ class ValidationEvidence:
     evidence_digest: str
     validated_tree_sha: str
     validation_receipt_digest: str
+    eligibility_evidence_digest: str
 
 
 @dataclass(frozen=True)
@@ -369,10 +370,16 @@ def _expected_validation_receipt(
     reviewed: ReviewedState,
     validated_tree_sha: Any,
     manual_gate_evidence: Any,
+    eligibility_evidence_digest: Any,
     registry_binding: dict[str, Any],
 ) -> dict[str, Any]:
     if not isinstance(validated_tree_sha, str) or not OID.fullmatch(
         validated_tree_sha
+    ):
+        raise ResolutionError("validation evidence is invalid or stale")
+    if (
+        not isinstance(eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(eligibility_evidence_digest)
     ):
         raise ResolutionError("validation evidence is invalid or stale")
     fields = {
@@ -390,6 +397,7 @@ def _expected_validation_receipt(
             manual_gate_evidence,
             registry_binding["manual_gates"],
         ),
+        "eligibility_evidence_digest": eligibility_evidence_digest,
     }
     return {**fields, "receipt_digest": _digest_json(fields)}
 
@@ -406,6 +414,7 @@ def _expected_validation_attestation(
         reviewed,
         payload.get("validated_tree_sha"),
         payload.get("manual_gate_evidence"),
+        payload.get("eligibility_evidence_digest"),
         registry_binding,
     )
     fields = {
@@ -421,6 +430,9 @@ def _expected_validation_attestation(
         "validated_tree_sha": receipt["validated_tree_sha"],
         "validation_receipt_digest": receipt["receipt_digest"],
         "manual_gate_evidence": receipt["manual_gate_evidence"],
+        "eligibility_evidence_digest": receipt[
+            "eligibility_evidence_digest"
+        ],
     }
     return {**fields, "attestation_digest": _digest_json(fields)}
 
@@ -757,6 +769,9 @@ def load_validation_evidence(
         evidence_digest=payload["attestation_digest"],
         validated_tree_sha=payload["validated_tree_sha"],
         validation_receipt_digest=payload["validation_receipt_digest"],
+        eligibility_evidence_digest=payload[
+            "eligibility_evidence_digest"
+        ],
     )
 
 
@@ -778,6 +793,8 @@ def verify_local_fix_commit(
         or not OID.fullmatch(validation.validated_tree_sha)
         or not isinstance(validation.validation_receipt_digest, str)
         or not DIGEST.fullmatch(validation.validation_receipt_digest)
+        or not isinstance(validation.eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(validation.eligibility_evidence_digest)
     ):
         raise ResolutionError("validation evidence binding is invalid or stale")
     try:
@@ -866,10 +883,11 @@ def load_eligibility_evidence(
     path: Path,
     repository: str,
     number: int,
-    expected_head: str,
+    reviewed_head_sha: str,
     reviewed_state_digest: str,
-    validation_evidence_digest: str,
     thread_ids: tuple[str, ...],
+    *,
+    authenticated_evidence_digest: str,
 ) -> str:
     try:
         payload = json.loads(
@@ -884,23 +902,27 @@ def load_eligibility_evidence(
         "schema_version",
         "repository",
         "pull_request_number",
-        "expected_head",
+        "reviewed_head_sha",
         "reviewed_state_digest",
-        "validation_evidence_digest",
         "eligible_threads",
     }
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise ResolutionError("eligibility evidence is unavailable or malformed")
+    observed_evidence_digest = _digest_json(payload)
+    if (
+        not isinstance(authenticated_evidence_digest, str)
+        or not DIGEST.fullmatch(authenticated_evidence_digest)
+        or observed_evidence_digest != authenticated_evidence_digest
+    ):
+        raise ResolutionError("eligibility evidence is not authenticated")
     threads = payload.get("eligible_threads")
     if (
         payload.get("schema_version") != "1.0"
         or payload.get("repository") != repository
         or payload.get("pull_request_number") != number
         or isinstance(payload.get("pull_request_number"), bool)
-        or payload.get("expected_head") != expected_head.lower()
+        or payload.get("reviewed_head_sha") != reviewed_head_sha.lower()
         or payload.get("reviewed_state_digest") != reviewed_state_digest
-        or payload.get("validation_evidence_digest")
-        != validation_evidence_digest
         or not isinstance(threads, list)
     ):
         raise ResolutionError("eligibility evidence binding is invalid or stale")
@@ -912,7 +934,6 @@ def load_eligibility_evidence(
             "disposition",
             "finding_ids",
             "evidence_digest",
-            "fix_commit_sha",
         }:
             raise ResolutionError("eligibility evidence thread is malformed")
         thread_id = item.get("thread_id")
@@ -936,7 +957,6 @@ def load_eligibility_evidence(
             or len(finding_ids) != len(set(finding_ids))
             or not isinstance(item.get("evidence_digest"), str)
             or not DIGEST.fullmatch(item["evidence_digest"])
-            or item.get("fix_commit_sha") != expected_head.lower()
         ):
             raise ResolutionError("eligibility evidence thread is ineligible")
         observed_thread_ids.append(thread_id)
@@ -944,7 +964,7 @@ def load_eligibility_evidence(
         raise ResolutionError(
             "eligibility evidence must cover requested threads exactly"
         )
-    return _digest_json(payload)
+    return observed_evidence_digest
 
 
 def read_target_thread(
@@ -1462,10 +1482,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             Path(arguments.eligibility_evidence),
             arguments.repo,
             arguments.pr,
-            arguments.expected_head,
+            reviewed.head_sha,
             reviewed.state_digest,
-            validation.evidence_digest,
             arguments.thread_id,
+            authenticated_evidence_digest=(
+                validation.eligibility_evidence_digest
+            ),
         )
         result = resolve_threads(
             arguments.repo,

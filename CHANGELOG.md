@@ -22,6 +22,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - rejected unauthenticated raw validation receipts for unchanged heads while
   retaining schema-1.0 custom-registry compatibility; the canonical registry
   remains contract-bound
+- authenticated the complete per-thread eligibility manifest through the
+  signed validation receipt and final attestation so callers cannot synthesize
+  or reclassify resolution evidence after validation
 - added regressions for pending, failed, unavailable, and omitted hosted checks,
   zero readiness API calls, head drift, reviewed-state drift, and missing
   validation evidence

@@ -61,16 +61,18 @@ The command verifies only the invariants required for this operation:
 - the reviewed-state file equals the caller-provided captured state digest;
 - successful validation evidence binds that reviewed state to the exact
   verified fix commit through a final attestation and the signed commit's
-  matching validation-receipt trailer;
+  matching validation-receipt trailer; the signed receipt also authenticates
+  the canonical eligibility-manifest digest;
 - the local repository has the exact registered origin and expected `HEAD`, the
   commit tree equals the validated tree, and the commit has a locally verified
   accepted signature;
 - a new fix commit has exactly the reviewed head as its parent and exactly one
   matching `SecPal-Validation-Receipt` trailer;
-- the eligibility manifest binds the repository, PR, expected head,
-  reviewed-state digest, validation-evidence digest, and every requested thread
-  exactly; each thread has an allowed classification/disposition, finding IDs,
-  evidence digest, and matching fix commit;
+- the eligibility manifest binds the repository, PR, reviewed head,
+  reviewed-state digest, and every requested thread exactly; each thread has an
+  allowed classification/disposition, finding IDs, and evidence digest, and
+  the complete canonical manifest must match the digest authenticated by the
+  signed validation receipt;
 - every requested thread belongs to that PR;
 - every requested thread and its comment identities, body digests, reply
   relationships, and resolution state match the supplied reviewed-state
@@ -134,27 +136,28 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 Repeat `--thread-id` to resolve several fixed threads in one invocation.
 The ordered `eligible_threads` array in the eligibility manifest must list
 those IDs in the same order and cover no additional thread. Its top-level
-bindings are `repository`, `pull_request_number`, `expected_head`,
-`reviewed_state_digest`, and `validation_evidence_digest`. The resolver
-calculates and reports the canonical SHA-256 digest of the validated manifest;
-the manifest does not self-certify a caller-provided digest.
+bindings are `repository`, `pull_request_number`, `reviewed_head_sha`, and
+`reviewed_state_digest`. Create it after classification but before complete
+validation. `attest-validation --eligibility-evidence` places its canonical
+SHA-256 digest in the validation receipt, which the signed commit trailer and
+final attestation authenticate. The resolver recalculates that digest and
+rejects any post-validation classification, disposition, finding, or evidence
+change before its first GitHub read.
 
 ```json
 {
   "schema_version": "1.0",
   "repository": "SecPal/api",
   "pull_request_number": 123,
-  "expected_head": "0123456789abcdef0123456789abcdef01234567",
+  "reviewed_head_sha": "0123456789abcdef0123456789abcdef01234567",
   "reviewed_state_digest": "REVIEWED_STATE_SHA256",
-  "validation_evidence_digest": "VALIDATION_EVIDENCE_SHA256",
   "eligible_threads": [
     {
       "thread_id": "PRRT_example",
       "classification": "VALID_ACTIONABLE",
       "disposition": "CORRECTED_AND_VERIFIED",
       "finding_ids": ["finding-1"],
-      "evidence_digest": "FINDING_EVIDENCE_SHA256",
-      "fix_commit_sha": "0123456789abcdef0123456789abcdef01234567"
+      "evidence_digest": "FINDING_EVIDENCE_SHA256"
     }
   ]
 }
@@ -166,7 +169,8 @@ When the user explicitly asks to resolve comments that have been fixed and
 pushed, use this simple path with the reviewed-state capture, its recorded
 `state_digest`, and the successful validation evidence for the fix commit.
 Also provide the exact local repository root and the eligibility manifest
-created from the completed finding classifications and dispositions.
+created from the completed finding classifications and dispositions and
+authenticated by the signed validation receipt.
 Full review remediation also uses this path after its signed push. A raw
 validation receipt for an unchanged head is not authenticated by that existing
 commit and cannot authorize resolution; do not create an artificial commit to

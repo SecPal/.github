@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import subprocess
@@ -258,7 +259,10 @@ def reviewed_state_payload(
     }
 
 
-def validation_attestation_payload(reviewed: dict[str, Any]) -> dict[str, Any]:
+def validation_attestation_payload(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str = "e" * 64,
+) -> dict[str, Any]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
     )
@@ -282,6 +286,7 @@ def validation_attestation_payload(reviewed: dict[str, Any]) -> dict[str, Any]:
         "reviewed_state_digest": reviewed["state_digest"],
         "reviewed_feedback_digest": reviewed["feedback_digest"],
         "manual_gate_evidence": manual_gate_evidence,
+        "eligibility_evidence_digest": eligibility_evidence_digest,
     }
     fields = {
         "schema_version": "1.0",
@@ -296,6 +301,7 @@ def validation_attestation_payload(reviewed: dict[str, Any]) -> dict[str, Any]:
         "validated_tree_sha": "f" * 40,
         "validation_receipt_digest": MODULE._digest_json(receipt_fields),
         "manual_gate_evidence": manual_gate_evidence,
+        "eligibility_evidence_digest": eligibility_evidence_digest,
     }
     return {**fields, "attestation_digest": MODULE._digest_json(fields)}
 
@@ -330,16 +336,14 @@ def validation_receipt_payload(reviewed: dict[str, Any]) -> dict[str, Any]:
 
 def eligibility_payload(
     reviewed: dict[str, Any],
-    validation_evidence_digest: str,
     thread_ids: Sequence[str],
 ) -> dict[str, Any]:
     fields = {
         "schema_version": "1.0",
         "repository": reviewed["repository"],
         "pull_request_number": reviewed["pull_request_number"],
-        "expected_head": "c" * 40,
+        "reviewed_head_sha": reviewed["head_sha"],
         "reviewed_state_digest": reviewed["state_digest"],
-        "validation_evidence_digest": validation_evidence_digest,
         "eligible_threads": [
             {
                 "thread_id": thread_id,
@@ -347,7 +351,6 @@ def eligibility_payload(
                 "disposition": "CORRECTED_AND_VERIFIED",
                 "finding_ids": [f"finding-{index}"],
                 "evidence_digest": f"{index:x}" * 64,
-                "fix_commit_sha": "c" * 40,
             }
             for index, thread_id in enumerate(thread_ids, start=1)
         ],
@@ -1238,11 +1241,13 @@ class ResolveFixedThreadsTests(TestCase):
             feedback_digest=payload["feedback_digest"],
         )
         attestation = validation_attestation_payload(payload)
-        for mutation in ("receipt", "gates", "secret"):
+        for mutation in ("receipt", "eligibility", "gates", "secret"):
             with self.subTest(mutation=mutation):
                 changed = dict(attestation)
                 if mutation == "receipt":
                     changed["validation_receipt_digest"] = "0" * 64
+                elif mutation == "eligibility":
+                    changed["eligibility_evidence_digest"] = "0" * 64
                 else:
                     changed["manual_gate_evidence"] = (
                         []
@@ -1428,6 +1433,7 @@ class ResolveFixedThreadsTests(TestCase):
             evidence_digest="d" * 64,
             validated_tree_sha="f" * 40,
             validation_receipt_digest="e" * 64,
+            eligibility_evidence_digest="f" * 64,
         )
         fake = mock.Mock()
         with self.assertRaisesRegex(
@@ -1500,7 +1506,7 @@ class ResolveFixedThreadsTests(TestCase):
         payload["state_digest"] = MODULE._digest_json(
             {**identity, "feedback": feedback}
         )
-        manifest = eligibility_payload(payload, "d" * 64, (first, second))
+        manifest = eligibility_payload(payload, (first, second))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "eligibility.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -1509,10 +1515,10 @@ class ResolveFixedThreadsTests(TestCase):
                 path,
                 "SecPal/api",
                 123,
-                "c" * 40,
+                payload["head_sha"],
                 payload["state_digest"],
-                "d" * 64,
                 (first, second),
+                authenticated_evidence_digest=MODULE._digest_json(manifest),
             )
 
         self.assertEqual(evidence_digest, MODULE._digest_json(manifest))
@@ -1520,7 +1526,7 @@ class ResolveFixedThreadsTests(TestCase):
     def test_ineligible_or_unlisted_thread_blocks_before_github(self) -> None:
         thread_id = "PRRT_exampleOne"
         payload = reviewed_state_payload(thread_id, [])
-        manifest = eligibility_payload(payload, "d" * 64, (thread_id,))
+        manifest = eligibility_payload(payload, (thread_id,))
         cases = {
             "unlisted": [],
             "unsafe disposition": [
@@ -1544,22 +1550,23 @@ class ResolveFixedThreadsTests(TestCase):
                         path,
                         "SecPal/api",
                         123,
-                        "c" * 40,
+                        payload["head_sha"],
                         payload["state_digest"],
-                        "d" * 64,
                         (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(
+                            changed
+                        ),
                     )
 
     def test_eligibility_manifest_rejects_rehashed_binding_drift(self) -> None:
         thread_id = "PRRT_exampleOne"
         payload = reviewed_state_payload(thread_id, [])
-        manifest = eligibility_payload(payload, "d" * 64, (thread_id,))
+        manifest = eligibility_payload(payload, (thread_id,))
         cases = {
             "repository": "SecPal/frontend",
             "pull_request_number": 124,
-            "expected_head": "b" * 40,
+            "reviewed_head_sha": "b" * 40,
             "reviewed_state_digest": "0" * 64,
-            "validation_evidence_digest": "1" * 64,
         }
         for field, value in cases.items():
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
@@ -1575,11 +1582,39 @@ class ResolveFixedThreadsTests(TestCase):
                         path,
                         "SecPal/api",
                         123,
-                        "c" * 40,
+                        payload["head_sha"],
                         payload["state_digest"],
-                        "d" * 64,
                         (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(
+                            changed
+                        ),
                     )
+
+    def test_eligibility_manifest_rejects_caller_rehashed_decision(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        trusted = eligibility_payload(payload, (thread_id,))
+        changed = copy.deepcopy(trusted)
+        changed["eligible_threads"][0]["finding_ids"] = ["unaddressed-finding"]
+        changed["eligible_threads"][0]["evidence_digest"] = "f" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(changed), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "eligibility evidence is not authenticated",
+            ):
+                MODULE.load_eligibility_evidence(
+                    path,
+                    "SecPal/api",
+                    123,
+                    payload["head_sha"],
+                    payload["state_digest"],
+                    (thread_id,),
+                    authenticated_evidence_digest=MODULE._digest_json(trusted),
+                )
 
     def test_nonfinite_reviewed_state_is_reported_without_traceback(self) -> None:
         for constant in ("NaN", "Infinity", "-Infinity"):
@@ -1955,6 +1990,7 @@ class ResolveFixedThreadsTests(TestCase):
                     evidence_digest="d" * 64,
                     validated_tree_sha="f" * 40,
                     validation_receipt_digest="b" * 64,
+                    eligibility_evidence_digest="e" * 64,
                 ),
             ),
             mock.patch.object(MODULE, "verify_local_fix_commit") as verify_commit,
