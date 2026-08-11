@@ -1141,26 +1141,30 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 1)
 
-    def test_outdated_change_after_reviewed_capture_blocks_before_mutation(
+    def test_outdated_change_after_reviewed_capture_remains_allowed_and_stable(
         self,
     ) -> None:
         thread_id = "PRRT_exampleOne"
-        fake = FakeGh([target_response(thread_id, outdated=True)])
+        fake = FakeGh(
+            [
+                target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+                resolve_response(thread_id),
+            ]
+        )
 
-        with self.assertRaisesRegex(
-            MODULE.ResolutionError,
-            "differs from reviewed feedback",
-        ):
-            resolve_threads(
-                "SecPal/api",
-                123,
-                "a" * 40,
-                [thread_id],
-                apply=True,
-                runner=fake,
-            )
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+        )
 
-        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(len(fake.calls), 4)
 
     def test_reviewed_state_digest_drift_blocks_before_validation_or_github(
         self,

@@ -1283,7 +1283,6 @@ def resolve_threads(
         reviewed_target = reviewed_targets[thread_id]
         if (
             target.thread.is_resolved != reviewed_target.is_resolved
-            or target.thread.is_outdated != reviewed_target.is_outdated
             or target.thread.comments != reviewed_target.comments
         ):
             raise ResolutionError(
