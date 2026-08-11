@@ -5,11 +5,14 @@
   "title": "SecPal PR review workflow repository registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "fixed_thread_resolution", "repositories"],
+  "required": ["schema_version", "repositories"],
   "properties": {
     "$comment": { "type": "string" },
     "schema_version": { "const": "1.0" },
-    "fixed_thread_resolution": { "$ref": "#/$defs/fixed_thread_resolution" },
+    "fixed_thread_resolution": {
+      "$ref": "#/$defs/fixed_thread_resolution",
+      "description": "Required in the canonical registry; optional for schema-1.0 custom registries retained for compatibility."
+    },
     "repositories": {
       "type": "array",
       "minItems": 1,

@@ -3800,8 +3800,10 @@ class RegistryTests(TestCase):
         self.assertEqual([item["repository"] for item in actions.validate_registry(registry)["repositories"]], self.repositories)
         missing_resolution_contract = copy.deepcopy(registry)
         missing_resolution_contract.pop("fixed_thread_resolution")
-        with self.assertRaises(actions.RegistryError):
-            actions.validate_registry(missing_resolution_contract)
+        self.assertEqual(
+            actions.validate_registry(missing_resolution_contract)["repositories"],
+            registry["repositories"],
+        )
         duplicate = copy.deepcopy(registry)
         duplicate["repositories"].append(copy.deepcopy(duplicate["repositories"][0]))
         with self.assertRaisesRegex(actions.RegistryError, "duplicate"):

@@ -60,8 +60,8 @@ The command verifies only the invariants required for this operation:
 - current PR head equals the caller-provided expected current head OID;
 - the reviewed-state file equals the caller-provided captured state digest;
 - successful validation evidence binds that reviewed state to the exact
-  verified fix commit: a receipt when the validated head is unchanged, or a
-  final attestation when remediation created a new commit;
+  verified fix commit through a final attestation and the signed commit's
+  matching validation-receipt trailer;
 - the local repository has the exact registered origin and expected `HEAD`, the
   commit tree equals the validated tree, and the commit has a locally verified
   accepted signature;
@@ -167,9 +167,11 @@ pushed, use this simple path with the reviewed-state capture, its recorded
 `state_digest`, and the successful validation evidence for the fix commit.
 Also provide the exact local repository root and the eligibility manifest
 created from the completed finding classifications and dispositions.
-Full review remediation also uses this path after its signed push or after
-proving that a no-change remediation retained the already-pushed head. Do not
-route resolution through the readiness or forensic workflow unless the current
-user instruction explicitly asks for CI inspection, readiness, or merge
-authorization. Even then, the CI observation is one bounded current-state read
-with no polling, waiting, sleeping, or automatic repetition.
+Full review remediation also uses this path after its signed push. A raw
+validation receipt for an unchanged head is not authenticated by that existing
+commit and cannot authorize resolution; do not create an artificial commit to
+work around this boundary. Do not route resolution through the readiness or
+forensic workflow unless the current user instruction explicitly asks for CI
+inspection, readiness, or merge authorization. Even then, the CI observation
+is one bounded current-state read with no polling, waiting, sleeping, or
+automatic repetition.

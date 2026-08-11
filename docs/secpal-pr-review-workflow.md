@@ -239,7 +239,10 @@ signed receipt, manual gates, and reviewed-feedback digests. Before the commit
 exists on GitHub, binding checks its local signature and configured format only.
 When remediation changes no tracked source file and every finding is safely
 disposed, verify unchanged local, remote, and PR heads and skip the commit and
-push; never create an artificial empty commit.
+push; never create an artificial empty commit. Because a receipt produced after
+that existing commit is not authenticated by it, the raw receipt cannot
+authorize thread resolution. Stop without resolution unless a final attestation
+is bound to a new signed fix commit.
 
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact

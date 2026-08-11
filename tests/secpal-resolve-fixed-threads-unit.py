@@ -849,6 +849,21 @@ class ResolveFixedThreadsTests(TestCase):
             registry["fixed_thread_resolution"]["prohibited_hosted_reads"],
         )
 
+    def test_resolver_rejects_registry_without_resolution_contract(self) -> None:
+        registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+        registry.pop("fixed_thread_resolution")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "repositories.json"
+            path.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "REGISTRY_PATH", path),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "fixed-thread resolution registry contract is invalid",
+                ),
+            ):
+                MODULE.load_repository_limits("SecPal/.github")
+
     def test_dry_run_reads_once_and_does_not_mutate(self) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh([target_response(thread_id)])
@@ -1285,7 +1300,7 @@ class ResolveFixedThreadsTests(TestCase):
                     reviewed,
                 )
 
-    def test_validation_receipt_supports_an_unchanged_validated_head(self) -> None:
+    def test_validation_receipt_cannot_authorize_no_change_resolution(self) -> None:
         thread_id = "PRRT_exampleOne"
         payload = reviewed_state_payload(thread_id, [])
         reviewed = mock.Mock(
@@ -1298,14 +1313,16 @@ class ResolveFixedThreadsTests(TestCase):
             path = Path(directory) / "receipt.json"
             path.write_text(json.dumps(receipt), encoding="utf-8")
 
-            digest = MODULE.load_validation_evidence(
-                path,
-                "SecPal/api",
-                "a" * 40,
-                reviewed,
-            )
-
-        self.assertEqual(digest.evidence_digest, receipt["receipt_digest"])
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "authenticated fix-commit attestation",
+            ):
+                MODULE.load_validation_evidence(
+                    path,
+                    "SecPal/api",
+                    "a" * 40,
+                    reviewed,
+                )
 
     def test_local_commit_binding_rejects_tree_parent_and_trailer_drift(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -1355,41 +1372,6 @@ class ResolveFixedThreadsTests(TestCase):
                             validation,
                             runner=fake,
                         )
-
-    def test_unchanged_receipt_requires_the_actual_commit_tree(self) -> None:
-        thread_id = "PRRT_exampleOne"
-        payload = reviewed_state_payload(thread_id, [])
-        reviewed = mock.Mock(
-            head_sha=payload["head_sha"],
-            state_digest=payload["state_digest"],
-            feedback_digest=payload["feedback_digest"],
-        )
-        receipt = validation_receipt_payload(payload)
-        with tempfile.TemporaryDirectory() as directory:
-            evidence_path = Path(directory) / "receipt.json"
-            evidence_path.write_text(json.dumps(receipt), encoding="utf-8")
-            validation = MODULE.load_validation_evidence(
-                evidence_path,
-                "SecPal/api",
-                "a" * 40,
-                reviewed,
-            )
-            fake = FakeGit(
-                expected_head="a" * 40,
-                reviewed_head="b" * 40,
-                tree="0" * 40,
-                receipt_digest=receipt["receipt_digest"],
-            )
-
-            with self.assertRaisesRegex(MODULE.ResolutionError, "tree"):
-                MODULE.verify_local_fix_commit(
-                    Path(directory),
-                    "SecPal/api",
-                    "a" * 40,
-                    reviewed,
-                    validation,
-                    runner=fake,
-                )
 
     def test_local_commit_binding_rejects_wrong_origin_and_invalid_signature(
         self,

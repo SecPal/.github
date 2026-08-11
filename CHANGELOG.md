@@ -19,6 +19,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - made its target-thread-only GitHub surface explicit in the canonical
   repository registry while keeping hosted CI, CodeQL, mergeability, branch
   protection, readiness, polling, and unrelated mutations outside the path
+- rejected unauthenticated raw validation receipts for unchanged heads while
+  retaining schema-1.0 custom-registry compatibility; the canonical registry
+  remains contract-bound
 - added regressions for pending, failed, unavailable, and omitted hosted checks,
   zero readiness API calls, head drift, reviewed-state drift, and missing
   validation evidence

@@ -56,8 +56,9 @@ signed push, or no commit movement for a no-push session.
 Resolves only explicitly named review threads after their findings have already
 been evaluated, fixed where necessary, and validated. The supplied reviewed-state
 capture must match the caller-provided captured state digest, and a successful
-validation receipt or final attestation must bind that reviewed state to the
-exact fix commit.
+final attestation must bind that reviewed state to the exact fix commit. A raw
+validation receipt for an unchanged head cannot authorize a resolution
+mutation because the pre-existing commit does not authenticate that receipt.
 The resolver verifies that evidence against the actual local commit tree,
 signature, origin, and, for a new fix commit, its parent and receipt trailer. A
 separate eligibility manifest must cover every requested thread exactly and

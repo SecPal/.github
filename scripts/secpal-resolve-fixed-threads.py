@@ -733,20 +733,9 @@ def load_validation_evidence(
         _load_repository_entry(repository)
     )
     if isinstance(payload, dict) and payload.get("kind") == "VALIDATION_RECEIPT":
-        expected_receipt = _expected_validation_receipt(
-            repository,
-            reviewed,
-            payload.get("validated_tree_sha"),
-            payload.get("manual_gate_evidence"),
-            registry_binding,
-        )
-        if expected_head.lower() != reviewed.head_sha or payload != expected_receipt:
-            raise ResolutionError("validation evidence is invalid or stale")
-        return ValidationEvidence(
-            kind="receipt",
-            evidence_digest=payload["receipt_digest"],
-            validated_tree_sha=payload["validated_tree_sha"],
-            validation_receipt_digest=payload["receipt_digest"],
+        raise ResolutionError(
+            "validation evidence requires an authenticated fix-commit "
+            "attestation"
         )
     if not isinstance(payload, dict):
         raise ResolutionError("validation evidence is unavailable or malformed")
@@ -782,17 +771,13 @@ def verify_local_fix_commit(
 ) -> None:
     if (
         not isinstance(validation, ValidationEvidence)
-        or validation.kind not in {"receipt", "attestation"}
+        or validation.kind != "attestation"
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
         or not isinstance(validation.validated_tree_sha, str)
         or not OID.fullmatch(validation.validated_tree_sha)
         or not isinstance(validation.validation_receipt_digest, str)
         or not DIGEST.fullmatch(validation.validation_receipt_digest)
-        or (
-            validation.kind == "receipt"
-            and expected_head.lower() != reviewed.head_sha
-        )
     ):
         raise ResolutionError("validation evidence binding is invalid or stale")
     try:
@@ -819,34 +804,33 @@ def verify_local_fix_commit(
         or commit_tree != validation.validated_tree_sha
     ):
         raise ResolutionError("validated tree does not match the fix commit tree")
-    if validation.kind == "attestation":
-        ancestry = runner(
-            root,
-            ("rev-list", "--parents", "-n", "1", expected_head.lower()),
-        ).stdout.split()
-        if ancestry != [expected_head.lower(), reviewed.head_sha]:
-            raise ResolutionError(
-                "validated fix commit parent does not match reviewed head"
-            )
-        trailer_output = runner(
-            root,
-            (
-                "show",
-                "-s",
-                "--format=%(trailers:key=SecPal-Validation-Receipt,"
-                "valueonly,separator=%x00)",
-                expected_head.lower(),
-            ),
-        ).stdout
-        trailers = [
-            value.strip()
-            for value in trailer_output.rstrip("\n").split("\x00")
-            if value.strip()
-        ]
-        if trailers != [validation.validation_receipt_digest]:
-            raise ResolutionError(
-                "fix commit validation-receipt trailer does not match evidence"
-            )
+    ancestry = runner(
+        root,
+        ("rev-list", "--parents", "-n", "1", expected_head.lower()),
+    ).stdout.split()
+    if ancestry != [expected_head.lower(), reviewed.head_sha]:
+        raise ResolutionError(
+            "validated fix commit parent does not match reviewed head"
+        )
+    trailer_output = runner(
+        root,
+        (
+            "show",
+            "-s",
+            "--format=%(trailers:key=SecPal-Validation-Receipt,"
+            "valueonly,separator=%x00)",
+            expected_head.lower(),
+        ),
+    ).stdout
+    trailers = [
+        value.strip()
+        for value in trailer_output.rstrip("\n").split("\x00")
+        if value.strip()
+    ]
+    if trailers != [validation.validation_receipt_digest]:
+        raise ResolutionError(
+            "fix commit validation-receipt trailer does not match evidence"
+        )
     commit_object = runner(
         root,
         ("cat-file", "commit", expected_head.lower()),

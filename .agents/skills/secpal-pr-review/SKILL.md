@@ -20,13 +20,14 @@ committed, and pushed, use the central source repository's
 `scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
 request number, expected current head OID, reviewed-state file, and thread IDs.
 Also require the captured reviewed-state digest and successful validation
-evidence: the head-bound receipt for an unchanged validated head or the final
-attestation for a new verified fix commit. Require the target repository root
-and an eligibility manifest that covers every requested thread exactly with an
+evidence in the final attestation for a new verified fix commit. A raw
+validation receipt for an unchanged head is not authenticated by that existing
+commit and cannot authorize resolution. Require the target repository root and
+an eligibility manifest that covers every requested thread exactly with an
 allowed classification/disposition, finding IDs, evidence digest, and the fix
 commit. The command rejects a swapped state file, a non-matching local commit,
-and stale, missing, incomplete, or differently bound evidence before any GitHub
-read.
+and stale, missing, incomplete, unauthenticated, or differently bound evidence
+before any GitHub read.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,
@@ -152,7 +153,9 @@ The following state machine applies only to the full feedback-remediation path.
    validation. When remediation changes no tracked source file and every finding
    is safely disposed, prove the local, remote, and PR heads still equal the
    reviewed head and skip the commit and push states; never create an artificial
-   empty commit.
+   empty commit. A receipt created after that existing commit is not
+   authenticated by it and cannot authorize a thread-resolution mutation; stop
+   without resolution when no authenticated fix-commit attestation exists.
 7. For the changed-tree path only, recheck the remote predecessor, push once
    without bypassing local hooks, and verify that local, remote, and PR heads
    equal the signed commit. Do not inspect hosted CI as a consequence of the

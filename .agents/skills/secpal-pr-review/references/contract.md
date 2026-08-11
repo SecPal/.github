@@ -120,17 +120,19 @@ INITIALIZE
   → IF_TRACKED_TREE_CHANGED
       → SIGNED_COMMIT
       → PUSH_ONCE
+      → RESOLVE_FIXED_THREADS
+      → STOP
     ELSE_VERIFY_UNCHANGED_HEAD
-  → RESOLVE_FIXED_THREADS
-  → STOP
+      → STOP_WITHOUT_THREAD_RESOLUTION
 ```
 
 A security blocker terminates at the state that detects it. A recoverable local
 error does not advance the state or consume a remediation cycle. When
 remediation changes no tracked source file and every finding is safely disposed,
 the invocation does not create an artificial commit: it verifies the unchanged
-local, remote, and PR head, resolves eligible reviewed threads against that
-head, and reports `NO_ACTIONABLE_FINDINGS`.
+local, remote, and PR head, stops without thread resolution because the raw
+receipt is not authenticated by that existing commit, and reports the retained
+dispositions.
 
 ### State rules
 
@@ -173,7 +175,10 @@ is informational only and cannot determine validity.
 `IF_TRACKED_TREE_CHANGED` selects only between the proven staged tree and the
 reviewed tree. When remediation changes no tracked source file, it takes
 `ELSE_VERIFY_UNCHANGED_HEAD`, proves local, remote, and PR heads still equal the
-reviewed head, and skips `SIGNED_COMMIT` and `PUSH_ONCE`.
+reviewed head, and skips `SIGNED_COMMIT` and `PUSH_ONCE`. The resulting raw
+receipt is not authenticated by the already-existing commit and cannot
+authorize thread resolution. The workflow stops without resolution rather than
+creating an artificial commit or trusting self-hashed evidence.
 
 `SIGNED_COMMIT` creates one cryptographically
 signed commit with the receipt digest as its single
@@ -196,6 +201,10 @@ reviewed target-comment identities and digests, two equal complete current
 target projections, and exact mutation response. It does not read or depend on
 hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
 reactions, unrelated feedback, or worktree cleanliness.
+
+Only the final attestation for a new signed fix commit is accepted as validation
+evidence. A raw validation receipt for an unchanged head has no receipt trailer
+in that pre-existing commit and fails closed before any GitHub read.
 
 `STOP` reports the commit, branch, remote synchronization, local validation,
 worktree state, PR identity, and resolution results. The workflow never merges;
