@@ -5,10 +5,11 @@
 """Resolve explicitly named, already-fixed pull-request review threads.
 
 This command deliberately separates thread resolution from merge readiness.
-It verifies the pull request, expected head, exact target thread identities, and
-the target comments and resolution state captured when feedback was reviewed,
-then resolves each still-open target once. It does not inspect CI, reactions,
-unrelated feedback, signatures, local validation receipts, or mergeability.
+It verifies the pull request, expected head, caller-captured reviewed-state
+digest, successful validation evidence for the fix commit, exact target thread
+identities, and the target state captured when feedback was reviewed, then
+resolves each still-open target once. It does not inspect CI, reactions,
+unrelated feedback, mergeability, or any broader readiness state.
 """
 
 from __future__ import annotations
@@ -39,6 +40,11 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
+EVIDENCE_TEXT = re.compile(r"^[^\x00-\x1f\x7f]+$")
+SECRET_VALUE = re.compile(
+    r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"authorization\s*:\s*bearer)"
+)
 GH_GRAPHQL_PREFIX = ("api", "--hostname", "github.com", "graphql")
 
 TARGET_QUERY = """
@@ -76,6 +82,58 @@ mutation($threadId: ID!) {
 }
 """
 ALLOWED_GRAPHQL_DOCUMENTS = frozenset({TARGET_QUERY, RESOLVE_MUTATION})
+FIXED_THREAD_RESOLUTION_CONTRACT = {
+    "resolver": "scripts/secpal-resolve-fixed-threads.py",
+    "required_bindings": [
+        "repository",
+        "pull_request_number",
+        "repository_root",
+        "expected_head",
+        "reviewed_state_digest",
+        "validation_evidence",
+        "eligibility_evidence",
+        "thread_ids",
+    ],
+    "allowed_github_operations": [
+        "READ_NAMED_REVIEW_THREAD",
+        "RESOLVE_NAMED_REVIEW_THREAD",
+    ],
+    "prohibited_hosted_reads": [
+        "GITHUB_ACTIONS",
+        "CODEQL",
+        "CHECK_SUITES",
+        "COMMIT_STATUSES",
+        "REQUIRED_CHECKS",
+        "MERGEABILITY",
+        "BRANCH_PROTECTION",
+        "MERGE_READINESS",
+    ],
+    "prohibited_mutations": [
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "MERGE",
+        "LABEL",
+        "GENERIC_COMMENT",
+    ],
+    "readiness_authorization": "SEPARATE_EXPLICIT_WORKFLOW",
+}
+ELIGIBLE_DISPOSITIONS = {
+    "VALID_ACTIONABLE": frozenset(
+        {"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}
+    ),
+    "INVALID_FALSE_OR_MISLEADING": frozenset({"DISPROVEN_WITH_EVIDENCE"}),
+    "INFORMATIONAL": frozenset({"NON_ACTIONABLE"}),
+    "DUPLICATE": frozenset({"DUPLICATE_OF_CANONICAL"}),
+    "OUTDATED_BUT_STILL_VALID": frozenset(
+        {"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}
+    ),
+    "OUTDATED_AND_OBSOLETE": frozenset({"OBSOLETE_ON_CURRENT_HEAD"}),
+    "ALREADY_FIXED_ON_SNAPSHOT_HEAD": frozenset({"PROVEN_EXISTING_FIX"}),
+    "SUPERSEDED": frozenset({"SUPERSEDED_BY_CANONICAL"}),
+    "SECURITY_WEAKENING_SUGGESTION": frozenset(
+        {"REJECTED_SECURITY_WEAKENING"}
+    ),
+}
 
 
 class ResolutionError(RuntimeError):
@@ -131,7 +189,25 @@ class ThreadState:
 class ExpectedThreadState:
     thread_id: str
     is_resolved: bool
+    is_outdated: bool
     comments: tuple[ThreadCommentState, ...]
+
+
+@dataclass(frozen=True)
+class ReviewedState:
+    head_sha: str
+    state_digest: str
+    feedback_digest: str
+    targets: dict[str, ExpectedThreadState]
+
+
+@dataclass(frozen=True)
+class ValidationEvidence:
+    kind: str
+    evidence_digest: str
+    validated_tree_sha: str
+    validation_receipt_digest: str
+    eligibility_evidence_digest: str
 
 
 @dataclass(frozen=True)
@@ -179,7 +255,7 @@ def _consume_comment(budget: InvocationBudget) -> None:
     budget.comments += 1
 
 
-def load_repository_limits(repository: str) -> RepositoryLimits:
+def _load_repository_entry(repository: str) -> dict[str, Any]:
     try:
         registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -192,6 +268,10 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
         )
     except evidence.ContractError as exc:
         raise ResolutionError("repository registry is invalid") from exc
+    if registry.get("fixed_thread_resolution") != (
+        FIXED_THREAD_RESOLUTION_CONTRACT
+    ):
+        raise ResolutionError("fixed-thread resolution registry contract is invalid")
     repositories = registry.get("repositories") if isinstance(registry, dict) else None
     if not isinstance(repositories, list):
         raise ResolutionError("repository registry is malformed")
@@ -202,7 +282,11 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
     ]
     if len(matches) != 1:
         raise ResolutionError(f"unsupported repository: {repository}")
-    entry = matches[0]
+    return matches[0]
+
+
+def load_repository_limits(repository: str) -> RepositoryLimits:
+    entry = _load_repository_entry(repository)
     maximum_api_calls = entry.get("maximum_api_calls")
     maximum_threads = entry.get("maximum_threads")
     maximum_comments = entry.get("maximum_comments")
@@ -223,6 +307,134 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
         maximum_threads=maximum_threads,
         maximum_comments=maximum_comments,
     )
+
+
+def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
+    focused_validation = entry["focused_validation"]
+    validation = [
+        command
+        for command in focused_validation
+        if command.get("execution_policy", "always") == "always"
+    ] + list(entry["required_local_validation"])
+    return {
+        "repository": entry["repository"],
+        "default_branch": entry["default_branch"],
+        "allowed_base_repositories": entry["allowed_base_repositories"],
+        "manual_gates": entry["manual_gates"],
+        "signature_policy": entry["signature_policy"],
+        "check_policy": entry["check_policy"],
+        "limits": {
+            key: entry[key] for key in ("maximum_api_calls", "maximum_items")
+        },
+        "validation": validation,
+        "focused_only_validation": [
+            command
+            for command in focused_validation
+            if command.get("execution_policy") == "focused-only"
+        ],
+    }
+
+
+def _validate_manual_gate_evidence(
+    value: Any,
+    registered_gates: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(registered_gates, list) or any(
+        not isinstance(gate, str) or not gate for gate in registered_gates
+    ):
+        raise ResolutionError("registered manual gates are malformed")
+    if not isinstance(value, list) or len(value) != len(registered_gates):
+        raise ResolutionError("validation evidence is invalid or stale")
+    normalized: list[dict[str, Any]] = []
+    for index, gate in enumerate(registered_gates):
+        item = value[index]
+        evidence_text = item.get("evidence") if isinstance(item, dict) else None
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"gate", "satisfied", "evidence"}
+            or item.get("gate") != gate
+            or item.get("satisfied") is not True
+            or not isinstance(evidence_text, str)
+            or not EVIDENCE_TEXT.fullmatch(evidence_text)
+            or SECRET_VALUE.search(evidence_text)
+        ):
+            raise ResolutionError("validation evidence is invalid or stale")
+        normalized.append(
+            {"gate": gate, "satisfied": True, "evidence": evidence_text}
+        )
+    return normalized
+
+
+def _expected_validation_receipt(
+    repository: str,
+    reviewed: ReviewedState,
+    validated_tree_sha: Any,
+    manual_gate_evidence: Any,
+    eligibility_evidence_digest: Any,
+    registry_binding: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(validated_tree_sha, str) or not OID.fullmatch(
+        validated_tree_sha
+    ):
+        raise ResolutionError("validation evidence is invalid or stale")
+    if (
+        not isinstance(eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(eligibility_evidence_digest)
+    ):
+        raise ResolutionError("validation evidence is invalid or stale")
+    fields = {
+        "schema_version": "1.0",
+        "kind": "VALIDATION_RECEIPT",
+        "repository": repository,
+        "head_sha": reviewed.head_sha,
+        "validated_tree_sha": validated_tree_sha.lower(),
+        "registry_digest": _digest_json(registry_binding),
+        "command_set_digest": _digest_json(registry_binding["validation"]),
+        "successful_result": True,
+        "reviewed_state_digest": reviewed.state_digest,
+        "reviewed_feedback_digest": reviewed.feedback_digest,
+        "manual_gate_evidence": _validate_manual_gate_evidence(
+            manual_gate_evidence,
+            registry_binding["manual_gates"],
+        ),
+        "eligibility_evidence_digest": eligibility_evidence_digest,
+    }
+    return {**fields, "receipt_digest": _digest_json(fields)}
+
+
+def _expected_validation_attestation(
+    repository: str,
+    expected_head: str,
+    reviewed: ReviewedState,
+    payload: dict[str, Any],
+    registry_binding: dict[str, Any],
+) -> dict[str, Any]:
+    receipt = _expected_validation_receipt(
+        repository,
+        reviewed,
+        payload.get("validated_tree_sha"),
+        payload.get("manual_gate_evidence"),
+        payload.get("eligibility_evidence_digest"),
+        registry_binding,
+    )
+    fields = {
+        "schema_version": "1.0",
+        "repository": repository,
+        "head_sha": expected_head.lower(),
+        "registry_digest": receipt["registry_digest"],
+        "command_set_digest": receipt["command_set_digest"],
+        "successful_result": True,
+        "reviewed_head_sha": reviewed.head_sha,
+        "reviewed_state_digest": reviewed.state_digest,
+        "reviewed_feedback_digest": reviewed.feedback_digest,
+        "validated_tree_sha": receipt["validated_tree_sha"],
+        "validation_receipt_digest": receipt["receipt_digest"],
+        "manual_gate_evidence": receipt["manual_gate_evidence"],
+        "eligibility_evidence_digest": receipt[
+            "eligibility_evidence_digest"
+        ],
+    }
+    return {**fields, "attestation_digest": _digest_json(fields)}
 
 
 def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
@@ -267,6 +479,51 @@ def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ResolutionError("gh returned an unexpected response")
     return value
+
+
+def _run_git(
+    repository_root: Path,
+    arguments: Sequence[str],
+    *,
+    allow_failure: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        executable = evidence.resolve_trusted_executable("git")
+        completed = subprocess.run(
+            [executable, *arguments],
+            cwd=repository_root,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=evidence.command_environment("git"),
+            timeout=30,
+        )
+    except evidence.CommandPolicyError as exc:
+        raise ResolutionError("trusted Git executable is unavailable") from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ResolutionError("local Git command is unavailable") from exc
+    if completed.returncode != 0 and not allow_failure:
+        raise ResolutionError(
+            evidence.redact_diagnostic(
+                completed.stderr or "local Git command failed"
+            )
+        )
+    return completed
+
+
+def _remote_repository(value: str) -> str:
+    normalized = value.strip()
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        normalized,
+    )
+    if match is None:
+        raise ResolutionError("local origin repository identity is unsupported")
+    return match.group(1)
 
 
 def _graphql(
@@ -314,12 +571,13 @@ def _reject_nonfinite_json_constant(value: str) -> Any:
     raise ValueError(f"non-finite JSON constant: {value}")
 
 
-def load_expected_targets(
+def load_reviewed_state(
     path: Path,
     repository: str,
     number: int,
+    expected_state_digest: str,
     thread_ids: tuple[str, ...],
-) -> dict[str, ExpectedThreadState]:
+) -> ReviewedState:
     try:
         payload = json.loads(
             path.read_text(encoding="utf-8"),
@@ -391,6 +649,14 @@ def load_expected_targets(
         )
     ):
         raise ResolutionError("reviewed feedback state digest is invalid")
+    if (
+        not isinstance(expected_state_digest, str)
+        or not DIGEST.fullmatch(expected_state_digest)
+        or state_digest != expected_state_digest
+    ):
+        raise ResolutionError(
+            "reviewed feedback state does not match the captured digest"
+        )
 
     threads = payload["threads"]
     indexed_threads: dict[str, dict[str, Any]] = {}
@@ -447,11 +713,258 @@ def load_expected_targets(
         expected_targets[thread_id] = ExpectedThreadState(
             thread_id=thread_id,
             is_resolved=thread["is_resolved"],
+            is_outdated=thread["is_outdated"],
             comments=tuple(
                 sorted(comments.values(), key=operator.attrgetter("comment_id"))
             ),
         )
-    return expected_targets
+    return ReviewedState(
+        head_sha=payload["head_sha"].lower(),
+        state_digest=state_digest,
+        feedback_digest=feedback_digest,
+        targets=expected_targets,
+    )
+
+
+def load_validation_evidence(
+    path: Path,
+    repository: str,
+    expected_head: str,
+    reviewed: ReviewedState,
+) -> ValidationEvidence:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except (OSError, ValueError) as exc:
+        raise ResolutionError(
+            "validation evidence is unavailable or malformed"
+        ) from exc
+    registry_binding = _validation_registry_binding(
+        _load_repository_entry(repository)
+    )
+    if isinstance(payload, dict) and payload.get("kind") == "VALIDATION_RECEIPT":
+        raise ResolutionError(
+            "validation evidence requires an authenticated fix-commit "
+            "attestation"
+        )
+    if not isinstance(payload, dict):
+        raise ResolutionError("validation evidence is unavailable or malformed")
+    expected_attestation = _expected_validation_attestation(
+        repository,
+        expected_head,
+        reviewed,
+        payload,
+        registry_binding,
+    )
+    if payload != expected_attestation:
+        if payload.get("head_sha") != expected_head.lower():
+            raise ResolutionError(
+                "validation evidence does not match the fix commit"
+            )
+        raise ResolutionError("validation evidence is invalid or stale")
+    return ValidationEvidence(
+        kind="attestation",
+        evidence_digest=payload["attestation_digest"],
+        validated_tree_sha=payload["validated_tree_sha"],
+        validation_receipt_digest=payload["validation_receipt_digest"],
+        eligibility_evidence_digest=payload[
+            "eligibility_evidence_digest"
+        ],
+    )
+
+
+def verify_local_fix_commit(
+    repository_root: Path,
+    repository: str,
+    expected_head: str,
+    reviewed: ReviewedState,
+    validation: ValidationEvidence,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = _run_git,
+) -> None:
+    if (
+        not isinstance(validation, ValidationEvidence)
+        or validation.kind != "attestation"
+        or not isinstance(validation.evidence_digest, str)
+        or not DIGEST.fullmatch(validation.evidence_digest)
+        or not isinstance(validation.validated_tree_sha, str)
+        or not OID.fullmatch(validation.validated_tree_sha)
+        or not isinstance(validation.validation_receipt_digest, str)
+        or not DIGEST.fullmatch(validation.validation_receipt_digest)
+        or not isinstance(validation.eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(validation.eligibility_evidence_digest)
+    ):
+        raise ResolutionError("validation evidence binding is invalid or stale")
+    try:
+        root = repository_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ResolutionError("local repository root is unavailable") from exc
+    if not root.is_dir():
+        raise ResolutionError("local repository root is unavailable")
+    origin = runner(root, ("remote", "get-url", "origin")).stdout.strip()
+    if _remote_repository(origin) != repository:
+        raise ResolutionError("local origin repository identity mismatch")
+    local_head = runner(root, ("rev-parse", "HEAD")).stdout.strip().lower()
+    if local_head != expected_head.lower():
+        raise ResolutionError(
+            f"local head mismatch: expected {expected_head.lower()}, "
+            f"observed {local_head or 'missing'}"
+        )
+    commit_tree = runner(
+        root,
+        ("rev-parse", f"{expected_head.lower()}^{{tree}}"),
+    ).stdout.strip().lower()
+    if (
+        not OID.fullmatch(commit_tree)
+        or commit_tree != validation.validated_tree_sha
+    ):
+        raise ResolutionError("validated tree does not match the fix commit tree")
+    ancestry = runner(
+        root,
+        ("rev-list", "--parents", "-n", "1", expected_head.lower()),
+    ).stdout.split()
+    if ancestry != [expected_head.lower(), reviewed.head_sha]:
+        raise ResolutionError(
+            "validated fix commit parent does not match reviewed head"
+        )
+    trailer_output = runner(
+        root,
+        (
+            "show",
+            "-s",
+            "--format=%(trailers:key=SecPal-Validation-Receipt,"
+            "valueonly,separator=%x00)",
+            expected_head.lower(),
+        ),
+    ).stdout
+    trailers = [
+        value.strip()
+        for value in trailer_output.rstrip("\n").split("\x00")
+        if value.strip()
+    ]
+    if trailers != [validation.validation_receipt_digest]:
+        raise ResolutionError(
+            "fix commit validation-receipt trailer does not match evidence"
+        )
+    commit_object = runner(
+        root,
+        ("cat-file", "commit", expected_head.lower()),
+        allow_failure=True,
+    )
+    verified = runner(
+        root,
+        ("verify-commit", "--raw", expected_head.lower()),
+        allow_failure=True,
+    )
+    local_signature = evidence.interpret_local_signature(
+        verified.returncode,
+        f"{verified.stdout}\n{verified.stderr}",
+        signature_format_hint=(
+            evidence._commit_signature_format(commit_object.stdout)
+            if commit_object.returncode == 0
+            else "unknown"
+        ),
+    )
+    signature_policy = _load_repository_entry(repository)["signature_policy"]
+    accepted_formats = signature_policy.get("accepted_formats")
+    if (
+        signature_policy.get("require_local_verified") is not True
+        or local_signature.get("state") != "valid"
+        or local_signature.get("verified") is not True
+        or not isinstance(accepted_formats, list)
+        or local_signature.get("format") not in accepted_formats
+    ):
+        raise ResolutionError("fix commit local signature is not verified")
+
+
+def load_eligibility_evidence(
+    path: Path,
+    repository: str,
+    number: int,
+    reviewed_head_sha: str,
+    reviewed_state_digest: str,
+    thread_ids: tuple[str, ...],
+    *,
+    authenticated_evidence_digest: str,
+) -> str:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except (OSError, ValueError) as exc:
+        raise ResolutionError(
+            "eligibility evidence is unavailable or malformed"
+        ) from exc
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "reviewed_head_sha",
+        "reviewed_state_digest",
+        "eligible_threads",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ResolutionError("eligibility evidence is unavailable or malformed")
+    observed_evidence_digest = _digest_json(payload)
+    if (
+        not isinstance(authenticated_evidence_digest, str)
+        or not DIGEST.fullmatch(authenticated_evidence_digest)
+        or observed_evidence_digest != authenticated_evidence_digest
+    ):
+        raise ResolutionError("eligibility evidence is not authenticated")
+    threads = payload.get("eligible_threads")
+    if (
+        payload.get("schema_version") != "1.0"
+        or payload.get("repository") != repository
+        or payload.get("pull_request_number") != number
+        or isinstance(payload.get("pull_request_number"), bool)
+        or payload.get("reviewed_head_sha") != reviewed_head_sha.lower()
+        or payload.get("reviewed_state_digest") != reviewed_state_digest
+        or not isinstance(threads, list)
+    ):
+        raise ResolutionError("eligibility evidence binding is invalid or stale")
+    observed_thread_ids: list[str] = []
+    for item in threads:
+        if not isinstance(item, dict) or set(item) != {
+            "thread_id",
+            "classification",
+            "disposition",
+            "finding_ids",
+            "evidence_digest",
+        }:
+            raise ResolutionError("eligibility evidence thread is malformed")
+        thread_id = item.get("thread_id")
+        classification = item.get("classification")
+        disposition = item.get("disposition")
+        finding_ids = item.get("finding_ids")
+        if (
+            not isinstance(thread_id, str)
+            or not THREAD_ID.fullmatch(thread_id)
+            or not isinstance(classification, str)
+            or disposition not in ELIGIBLE_DISPOSITIONS.get(
+                classification,
+                frozenset(),
+            )
+            or not isinstance(finding_ids, list)
+            or not finding_ids
+            or any(
+                not isinstance(finding_id, str) or not finding_id
+                for finding_id in finding_ids
+            )
+            or len(finding_ids) != len(set(finding_ids))
+            or not isinstance(item.get("evidence_digest"), str)
+            or not DIGEST.fullmatch(item["evidence_digest"])
+        ):
+            raise ResolutionError("eligibility evidence thread is ineligible")
+        observed_thread_ids.append(thread_id)
+    if tuple(observed_thread_ids) != thread_ids:
+        raise ResolutionError(
+            "eligibility evidence must cover requested threads exactly"
+        )
+    return observed_evidence_digest
 
 
 def read_target_thread(
@@ -697,6 +1210,7 @@ def validate_expected_targets(
             not isinstance(target, ExpectedThreadState)
             or target.thread_id != thread_id
             or not isinstance(target.is_resolved, bool)
+            or not isinstance(target.is_outdated, bool)
             or tuple(
                 sorted(target.comments, key=operator.attrgetter("comment_id"))
             )
@@ -732,9 +1246,27 @@ def resolve_threads(
     *,
     apply: bool,
     expected_targets: dict[str, ExpectedThreadState] | None = None,
+    reviewed_state_digest: str | None = None,
+    validation_evidence_digest: str | None = None,
+    eligibility_evidence_digest: str | None = None,
     runner: Callable[[Sequence[str]], dict[str, Any]] = _run_gh,
 ) -> dict[str, Any]:
     validate_request(repository, number, expected_head, thread_ids, apply)
+    if (
+        not isinstance(reviewed_state_digest, str)
+        or not DIGEST.fullmatch(reviewed_state_digest)
+    ):
+        raise ResolutionError("reviewed state digest is required")
+    if (
+        not isinstance(validation_evidence_digest, str)
+        or not DIGEST.fullmatch(validation_evidence_digest)
+    ):
+        raise ResolutionError("validation evidence digest is required")
+    if (
+        not isinstance(eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(eligibility_evidence_digest)
+    ):
+        raise ResolutionError("eligibility evidence digest is required")
     reviewed_targets = validate_expected_targets(thread_ids, expected_targets)
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
@@ -845,6 +1377,9 @@ def resolve_threads(
                     "repository": repository,
                     "pull_request_number": number,
                     "head_sha": expected_head.lower(),
+                    "reviewed_state_digest": reviewed_state_digest,
+                    "validation_evidence_digest": validation_evidence_digest,
+                    "eligibility_evidence_digest": eligibility_evidence_digest,
                     "mode": "apply",
                     "status": "failed",
                     "already_resolved": already_resolved,
@@ -876,6 +1411,9 @@ def resolve_threads(
         "repository": repository,
         "pull_request_number": number,
         "head_sha": expected_head.lower(),
+        "reviewed_state_digest": reviewed_state_digest,
+        "validation_evidence_digest": validation_evidence_digest,
+        "eligibility_evidence_digest": eligibility_evidence_digest,
         "mode": "apply" if apply else "dry-run",
         "status": "success",
         "already_resolved": already_resolved,
@@ -890,8 +1428,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr", required=True, type=int)
+    parser.add_argument("--repo-root", required=True)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--reviewed-state", required=True)
+    parser.add_argument("--expected-reviewed-state-digest", required=True)
+    parser.add_argument("--validation-evidence", required=True)
+    parser.add_argument("--eligibility-evidence", required=True)
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -904,6 +1446,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.thread_id,
             arguments.apply,
         )
+        if not DIGEST.fullmatch(arguments.expected_reviewed_state_digest):
+            raise ResolutionError(
+                "expected reviewed state digest must be a SHA-256 digest"
+            )
     except ResolutionError as exc:
         parser.error(str(exc))
     return arguments
@@ -912,11 +1458,36 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        expected_targets = load_expected_targets(
+        reviewed = load_reviewed_state(
             Path(arguments.reviewed_state),
             arguments.repo,
             arguments.pr,
+            arguments.expected_reviewed_state_digest,
             arguments.thread_id,
+        )
+        validation = load_validation_evidence(
+            Path(arguments.validation_evidence),
+            arguments.repo,
+            arguments.expected_head,
+            reviewed,
+        )
+        verify_local_fix_commit(
+            Path(arguments.repo_root),
+            arguments.repo,
+            arguments.expected_head,
+            reviewed,
+            validation,
+        )
+        eligibility_evidence_digest = load_eligibility_evidence(
+            Path(arguments.eligibility_evidence),
+            arguments.repo,
+            arguments.pr,
+            reviewed.head_sha,
+            reviewed.state_digest,
+            arguments.thread_id,
+            authenticated_evidence_digest=(
+                validation.eligibility_evidence_digest
+            ),
         )
         result = resolve_threads(
             arguments.repo,
@@ -924,7 +1495,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.expected_head,
             arguments.thread_id,
             apply=arguments.apply,
-            expected_targets=expected_targets,
+            expected_targets=reviewed.targets,
+            reviewed_state_digest=reviewed.state_digest,
+            validation_evidence_digest=validation.evidence_digest,
+            eligibility_evidence_digest=eligibility_evidence_digest,
         )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

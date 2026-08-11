@@ -71,8 +71,18 @@ evaluated, fixed where necessary, validated, committed, and pushed uses
 state machine.
 
 This path requires the exact repository, pull request number, expected current
-head OID, reviewed-state file, and thread IDs. It verifies the reviewed-state
-digests, reads every named target completely, and requires its comment
+head OID, reviewed-state file, caller-captured reviewed-state digest, and
+successful validation evidence bound to the verified fix commit, local
+repository root, and per-thread eligibility evidence, plus thread IDs. It
+verifies the registered origin, local head, validated tree, accepted local
+commit signature, and, for a new fix commit, the sole parent and validation
+receipt trailer before any GitHub read. The receipt and final attestation must
+authenticate the canonical eligibility-manifest digest. It also requires the
+eligibility manifest to cover the requested threads exactly and bind their allowed
+classifications/dispositions, finding IDs, evidence digests, reviewed head, and
+reviewed-state digest.
+It then reads every named target
+completely, and requires its comment
 identities, body digests, reply relationships, and resolution state to match the
 feedback that was actually classified. It then verifies PR membership and
 records current resolved/outdated state. Immediately before each write or
@@ -94,8 +104,9 @@ without retry, emits one structured report naming resolved, failed, and
 unattempted targets, and exits nonzero.
 
 The resolution-only path performs no feedback classification, validation,
-attestation, commit, push, Required Check read, readiness audit, review request,
-or merge operation. It is also the default post-push resolution step after
+attestation creation, commit, push, Required Check read, readiness audit, review
+request, or merge operation. It consumes already-produced validation evidence
+only. It is also the default post-push resolution step after
 feedback remediation. It is not selected for a separately requested readiness
 audit, forensic evidence capture, or merge evaluation.
 
@@ -111,17 +122,19 @@ INITIALIZE
   → IF_TRACKED_TREE_CHANGED
       → SIGNED_COMMIT
       → PUSH_ONCE
+      → RESOLVE_FIXED_THREADS
+      → STOP
     ELSE_VERIFY_UNCHANGED_HEAD
-  → RESOLVE_FIXED_THREADS
-  → STOP
+      → STOP_WITHOUT_THREAD_RESOLUTION
 ```
 
 A security blocker terminates at the state that detects it. A recoverable local
 error does not advance the state or consume a remediation cycle. When
 remediation changes no tracked source file and every finding is safely disposed,
 the invocation does not create an artificial commit: it verifies the unchanged
-local, remote, and PR head, resolves eligible reviewed threads against that
-head, and reports `NO_ACTIONABLE_FINDINGS`.
+local, remote, and PR head, stops without thread resolution because the raw
+receipt is not authenticated by that existing commit, and reports the retained
+dispositions.
 
 ### State rules
 
@@ -152,9 +165,14 @@ commands and every required local command once and returns a deterministic
 receipt binding repository, parent head,
 staged-tree SHA, registry digest, command-set digest, successful result, and
 reviewed-feedback digests plus explicit satisfied evidence for every registered
-manual gate. On entry, the tracked tree and holistic-audit result are frozen;
-independent discovery and audit do not continue in or after this state. A failed
-command produces no receipt; the command invalidates any report already at its
+manual gate and the canonical digest of the finalized eligibility manifest.
+The manifest is finalized after classification and before this state; it binds
+the reviewed head/state and every eligible thread's classification,
+disposition, finding IDs, and evidence digest without referring to the not-yet-
+created fix commit. On entry, the tracked tree, eligibility manifest, and
+holistic-audit result are frozen; independent discovery and audit do not
+continue in or after this state. A failed command produces no receipt; the
+command invalidates any report already at its
 configured output before validation begins, terminates this invocation, and
 permits no tree change or complete-command retry. A new explicit remediation
 invocation must capture fresh state and audit any correction before its single
@@ -164,7 +182,10 @@ is informational only and cannot determine validity.
 `IF_TRACKED_TREE_CHANGED` selects only between the proven staged tree and the
 reviewed tree. When remediation changes no tracked source file, it takes
 `ELSE_VERIFY_UNCHANGED_HEAD`, proves local, remote, and PR heads still equal the
-reviewed head, and skips `SIGNED_COMMIT` and `PUSH_ONCE`.
+reviewed head, and skips `SIGNED_COMMIT` and `PUSH_ONCE`. The resulting raw
+receipt is not authenticated by the already-existing commit and cannot
+authorize thread resolution. The workflow stops without resolution rather than
+creating an artificial commit or trusting self-hashed evidence.
 
 `SIGNED_COMMIT` creates one cryptographically
 signed commit with the receipt digest as its single
@@ -178,12 +199,20 @@ hooks, or uses administrator authority. After the push it verifies only local,
 remote, and PR head equality.
 
 `RESOLVE_FIXED_THREADS` invokes `scripts/secpal-resolve-fixed-threads.py` for
-the exact eligible thread IDs, current head, and reviewed-state file. Resolution
-depends only on the open PR, exact head, target membership, equality with the
+the exact eligible thread IDs, current head, reviewed-state file and captured
+digest, successful validation evidence bound to the verified fix commit, local
+commit proof, and exact per-thread eligibility evidence authenticated by the
+signed validation receipt. Resolution depends
+only on those inputs, the open PR, exact head, target
+membership, equality with the
 reviewed target-comment identities and digests, two equal complete current
 target projections, and exact mutation response. It does not read or depend on
 hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
-reactions, unrelated feedback, validation attestations, or worktree state.
+reactions, unrelated feedback, or worktree cleanliness.
+
+Only the final attestation for a new signed fix commit is accepted as validation
+evidence. A raw validation receipt for an unchanged head has no receipt trailer
+in that pre-existing commit and fails closed before any GitHub read.
 
 `STOP` reports the commit, branch, remote synchronization, local validation,
 worktree state, PR identity, and resolution results. The workflow never merges;
@@ -299,12 +328,14 @@ classifications, signed validation-receipt trailer, and validation-attestation
 identity. It is read at most once only under the explicit CI and readiness path.
 
 A validation receipt is produced by the single complete run and binds its staged
-tree and normalized satisfied evidence for every registered manual gate. After
+tree, canonical eligibility-manifest digest, and normalized satisfied evidence
+for every registered manual gate. After
 the signed commit, that receipt may be bound once only when the commit's parent,
 tree, and single `SecPal-Validation-Receipt` trailer match exactly. The final
 validation attestation contains at least `repository`, `head_sha`,
 `registry_digest`, `command_set_digest`, `successful_result`, validated tree,
-receipt digest, and manual-gate evidence. It also binds the reviewed state and
+receipt digest, manual-gate evidence, and authenticated eligibility digest. It
+also binds the reviewed state and
 feedback digests. The batch independently reconstructs the receipt from the
 live signed commit and rejects a caller-authored attestation file that lacks the
 matching signed trailer. Canonical JSON and SHA-256 make it deterministic;

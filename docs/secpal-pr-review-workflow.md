@@ -173,7 +173,8 @@ workflow never posts fixed/addressed/SHA/progress messages.
 
 The normal path captures stable feedback once, creates one reusable local
 validation attestation, pushes one signed commit, and resolves only the named
-fixed threads:
+fixed threads. Finalize `SESSION/thread-eligibility.json` from the completed
+classifications and dispositions before starting the complete validation:
 
 ```bash
 python3 scripts/secpal-pr-review-actions.py resolve-batch \
@@ -186,6 +187,7 @@ python3 scripts/secpal-pr-review-actions.py attest-validation \
   --expected-head PARENT_HEAD \
   --reviewed-state SESSION/reviewed-feedback.json \
   --manual-gate-evidence SESSION/manual-gates.json \
+  --eligibility-evidence SESSION/thread-eligibility.json \
   --repo-root /path/to/SecPal/api \
   --output SESSION/validation-receipt.json
 
@@ -200,14 +202,19 @@ python3 scripts/secpal-pr-review-actions.py attest-validation \
   --reviewed-state SESSION/reviewed-feedback.json \
   --repo-root /path/to/SecPal/api \
   --receipt SESSION/validation-receipt.json \
+  --eligibility-evidence SESSION/thread-eligibility.json \
   --bind-commit \
   --output SESSION/validation-attestation.json
 
 python3 scripts/secpal-resolve-fixed-threads.py \
   --repo SecPal/api \
   --pr 123 \
+  --repo-root /path/to/SecPal/api \
   --expected-head HEAD \
   --reviewed-state SESSION/reviewed-feedback.json \
+  --expected-reviewed-state-digest REVIEWED_STATE_SHA256 \
+  --validation-evidence SESSION/validation-attestation.json \
+  --eligibility-evidence SESSION/thread-eligibility.json \
   --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
@@ -226,21 +233,29 @@ or private-key marker is rejected rather than copied into the receipt. The
 capture reads one canonical projection containing feedback identities,
 digests, states, reactions, actors, the current head, and the reviewed base
 branch/SHA. It excludes Required Checks. The complete run produces a staged-tree
-receipt that includes the manual-gate evidence. When the tracked tree changed,
+receipt that includes the manual-gate evidence and the canonical digest of the
+pre-validation eligibility manifest. When the tracked tree changed,
 the same command binds that receipt after the signed commit only when the
 commit's sole parent, tree, signature, and receipt trailer match exactly; this
 does not rerun validation. The final attestation binds the repository, finished
 head, registry digest, command-set digest, successful result, validated tree,
-signed receipt, manual gates, and reviewed-feedback digests. Before the commit
-exists on GitHub, binding checks its local signature and configured format only.
+signed receipt, manual gates, authenticated eligibility digest, and
+reviewed-feedback digests. Before the commit exists on GitHub, binding checks
+its local signature and configured format only.
 When remediation changes no tracked source file and every finding is safely
 disposed, verify unchanged local, remote, and PR heads and skip the commit and
-push; never create an artificial empty commit.
+push; never create an artificial empty commit. Because a receipt produced after
+that existing commit is not authenticated by it, the raw receipt cannot
+authorize thread resolution. Stop without resolution unless a final attestation
+is bound to a new signed fix commit.
 
-The simple resolver verifies the exact PR head and target identity without
-reading checks, rules, reactions, unrelated feedback, mergeability, or branch
-protection. It first reads each target completely and requires its comments to
-match the reviewed-state identities and digests. Immediately before each
+The simple resolver first verifies the caller-captured reviewed-state digest,
+successful validation attestation, actual local signed commit, and exact
+per-thread eligibility manifest authenticated by the signed validation
+receipt. It then verifies the exact PR head and target identity without reading checks,
+rules, reactions, unrelated feedback, mergeability, or branch protection. It
+reads each target completely and requires its comments to match the
+reviewed-state identities and digests. Immediately before each
 mutation or successful already-resolved report, it requires two more equal
 complete target projections; every mutation response must confirm the exact
 resolved thread.

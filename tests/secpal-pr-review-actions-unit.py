@@ -3790,8 +3790,20 @@ class RegistryTests(TestCase):
                 self.assertLessEqual(entry["maximum_reactions"], 50)
 
     def test_registry_cases_61_to_69(self) -> None:
-        registry = {"schema_version": "1.0", "repositories": [registry_entry(repo) for repo in self.repositories]}
+        registry = {
+            "schema_version": "1.0",
+            "fixed_thread_resolution": copy.deepcopy(
+                actions.load_registry()["fixed_thread_resolution"]
+            ),
+            "repositories": [registry_entry(repo) for repo in self.repositories],
+        }
         self.assertEqual([item["repository"] for item in actions.validate_registry(registry)["repositories"]], self.repositories)
+        missing_resolution_contract = copy.deepcopy(registry)
+        missing_resolution_contract.pop("fixed_thread_resolution")
+        self.assertEqual(
+            actions.validate_registry(missing_resolution_contract)["repositories"],
+            registry["repositories"],
+        )
         duplicate = copy.deepcopy(registry)
         duplicate["repositories"].append(copy.deepcopy(duplicate["repositories"][0]))
         with self.assertRaisesRegex(actions.RegistryError, "duplicate"):
@@ -4258,7 +4270,13 @@ class RegistryTests(TestCase):
         )
 
     def test_required_validation_rejects_focused_only_execution(self) -> None:
-        registry = {"schema_version": "1.0", "repositories": [frontend_registry_entry()]}
+        registry = {
+            "schema_version": "1.0",
+            "fixed_thread_resolution": copy.deepcopy(
+                actions.load_registry()["fixed_thread_resolution"]
+            ),
+            "repositories": [frontend_registry_entry()],
+        }
         registry["repositories"][0]["required_local_validation"][0][
             "execution_policy"
         ] = "focused-only"
@@ -5375,6 +5393,62 @@ class FastPathTests(TestCase):
                 commit_tree_sha="a" * 40,
                 commit_validation_receipt_digest=receipt["receipt_digest"],
             )
+
+    def test_resolution_eligibility_is_bound_into_the_signed_receipt(self) -> None:
+        payload = fast_feedback(thread_count=1).to_dict()
+        payload["threads"][0]["node_id"] = "PRRT_exampleOne"
+        reviewed = fast_path.StableFeedbackState.from_payload(payload)
+        manifest = {
+            "schema_version": "1.0",
+            "repository": "SecPal/.github",
+            "pull_request_number": 1,
+            "reviewed_head_sha": reviewed.head_sha,
+            "reviewed_state_digest": reviewed.state_digest,
+            "eligible_threads": [
+                {
+                    "thread_id": "PRRT_exampleOne",
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["finding-1"],
+                    "evidence_digest": "a" * 64,
+                }
+            ],
+        }
+        registry = fast_registry()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            eligibility_digest = actions._resolution_eligibility_digest(
+                str(path), "SecPal/.github", reviewed
+            )
+
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            eligibility_evidence_digest=eligibility_digest,
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha=p21.HEAD,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+
+        self.assertEqual(
+            receipt["eligibility_evidence_digest"], eligibility_digest
+        )
+        self.assertEqual(
+            attestation["eligibility_evidence_digest"], eligibility_digest
+        )
 
     def test_registered_manual_gates_require_explicit_satisfied_evidence(self) -> None:
         binding = actions._fast_registry_binding(registry_entry("SecPal/.github"))

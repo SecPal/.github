@@ -55,11 +55,22 @@ signed push, or no commit movement for a no-push session.
 
 Resolves only explicitly named review threads after their findings have already
 been evaluated, fixed where necessary, and validated. The supplied reviewed-state
-capture binds the operation to the caller-provided PR head and reviewed
-target-comment identities, digests, and resolution state. After one initial
-complete target read, it requires two more equal complete target projections
-immediately before each write or successful already-resolved report, and keeps
-thread resolution separate from CI and merge-readiness decisions. It accepts
+capture must match the caller-provided captured state digest, and a successful
+final attestation must bind that reviewed state to the exact fix commit. A raw
+validation receipt for an unchanged head cannot authorize a resolution
+mutation because the pre-existing commit does not authenticate that receipt.
+The resolver verifies that evidence against the actual local commit tree,
+signature, origin, and, for a new fix commit, its parent and receipt trailer. A
+separate eligibility manifest must cover every requested thread exactly and
+bind its allowed classification/disposition and finding evidence to the
+reviewed state. Its canonical digest must be authenticated by the signed
+validation receipt and final attestation, so it cannot be created or changed
+after validation. Together they bind the operation to the caller-provided PR
+head and reviewed target-comment identities, digests, and resolution state. After one
+initial complete target read, it requires two more equal complete target
+projections immediately before each write or successful already-resolved
+report, and keeps thread resolution separate from CI and merge-readiness
+decisions. It accepts
 only canonical registry repositories, enforces their shared API, thread, and
 comment limits, preflights every known read/write cost, uses the trusted GitHub
 CLI boundary, and reports partial failure without retrying a write.

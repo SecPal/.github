@@ -267,6 +267,10 @@ if jq -e \
 fi
 grep -Fq -- '--reviewed-state REVIEWED_STATE' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation does not bind mutations to reviewed feedback'
+grep -Fq -- '--expected-reviewed-state-digest REVIEWED_STATE_SHA256' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation does not bind the captured reviewed-state digest'
+grep -Fq -- '--validation-evidence VALIDATION_EVIDENCE.json' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation does not require validation evidence'
 grep -Fq 'three complete target reads' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation undercounts stable target rechecks'
 grep -Fq 'When remediation changes no tracked source file' "$CONTRACT" \
@@ -328,6 +332,34 @@ grep -Fq 'expected current head OID' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation is not head-bound'
 grep -Fq 'every requested thread belongs to that PR' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation is not target-bound'
+grep -Fq 'canonical eligibility-manifest digest' "$CONTRACT" \
+  || fail 'contract does not authenticate per-thread eligibility evidence'
+grep -Fq 'signed validation receipt and final attestation' "$SKILL" \
+  || fail 'skill does not authenticate the eligibility manifest before resolution'
+grep -Fq 'attest-validation --eligibility-evidence' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation omits eligibility attestation'
+jq -e '
+  .fixed_thread_resolution == {
+    "resolver": "scripts/secpal-resolve-fixed-threads.py",
+    "required_bindings": [
+      "repository", "pull_request_number", "repository_root", "expected_head",
+      "reviewed_state_digest", "validation_evidence", "eligibility_evidence",
+      "thread_ids"
+    ],
+    "allowed_github_operations": [
+      "READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"
+    ],
+    "prohibited_hosted_reads": [
+      "GITHUB_ACTIONS", "CODEQL", "CHECK_SUITES", "COMMIT_STATUSES",
+      "REQUIRED_CHECKS", "MERGEABILITY", "BRANCH_PROTECTION", "MERGE_READINESS"
+    ],
+    "prohibited_mutations": [
+      "REVIEW_REQUEST", "READY_TRANSITION", "MERGE", "LABEL", "GENERIC_COMMENT"
+    ],
+    "readiness_authorization": "SEPARATE_EXPLICIT_WORKFLOW"
+  }
+' "$REGISTRY" >/dev/null \
+  || fail 'repository registry does not define the CI-independent fixed-thread contract'
 
 git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
   || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"

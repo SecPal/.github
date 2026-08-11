@@ -789,6 +789,7 @@ def create_validation_receipt(
     successful_result: bool,
     reviewed_state: StableFeedbackState,
     manual_gate_evidence: Any,
+    eligibility_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     gates = registry.get("manual_gates") if isinstance(registry, dict) else None
     normalized_gates = validate_manual_gate_evidence(manual_gate_evidence, gates)
@@ -807,6 +808,13 @@ def create_validation_receipt(
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
         "manual_gate_evidence": normalized_gates,
     }
+    if eligibility_evidence_digest is not None:
+        if (
+            not isinstance(eligibility_evidence_digest, str)
+            or not DIGEST.fullmatch(eligibility_evidence_digest)
+        ):
+            raise SecurityBlocker("eligibility evidence digest is malformed")
+        fields["eligibility_evidence_digest"] = eligibility_evidence_digest
     return {**fields, "receipt_digest": digest_json(fields)}
 
 
@@ -831,6 +839,9 @@ def create_validation_attestation(
         successful_result=True,
         reviewed_state=reviewed_state,
         manual_gate_evidence=validation_receipt.get("manual_gate_evidence"),
+        eligibility_evidence_digest=validation_receipt.get(
+            "eligibility_evidence_digest"
+        ),
     )
     if validation_receipt != expected_receipt:
         raise SecurityBlocker("validation receipt is invalid or stale")
@@ -850,6 +861,10 @@ def create_validation_attestation(
             validation_receipt["manual_gate_evidence"]
         ),
     }
+    if "eligibility_evidence_digest" in validation_receipt:
+        fields["eligibility_evidence_digest"] = validation_receipt[
+            "eligibility_evidence_digest"
+        ]
     return {**fields, "attestation_digest": digest_json(fields)}
 
 
@@ -881,6 +896,9 @@ def verify_validation_attestation(
         successful_result=True,
         reviewed_state=reviewed_state,
         manual_gate_evidence=attestation.get("manual_gate_evidence"),
+        eligibility_evidence_digest=attestation.get(
+            "eligibility_evidence_digest"
+        ),
     )
     if (
         commit_validation_receipt_digest != receipt["receipt_digest"]

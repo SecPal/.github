@@ -145,6 +145,23 @@ RESOLVER_CALLS = (
             ("timeout", "30"),
         ),
     ),
+    ProcessCall(
+        None,
+        "_run_git",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
 )
 
 EXPECTED_CALLS = {
@@ -370,6 +387,9 @@ LOADED_MODULE_ATTRIBUTES = {
         },
         "fast_path": {
             "BatchRequest",
+            "CLASSIFICATION_DISPOSITIONS",
+            "DIGEST",
+            "IDENTITY",
             "ReadinessState",
             "RecoverableLocalError",
             "SECRET_VALUE",
@@ -391,7 +411,9 @@ LOADED_MODULE_ATTRIBUTES = {
         "evidence": {
             "CommandPolicyError",
             "ContractError",
+            "_commit_signature_format",
             "command_environment",
+            "interpret_local_signature",
             "redact_diagnostic",
             "resolve_trusted_executable",
             "validate_against_authoritative_schema",
@@ -452,6 +474,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'manual_gate_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'eligibility_evidence', None)",
         ),
     },
     "secpal-resolve-fixed-threads.py": {
@@ -517,10 +543,19 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_digest_json",
     "_graphql",
     "_load_evidence_helper",
+    "_load_repository_entry",
+    "_expected_validation_attestation",
+    "_expected_validation_receipt",
     "_reject_nonfinite_json_constant",
+    "_remote_repository",
     "_run_gh",
-    "load_expected_targets",
+    "_run_git",
+    "_validate_manual_gate_evidence",
+    "_validation_registry_binding",
     "load_repository_limits",
+    "load_eligibility_evidence",
+    "load_reviewed_state",
+    "load_validation_evidence",
     "main",
     "parse_args",
     "read_stable_target_thread",
@@ -529,20 +564,35 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "resolve_threads",
     "validate_expected_targets",
     "validate_request",
+    "verify_local_fix_commit",
 }
 RESOLVER_CLASS_SHAPES = {
     "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "InvocationBudget": ClassShape((), (), ("dataclass",)),
     "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "ReviewedState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ResolutionError": ClassShape(("RuntimeError",), (), ()),
     "TargetRead": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ThreadCommentState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "ValidationEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
 }
 SAFE_RESOLVER_FUNCTION_REFERENCES = {
     DynamicImportCall(
-        ("load_expected_targets",),
+        ("load_reviewed_state",),
         "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("load_validation_evidence",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("load_eligibility_evidence",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("verify_local_fix_commit",),
+        "_run_git",
     ),
     DynamicImportCall(
         ("resolve_threads",),
@@ -551,9 +601,15 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
 }
 RESOLVER_LOOP_SITES = {
     LoopSite("for", ("_graphql",), "variables.items()"),
-    LoopSite("for", ("load_expected_targets",), "threads"),
-    LoopSite("for", ("load_expected_targets",), "thread_ids"),
-    LoopSite("for", ("load_expected_targets",), "thread['comments']"),
+    LoopSite("for", ("load_reviewed_state",), "threads"),
+    LoopSite("for", ("load_reviewed_state",), "thread_ids"),
+    LoopSite("for", ("load_reviewed_state",), "thread['comments']"),
+    LoopSite(
+        "for",
+        ("_validate_manual_gate_evidence",),
+        "enumerate(registered_gates)",
+    ),
+    LoopSite("for", ("load_eligibility_evidence",), "threads"),
     LoopSite(
         "for",
         ("read_target_thread",),
@@ -568,8 +624,23 @@ RESOLVER_LOOP_SITES = {
     LoopSite("for", ("validate_expected_targets",), "target.comments"),
     LoopSite("for", ("resolve_threads",), "thread_ids"),
     LoopSite("for", ("resolve_threads",), "enumerate(thread_ids)"),
-    LoopSite("comprehension", ("load_repository_limits",), "repositories"),
-    LoopSite("comprehension", ("load_expected_targets",), "feedback.values()"),
+    LoopSite("comprehension", ("_load_repository_entry",), "repositories"),
+    LoopSite("comprehension", ("load_reviewed_state",), "feedback.values()"),
+    LoopSite(
+        "comprehension",
+        ("_validate_manual_gate_evidence",),
+        "registered_gates",
+    ),
+    LoopSite(
+        "comprehension",
+        ("_validation_registry_binding",),
+        "focused_validation",
+    ),
+    LoopSite(
+        "comprehension",
+        ("_validation_registry_binding",),
+        "('maximum_api_calls', 'maximum_items')",
+    ),
     LoopSite(
         "comprehension",
         ("validate_expected_targets",),
@@ -579,6 +650,16 @@ RESOLVER_LOOP_SITES = {
         "comprehension",
         ("_run_gh",),
         "arguments[len(GH_GRAPHQL_PREFIX):]",
+    ),
+    LoopSite(
+        "comprehension",
+        ("verify_local_fix_commit",),
+        "trailer_output.rstrip('\\n').split('\\x00')",
+    ),
+    LoopSite(
+        "comprehension",
+        ("load_eligibility_evidence",),
+        "finding_ids",
     ),
     LoopSite("comprehension", ("resolve_threads",), "thread_ids"),
     LoopSite("comprehension", ("validate_request",), "thread_ids"),

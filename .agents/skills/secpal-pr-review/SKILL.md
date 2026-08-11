@@ -19,6 +19,17 @@ findings have already been evaluated, fixed where necessary, validated,
 committed, and pushed, use the central source repository's
 `scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
 request number, expected current head OID, reviewed-state file, and thread IDs.
+Also require the captured reviewed-state digest and successful validation
+evidence in the final attestation for a new verified fix commit. A raw
+validation receipt for an unchanged head is not authenticated by that existing
+commit and cannot authorize resolution. Require the target repository root and
+an eligibility manifest that covers every requested thread exactly with an
+allowed classification/disposition, finding IDs, and evidence digest. Finalize
+the manifest before complete validation and bind its canonical digest into the
+signed validation receipt and final attestation for the fix commit. The command
+rejects a swapped state file, a non-matching local commit,
+and stale, missing, incomplete, unauthenticated, or differently bound evidence
+before any GitHub read.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,
@@ -32,8 +43,12 @@ Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 python3 scripts/secpal-resolve-fixed-threads.py \
   --repo OWNER/REPOSITORY \
   --pr PULL_REQUEST_NUMBER \
+  --repo-root /path/to/OWNER/REPOSITORY \
   --expected-head FULL_40_CHARACTER_HEAD_OID \
   --reviewed-state REVIEWED_STATE.json \
+  --expected-reviewed-state-digest REVIEWED_STATE_SHA256 \
+  --validation-evidence VALIDATION_EVIDENCE.json \
+  --eligibility-evidence ELIGIBILITY_EVIDENCE.json \
   --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
@@ -122,10 +137,13 @@ The following state machine applies only to the full feedback-remediation path.
    integrity, lifecycle, rollout, and avoidable complexity. Complete all source,
    provenance, edge-case, and diff inspection here, and fix material in-scope
    defects before the complete validation.
-5. Stage the finished tree and run the registered unconditional focused commands
-   plus every required local validation exactly once through
-   `attest-validation`, supplying explicit satisfied evidence for every
-   registered manual gate. Preserve its deterministic staged-tree,
+5. Finalize the eligibility manifest for every thread that may be resolved,
+   binding its classifications, dispositions, finding IDs, evidence digests,
+   reviewed head, and reviewed-state digest. Stage the finished tree and run
+   the registered unconditional focused commands plus every required local
+   validation exactly once through `attest-validation`, supplying that manifest
+   and explicit satisfied evidence for every registered manual gate. Preserve
+   its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
    receipt. Do not continue discovery or change the tree after this step begins.
    A failed command produces no receipt and is a terminal security blocker for
@@ -140,14 +158,19 @@ The following state machine applies only to the full feedback-remediation path.
    validation. When remediation changes no tracked source file and every finding
    is safely disposed, prove the local, remote, and PR heads still equal the
    reviewed head and skip the commit and push states; never create an artificial
-   empty commit.
+   empty commit. A receipt created after that existing commit is not
+   authenticated by it and cannot authorize a thread-resolution mutation; stop
+   without resolution when no authenticated fix-commit attestation exists.
 7. For the changed-tree path only, recheck the remote predecessor, push once
    without bypassing local hooks, and verify that local, remote, and PR heads
    equal the signed commit. Do not inspect hosted CI as a consequence of the
    push.
 8. Resolve every eligible fixed thread with
    `scripts/secpal-resolve-fixed-threads.py --apply`, binding the exact
-   repository, PR, current head OID, reviewed-state file, and thread IDs. This
+   repository, PR, repository root, current head OID, reviewed-state file and
+   digest, successful validation evidence for that fix commit, exact
+   per-thread eligibility evidence whose canonical digest is authenticated by
+   the signed receipt, and thread IDs. This
    reads only the named targets, requires their comments to equal the reviewed
    feedback, and does not reclassify or gate on unrelated PR state.
 9. Report the commit, branch, remote synchronization, local validation,

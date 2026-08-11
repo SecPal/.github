@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import subprocess
@@ -35,6 +36,60 @@ class FakeGh:
         if not self.responses:
             raise AssertionError("unexpected gh call")
         return self.responses.pop(0)
+
+
+class FakeGit:
+    def __init__(
+        self,
+        *,
+        expected_head: str,
+        reviewed_head: str,
+        tree: str,
+        receipt_digest: str,
+        repository: str = "SecPal/api",
+        signature_valid: bool = True,
+    ) -> None:
+        self.expected_head = expected_head
+        self.reviewed_head = reviewed_head
+        self.tree = tree
+        self.receipt_digest = receipt_digest
+        self.repository = repository
+        self.signature_valid = signature_valid
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(
+        self,
+        repository_root: Path,
+        arguments: Sequence[str],
+        *,
+        allow_failure: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del repository_root, allow_failure
+        call = tuple(arguments)
+        self.calls.append(call)
+        if call == ("remote", "get-url", "origin"):
+            stdout = f"https://github.com/{self.repository}.git\n"
+        elif call == ("rev-parse", "HEAD"):
+            stdout = f"{self.expected_head}\n"
+        elif call == ("rev-parse", f"{self.expected_head}^{{tree}}"):
+            stdout = f"{self.tree}\n"
+        elif call == ("rev-list", "--parents", "-n", "1", self.expected_head):
+            stdout = f"{self.expected_head} {self.reviewed_head}\n"
+        elif call[0:2] == ("show", "-s"):
+            stdout = f"{self.receipt_digest}\n"
+        elif call == ("cat-file", "commit", self.expected_head):
+            stdout = (
+                f"tree {self.tree}\nparent {self.reviewed_head}\n"
+                "gpgsig -----BEGIN SSH SIGNATURE-----\n signature\n"
+                " -----END SSH SIGNATURE-----\n\nmessage\n"
+            )
+        elif call == ("verify-commit", "--raw", self.expected_head):
+            if not self.signature_valid:
+                return subprocess.CompletedProcess(call, 1, "", "bad signature")
+            stdout = 'Good "git" signature for fixture\n'
+        else:
+            raise AssertionError(f"unexpected git call: {call}")
+        return subprocess.CompletedProcess(call, 0, stdout, "")
 
 
 def resolve_response(thread_id: str) -> dict[str, Any]:
@@ -101,6 +156,7 @@ def expected_thread_state(
     comments: list[tuple[str, str, str | None]] | None = None,
     *,
     resolved: bool = False,
+    outdated: bool = False,
 ) -> Any:
     states = [
         MODULE.ThreadCommentState(
@@ -113,6 +169,7 @@ def expected_thread_state(
     return MODULE.ExpectedThreadState(
         thread_id=thread_id,
         is_resolved=resolved,
+        is_outdated=outdated,
         comments=tuple(sorted(states, key=lambda item: item.comment_id)),
     )
 
@@ -145,6 +202,9 @@ def resolve_threads(
         immutable_thread_ids,
         apply=apply,
         expected_targets=expected_targets,
+        reviewed_state_digest="c" * 64,
+        validation_evidence_digest="d" * 64,
+        eligibility_evidence_digest="e" * 64,
         runner=runner,
     )
 
@@ -197,6 +257,105 @@ def reviewed_state_payload(
         "feedback_digest": MODULE._digest_json(feedback),
         "state_digest": MODULE._digest_json({**identity, "feedback": feedback}),
     }
+
+
+def validation_attestation_payload(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str = "e" * 64,
+) -> dict[str, Any]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    manual_gate_evidence = [
+        {
+            "gate": gate,
+            "satisfied": True,
+            "evidence": f"Verified integration evidence {index}",
+        }
+        for index, gate in enumerate(binding["manual_gates"], start=1)
+    ]
+    receipt_fields = {
+        "schema_version": "1.0",
+        "kind": "VALIDATION_RECEIPT",
+        "repository": reviewed["repository"],
+        "head_sha": reviewed["head_sha"],
+        "validated_tree_sha": "f" * 40,
+        "registry_digest": MODULE._digest_json(binding),
+        "command_set_digest": MODULE._digest_json(binding["validation"]),
+        "successful_result": True,
+        "reviewed_state_digest": reviewed["state_digest"],
+        "reviewed_feedback_digest": reviewed["feedback_digest"],
+        "manual_gate_evidence": manual_gate_evidence,
+        "eligibility_evidence_digest": eligibility_evidence_digest,
+    }
+    fields = {
+        "schema_version": "1.0",
+        "repository": reviewed["repository"],
+        "head_sha": "c" * 40,
+        "registry_digest": MODULE._digest_json(binding),
+        "command_set_digest": MODULE._digest_json(binding["validation"]),
+        "successful_result": True,
+        "reviewed_head_sha": reviewed["head_sha"],
+        "reviewed_state_digest": reviewed["state_digest"],
+        "reviewed_feedback_digest": reviewed["feedback_digest"],
+        "validated_tree_sha": "f" * 40,
+        "validation_receipt_digest": MODULE._digest_json(receipt_fields),
+        "manual_gate_evidence": manual_gate_evidence,
+        "eligibility_evidence_digest": eligibility_evidence_digest,
+    }
+    return {**fields, "attestation_digest": MODULE._digest_json(fields)}
+
+
+def validation_receipt_payload(reviewed: dict[str, Any]) -> dict[str, Any]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    manual_gate_evidence = [
+        {
+            "gate": gate,
+            "satisfied": True,
+            "evidence": f"Verified integration evidence {index}",
+        }
+        for index, gate in enumerate(binding["manual_gates"], start=1)
+    ]
+    fields = {
+        "schema_version": "1.0",
+        "kind": "VALIDATION_RECEIPT",
+        "repository": reviewed["repository"],
+        "head_sha": reviewed["head_sha"],
+        "validated_tree_sha": "f" * 40,
+        "registry_digest": MODULE._digest_json(binding),
+        "command_set_digest": MODULE._digest_json(binding["validation"]),
+        "successful_result": True,
+        "reviewed_state_digest": reviewed["state_digest"],
+        "reviewed_feedback_digest": reviewed["feedback_digest"],
+        "manual_gate_evidence": manual_gate_evidence,
+    }
+    return {**fields, "receipt_digest": MODULE._digest_json(fields)}
+
+
+def eligibility_payload(
+    reviewed: dict[str, Any],
+    thread_ids: Sequence[str],
+) -> dict[str, Any]:
+    fields = {
+        "schema_version": "1.0",
+        "repository": reviewed["repository"],
+        "pull_request_number": reviewed["pull_request_number"],
+        "reviewed_head_sha": reviewed["head_sha"],
+        "reviewed_state_digest": reviewed["state_digest"],
+        "eligible_threads": [
+            {
+                "thread_id": thread_id,
+                "classification": "VALID_ACTIONABLE",
+                "disposition": "CORRECTED_AND_VERIFIED",
+                "finding_ids": [f"finding-{index}"],
+                "evidence_digest": f"{index:x}" * 64,
+            }
+            for index, thread_id in enumerate(thread_ids, start=1)
+        ],
+    }
+    return fields
 
 
 class ResolveFixedThreadsTests(TestCase):
@@ -677,6 +836,37 @@ class ResolveFixedThreadsTests(TestCase):
             ):
                 MODULE.load_repository_limits("SecPal/api")
 
+    def test_registry_contract_keeps_resolution_ci_independent(self) -> None:
+        registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            registry["fixed_thread_resolution"],
+            MODULE.FIXED_THREAD_RESOLUTION_CONTRACT,
+        )
+        self.assertEqual(
+            registry["fixed_thread_resolution"]["allowed_github_operations"],
+            ["READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"],
+        )
+        self.assertIn(
+            "MERGE_READINESS",
+            registry["fixed_thread_resolution"]["prohibited_hosted_reads"],
+        )
+
+    def test_resolver_rejects_registry_without_resolution_contract(self) -> None:
+        registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+        registry.pop("fixed_thread_resolution")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "repositories.json"
+            path.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "REGISTRY_PATH", path),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "fixed-thread resolution registry contract is invalid",
+                ),
+            ):
+                MODULE.load_repository_limits("SecPal/.github")
+
     def test_dry_run_reads_once_and_does_not_mutate(self) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh([target_response(thread_id)])
@@ -735,6 +925,47 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [first, second])
         self.assertEqual(len(fake.calls), 8)
 
+    def test_resolution_succeeds_for_every_hosted_check_condition_without_reading_it(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        for condition in ("PENDING", "FAILED", None, "OMITTED"):
+            with self.subTest(condition=condition):
+                responses = [
+                    target_response(thread_id),
+                    target_response(thread_id),
+                    target_response(thread_id),
+                    resolve_response(thread_id),
+                ]
+                if condition != "OMITTED":
+                    for response in responses[:3]:
+                        response["data"]["node"]["pullRequest"][
+                            "hostedChecks"
+                        ] = condition
+                fake = FakeGh(responses)
+
+                result = resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    [thread_id],
+                    apply=True,
+                    runner=fake,
+                )
+
+                self.assertEqual(result["resolved"], [thread_id])
+                serialized_calls = "\n".join(" ".join(call) for call in fake.calls)
+                for prohibited in (
+                    "checkSuites",
+                    "statusCheckRollup",
+                    "mergeable",
+                    "mergeStateStatus",
+                    "branchProtectionRule",
+                    "codeScanningAlerts",
+                    "workflowRuns",
+                ):
+                    self.assertNotIn(prohibited, serialized_calls)
+
     def test_already_resolved_target_is_idempotent(self) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh(
@@ -789,7 +1020,7 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["failed"][0]["phase"], "recheck")
         self.assertEqual(len(fake.calls), 3)
 
-    def test_cli_requires_reviewed_state(self) -> None:
+    def test_cli_requires_reviewed_state_digest_and_validation_evidence(self) -> None:
         with self.assertRaises(SystemExit):
             MODULE.parse_args(
                 [
@@ -799,10 +1030,36 @@ class ResolveFixedThreadsTests(TestCase):
                     "123",
                     "--expected-head",
                     "a" * 40,
+                    "--reviewed-state",
+                    "reviewed.json",
                     "--thread-id",
                     "PRRT_exampleOne",
                 ]
             )
+
+    def test_callable_requires_validation_binding_before_reading(self) -> None:
+        fake = FakeGh([])
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "validation evidence digest is required",
+        ):
+            MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                ("PRRT_exampleOne",),
+                apply=True,
+                expected_targets={
+                    "PRRT_exampleOne": expected_thread_state(
+                        "PRRT_exampleOne"
+                    ),
+                },
+                reviewed_state_digest="c" * 64,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
 
     def test_callable_requires_reviewed_target_state_before_reading(self) -> None:
         fake = FakeGh([])
@@ -817,6 +1074,9 @@ class ResolveFixedThreadsTests(TestCase):
                 "a" * 40,
                 ("PRRT_exampleOne",),
                 apply=True,
+                reviewed_state_digest="c" * 64,
+                validation_evidence_digest="d" * 64,
+                eligibility_evidence_digest="e" * 64,
                 runner=fake,
             )
 
@@ -832,14 +1092,18 @@ class ResolveFixedThreadsTests(TestCase):
                 encoding="utf-8",
             )
 
-            targets = MODULE.load_expected_targets(
+            reviewed = MODULE.load_reviewed_state(
                 path,
                 "SecPal/api",
                 123,
-                [thread_id],
+                reviewed_state_payload(thread_id, comments)["state_digest"],
+                (thread_id,),
             )
 
-        self.assertEqual(targets[thread_id], expected_thread_state(thread_id, comments))
+        self.assertEqual(
+            reviewed.targets[thread_id],
+            expected_thread_state(thread_id, comments),
+        )
 
     def test_reviewed_state_loader_binds_resolution_state(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -853,19 +1117,21 @@ class ResolveFixedThreadsTests(TestCase):
             path = Path(directory) / "reviewed.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
 
-            targets = MODULE.load_expected_targets(
+            reviewed = MODULE.load_reviewed_state(
                 path,
                 "SecPal/api",
                 123,
-                [thread_id],
+                payload["state_digest"],
+                (thread_id,),
             )
 
         self.assertEqual(
-            targets[thread_id],
+            reviewed.targets[thread_id],
             expected_thread_state(
                 thread_id,
                 [("PRRC_root", "reviewed body", None)],
                 resolved=True,
+                outdated=True,
             ),
         )
 
@@ -893,21 +1159,462 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 1)
 
-    def test_outdated_change_after_reviewed_capture_remains_allowed(self) -> None:
+    def test_outdated_change_after_reviewed_capture_remains_allowed_and_stable(
+        self,
+    ) -> None:
         thread_id = "PRRT_exampleOne"
-        fake = FakeGh([target_response(thread_id, outdated=True)])
+        fake = FakeGh(
+            [
+                target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+                resolve_response(thread_id),
+            ]
+        )
 
         result = resolve_threads(
             "SecPal/api",
             123,
             "a" * 40,
             [thread_id],
-            apply=False,
+            apply=True,
             runner=fake,
         )
 
-        self.assertEqual(result["pending"], [thread_id])
-        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(len(fake.calls), 4)
+
+    def test_reviewed_state_digest_drift_blocks_before_validation_or_github(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "does not match the captured digest",
+            ):
+                MODULE.load_reviewed_state(
+                    path,
+                    "SecPal/api",
+                    123,
+                    "0" * 64,
+                    (thread_id,),
+                )
+
+    def test_validation_attestation_binds_fix_head_and_reviewed_state(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        attestation = validation_attestation_payload(payload)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            path.write_text(json.dumps(attestation), encoding="utf-8")
+
+            digest = MODULE.load_validation_evidence(
+                path,
+                "SecPal/api",
+                "c" * 40,
+                reviewed,
+            )
+
+        self.assertEqual(
+            digest.evidence_digest,
+            attestation["attestation_digest"],
+        )
+
+    def test_attestation_rejects_forged_receipt_and_missing_manual_gates(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        attestation = validation_attestation_payload(payload)
+        for mutation in ("receipt", "eligibility", "gates", "secret"):
+            with self.subTest(mutation=mutation):
+                changed = dict(attestation)
+                if mutation == "receipt":
+                    changed["validation_receipt_digest"] = "0" * 64
+                elif mutation == "eligibility":
+                    changed["eligibility_evidence_digest"] = "0" * 64
+                else:
+                    changed["manual_gate_evidence"] = (
+                        []
+                        if mutation == "gates"
+                        else [
+                            {
+                                **attestation["manual_gate_evidence"][0],
+                                "evidence": "Authorization: Bearer secret",
+                            },
+                            *attestation["manual_gate_evidence"][1:],
+                        ]
+                    )
+                fields = {
+                    key: value
+                    for key, value in changed.items()
+                    if key != "attestation_digest"
+                }
+                changed["attestation_digest"] = MODULE._digest_json(fields)
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "attestation.json"
+                    path.write_text(json.dumps(changed), encoding="utf-8")
+
+                    with self.assertRaisesRegex(
+                        MODULE.ResolutionError,
+                        "validation evidence is invalid or stale",
+                    ):
+                        MODULE.load_validation_evidence(
+                            path,
+                            "SecPal/api",
+                            "c" * 40,
+                            reviewed,
+                        )
+
+    def test_validation_evidence_head_drift_blocks(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        attestation = validation_attestation_payload(payload)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            path.write_text(json.dumps(attestation), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "validation evidence does not match the fix commit",
+            ):
+                MODULE.load_validation_evidence(
+                    path,
+                    "SecPal/api",
+                    "b" * 40,
+                    reviewed,
+                )
+
+    def test_validation_receipt_cannot_authorize_no_change_resolution(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        receipt = validation_receipt_payload(payload)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "receipt.json"
+            path.write_text(json.dumps(receipt), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "authenticated fix-commit attestation",
+            ):
+                MODULE.load_validation_evidence(
+                    path,
+                    "SecPal/api",
+                    "a" * 40,
+                    reviewed,
+                )
+
+    def test_local_commit_binding_rejects_tree_parent_and_trailer_drift(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        attestation = validation_attestation_payload(payload)
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_path = Path(directory) / "attestation.json"
+            evidence_path.write_text(json.dumps(attestation), encoding="utf-8")
+            validation = MODULE.load_validation_evidence(
+                evidence_path,
+                "SecPal/api",
+                "c" * 40,
+                reviewed,
+            )
+            cases = {
+                "tree": {"tree": "0" * 40},
+                "parent": {"reviewed_head": "0" * 40},
+                "trailer": {"receipt_digest": "0" * 64},
+            }
+            for expected_error, changes in cases.items():
+                with self.subTest(expected_error=expected_error):
+                    fake = FakeGit(
+                        expected_head="c" * 40,
+                        reviewed_head=changes.get(
+                            "reviewed_head", reviewed.head_sha
+                        ),
+                        tree=changes.get("tree", attestation["validated_tree_sha"]),
+                        receipt_digest=changes.get(
+                            "receipt_digest",
+                            attestation["validation_receipt_digest"],
+                        ),
+                    )
+                    with self.assertRaisesRegex(
+                        MODULE.ResolutionError,
+                        expected_error,
+                    ):
+                        MODULE.verify_local_fix_commit(
+                            Path(directory),
+                            "SecPal/api",
+                            "c" * 40,
+                            reviewed,
+                            validation,
+                            runner=fake,
+                        )
+
+    def test_local_commit_binding_rejects_wrong_origin_and_invalid_signature(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        attestation = validation_attestation_payload(payload)
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_path = Path(directory) / "attestation.json"
+            evidence_path.write_text(json.dumps(attestation), encoding="utf-8")
+            validation = MODULE.load_validation_evidence(
+                evidence_path,
+                "SecPal/api",
+                "c" * 40,
+                reviewed,
+            )
+            cases = {
+                "origin": {"repository": "SecPal/frontend"},
+                "signature": {"signature_valid": False},
+            }
+            for expected_error, changes in cases.items():
+                with self.subTest(expected_error=expected_error):
+                    fake = FakeGit(
+                        expected_head="c" * 40,
+                        reviewed_head=reviewed.head_sha,
+                        tree=attestation["validated_tree_sha"],
+                        receipt_digest=attestation[
+                            "validation_receipt_digest"
+                        ],
+                        **changes,
+                    )
+                    with self.assertRaisesRegex(
+                        MODULE.ResolutionError,
+                        expected_error,
+                    ):
+                        MODULE.verify_local_fix_commit(
+                            Path(directory),
+                            "SecPal/api",
+                            "c" * 40,
+                            reviewed,
+                            validation,
+                            runner=fake,
+                        )
+
+    def test_local_commit_binding_rejects_an_unknown_evidence_kind(self) -> None:
+        reviewed = mock.Mock(head_sha="a" * 40)
+        validation = MODULE.ValidationEvidence(
+            kind="caller-constructed",
+            evidence_digest="d" * 64,
+            validated_tree_sha="f" * 40,
+            validation_receipt_digest="e" * 64,
+            eligibility_evidence_digest="f" * 64,
+        )
+        fake = mock.Mock()
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "validation evidence binding",
+        ):
+            MODULE.verify_local_fix_commit(
+                Path("."),
+                "SecPal/api",
+                "c" * 40,
+                reviewed,
+                validation,
+                runner=fake,
+            )
+        fake.assert_not_called()
+
+    def test_missing_validation_evidence_blocks_before_github(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        reviewed = mock.Mock(
+            head_sha=payload["head_sha"],
+            state_digest=payload["state_digest"],
+            feedback_digest=payload["feedback_digest"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "validation evidence is unavailable",
+            ):
+                MODULE.load_validation_evidence(
+                    Path(directory) / "missing-attestation.json",
+                    "SecPal/api",
+                    "a" * 40,
+                    reviewed,
+                )
+
+    def test_eligibility_manifest_binds_every_requested_thread(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        payload = reviewed_state_payload(first, [])
+        payload["threads"].append(
+            {
+                "node_id": second,
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [],
+            }
+        )
+        feedback = {
+            key: payload[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        payload["feedback_digest"] = MODULE._digest_json(feedback)
+        identity = {
+            key: payload[key]
+            for key in (
+                "repository",
+                "pull_request_number",
+                "head_sha",
+                "base_ref",
+                "base_sha",
+                "pr_state",
+            )
+        }
+        payload["state_digest"] = MODULE._digest_json(
+            {**identity, "feedback": feedback}
+        )
+        manifest = eligibility_payload(payload, (first, second))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            evidence_digest = MODULE.load_eligibility_evidence(
+                path,
+                "SecPal/api",
+                123,
+                payload["head_sha"],
+                payload["state_digest"],
+                (first, second),
+                authenticated_evidence_digest=MODULE._digest_json(manifest),
+            )
+
+        self.assertEqual(evidence_digest, MODULE._digest_json(manifest))
+
+    def test_ineligible_or_unlisted_thread_blocks_before_github(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(payload, (thread_id,))
+        cases = {
+            "unlisted": [],
+            "unsafe disposition": [
+                {
+                    **manifest["eligible_threads"][0],
+                    "disposition": "UNRESOLVED_VALID_FINDING",
+                }
+            ],
+        }
+        for label, threads in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                changed = {**manifest, "eligible_threads": threads}
+                path = Path(directory) / "eligibility.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "eligibility evidence",
+                ):
+                    MODULE.load_eligibility_evidence(
+                        path,
+                        "SecPal/api",
+                        123,
+                        payload["head_sha"],
+                        payload["state_digest"],
+                        (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(
+                            changed
+                        ),
+                    )
+
+    def test_eligibility_manifest_rejects_rehashed_binding_drift(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(payload, (thread_id,))
+        cases = {
+            "repository": "SecPal/frontend",
+            "pull_request_number": 124,
+            "reviewed_head_sha": "b" * 40,
+            "reviewed_state_digest": "0" * 64,
+        }
+        for field, value in cases.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                changed = {**manifest, field: value}
+                path = Path(directory) / "eligibility.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "eligibility evidence binding",
+                ):
+                    MODULE.load_eligibility_evidence(
+                        path,
+                        "SecPal/api",
+                        123,
+                        payload["head_sha"],
+                        payload["state_digest"],
+                        (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(
+                            changed
+                        ),
+                    )
+
+    def test_eligibility_manifest_rejects_caller_rehashed_decision(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        trusted = eligibility_payload(payload, (thread_id,))
+        changed = copy.deepcopy(trusted)
+        changed["eligible_threads"][0]["finding_ids"] = ["unaddressed-finding"]
+        changed["eligible_threads"][0]["evidence_digest"] = "f" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(changed), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "eligibility evidence is not authenticated",
+            ):
+                MODULE.load_eligibility_evidence(
+                    path,
+                    "SecPal/api",
+                    123,
+                    payload["head_sha"],
+                    payload["state_digest"],
+                    (thread_id,),
+                    authenticated_evidence_digest=MODULE._digest_json(trusted),
+                )
 
     def test_nonfinite_reviewed_state_is_reported_without_traceback(self) -> None:
         for constant in ("NaN", "Infinity", "-Infinity"):
@@ -932,10 +1639,18 @@ class ResolveFixedThreadsTests(TestCase):
                             "SecPal/api",
                             "--pr",
                             "123",
+                            "--repo-root",
+                            ".",
                             "--expected-head",
                             "a" * 40,
                             "--reviewed-state",
                             str(path),
+                            "--expected-reviewed-state-digest",
+                            "c" * 64,
+                            "--validation-evidence",
+                            "attestation.json",
+                            "--eligibility-evidence",
+                            "eligibility.json",
                             "--thread-id",
                             "PRRT_exampleOne",
                         ]
@@ -964,11 +1679,12 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.ResolutionError,
                 "digest is invalid",
             ):
-                MODULE.load_expected_targets(
+                MODULE.load_reviewed_state(
                     path,
                     "SecPal/api",
                     123,
-                    [thread_id],
+                    payload["state_digest"],
+                    (thread_id,),
                 )
 
     def test_head_mismatch_blocks_before_mutation(self) -> None:
@@ -1252,13 +1968,36 @@ class ResolveFixedThreadsTests(TestCase):
             "unattempted": [],
         }
         output = StringIO()
+        reviewed = MODULE.ReviewedState(
+            head_sha="a" * 40,
+            state_digest="c" * 64,
+            feedback_digest="e" * 64,
+            targets={
+                "PRRT_exampleOne": expected_thread_state("PRRT_exampleOne"),
+            },
+        )
         with (
             mock.patch.object(
                 MODULE,
-                "load_expected_targets",
-                return_value={
-                    "PRRT_exampleOne": expected_thread_state("PRRT_exampleOne"),
-                },
+                "load_reviewed_state",
+                return_value=reviewed,
+            ),
+            mock.patch.object(
+                MODULE,
+                "load_validation_evidence",
+                return_value=MODULE.ValidationEvidence(
+                    kind="attestation",
+                    evidence_digest="d" * 64,
+                    validated_tree_sha="f" * 40,
+                    validation_receipt_digest="b" * 64,
+                    eligibility_evidence_digest="e" * 64,
+                ),
+            ),
+            mock.patch.object(MODULE, "verify_local_fix_commit") as verify_commit,
+            mock.patch.object(
+                MODULE,
+                "load_eligibility_evidence",
+                return_value="e" * 64,
             ),
             mock.patch.object(MODULE, "resolve_threads", return_value=report),
             redirect_stdout(output),
@@ -1269,10 +2008,18 @@ class ResolveFixedThreadsTests(TestCase):
                     "SecPal/api",
                     "--pr",
                     "123",
+                    "--repo-root",
+                    ".",
                     "--expected-head",
                     "a" * 40,
                     "--reviewed-state",
                     "reviewed.json",
+                    "--expected-reviewed-state-digest",
+                    "c" * 64,
+                    "--validation-evidence",
+                    "attestation.json",
+                    "--eligibility-evidence",
+                    "eligibility.json",
                     "--thread-id",
                     "PRRT_exampleOne",
                 ]
@@ -1280,6 +2027,7 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(returncode, 1)
         self.assertEqual(json.loads(output.getvalue()), report)
+        verify_commit.assert_called_once()
 
     def test_run_gh_uses_trusted_absolute_executable_and_environment(self) -> None:
         completed = subprocess.CompletedProcess(

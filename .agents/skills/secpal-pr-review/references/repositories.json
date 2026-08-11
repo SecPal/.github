@@ -1,6 +1,38 @@
 {
   "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
   "schema_version": "1.0",
+  "fixed_thread_resolution": {
+    "resolver": "scripts/secpal-resolve-fixed-threads.py",
+    "required_bindings": [
+      "repository",
+      "pull_request_number",
+      "repository_root",
+      "expected_head",
+      "reviewed_state_digest",
+      "validation_evidence",
+      "eligibility_evidence",
+      "thread_ids"
+    ],
+    "allowed_github_operations": ["READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"],
+    "prohibited_hosted_reads": [
+      "GITHUB_ACTIONS",
+      "CODEQL",
+      "CHECK_SUITES",
+      "COMMIT_STATUSES",
+      "REQUIRED_CHECKS",
+      "MERGEABILITY",
+      "BRANCH_PROTECTION",
+      "MERGE_READINESS"
+    ],
+    "prohibited_mutations": [
+      "REVIEW_REQUEST",
+      "READY_TRANSITION",
+      "MERGE",
+      "LABEL",
+      "GENERIC_COMMENT"
+    ],
+    "readiness_authorization": "SEPARATE_EXPLICIT_WORKFLOW"
+  },
   "repositories": [
     {
       "repository": "SecPal/.github",

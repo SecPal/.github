@@ -9,6 +9,28 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-11 - Decouple Fixed Review-Thread Resolution
+
+**Changed:**
+
+- bound the dedicated fixed-thread resolver to the caller-captured reviewed-state
+  digest, exact locally verified signed commit, successful validation evidence,
+  and explicit eligibility evidence for every target thread
+- made its target-thread-only GitHub surface explicit in the canonical
+  repository registry while keeping hosted CI, CodeQL, mergeability, branch
+  protection, readiness, polling, and unrelated mutations outside the path
+- rejected unauthenticated raw validation receipts for unchanged heads while
+  retaining schema-1.0 custom-registry compatibility; the canonical registry
+  remains contract-bound
+- authenticated the complete per-thread eligibility manifest through the
+  signed validation receipt and final attestation so callers cannot synthesize
+  or reclassify resolution evidence after validation
+- added regressions for pending, failed, unavailable, and omitted hosted checks,
+  zero readiness API calls, head drift, reviewed-state drift, and missing
+  validation evidence
+
+---
+
 ## 2026-08-10 - Restore Dependabot Update Classification
 
 **Changed:**
