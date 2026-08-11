@@ -71,8 +71,16 @@ evaluated, fixed where necessary, validated, committed, and pushed uses
 state machine.
 
 This path requires the exact repository, pull request number, expected current
-head OID, reviewed-state file, and thread IDs. It verifies the reviewed-state
-digests, reads every named target completely, and requires its comment
+head OID, reviewed-state file, caller-captured reviewed-state digest, and
+successful validation evidence bound to the verified fix commit, local
+repository root, and per-thread eligibility evidence, plus thread IDs. It
+verifies the registered origin, local head, validated tree, accepted local
+commit signature, and, for a new fix commit, the sole parent and validation
+receipt trailer before any GitHub read. It also requires the eligibility
+manifest to cover the requested threads exactly and bind their allowed
+classifications/dispositions, finding IDs, evidence digests, and fix commit.
+It then reads every named target
+completely, and requires its comment
 identities, body digests, reply relationships, and resolution state to match the
 feedback that was actually classified. It then verifies PR membership and
 records current resolved/outdated state. Immediately before each write or
@@ -94,8 +102,9 @@ without retry, emits one structured report naming resolved, failed, and
 unattempted targets, and exits nonzero.
 
 The resolution-only path performs no feedback classification, validation,
-attestation, commit, push, Required Check read, readiness audit, review request,
-or merge operation. It is also the default post-push resolution step after
+attestation creation, commit, push, Required Check read, readiness audit, review
+request, or merge operation. It consumes already-produced validation evidence
+only. It is also the default post-push resolution step after
 feedback remediation. It is not selected for a separately requested readiness
 audit, forensic evidence capture, or merge evaluation.
 
@@ -178,12 +187,15 @@ hooks, or uses administrator authority. After the push it verifies only local,
 remote, and PR head equality.
 
 `RESOLVE_FIXED_THREADS` invokes `scripts/secpal-resolve-fixed-threads.py` for
-the exact eligible thread IDs, current head, and reviewed-state file. Resolution
-depends only on the open PR, exact head, target membership, equality with the
+the exact eligible thread IDs, current head, reviewed-state file and captured
+digest, successful validation evidence bound to the verified fix commit, local
+commit proof, and exact per-thread eligibility evidence. Resolution depends
+only on those inputs, the open PR, exact head, target
+membership, equality with the
 reviewed target-comment identities and digests, two equal complete current
 target projections, and exact mutation response. It does not read or depend on
 hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
-reactions, unrelated feedback, validation attestations, or worktree state.
+reactions, unrelated feedback, or worktree cleanliness.
 
 `STOP` reports the commit, branch, remote synchronization, local validation,
 worktree state, PR identity, and resolution results. The workflow never merges;

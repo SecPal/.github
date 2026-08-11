@@ -222,7 +222,8 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
-entry = module.select_repository(module.load_registry(), "SecPal/.github")
+registry = module.load_registry()
+entry = module.select_repository(registry, "SecPal/.github")
 entry["focused_validation"] = []
 entry["required_local_validation"] = [
     {
@@ -239,7 +240,11 @@ entry["required_local_validation"] = [
 entry["manual_gates"] = []
 (workspace / "validation-registry.json").write_text(
     json.dumps(
-        {"schema_version": "1.0", "repositories": [entry]},
+        {
+            "schema_version": "1.0",
+            "fixed_thread_resolution": registry["fixed_thread_resolution"],
+            "repositories": [entry],
+        },
         sort_keys=True,
         separators=(",", ":"),
     )

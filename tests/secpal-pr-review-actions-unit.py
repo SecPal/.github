@@ -3790,8 +3790,18 @@ class RegistryTests(TestCase):
                 self.assertLessEqual(entry["maximum_reactions"], 50)
 
     def test_registry_cases_61_to_69(self) -> None:
-        registry = {"schema_version": "1.0", "repositories": [registry_entry(repo) for repo in self.repositories]}
+        registry = {
+            "schema_version": "1.0",
+            "fixed_thread_resolution": copy.deepcopy(
+                actions.load_registry()["fixed_thread_resolution"]
+            ),
+            "repositories": [registry_entry(repo) for repo in self.repositories],
+        }
         self.assertEqual([item["repository"] for item in actions.validate_registry(registry)["repositories"]], self.repositories)
+        missing_resolution_contract = copy.deepcopy(registry)
+        missing_resolution_contract.pop("fixed_thread_resolution")
+        with self.assertRaises(actions.RegistryError):
+            actions.validate_registry(missing_resolution_contract)
         duplicate = copy.deepcopy(registry)
         duplicate["repositories"].append(copy.deepcopy(duplicate["repositories"][0]))
         with self.assertRaisesRegex(actions.RegistryError, "duplicate"):
@@ -4258,7 +4268,13 @@ class RegistryTests(TestCase):
         )
 
     def test_required_validation_rejects_focused_only_execution(self) -> None:
-        registry = {"schema_version": "1.0", "repositories": [frontend_registry_entry()]}
+        registry = {
+            "schema_version": "1.0",
+            "fixed_thread_resolution": copy.deepcopy(
+                actions.load_registry()["fixed_thread_resolution"]
+            ),
+            "repositories": [frontend_registry_entry()],
+        }
         registry["repositories"][0]["required_local_validation"][0][
             "execution_policy"
         ] = "focused-only"

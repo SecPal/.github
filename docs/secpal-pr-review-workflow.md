@@ -206,8 +206,12 @@ python3 scripts/secpal-pr-review-actions.py attest-validation \
 python3 scripts/secpal-resolve-fixed-threads.py \
   --repo SecPal/api \
   --pr 123 \
+  --repo-root /path/to/SecPal/api \
   --expected-head HEAD \
   --reviewed-state SESSION/reviewed-feedback.json \
+  --expected-reviewed-state-digest REVIEWED_STATE_SHA256 \
+  --validation-evidence SESSION/validation-attestation.json \
+  --eligibility-evidence SESSION/thread-eligibility.json \
   --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
@@ -237,10 +241,13 @@ When remediation changes no tracked source file and every finding is safely
 disposed, verify unchanged local, remote, and PR heads and skip the commit and
 push; never create an artificial empty commit.
 
-The simple resolver verifies the exact PR head and target identity without
-reading checks, rules, reactions, unrelated feedback, mergeability, or branch
-protection. It first reads each target completely and requires its comments to
-match the reviewed-state identities and digests. Immediately before each
+The simple resolver first verifies the caller-captured reviewed-state digest,
+successful validation attestation, actual local signed commit, and exact
+per-thread eligibility manifest bound to the fix commit. It then verifies the
+exact PR head and target identity without reading checks,
+rules, reactions, unrelated feedback, mergeability, or branch protection. It
+reads each target completely and requires its comments to match the
+reviewed-state identities and digests. Immediately before each
 mutation or successful already-resolved report, it requires two more equal
 complete target projections; every mutation response must confirm the exact
 resolved thread.

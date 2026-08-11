@@ -5,10 +5,11 @@
   "title": "SecPal PR review workflow repository registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "repositories"],
+  "required": ["schema_version", "fixed_thread_resolution", "repositories"],
   "properties": {
     "$comment": { "type": "string" },
     "schema_version": { "const": "1.0" },
+    "fixed_thread_resolution": { "$ref": "#/$defs/fixed_thread_resolution" },
     "repositories": {
       "type": "array",
       "minItems": 1,
@@ -16,6 +17,52 @@
     }
   },
   "$defs": {
+    "fixed_thread_resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolver",
+        "required_bindings",
+        "allowed_github_operations",
+        "prohibited_hosted_reads",
+        "prohibited_mutations",
+        "readiness_authorization"
+      ],
+      "properties": {
+        "resolver": { "const": "scripts/secpal-resolve-fixed-threads.py" },
+        "required_bindings": {
+          "const": [
+            "repository",
+            "pull_request_number",
+            "repository_root",
+            "expected_head",
+            "reviewed_state_digest",
+            "validation_evidence",
+            "eligibility_evidence",
+            "thread_ids"
+          ]
+        },
+        "allowed_github_operations": {
+          "const": ["READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"]
+        },
+        "prohibited_hosted_reads": {
+          "const": [
+            "GITHUB_ACTIONS",
+            "CODEQL",
+            "CHECK_SUITES",
+            "COMMIT_STATUSES",
+            "REQUIRED_CHECKS",
+            "MERGEABILITY",
+            "BRANCH_PROTECTION",
+            "MERGE_READINESS"
+          ]
+        },
+        "prohibited_mutations": {
+          "const": ["REVIEW_REQUEST", "READY_TRANSITION", "MERGE", "LABEL", "GENERIC_COMMENT"]
+        },
+        "readiness_authorization": { "const": "SEPARATE_EXPLICIT_WORKFLOW" }
+      }
+    },
     "repository": {
       "type": "object",
       "additionalProperties": false,

@@ -19,6 +19,14 @@ findings have already been evaluated, fixed where necessary, validated,
 committed, and pushed, use the central source repository's
 `scripts/secpal-resolve-fixed-threads.py`. Require the exact repository, pull
 request number, expected current head OID, reviewed-state file, and thread IDs.
+Also require the captured reviewed-state digest and successful validation
+evidence: the head-bound receipt for an unchanged validated head or the final
+attestation for a new verified fix commit. Require the target repository root
+and an eligibility manifest that covers every requested thread exactly with an
+allowed classification/disposition, finding IDs, evidence digest, and the fix
+commit. The command rejects a swapped state file, a non-matching local commit,
+and stale, missing, incomplete, or differently bound evidence before any GitHub
+read.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,
@@ -32,8 +40,12 @@ Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 python3 scripts/secpal-resolve-fixed-threads.py \
   --repo OWNER/REPOSITORY \
   --pr PULL_REQUEST_NUMBER \
+  --repo-root /path/to/OWNER/REPOSITORY \
   --expected-head FULL_40_CHARACTER_HEAD_OID \
   --reviewed-state REVIEWED_STATE.json \
+  --expected-reviewed-state-digest REVIEWED_STATE_SHA256 \
+  --validation-evidence VALIDATION_EVIDENCE.json \
+  --eligibility-evidence ELIGIBILITY_EVIDENCE.json \
   --thread-id REVIEW_THREAD_NODE_ID \
   --apply
 ```
@@ -147,7 +159,9 @@ The following state machine applies only to the full feedback-remediation path.
    push.
 8. Resolve every eligible fixed thread with
    `scripts/secpal-resolve-fixed-threads.py --apply`, binding the exact
-   repository, PR, current head OID, reviewed-state file, and thread IDs. This
+   repository, PR, repository root, current head OID, reviewed-state file and
+   digest, successful validation evidence for that fix commit, exact
+   per-thread eligibility evidence, and thread IDs. This
    reads only the named targets, requires their comments to equal the reviewed
    feedback, and does not reclassify or gate on unrelated PR state.
 9. Report the commit, branch, remote synchronization, local validation,
