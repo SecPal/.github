@@ -250,7 +250,14 @@ and focused instruction overlays across all repositories.
 2. **REUSE Compliance**
 
    - Validates `AGENTS.md` REUSE metadata
-   - Accepts allowed inline SPDX metadata or a valid `.license` sidecar
+   - Requires the complete repository-policy expression in inline SPDX
+     metadata or a valid `.license` sidecar
+   - Requires plain `AGPL-3.0-or-later` for managed runtime and review
+     baselines, except the API repository's intentional `CC0-1.0` baseline
+   - Preserves exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`,
+     or `MIT` expressions on focused overlays
+   - Rejects the obsolete expression
+     `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`
 
 3. **Markdown Linting**
 

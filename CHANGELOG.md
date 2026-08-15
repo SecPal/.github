@@ -9,6 +9,26 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-15 - Establish AI Licensing And Branding Invariants
+
+**Changed:**
+
+- made the plain-AGPL target, REUSE copyright and year handling, intentional
+  alternate-license preservation, third-party metadata boundary, and official
+  SecPal product-branding requirements explicit in the runtime and review
+  instructions
+- changed AI-instruction license validation to require plain AGPL for managed
+  runtime and review baselines, retain the API repository's intentional CC0
+  baseline and deliberate focused-overlay licenses, and reject both incomplete
+  matches and the obsolete SecPal attribution expression without disturbing
+  unrelated custom-license metadata
+- aligned the Copilot profile's authoritative `.license` sidecar with its
+  visible plain-AGPL metadata and the `SecPal Contributors` year convention
+- added Polyscope rollout regressions proving invalid attribution metadata
+  fails before side effects and valid repository instructions remain unchanged
+
+---
+
 ## 2026-08-11 - Decouple Fixed Review-Thread Resolution
 
 **Changed:**

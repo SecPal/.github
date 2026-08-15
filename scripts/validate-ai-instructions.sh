@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
@@ -43,6 +43,11 @@ detect_repo_type() {
     fi
 
     if [ "$(basename "$PWD")" = "GuardGuide" ]; then
+        printf '%s\n' guardguide
+    elif { [ -f composer.json ] \
+            && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' composer.json; } \
+        || { [ -f package.json ] \
+            && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' package.json; }; then
         printf '%s\n' guardguide
     elif [ -f artisan ] || [ -f composer.json ]; then
         printf '%s\n' api
@@ -140,10 +145,78 @@ PY
     fi
 }
 
+instruction_license_pattern() {
+    local file="$1"
+    local repo_type="$2"
+
+    case "$file" in
+        .github/instructions/*.instructions.md)
+            printf '%s\n' 'AGPL-3\.0-or-later|Apache-2\.0|CC0-1\.0|MIT'
+            ;;
+        *)
+            if [ "$repo_type" = "api" ]; then
+                printf '%s\n' 'CC0-1\.0'
+            else
+                printf '%s\n' 'AGPL-3\.0-or-later'
+            fi
+            ;;
+    esac
+}
+
+instruction_license_description() {
+    local file="$1"
+    local repo_type="$2"
+
+    case "$file" in
+        .github/instructions/*.instructions.md)
+            printf '%s\n' 'AGPL-3.0-or-later, Apache-2.0, CC0-1.0, or MIT'
+            ;;
+        *)
+            if [ "$repo_type" = "api" ]; then
+                printf '%s\n' 'CC0-1.0'
+            else
+                printf '%s\n' 'AGPL-3.0-or-later'
+            fi
+            ;;
+    esac
+}
+
+has_complete_allowed_instruction_license() {
+    local file="$1"
+    local line_limit="$2"
+    local expression_pattern="$3"
+    local bare_pattern
+    local html_pattern
+    local metadata
+    local identifier_count
+    local allowed_count
+
+    bare_pattern='^[[:space:]]*(#[[:space:]]*)?SPDX-License''-Identifier:[[:space:]]+('"$expression_pattern"')[[:space:]]*$'
+    html_pattern='^[[:space:]]*<!--[[:space:]]*SPDX-License''-Identifier:[[:space:]]+('"$expression_pattern"')[[:space:]]*-->[[:space:]]*$'
+
+    if [ "$line_limit" = "all" ]; then
+        metadata="$(<"$file")"
+    else
+        metadata="$(head -n "$line_limit" "$file")"
+    fi
+
+    identifier_count="$(printf '%s\n' "$metadata" \
+        | grep -cF 'SPDX-License''-Identifier:' || true)"
+    allowed_count="$(printf '%s\n' "$metadata" \
+        | grep -cE "($bare_pattern)|($html_pattern)" || true)"
+
+    [ "$identifier_count" -eq 1 ] && [ "$allowed_count" -eq 1 ]
+}
+
 test_reuse_license() {
     local file="$1"
     local label="$2"
-    local license_pattern='SPDX-License''-Identifier:[[:space:]]+(CC0-1.0|AGPL-3.0-or-later)'
+    local repo_type="$3"
+    local expression_pattern
+    local expected
+
+    expression_pattern="$(instruction_license_pattern "$file" "$repo_type")"
+    expected="$(instruction_license_description "$file" "$repo_type")"
 
     if [ ! -f "$file" ]; then
         print_result "$label has REUSE license" "FAIL" "Missing $file"
@@ -151,20 +224,21 @@ test_reuse_license() {
     fi
 
     if [ -f "$file.license" ]; then
-        if grep -qE "$license_pattern" "$file.license"; then
+        if has_complete_allowed_instruction_license \
+            "$file.license" all "$expression_pattern"; then
             print_result "$label has REUSE license" "PASS"
         else
             print_result "$label has REUSE license" "FAIL" \
-                "Sidecar .license exists but does not declare an allowed license"
+                "$label must declare exactly one complete permitted SPDX expression: $expected"
         fi
         return
     fi
 
-    if head -n 10 "$file" | grep -qE "$license_pattern"; then
+    if has_complete_allowed_instruction_license "$file" 10 "$expression_pattern"; then
         print_result "$label has REUSE license" "PASS"
     else
         print_result "$label has REUSE license" "FAIL" \
-            "Missing inline SPDX header or .license sidecar"
+            "$label must declare exactly one complete permitted SPDX expression: $expected"
     fi
 }
 
@@ -307,6 +381,7 @@ test_instruction_size_limit() {
 }
 
 main() {
+    local file
     local repo_type
 
     printf '%s\n' '========================================='
@@ -321,9 +396,12 @@ main() {
     test_readable_utf8_markdown AGENTS.md AGENTS.md
     test_readable_utf8_markdown \
         .github/copilot-instructions.md copilot-instructions.md
-    test_reuse_license AGENTS.md AGENTS.md
+    test_reuse_license AGENTS.md AGENTS.md "$repo_type"
     test_reuse_license \
-        .github/copilot-instructions.md copilot-instructions.md
+        .github/copilot-instructions.md copilot-instructions.md "$repo_type"
+    while IFS= read -r -d '' file; do
+        test_reuse_license "$file" "$file" "$repo_type"
+    done < <(find .github/instructions -type f -name '*.instructions.md' -print0 2>/dev/null)
     test_instruction_frontmatter
     test_markdown_lint
     test_instruction_size_limit AGENTS.md AGENTS.md "runtime discovery"

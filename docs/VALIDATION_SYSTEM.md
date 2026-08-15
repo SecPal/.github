@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025-2026 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -44,7 +44,12 @@ The validator checks:
 
 - required `AGENTS.md` and `.github/copilot-instructions.md` files;
 - non-empty, readable UTF-8 Markdown with a top-level heading;
-- inline SPDX metadata or an allowed REUSE `.license` sidecar;
+- one complete policy-appropriate SPDX expression in inline metadata or a
+  REUSE `.license` sidecar for every runtime, review, and focused instruction
+  file: plain `AGPL-3.0-or-later` for managed runtime and review baselines,
+  except the intentionally `CC0-1.0` API baseline, with exact deliberate
+  `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT` expressions accepted
+  for focused overlays;
 - Markdown structure for runtime, review, and focused instruction files;
 - syntactically valid YAML overlay frontmatter with opening and closing
   delimiters plus non-empty string `name` and `applyTo` values;
@@ -97,6 +102,14 @@ Copilot review profile fails through the same canonical contract.
 `tests/validate-ai-instructions.sh` uses temporary repositories to prove that:
 
 - different valid runtime and review content passes;
+- managed runtime and review baselines require plain `AGPL-3.0-or-later`, the
+  API baseline requires its intentional `CC0-1.0`, and focused overlays retain
+  exact `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, and `MIT` support;
+- the obsolete expression
+  `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`, duplicate identifiers,
+  and a wrong repository-baseline license fail;
+- API, GuardGuide, and `guardguide.de` fixtures exercise automatic repository
+  detection so GuardGuide remains AGPL and is not mistaken for the CC0 API;
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;
@@ -105,7 +118,8 @@ Copilot review profile fails through the same canonical contract.
 
 `tests/polyscope-rollout.sh` separately proves that rollout applies the
 canonical contract to managed roots and candidate worktrees before dependent
-writes, preserves an independent Copilot profile, and continues to manage the
+writes, rejects the obsolete SecPal attribution expression, preserves every
+repository instruction artifact byte-for-byte, and continues to manage the
 direct global Codex `AGENTS.md` symlink without introducing copied runtime
 sources or instruction modes.
 
@@ -253,9 +267,12 @@ instruction file into another merely to satisfy validation.
 
 ### REUSE failure
 
-Add an allowed inline SPDX header near the start of the file or a valid
-companion `.license` sidecar. The accepted instruction licenses are `CC0-1.0`
-and `AGPL-3.0-or-later`.
+Add one policy-appropriate inline SPDX header near the start of the file or a
+valid companion `.license` sidecar. Managed `AGENTS.md` and Copilot profiles
+require exactly `AGPL-3.0-or-later`, except for the API repository's intentional
+`CC0-1.0` baseline. Focused overlays may retain an intentional exact
+`AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT` expression. Longer
+expressions that merely begin with one of those identifiers are rejected.
 
 ### Markdown failure
 
