@@ -1901,6 +1901,22 @@ resolved_fixture = module.validate_instruction_root(fixture, validated_roots, "f
 assert resolved_fixture == fixture.resolve()
 assert validated_roots == {(fixture.resolve(), "frontend")}
 
+misleading_guardguide_fixture = workspace / "GuardGuide instruction root"
+shutil.copytree(fixture, misleading_guardguide_fixture)
+(misleading_guardguide_fixture / "composer.json").write_text(
+    '{"name":"secpal/api"}\n'
+)
+resolved_guardguide_fixture = module.validate_instruction_root(
+    misleading_guardguide_fixture,
+    validated_roots,
+    "GuardGuide",
+)
+assert resolved_guardguide_fixture == misleading_guardguide_fixture.resolve()
+assert validated_roots == {
+    (fixture.resolve(), "frontend"),
+    (misleading_guardguide_fixture.resolve(), "GuardGuide"),
+}
+
 original_validator = module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR
 missing_validator = workspace / "missing-validate-ai-instructions.sh"
 module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = missing_validator
