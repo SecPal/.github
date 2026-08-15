@@ -3194,8 +3194,14 @@ def resolve_registered_instruction_repository_name(
     for registered_path, display_name in rows:
         if not isinstance(registered_path, str) or not registered_path.strip():
             continue
+        registered_candidate = pathlib.Path(registered_path)
+        if not registered_candidate.is_absolute():
+            raise CanonicalInstructionValidationError(
+                f"canonical AI-instruction validation failed for {resolved_worktree}: "
+                "active Polyscope registration must use an absolute path"
+            )
         try:
-            registered_worktree = pathlib.Path(registered_path).resolve()
+            registered_worktree = registered_candidate.resolve()
         except (OSError, ValueError):
             continue
         if registered_worktree == resolved_worktree:

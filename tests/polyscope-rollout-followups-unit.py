@@ -10,6 +10,7 @@ import importlib.util
 import inspect
 import io
 import json
+import sqlite3
 import subprocess
 import tempfile
 import tokenize
@@ -35,6 +36,45 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_registered_instruction_identity_rejects_relative_worktree_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worktree = root / "candidate"
+            worktree.mkdir()
+            db_path = root / "polyscope.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.executescript(
+                    """
+                    create table repositories (
+                        id text primary key,
+                        name text not null,
+                        path text not null
+                    );
+                    create table worktrees (
+                        id text primary key,
+                        repo_id text not null,
+                        path text not null,
+                        status text default 'active' not null
+                    );
+                    insert into repositories (id, name, path)
+                    values ('api-repo', 'SecPal/api', '/source/api');
+                    insert into worktrees (id, repo_id, path, status)
+                    values ('candidate', 'api-repo', 'candidate', 'active');
+                    """
+                )
+
+            with (
+                contextlib.chdir(root),
+                self.assertRaisesRegex(
+                    rollout.CanonicalInstructionValidationError,
+                    "absolute path",
+                ),
+            ):
+                rollout.resolve_registered_instruction_repository_name(
+                    worktree,
+                    db_path,
+                )
+
     def test_user_server_startup_uses_lightweight_nginx_convergence(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
         ready_command = next(
