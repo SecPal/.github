@@ -7403,6 +7403,7 @@ grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
 grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-server.service"
+grep -q "Environment=SECPAL_WORKSPACE_ROOT=$workspace_root" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
 grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock" "$fake_unit_dir/polyscope-server.service"
 grep -q -- '--refresh-nginx --skip-if-provision-locked' "$fake_unit_dir/polyscope-server.service"

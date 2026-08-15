@@ -145,12 +145,20 @@ written. A missing validator or missing Markdown tooling blocks rollout.
 
 Generated Polyscope workspace setup sequences contain exactly one strict shell
 entry. That entry invokes the validation-only
-`--validate-instruction-worktree` mode, then runs the complete original native
-setup as fail-fast command groups. Polyscope may already have created and
-registered the candidate at that point, but canonical validation must succeed
-before npm, Composer, `.env`, database, migration, seed, or any other native
-setup command runs. A multiline command cannot escape the guard, and failure of
-any native command stops every later setup operation.
+`--validate-instruction-worktree` mode with an explicit repository name, then
+runs the complete original native setup as fail-fast command groups. Cached
+setup definitions from before repository-name propagation remain valid during
+rollout convergence: when that argument is absent, the validator resolves the
+trusted identity from the candidate's active Polyscope database registration.
+For nondefault installations, the user-service installer exports its configured
+managed workspace root to cached setup processes so this lookup does not fall
+back to `$HOME/code/SecPal`.
+Missing, ambiguous, or unmanaged registrations fail closed; ambient identity
+and mutable worktree manifests cannot select repository policy. Polyscope may
+already have created and registered the candidate at that point, but canonical
+validation must succeed before npm, Composer, `.env`, database, migration,
+seed, or any other native setup command runs. A multiline command cannot escape
+the guard, and failure of any native command stops every later setup operation.
 
 The external worktree provisioner derives its allowlist only from active
 `worktrees` registrations in the current Polyscope SQLite database. Registered

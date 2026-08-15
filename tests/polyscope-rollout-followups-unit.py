@@ -10,7 +10,10 @@ import importlib.util
 import inspect
 import io
 import json
+import os
+import sqlite3
 import subprocess
+import sys
 import tempfile
 import tokenize
 from pathlib import Path
@@ -35,6 +38,148 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_cached_validation_uses_installed_workspace_root(self) -> None:
+        configured_root = Path("/srv/secpal-workspace")
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"SECPAL_WORKSPACE_ROOT": str(configured_root)},
+            ),
+            mock.patch.object(sys, "argv", ["polyscope-rollout.py"]),
+        ):
+            args = rollout.parse_args()
+
+        self.assertEqual(args.workspace_root, configured_root)
+
+    def test_installer_exports_workspace_root_to_cached_setups(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+
+        self.assertIn(
+            "Environment=SECPAL_WORKSPACE_ROOT=$WORKSPACE_ROOT",
+            installer,
+        )
+
+    def test_registered_instruction_identity_rejects_unmanaged_repository_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worktree = root / "candidate"
+            worktree.mkdir()
+            db_path = root / "polyscope.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.executescript(
+                    """
+                    create table repositories (
+                        id text primary key,
+                        name text not null,
+                        path text not null
+                    );
+                    create table worktrees (
+                        id text primary key,
+                        repo_id text not null,
+                        path text not null,
+                        status text default 'active' not null
+                    );
+                    """
+                )
+                connection.executemany(
+                    "insert into repositories (id, name, path) values (?, ?, ?)",
+                    (
+                        (
+                            "managed",
+                            "SecPal/api",
+                            str(root / "managed" / "api"),
+                        ),
+                        (
+                            "unmanaged",
+                            "SecPal/api",
+                            str(root / "unmanaged-api"),
+                        ),
+                    ),
+                )
+                connection.execute(
+                    "insert into worktrees (id, repo_id, path, status) "
+                    "values (?, ?, ?, 'active')",
+                    ("candidate", "unmanaged", str(worktree)),
+                )
+
+            args = SimpleNamespace(
+                validate_instruction_worktree=worktree,
+                instruction_repository_name=None,
+                db_path=db_path,
+                workspace_root=root / "managed",
+            )
+            with (
+                mock.patch.object(
+                    rollout,
+                    "validate_instruction_root",
+                    return_value=worktree,
+                ),
+                self.assertRaisesRegex(
+                    rollout.CanonicalInstructionValidationError,
+                    "managed repository source path",
+                ),
+            ):
+                rollout.dispatch_validation_only_direct_mode(args)
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "update worktrees set repo_id = ? where id = ?",
+                    ("managed", "candidate"),
+                )
+            with (
+                mock.patch.object(
+                    rollout,
+                    "validate_instruction_root",
+                    return_value=worktree,
+                ) as validate,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    rollout.dispatch_validation_only_direct_mode(args),
+                    0,
+                )
+            validate.assert_called_once_with(worktree, set(), "api")
+
+    def test_registered_instruction_identity_rejects_relative_worktree_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worktree = root / "candidate"
+            worktree.mkdir()
+            db_path = root / "polyscope.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.executescript(
+                    """
+                    create table repositories (
+                        id text primary key,
+                        name text not null,
+                        path text not null
+                    );
+                    create table worktrees (
+                        id text primary key,
+                        repo_id text not null,
+                        path text not null,
+                        status text default 'active' not null
+                    );
+                    insert into repositories (id, name, path)
+                    values ('api-repo', 'SecPal/api', '/source/api');
+                    insert into worktrees (id, repo_id, path, status)
+                    values ('candidate', 'api-repo', 'candidate', 'active');
+                    """
+                )
+
+            with (
+                contextlib.chdir(root),
+                self.assertRaisesRegex(
+                    rollout.CanonicalInstructionValidationError,
+                    "absolute path",
+                ),
+            ):
+                rollout.resolve_registered_instruction_repository_name(
+                    worktree,
+                    db_path,
+                    root,
+                )
+
     def test_user_server_startup_uses_lightweight_nginx_convergence(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
         ready_command = next(
