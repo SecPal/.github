@@ -99,6 +99,8 @@ before recursion. Without a path argument, canonical callers may supply trusted
 identity through `GITHUB_REPOSITORY` or `SECPAL_REPOSITORY_NAME`. The legacy
 `REPO_TYPE` hint remains available for local compatibility, but cannot select
 the API policy unless the repository has the exact `secpal/api` manifest.
+Trusted `SecPal/deployment` identity is reported explicitly and uses the same
+strict plain-AGPL baseline as other migrated managed repositories.
 
 The compatibility entry point `validate-copilot-instructions.sh` always
 delegates to this canonical validator, including for repository-path arguments.
@@ -116,6 +118,9 @@ Copilot review profile fails through the same canonical contract.
 - the obsolete expression
   `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`, duplicate identifiers,
   and a wrong repository-baseline license fail;
+- the migrated `SecPal/deployment` identity accepts plain-AGPL runtime and
+  review instructions, is reported explicitly, and rejects the obsolete
+  attribution expression;
 - API, frontend-with-Composer, GuardGuide, and `guardguide.de` fixtures exercise
   trusted repository identity, path-local fallback detection, and legacy type
   hints so ambient identity and misleading manifest values cannot select

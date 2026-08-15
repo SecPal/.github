@@ -78,6 +78,10 @@ detect_repo_type() {
             printf '%s\n' android
             return
             ;;
+        deployment)
+            printf '%s\n' deployment
+            return
+            ;;
         contracts)
             printf '%s\n' contracts
             return
