@@ -178,6 +178,7 @@ with sqlite3.connect(legacy_db_path) as connection:
 
 legacy_validation_command = (
     f"python3 {shlex.quote(str(script_path))} "
+    f"--workspace-root {shlex.quote(str(native_source_workspace))} "
     '--validate-instruction-worktree "$PWD"'
 )
 legacy_env = native_env.copy()

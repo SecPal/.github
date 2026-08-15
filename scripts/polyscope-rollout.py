@@ -3148,10 +3148,16 @@ def validate_instruction_root(
 def resolve_registered_instruction_repository_name(
     worktree_path: pathlib.Path,
     db_path: pathlib.Path,
+    workspace_root: pathlib.Path,
 ) -> str:
     """Resolve a legacy setup caller through its active Polyscope registration."""
     resolved_worktree = worktree_path.resolve()
     resolved_db_path = db_path.resolve()
+    if not workspace_root.is_absolute():
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            "managed repository workspace root must be absolute"
+        )
     requirement = (
         "validation without --instruction-repository-name requires an active "
         "Polyscope registration"
@@ -3178,11 +3184,14 @@ def resolve_registered_instruction_repository_name(
             )
             rows = connection.execute(
                 """
-                select worktrees.path, repositories.name
+                select worktrees.path, repositories.id, repositories.path
                 from worktrees
                 join repositories on repositories.id = worktrees.repo_id
                 """
                 + where_clause
+            ).fetchall()
+            repository_rows = connection.execute(
+                "select id, path from repositories"
             ).fetchall()
     except sqlite3.Error as error:
         raise CanonicalInstructionValidationError(
@@ -3191,7 +3200,7 @@ def resolve_registered_instruction_repository_name(
         ) from error
 
     registered_repositories = []
-    for registered_path, display_name in rows:
+    for registered_path, repository_id, repository_path in rows:
         if not isinstance(registered_path, str) or not registered_path.strip():
             continue
         registered_candidate = pathlib.Path(registered_path)
@@ -3205,7 +3214,7 @@ def resolve_registered_instruction_repository_name(
         except (OSError, ValueError):
             continue
         if registered_worktree == resolved_worktree:
-            registered_repositories.append(display_name)
+            registered_repositories.append((repository_id, repository_path))
 
     if not registered_repositories:
         raise CanonicalInstructionValidationError(
@@ -3219,17 +3228,56 @@ def resolve_registered_instruction_repository_name(
             f"active Polyscope registrations in {resolved_db_path}"
         )
 
-    display_name = registered_repositories[0]
-    repository_names = {
-        settings["display_name"]: repo_name
-        for repo_name, settings in REPO_SETTINGS.items()
+    repository_id, repository_path = registered_repositories[0]
+    if not isinstance(repository_id, str) or not repository_id.strip():
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            "active Polyscope registration has no usable repository identity"
+        )
+
+    if not isinstance(repository_path, str) or not repository_path.strip():
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            "active Polyscope registration has no managed repository source path"
+        )
+    registered_repository_path = pathlib.Path(repository_path)
+    if not registered_repository_path.is_absolute():
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            "active Polyscope registration must use an absolute managed "
+            "repository source path"
+        )
+    managed_repositories = {
+        workspace_root / repo_name: repo_name
+        for repo_name in REPO_SETTINGS
     }
-    repository_name = repository_names.get(display_name)
+    repository_name = managed_repositories.get(registered_repository_path)
     if repository_name is None:
         raise CanonicalInstructionValidationError(
             f"canonical AI-instruction validation failed for {resolved_worktree}: "
-            f"active Polyscope registration has unsupported repository identity "
-            f"{display_name!r}"
+            "active Polyscope registration does not match managed repository "
+            "source path state"
+        )
+
+    managed_repository_ids = []
+    for candidate_id, candidate_path in repository_rows:
+        if (
+            not isinstance(candidate_id, str)
+            or not candidate_id.strip()
+            or not isinstance(candidate_path, str)
+            or not candidate_path.strip()
+        ):
+            continue
+        candidate = pathlib.Path(candidate_path)
+        if not candidate.is_absolute():
+            continue
+        if candidate == registered_repository_path:
+            managed_repository_ids.append(candidate_id)
+    if managed_repository_ids != [repository_id]:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            "active Polyscope registration does not uniquely match its managed "
+            "repository source path and identity"
         )
 
     return repository_name
@@ -6143,6 +6191,7 @@ def dispatch_validation_only_direct_mode(args: argparse.Namespace) -> int | None
         repository_name = resolve_registered_instruction_repository_name(
             requested_root,
             args.db_path,
+            args.workspace_root,
         )
     resolved_root = validate_instruction_root(
         requested_root,

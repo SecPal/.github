@@ -36,6 +36,87 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_registered_instruction_identity_rejects_unmanaged_repository_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worktree = root / "candidate"
+            worktree.mkdir()
+            db_path = root / "polyscope.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.executescript(
+                    """
+                    create table repositories (
+                        id text primary key,
+                        name text not null,
+                        path text not null
+                    );
+                    create table worktrees (
+                        id text primary key,
+                        repo_id text not null,
+                        path text not null,
+                        status text default 'active' not null
+                    );
+                    """
+                )
+                connection.executemany(
+                    "insert into repositories (id, name, path) values (?, ?, ?)",
+                    (
+                        (
+                            "managed",
+                            "SecPal/api",
+                            str(root / "managed" / "api"),
+                        ),
+                        (
+                            "unmanaged",
+                            "SecPal/api",
+                            str(root / "unmanaged-api"),
+                        ),
+                    ),
+                )
+                connection.execute(
+                    "insert into worktrees (id, repo_id, path, status) "
+                    "values (?, ?, ?, 'active')",
+                    ("candidate", "unmanaged", str(worktree)),
+                )
+
+            args = SimpleNamespace(
+                validate_instruction_worktree=worktree,
+                instruction_repository_name=None,
+                db_path=db_path,
+                workspace_root=root / "managed",
+            )
+            with (
+                mock.patch.object(
+                    rollout,
+                    "validate_instruction_root",
+                    return_value=worktree,
+                ),
+                self.assertRaisesRegex(
+                    rollout.CanonicalInstructionValidationError,
+                    "managed repository source path",
+                ),
+            ):
+                rollout.dispatch_validation_only_direct_mode(args)
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "update worktrees set repo_id = ? where id = ?",
+                    ("managed", "candidate"),
+                )
+            with (
+                mock.patch.object(
+                    rollout,
+                    "validate_instruction_root",
+                    return_value=worktree,
+                ) as validate,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    rollout.dispatch_validation_only_direct_mode(args),
+                    0,
+                )
+            validate.assert_called_once_with(worktree, set(), "api")
+
     def test_registered_instruction_identity_rejects_relative_worktree_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -73,6 +154,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 rollout.resolve_registered_instruction_repository_name(
                     worktree,
                     db_path,
+                    root,
                 )
 
     def test_user_server_startup_uses_lightweight_nginx_convergence(self) -> None:
