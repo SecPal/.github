@@ -20,8 +20,8 @@ write_valid_repo() {
 
     cat >"$target_dir/AGENTS.md" <<'EOF'
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # Repository Runtime Instructions
@@ -33,8 +33,8 @@ EOF
 
     cat >"$target_dir/.github/copilot-instructions.md" <<'EOF'
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # Code Review Profile
@@ -107,9 +107,10 @@ copy_repo "$valid_repo" "$missing_copilot_repo"
 rm "$missing_copilot_repo/.github/copilot-instructions.md"
 assert_wrapper_fails_with "$missing_copilot_repo" 'Missing: .github/copilot-instructions.md'
 
-invalid_license_repo="$workspace/invalid-inline-license"
+invalid_license_repo="$workspace/obsolete-attribution-license"
 copy_repo "$valid_repo" "$invalid_license_repo"
-sed -i 's/SPDX-License''-Identifier: CC0-1.0/SPDX-License''-Identifier: MIT/' \
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
     "$invalid_license_repo/.github/copilot-instructions.md"
 assert_wrapper_fails_with "$invalid_license_repo" 'copilot-instructions.md has REUSE license'
 

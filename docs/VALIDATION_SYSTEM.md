@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025-2026 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -44,7 +44,13 @@ The validator checks:
 
 - required `AGENTS.md` and `.github/copilot-instructions.md` files;
 - non-empty, readable UTF-8 Markdown with a top-level heading;
-- inline SPDX metadata or an allowed REUSE `.license` sidecar;
+- one complete policy-appropriate SPDX expression in the authoritative inline
+  metadata or REUSE `.license` sidecar for every runtime, review, and focused
+  instruction file, while rejecting duplicate or conflicting declarations in
+  either source: plain `AGPL-3.0-or-later` for the migrated `.github` baseline,
+  the intentionally `CC0-1.0` API baseline, plain `AGPL-3.0-or-later` for other
+  managed baselines, and exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`,
+  `CC0-1.0`, or `MIT` expressions for focused overlays;
 - Markdown structure for runtime, review, and focused instruction files;
 - syntactically valid YAML overlay frontmatter with opening and closing
   delimiters plus non-empty string `name` and `applyTo` values;
@@ -87,6 +93,13 @@ To validate another checked-out repository with this implementation:
 bash scripts/validate-ai-instructions.sh /path/to/repository
 ```
 
+Repository-path mode derives identity independently for each target and clears
+ambient `GITHUB_REPOSITORY`, `SECPAL_REPOSITORY_NAME`, and `REPO_TYPE` values
+before recursion. Without a path argument, canonical callers may supply trusted
+identity through `GITHUB_REPOSITORY` or `SECPAL_REPOSITORY_NAME`. The legacy
+`REPO_TYPE` hint remains available for local compatibility, but cannot select
+the API policy unless the repository has the exact `secpal/api` manifest.
+
 The compatibility entry point `validate-copilot-instructions.sh` always
 delegates to this canonical validator, including for repository-path arguments.
 It has no Copilot-only validation model, so a missing `AGENTS.md` or missing
@@ -97,6 +110,16 @@ Copilot review profile fails through the same canonical contract.
 `tests/validate-ai-instructions.sh` uses temporary repositories to prove that:
 
 - different valid runtime and review content passes;
+- managed runtime and review baselines require plain `AGPL-3.0-or-later`, the
+  API baseline requires its intentional `CC0-1.0`, and focused overlays retain
+  exact `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, and `MIT` support;
+- the obsolete expression
+  `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`, duplicate identifiers,
+  and a wrong repository-baseline license fail;
+- API, frontend-with-Composer, GuardGuide, and `guardguide.de` fixtures exercise
+  trusted repository identity, path-local fallback detection, and legacy type
+  hints so ambient identity and misleading manifest values cannot select
+  another repository's licensing policy;
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;
@@ -105,7 +128,8 @@ Copilot review profile fails through the same canonical contract.
 
 `tests/polyscope-rollout.sh` separately proves that rollout applies the
 canonical contract to managed roots and candidate worktrees before dependent
-writes, preserves an independent Copilot profile, and continues to manage the
+writes, rejects the obsolete SecPal attribution expression, preserves every
+repository instruction artifact byte-for-byte, and continues to manage the
 direct global Codex `AGENTS.md` symlink without introducing copied runtime
 sources or instruction modes.
 
@@ -253,9 +277,13 @@ instruction file into another merely to satisfy validation.
 
 ### REUSE failure
 
-Add an allowed inline SPDX header near the start of the file or a valid
-companion `.license` sidecar. The accepted instruction licenses are `CC0-1.0`
-and `AGPL-3.0-or-later`.
+Add one policy-appropriate inline SPDX header near the start of the file or a
+valid companion `.license` sidecar. When both sources declare a license, each
+must contain exactly one identical expression. Managed baselines require
+`AGPL-3.0-or-later`; the API requires its intentional `CC0-1.0`. Focused
+overlays may retain an intentional exact
+`AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT` expression. Longer
+expressions that merely begin with one of those identifiers are rejected.
 
 ### Markdown failure
 

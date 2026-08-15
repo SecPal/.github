@@ -32,6 +32,34 @@ print(digest.hexdigest())
 PY
 }
 
+instruction_tree_sha256() {
+    python3 - "$1" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+digest = hashlib.sha256()
+for path in sorted(root.rglob("*")):
+    if not path.is_file():
+        continue
+    if path.name not in {
+        "AGENTS.md",
+        "AGENTS.md.license",
+        "copilot-instructions.md",
+        "copilot-instructions.md.license",
+    } and not path.name.endswith(
+        (".instructions.md", ".instructions.md.license")
+    ):
+        continue
+    digest.update(str(path.relative_to(root)).encode())
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest())
+PY
+}
+
 assert_no_generated_preflight_action() {
     local config_path="$1"
 
@@ -43,6 +71,25 @@ assert_no_generated_preflight_action() {
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
+
+instruction_hash_fixture="$workspace/instruction-hash"
+mkdir -p "$instruction_hash_fixture/.github"
+printf '# Runtime instructions\n' >"$instruction_hash_fixture/AGENTS.md"
+printf '%s\n' 'SPDX-License''-Identifier: AGPL-3.0-or-later' \
+    >"$instruction_hash_fixture/AGENTS.md.license"
+instruction_hash_before_sidecar_change="$(
+    instruction_tree_sha256 "$instruction_hash_fixture"
+)"
+printf '%s\n' 'SPDX-License''-Identifier: MIT' \
+    >"$instruction_hash_fixture/AGENTS.md.license"
+instruction_hash_after_sidecar_change="$(
+    instruction_tree_sha256 "$instruction_hash_fixture"
+)"
+if [ "$instruction_hash_before_sidecar_change" \
+    = "$instruction_hash_after_sidecar_change" ]; then
+    echo "instruction tree hash must include REUSE sidecars" >&2
+    exit 1
+fi
 
 fake_setfacl="$workspace/fake-tools/setfacl"
 mkdir -p "$(dirname "$fake_setfacl")"
@@ -76,7 +123,11 @@ create_repo() {
     cp "$REPO_ROOT/.markdownlint.json" "$repo_dir/.markdownlint.json"
     printf '%s' "$copilot_body" > "$repo_dir/.github/copilot-instructions.md"
     printf '%s' "$focus_body" > "$repo_dir/.github/instructions/$focus_filename"
+    sed -i '1a# SPDX-FileCopyrightText: 2026 SecPal Contributors\n# SPDX-License''-Identifier: AGPL-3.0-or-later' \
+        "$repo_dir/.github/instructions/$focus_filename"
     printf '%s' "---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Org Shared Rules
 applyTo: '**'
 ---
@@ -132,10 +183,12 @@ for repo_dir in workspace_root.iterdir():
         else:
             overlay_lines.append(f"- `.github/instructions/{overlay_path.name}`")
     overlays = "\n".join(overlay_lines)
+    license_expression = "CC0-1.0" if repo_dir.name == "api" else "AGPL-3.0-or-later"
     agents_text = (
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
-        "SPDX-License" + "-Identifier: AGPL-3.0-or-later\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+        "SPDX-License"
+        f"-Identifier: {license_expression}\n"
         "-->\n\n"
         f"# {repo_dir.name} Agent Instructions\n\n"
         "This file is the authoritative, provider-neutral runtime baseline for this repository.\n"
@@ -147,7 +200,7 @@ for repo_dir in workspace_root.iterdir():
     )
     (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
 
-(workspace_root / "api" / "composer.json").write_text("{}\n")
+(workspace_root / "api" / "composer.json").write_text('{"name":"secpal/api"}\n')
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / "api" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
@@ -244,8 +297,8 @@ PY
 seed_api_worktree_files() {
     local worktree_dir="$1"
 
-    write_valid_worktree_instructions "$worktree_dir"
-    printf '{}\n' > "$worktree_dir/composer.json"
+    write_valid_worktree_instructions "$worktree_dir" CC0-1.0
+    printf '{"name":"secpal/api"}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
     chmod +x "$worktree_dir/artisan"
 }
@@ -254,38 +307,39 @@ seed_node_worktree_files() {
     local worktree_dir="$1"
     local package_name="$2"
 
-    write_valid_worktree_instructions "$worktree_dir"
+    write_valid_worktree_instructions "$worktree_dir" AGPL-3.0-or-later
     printf '{\n  "name": "%s",\n  "private": true,\n  "scripts": {\n    "build": "vite build"\n  }\n}\n' "$package_name" > "$worktree_dir/package.json"
     printf '{\n  "name": "%s",\n  "lockfileVersion": 3,\n  "requires": true,\n  "packages": {}\n}\n' "$package_name" > "$worktree_dir/package-lock.json"
 }
 
 write_valid_worktree_instructions() {
     local worktree_dir="$1"
+    local license_expression="$2"
 
     mkdir -p "$worktree_dir/.github"
     cp "$REPO_ROOT/.markdownlint.json" "$worktree_dir/.markdownlint.json"
-    cat >"$worktree_dir/AGENTS.md" <<'EOF'
-<!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
--->
-
-# Test Runtime Instructions
-
-## Scope and Safety
-
-- Preserve existing work.
-EOF
-    cat >"$worktree_dir/.github/copilot-instructions.md" <<'EOF'
-<!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
--->
-
-# Test Review Profile
-
-- Review the complete diff.
-EOF
+    printf '%s\n' \
+        '<!--' \
+        'SPDX-FileCopyrightText: 2026 SecPal Contributors' \
+        "SPDX-License""-Identifier: $license_expression" \
+        '-->' \
+        '' \
+        '# Test Runtime Instructions' \
+        '' \
+        '## Scope and Safety' \
+        '' \
+        '- Preserve existing work.' \
+        >"$worktree_dir/AGENTS.md"
+    printf '%s\n' \
+        '<!--' \
+        'SPDX-FileCopyrightText: 2026 SecPal Contributors' \
+        "SPDX-License""-Identifier: $license_expression" \
+        '-->' \
+        '' \
+        '# Test Review Profile' \
+        '' \
+        '- Review the complete diff.' \
+        >"$worktree_dir/.github/copilot-instructions.md"
 }
 
 assert_rollout_rejects_invalid_local_config() {
@@ -373,8 +427,8 @@ assert_rollout_rejects_instruction_contract() {
         no-heading)
             cat >"$instruction_path" <<'EOF'
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 This readable instruction file has no top-level heading.
@@ -387,8 +441,12 @@ EOF
         missing-spdx)
             sed '/SPDX-License''-Identifier:/d' "$saved_path" >"$instruction_path"
             ;;
-        invalid-spdx)
-            sed 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: MIT/' \
+        invalid-spdx-expression)
+            sed 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: Not-A-Valid-License/' \
+                "$saved_path" >"$instruction_path"
+            ;;
+        obsolete-attribution-spdx)
+            sed 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
                 "$saved_path" >"$instruction_path"
             ;;
         oversized)
@@ -456,11 +514,16 @@ EOF
 }
 
 common_header='<!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->'
 
-create_repo "api" "$common_header
+api_header='<!--
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: CC0-1.0
+-->'
+
+create_repo "api" "$api_header
 
 # API Instructions
 
@@ -580,6 +643,8 @@ applyTo: 'resources/js/**/*.tsx'
 "
 
 printf '%s' "---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Laravel PHP Rules
 applyTo: '**/*.php'
 ---
@@ -815,6 +880,8 @@ path = Path(sys.argv[1])
 path.write_text(path.read_text().replace("## Core Runtime Baseline\n\n", "", 1))
 PY
 
+instruction_tree_hash_before_rollout="$(instruction_tree_sha256 "$workspace_root")"
+
 db_path="$workspace/polyscope.db"
 repos_json="$workspace/repos.json"
 nginx_output="$workspace/preview.secpal.dev.conf"
@@ -891,9 +958,14 @@ assert_rollout_rejects_instruction_contract \
 assert_rollout_rejects_instruction_contract \
     "GuardGuide" "AGENTS.md" "markdown-invalid" 'instruction Markdown passes lint'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "missing-spdx" 'Missing inline SPDX header or .license sidecar'
+    "GuardGuide" "AGENTS.md" "missing-spdx" \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "invalid-spdx" 'Missing inline SPDX header or .license sidecar'
+    "GuardGuide" "AGENTS.md" "invalid-spdx-expression" \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
+assert_rollout_rejects_instruction_contract \
+    "GuardGuide" "AGENTS.md" "obsolete-attribution-spdx" \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 assert_rollout_rejects_instruction_contract \
     "GuardGuide" "AGENTS.md" "oversized" 'bytes exceeds 32768 bytes'
 assert_rollout_rejects_instruction_contract \
@@ -942,9 +1014,10 @@ for executable in ("composer", "php", "psql"):
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
+    (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
@@ -953,7 +1026,7 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Review Profile\n\n"
@@ -981,7 +1054,7 @@ def invalidate_instruction(root: pathlib.Path, instruction_kind: str) -> str:
             "",
         )
     )
-    return "Missing inline SPDX header or .license sidecar"
+    return "copilot-instructions.md must declare exactly one complete permitted SPDX expression: CC0-1.0"
 
 
 def cli_arguments(
@@ -1205,9 +1278,10 @@ release_first = fixture / "release-first"
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
+    (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
@@ -1215,7 +1289,7 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Review Profile\n\n"
@@ -1232,6 +1306,8 @@ for instruction_name, instruction_title in (
 ):
     source_api.joinpath(".github", "instructions", instruction_name).write_text(
         "---\n"
+        "# SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+        "# SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
         f"name: {instruction_title}\n"
         "applyTo: '**'\n"
         "---\n\n"
@@ -1241,7 +1317,7 @@ for instruction_name, instruction_title in (
 (physical_worktree / ".git" / "info").mkdir(parents=True)
 (physical_worktree / ".git" / "hooks").mkdir()
 for repository_root in (source_api, physical_worktree):
-    repository_root.joinpath("composer.json").write_text("{}\n")
+    repository_root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     repository_root.joinpath("artisan").write_text("#!/usr/bin/env php\n")
 fake_bin.mkdir(parents=True)
 race_state.mkdir()
@@ -1692,6 +1768,17 @@ if [ "$frontend_copilot_hash_after_rollout" != "$frontend_copilot_hash_before_ro
     echo "rollout must not reconstruct or overwrite an independent Copilot profile" >&2
     exit 1
 fi
+instruction_tree_hash_after_rollout="$(instruction_tree_sha256 "$workspace_root")"
+if [ "$instruction_tree_hash_after_rollout" != "$instruction_tree_hash_before_rollout" ]; then
+    echo "rollout must not regenerate or synchronize repository AI instructions" >&2
+    exit 1
+fi
+if grep -R -qF \
+    'AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution' \
+    "$workspace_root"/*/AGENTS.md "$workspace_root"/*/.github 2>/dev/null; then
+    echo "rollout must not reintroduce the obsolete SecPal attribution expression" >&2
+    exit 1
+fi
 grep -qF '## Independent Review Sentinel' "$frontend_copilot_path"
 
 # Provisionability requires both independent instruction files in each
@@ -1709,15 +1796,15 @@ fixture = workspace / "instruction-contract-worktree"
 (fixture / ".markdownlint.json").write_text('{"default": true}\n')
 (fixture / "AGENTS.md").write_text(
     "<!--\n"
-    "SPDX-FileCopyrightText: 2026 SecPal\n"
-    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+    "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
-    "SPDX-FileCopyrightText: 2026 SecPal\n"
-    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+    "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Review Profile\n"
 )
@@ -1754,7 +1841,7 @@ else:
 
 copilot_path = fixture / ".github" / "copilot-instructions.md"
 valid_copilot = copilot_path.read_text()
-copilot_path.write_text(valid_copilot.replace("SPDX-License" "-Identifier: CC0-1.0\n", ""))
+copilot_path.write_text(valid_copilot.replace("SPDX-License" "-Identifier: AGPL-3.0-or-later\n", ""))
 try:
     module.is_provisionable_worktree(
         "frontend",
@@ -1765,7 +1852,7 @@ try:
     )
 except module.CanonicalInstructionValidationError as error:
     assert str(fixture) in str(error), error
-    assert "Missing inline SPDX header or .license sidecar" in str(error), error
+    assert "copilot-instructions.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later" in str(error), error
 else:
     raise AssertionError("unlicensed Copilot instructions must fail canonical worktree validation")
 
@@ -1773,8 +1860,9 @@ assert not (fixture / "polyscope.local.json").exists()
 assert not (fixture / ".polyscope-secpal-provisioned.json").exists()
 PY
 
-# Canonical validation uses argv-safe paths, caches each resolved root after a
-# real successful run, and fails closed when its validator cannot execute.
+# Canonical validation uses a resolved working directory with trusted repository
+# identity, caches each root after a real successful run, and fails closed when
+# its validator cannot execute.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
 import pathlib
@@ -1795,33 +1883,49 @@ fixture = workspace / "instruction root with shell $ characters"
 (fixture / ".markdownlint.json").write_text((repo_root / ".markdownlint.json").read_text())
 (fixture / "AGENTS.md").write_text(
     "<!--\n"
-    "SPDX-FileCopyrightText: 2026 SecPal\n"
-    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+    "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
-    "SPDX-FileCopyrightText: 2026 SecPal\n"
-    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+    "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Review Profile\n"
 )
 
-validated_roots: set[pathlib.Path] = set()
-resolved_fixture = module.validate_instruction_root(fixture, validated_roots)
+validated_roots: set[tuple[pathlib.Path, str]] = set()
+resolved_fixture = module.validate_instruction_root(fixture, validated_roots, "frontend")
 assert resolved_fixture == fixture.resolve()
-assert validated_roots == {fixture.resolve()}
+assert validated_roots == {(fixture.resolve(), "frontend")}
+
+misleading_guardguide_fixture = workspace / "GuardGuide instruction root"
+shutil.copytree(fixture, misleading_guardguide_fixture)
+(misleading_guardguide_fixture / "composer.json").write_text(
+    '{"name":"secpal/api"}\n'
+)
+resolved_guardguide_fixture = module.validate_instruction_root(
+    misleading_guardguide_fixture,
+    validated_roots,
+    "GuardGuide",
+)
+assert resolved_guardguide_fixture == misleading_guardguide_fixture.resolve()
+assert validated_roots == {
+    (fixture.resolve(), "frontend"),
+    (misleading_guardguide_fixture.resolve(), "GuardGuide"),
+}
 
 original_validator = module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR
 missing_validator = workspace / "missing-validate-ai-instructions.sh"
 module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = missing_validator
-assert module.validate_instruction_root(fixture, validated_roots) == fixture.resolve()
+assert module.validate_instruction_root(fixture, validated_roots, "frontend") == fixture.resolve()
 
 uncached_fixture = workspace / "uncached instruction root"
 shutil.copytree(fixture, uncached_fixture)
 try:
-    module.validate_instruction_root(uncached_fixture, validated_roots)
+    module.validate_instruction_root(uncached_fixture, validated_roots, "frontend")
 except module.CanonicalInstructionValidationError as error:
     assert str(uncached_fixture) in str(error), error
     assert str(missing_validator) in str(error), error
@@ -1833,7 +1937,7 @@ nonexecutable_validator = workspace / "nonexecutable-validate-ai-instructions.sh
 nonexecutable_validator.write_text("#!/usr/bin/env bash\nexit 0\n")
 module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = nonexecutable_validator
 try:
-    module.validate_instruction_root(uncached_fixture, validated_roots)
+    module.validate_instruction_root(uncached_fixture, validated_roots, "frontend")
 except module.CanonicalInstructionValidationError as error:
     assert "missing or not executable" in str(error), error
 else:
@@ -1999,9 +2103,10 @@ fake_bin.mkdir()
 for instruction_root in (source_api, api_worktree):
     instruction_root.joinpath(".github").mkdir(exist_ok=True)
     shutil.copy2(repo_root / ".markdownlint.json", instruction_root / ".markdownlint.json")
+    instruction_root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     instruction_root.joinpath("AGENTS.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
@@ -2009,7 +2114,7 @@ for instruction_root in (source_api, api_worktree):
     )
     instruction_root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Review Profile\n\n"
@@ -3128,15 +3233,15 @@ repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
 )
 (repo_spec_frontend / "AGENTS.md").write_text(
     "<!--\n"
-    "SPDX-FileCopyrightText: 2026 SecPal\n"
-    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+    "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Frontend Runtime Instructions\n"
 )
 (repo_spec_frontend / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
-    "SPDX-FileCopyrightText: 2026 SecPal\n"
-    "SPDX-License" "-Identifier: CC0-1.0\n"
+    "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+    "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Frontend Review Profile\n"
 )
@@ -5561,7 +5666,8 @@ CORS_ALLOWED_ORIGINS=https://app.secpal.dev
 EOF
 
 seed_api_worktree_files "$api_clone"
-write_valid_worktree_instructions "$broken_api_clone"
+write_valid_worktree_instructions "$broken_api_clone" CC0-1.0
+printf '{"name":"secpal/api"}\n' >"$broken_api_clone/composer.json"
 seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
 seed_node_worktree_files "$broken_android_clone" "android-feat"
 seed_node_worktree_files "$android_clone" "android-auto-hawk"
@@ -5712,7 +5818,7 @@ assert_invalid_candidate_blocks_provisioning \
     "instruction Markdown passes lint"
 assert_invalid_candidate_blocks_provisioning \
     "invalid-copilot" ".github/copilot-instructions.md" "missing-spdx" \
-    "Missing inline SPDX header or .license sidecar"
+    "copilot-instructions.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later"
 
 replace_registered_worktrees \
     "api12345" "$api_clone" \
@@ -6191,7 +6297,7 @@ seed_api_worktree_files "$failing_api_alias_clone"
 seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibis"
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
 seed_api_worktree_files "$guardguide_clone"
-seed_node_worktree_files "$guardguide_clone" "guardguide-steady-otter"
+seed_node_worktree_files "$guardguide_clone" "guardguide"
 cp "$workspace_root/api/.env" "$failing_api_clone/.env"
 mkdir -p "$home_dir/.polyscope/clones/api12345/$failing_api_alias_workspace"
 printf '{\n  "packages": []\n}\n' > "$guardguide_clone/composer.lock"

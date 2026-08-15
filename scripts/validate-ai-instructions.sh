@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
@@ -36,16 +36,80 @@ print_result() {
     FAILED_TESTS=$((FAILED_TESTS + 1))
 }
 
+composer_package_is() {
+    local manifest="$1"
+    local expected_name="$2"
+
+    python3 - "$manifest" "$expected_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+raise SystemExit(
+    0
+    if isinstance(manifest, dict) and manifest.get("name") == sys.argv[2]
+    else 1
+)
+PY
+}
+
 detect_repo_type() {
-    if [ -n "${REPO_TYPE:-}" ]; then
+    local repository_name="${1:-}"
+
+    case "$repository_name" in
+        api)
+            printf '%s\n' api
+            return
+            ;;
+        GuardGuide)
+            printf '%s\n' guardguide
+            return
+            ;;
+        frontend)
+            printf '%s\n' frontend
+            return
+            ;;
+        android)
+            printf '%s\n' android
+            return
+            ;;
+        contracts)
+            printf '%s\n' contracts
+            return
+            ;;
+        guardguide.de|secpal.app)
+            printf '%s\n' website
+            return
+            ;;
+        .github)
+            printf '%s\n' org
+            return
+            ;;
+    esac
+
+    if [ -n "${REPO_TYPE:-}" ] \
+        && { [ "$REPO_TYPE" != "api" ] \
+            || { [ -f composer.json ] \
+                && composer_package_is composer.json secpal/api; }; }; then
         printf '%s\n' "$REPO_TYPE"
         return
     fi
 
-    if [ "$(basename "$PWD")" = "GuardGuide" ]; then
-        printf '%s\n' guardguide
-    elif [ -f artisan ] || [ -f composer.json ]; then
+    if [ -f composer.json ] \
+        && composer_package_is composer.json secpal/api; then
         printf '%s\n' api
+    elif [ "$(basename "$PWD")" = "GuardGuide" ]; then
+        printf '%s\n' guardguide
+    elif { [ -f composer.json ] \
+            && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' composer.json; } \
+        || { [ -f package.json ] \
+            && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' package.json; }; then
+        printf '%s\n' guardguide
     elif [ -f capacitor.config.ts ] || [ -d android/app/src ]; then
         printf '%s\n' android
     elif [ -f astro.config.mjs ]; then
@@ -56,6 +120,35 @@ detect_repo_type() {
         printf '%s\n' contracts
     else
         printf '%s\n' org
+    fi
+}
+
+instruction_baseline_policy() {
+    local repo_type="$1"
+    local repository_name="$2"
+
+    if [ "$repository_name" = "api" ]; then
+        printf '%s\n' api
+    elif [ -z "$repository_name" ] \
+        && [ "$repo_type" = "api" ] \
+        && [ -f composer.json ] \
+        && composer_package_is composer.json secpal/api; then
+        printf '%s\n' api
+    else
+        printf '%s\n' agpl
+    fi
+}
+
+trusted_repository_name() {
+    case "${GITHUB_REPOSITORY:-}" in
+        SecPal/*)
+            printf '%s\n' "${GITHUB_REPOSITORY#SecPal/}"
+            return
+            ;;
+    esac
+
+    if [ -n "${SECPAL_REPOSITORY_NAME:-}" ]; then
+        printf '%s\n' "$SECPAL_REPOSITORY_NAME"
     fi
 }
 
@@ -140,10 +233,98 @@ PY
     fi
 }
 
+instruction_license_pattern() {
+    local file="$1"
+    local repo_type="$2"
+    local repository_name="$3"
+    local baseline_policy
+
+    baseline_policy="$(instruction_baseline_policy \
+        "$repo_type" "$repository_name")"
+
+    case "$file" in
+        .github/instructions/*.instructions.md)
+            printf '%s\n' 'AGPL-3\.0-or-later|Apache-2\.0|CC0-1\.0|MIT'
+            ;;
+        *)
+            case "$baseline_policy" in
+                api) printf '%s\n' 'CC0-1\.0' ;;
+                agpl) printf '%s\n' 'AGPL-3\.0-or-later' ;;
+            esac
+            ;;
+    esac
+}
+
+instruction_license_description() {
+    local file="$1"
+    local repo_type="$2"
+    local repository_name="$3"
+    local baseline_policy
+
+    baseline_policy="$(instruction_baseline_policy \
+        "$repo_type" "$repository_name")"
+
+    case "$file" in
+        .github/instructions/*.instructions.md)
+            printf '%s\n' 'AGPL-3.0-or-later, Apache-2.0, CC0-1.0, or MIT'
+            ;;
+        *)
+            case "$baseline_policy" in
+                api) printf '%s\n' 'CC0-1.0' ;;
+                agpl) printf '%s\n' 'AGPL-3.0-or-later' ;;
+            esac
+            ;;
+    esac
+}
+
+complete_allowed_instruction_license_expression() {
+    local file="$1"
+    local line_limit="$2"
+    local expression_pattern="$3"
+    local bare_pattern
+    local html_pattern
+    local metadata
+    local identifier_count
+    local allowed_count
+
+    bare_pattern='^[[:space:]]*(#[[:space:]]*)?SPDX-License''-Identifier:[[:space:]]+('"$expression_pattern"')[[:space:]]*$'
+    html_pattern='^[[:space:]]*<!--[[:space:]]*SPDX-License''-Identifier:[[:space:]]+('"$expression_pattern"')[[:space:]]*-->[[:space:]]*$'
+
+    if [ "$line_limit" = "all" ]; then
+        metadata="$(<"$file")"
+    else
+        metadata="$(head -n "$line_limit" "$file")"
+    fi
+
+    identifier_count="$(grep -cF 'SPDX-License''-Identifier:' "$file" \
+        || true)"
+    allowed_count="$(printf '%s\n' "$metadata" \
+        | grep -cE "($bare_pattern)|($html_pattern)" || true)"
+
+    if [ "$identifier_count" -ne 1 ] || [ "$allowed_count" -ne 1 ]; then
+        return 1
+    fi
+
+    printf '%s\n' "$metadata" \
+        | grep -E "($bare_pattern)|($html_pattern)" \
+        | grep -oE "$expression_pattern"
+}
+
 test_reuse_license() {
     local file="$1"
     local label="$2"
-    local license_pattern='SPDX-License''-Identifier:[[:space:]]+(CC0-1.0|AGPL-3.0-or-later)'
+    local repo_type="$3"
+    local repository_name="$4"
+    local expression_pattern
+    local expected
+    local inline_expression
+    local inline_identifier_count
+    local sidecar_expression
+
+    expression_pattern="$(instruction_license_pattern \
+        "$file" "$repo_type" "$repository_name")"
+    expected="$(instruction_license_description \
+        "$file" "$repo_type" "$repository_name")"
 
     if [ ! -f "$file" ]; then
         print_result "$label has REUSE license" "FAIL" "Missing $file"
@@ -151,20 +332,31 @@ test_reuse_license() {
     fi
 
     if [ -f "$file.license" ]; then
-        if grep -qE "$license_pattern" "$file.license"; then
+        inline_identifier_count="$(grep -cF \
+            'SPDX-License''-Identifier:' "$file" || true)"
+        if ! sidecar_expression="$(complete_allowed_instruction_license_expression \
+            "$file.license" all "$expression_pattern")"; then
+            print_result "$label has REUSE license" "FAIL" \
+                "$label must declare exactly one complete permitted SPDX expression: $expected"
+        elif [ "$inline_identifier_count" -eq 0 ]; then
+            print_result "$label has REUSE license" "PASS"
+        elif inline_expression="$(complete_allowed_instruction_license_expression \
+            "$file" 10 "$expression_pattern")" \
+            && [ "$inline_expression" = "$sidecar_expression" ]; then
             print_result "$label has REUSE license" "PASS"
         else
             print_result "$label has REUSE license" "FAIL" \
-                "Sidecar .license exists but does not declare an allowed license"
+                "$label must declare exactly one complete permitted SPDX expression: $expected"
         fi
         return
     fi
 
-    if head -n 10 "$file" | grep -qE "$license_pattern"; then
+    if complete_allowed_instruction_license_expression \
+        "$file" 10 "$expression_pattern" >/dev/null; then
         print_result "$label has REUSE license" "PASS"
     else
         print_result "$label has REUSE license" "FAIL" \
-            "Missing inline SPDX header or .license sidecar"
+            "$label must declare exactly one complete permitted SPDX expression: $expected"
     fi
 }
 
@@ -307,13 +499,16 @@ test_instruction_size_limit() {
 }
 
 main() {
+    local file
+    local repository_name
     local repo_type
 
     printf '%s\n' '========================================='
     printf '%s\n' 'SecPal AI Instructions Validation'
     printf '%s\n\n' '========================================='
 
-    repo_type="$(detect_repo_type)"
+    repository_name="$(trusted_repository_name)"
+    repo_type="$(detect_repo_type "$repository_name")"
     printf 'Repository Type: %s\n\n' "$repo_type"
 
     test_instruction_path_boundaries || return 1
@@ -321,9 +516,13 @@ main() {
     test_readable_utf8_markdown AGENTS.md AGENTS.md
     test_readable_utf8_markdown \
         .github/copilot-instructions.md copilot-instructions.md
-    test_reuse_license AGENTS.md AGENTS.md
+    test_reuse_license AGENTS.md AGENTS.md "$repo_type" "$repository_name"
     test_reuse_license \
-        .github/copilot-instructions.md copilot-instructions.md
+        .github/copilot-instructions.md copilot-instructions.md \
+        "$repo_type" "$repository_name"
+    while IFS= read -r -d '' file; do
+        test_reuse_license "$file" "$file" "$repo_type" "$repository_name"
+    done < <(find .github/instructions -type f -name '*.instructions.md' -print0 2>/dev/null)
     test_instruction_frontmatter
     test_markdown_lint
     test_instruction_size_limit AGENTS.md AGENTS.md "runtime discovery"
@@ -357,6 +556,7 @@ if [ "$#" -gt 0 ]; then
 
         (
             cd "$repo_path"
+            unset GITHUB_REPOSITORY SECPAL_REPOSITORY_NAME REPO_TYPE
             "$SCRIPT_DIR/validate-ai-instructions.sh"
         ) || overall_status=1
     done

@@ -26,8 +26,8 @@ write_valid_repo() {
 
     cat >"$target_dir/AGENTS.md" <<'EOF'
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # Repository Runtime Instructions
@@ -44,8 +44,8 @@ EOF
 
     cat >"$target_dir/.github/copilot-instructions.md" <<'EOF'
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
-SPDX-License-Identifier: CC0-1.0
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # Code Review Profile
@@ -61,8 +61,8 @@ EOF
 
     cat >"$target_dir/.github/instructions/example.instructions.md" <<'EOF'
 ---
-# SPDX-FileCopyrightText: 2026 SecPal
-# SPDX-License-Identifier: CC0-1.0
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Example Workflow Rules
 description: Applies focused checks to workflow files.
 applyTo: ".github/workflows/**/*.yml"
@@ -85,18 +85,20 @@ copy_valid_repo() {
 run_validator() {
     local repo_dir="$1"
     local output_file="$2"
+    local repo_type="${3:-org}"
 
     (
         cd "$repo_dir"
-        REPO_TYPE=org bash "$VALIDATOR"
+        REPO_TYPE="$repo_type" bash "$VALIDATOR"
     ) >"$output_file" 2>&1
 }
 
 assert_passes() {
     local repo_dir="$1"
     local output_file="$2"
+    local repo_type="${3:-org}"
 
-    if ! run_validator "$repo_dir" "$output_file"; then
+    if ! run_validator "$repo_dir" "$output_file" "$repo_type"; then
         sed -n '1,240p' "$output_file" >&2
         echo "validator unexpectedly rejected $repo_dir" >&2
         exit 1
@@ -106,13 +108,14 @@ assert_passes() {
 assert_fails_with() {
     local repo_dir="$1"
     local expected="$2"
+    local repo_type="${3:-org}"
     local output_file
     local exit_code
 
     output_file="$workspace/$(basename "$repo_dir").output"
 
     set +e
-    run_validator "$repo_dir" "$output_file"
+    run_validator "$repo_dir" "$output_file" "$repo_type"
     exit_code=$?
     set -e
 
@@ -142,6 +145,133 @@ grep -qF 'instruction Markdown passes lint' "$valid_output"
 grep -qF 'instruction overlays include valid frontmatter' "$valid_output"
 grep -qF 'AGENTS.md stays under runtime discovery size limit' "$valid_output"
 
+obsolete_agents_license_repo="$workspace/obsolete-agents-license"
+copy_valid_repo "$valid_repo" "$obsolete_agents_license_repo"
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
+    "$obsolete_agents_license_repo/AGENTS.md"
+assert_fails_with "$obsolete_agents_license_repo" 'AGENTS.md has REUSE license'
+
+obsolete_copilot_license_repo="$workspace/obsolete-copilot-license"
+copy_valid_repo "$valid_repo" "$obsolete_copilot_license_repo"
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
+    "$obsolete_copilot_license_repo/.github/copilot-instructions.md"
+assert_fails_with "$obsolete_copilot_license_repo" \
+    'copilot-instructions.md has REUSE license'
+
+obsolete_inline_with_valid_sidecar_repo="$workspace/obsolete-inline-with-valid-sidecar"
+copy_valid_repo "$valid_repo" "$obsolete_inline_with_valid_sidecar_repo"
+printf '%s\n' \
+    'SPDX-FileCopyrightText: 2026 SecPal Contributors' \
+    'SPDX-License''-Identifier: AGPL-3.0-or-later' \
+    >"$obsolete_inline_with_valid_sidecar_repo/.github/copilot-instructions.md.license"
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
+    "$obsolete_inline_with_valid_sidecar_repo/.github/copilot-instructions.md"
+assert_fails_with "$obsolete_inline_with_valid_sidecar_repo" \
+    'copilot-instructions.md has REUSE license'
+
+obsolete_overlay_license_repo="$workspace/obsolete-overlay-license"
+copy_valid_repo "$valid_repo" "$obsolete_overlay_license_repo"
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
+    "$obsolete_overlay_license_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$obsolete_overlay_license_repo" \
+    '.github/instructions/example.instructions.md has REUSE license'
+
+duplicate_agents_license_repo="$workspace/duplicate-agents-license"
+copy_valid_repo "$valid_repo" "$duplicate_agents_license_repo"
+sed -i \
+    '/SPDX-License''-Identifier: AGPL-3.0-or-later/aSPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution' \
+    "$duplicate_agents_license_repo/AGENTS.md"
+assert_fails_with "$duplicate_agents_license_repo" 'AGENTS.md has REUSE license'
+
+late_duplicate_agents_license_repo="$workspace/late-duplicate-agents-license"
+copy_valid_repo "$valid_repo" "$late_duplicate_agents_license_repo"
+printf '%s\n' \
+    '<!-- SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution -->' \
+    >>"$late_duplicate_agents_license_repo/AGENTS.md"
+assert_fails_with "$late_duplicate_agents_license_repo" \
+    'AGENTS.md has REUSE license'
+
+api_license_repo="$workspace/allowed-api-cc0"
+copy_valid_repo "$valid_repo" "$api_license_repo"
+printf '{"name":"secpal/api"}\n' >"$api_license_repo/composer.json"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
+    "$api_license_repo/AGENTS.md" \
+    "$api_license_repo/.github/copilot-instructions.md"
+assert_passes "$api_license_repo" "$workspace/allowed-api-cc0.output" api
+
+legacy_frontend_license_repo="$workspace/rejected-legacy-frontend-cc0"
+copy_valid_repo "$valid_repo" "$legacy_frontend_license_repo"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
+    "$legacy_frontend_license_repo/AGENTS.md" \
+    "$legacy_frontend_license_repo/.github/copilot-instructions.md"
+assert_fails_with "$legacy_frontend_license_repo" \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later' \
+    frontend
+
+wrong_org_root_license_repo="$workspace/wrong-org-root-license"
+copy_valid_repo "$valid_repo" "$wrong_org_root_license_repo"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: MIT/' \
+    "$wrong_org_root_license_repo/AGENTS.md"
+assert_fails_with "$wrong_org_root_license_repo" \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
+
+wrong_api_root_license_repo="$workspace/wrong-api-root-license"
+copy_valid_repo "$valid_repo" "$wrong_api_root_license_repo"
+printf '{"name":"secpal/api"}\n' \
+    >"$wrong_api_root_license_repo/composer.json"
+wrong_api_root_output="$workspace/wrong-api-root-license.output"
+set +e
+(
+    cd "$wrong_api_root_license_repo"
+    SECPAL_REPOSITORY_NAME=api bash "$VALIDATOR"
+) >"$wrong_api_root_output" 2>&1
+wrong_api_root_status=$?
+set -e
+if [ "$wrong_api_root_status" -eq 0 ]; then
+    sed -n '1,240p' "$wrong_api_root_output" >&2
+    echo "trusted API identity must require the CC0 baseline" >&2
+    exit 1
+fi
+grep -qF \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: CC0-1.0' \
+    "$wrong_api_root_output"
+
+for allowed_license in CC0-1.0 MIT Apache-2.0; do
+    allowed_license_slug="${allowed_license//./-}"
+    allowed_license_repo="$workspace/allowed-$allowed_license_slug"
+    allowed_license_output="$workspace/allowed-$allowed_license_slug.output"
+    copy_valid_repo "$valid_repo" "$allowed_license_repo"
+    sed -i \
+        "s/SPDX-License""-Identifier: AGPL-3.0-or-later/SPDX-License""-Identifier: $allowed_license/" \
+        "$allowed_license_repo/.github/instructions/example.instructions.md"
+    assert_passes "$allowed_license_repo" "$allowed_license_output"
+done
+
+html_comment_repo="$workspace/html-comment-license"
+copy_valid_repo "$valid_repo" "$html_comment_repo"
+html_license_identifier='SPDX-License'"-Identifier: AGPL-3.0-or-later"
+printf -v html_header_sed \
+    '1,4c<!-- SPDX-FileCopyrightText: 2026 SecPal Contributors -->\\\n<!-- %s -->' \
+    "$html_license_identifier"
+sed -i "$html_header_sed" \
+    "$html_comment_repo/AGENTS.md" \
+    "$html_comment_repo/.github/copilot-instructions.md"
+assert_passes "$html_comment_repo" "$workspace/html-comment-license.output"
+
+unrelated_custom_license_repo="$workspace/unrelated-custom-license"
+copy_valid_repo "$valid_repo" "$unrelated_custom_license_repo"
+mkdir -p "$unrelated_custom_license_repo/vendor"
+printf '%s\n' \
+    'SPDX-FileCopyrightText: 2026 Example Vendor' \
+    'SPDX-License''-Identifier: LicenseRef-Example-''Vendor' \
+    >"$unrelated_custom_license_repo/vendor/example.txt.license"
+assert_passes "$unrelated_custom_license_repo" \
+    "$workspace/unrelated-custom-license.output"
+
 # The positive fixture deliberately has different runtime and review content,
 # no mirror declaration, no copied overlay body, and none of the former policy
 # keywords. Its success is the behavioral contract for independent layers.
@@ -158,6 +288,92 @@ fi
 path_argument_output="$workspace/path-argument.output"
 bash "$VALIDATOR" "$valid_repo" >"$path_argument_output" 2>&1
 grep -qF 'Repository Type: org' "$path_argument_output"
+
+detected_api_repo="$workspace/detected-api"
+copy_valid_repo "$valid_repo" "$detected_api_repo"
+printf '{"name":"secpal/api"}\n' >"$detected_api_repo/composer.json"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
+    "$detected_api_repo/AGENTS.md" \
+    "$detected_api_repo/.github/copilot-instructions.md"
+detected_api_output="$workspace/detected-api.output"
+(
+    cd "$detected_api_repo"
+    SECPAL_REPOSITORY_NAME=api bash "$VALIDATOR"
+) >"$detected_api_output" 2>&1
+grep -qF 'Repository Type: api' "$detected_api_output"
+
+ambient_github_api_output="$workspace/ambient-github-api.output"
+GITHUB_REPOSITORY=SecPal/.github \
+    bash "$VALIDATOR" "$detected_api_repo" >"$ambient_github_api_output" 2>&1
+grep -qF 'Repository Type: api' "$ambient_github_api_output"
+grep -qF 'All tests passed' "$ambient_github_api_output"
+
+api_named_guardguide_repo="$workspace/api-path-heuristic/GuardGuide"
+copy_valid_repo "$detected_api_repo" "$api_named_guardguide_repo"
+api_named_guardguide_output="$workspace/api-named-guardguide.output"
+bash "$VALIDATOR" "$api_named_guardguide_repo" \
+    >"$api_named_guardguide_output" 2>&1
+grep -qF 'Repository Type: api' "$api_named_guardguide_output"
+grep -qF 'All tests passed' "$api_named_guardguide_output"
+
+untrusted_api_manifest_repo="$workspace/untrusted-api-manifest"
+copy_valid_repo "$valid_repo" "$untrusted_api_manifest_repo"
+printf '{"name":"secpal/api"}\n' >"$untrusted_api_manifest_repo/composer.json"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
+    "$untrusted_api_manifest_repo/AGENTS.md" \
+    "$untrusted_api_manifest_repo/.github/copilot-instructions.md"
+untrusted_api_manifest_output="$workspace/untrusted-api-manifest.output"
+bash "$VALIDATOR" "$untrusted_api_manifest_repo" \
+    >"$untrusted_api_manifest_output" 2>&1
+grep -qF 'Repository Type: api' "$untrusted_api_manifest_output"
+grep -qF 'All tests passed' "$untrusted_api_manifest_output"
+
+frontend_with_composer_repo="$workspace/frontend-with-composer"
+copy_valid_repo "$valid_repo" "$frontend_with_composer_repo"
+printf '{"name":"secpal/api"}\n' \
+    >"$frontend_with_composer_repo/composer.json"
+printf '{"name":"secpal/frontend","devDependencies":{"vite":"latest"}}\n' \
+    >"$frontend_with_composer_repo/package.json"
+frontend_with_composer_output="$workspace/frontend-with-composer.output"
+(
+    cd "$frontend_with_composer_repo"
+    GITHUB_REPOSITORY=SecPal/frontend bash "$VALIDATOR"
+) >"$frontend_with_composer_output" 2>&1
+grep -qF 'Repository Type: frontend' "$frontend_with_composer_output"
+grep -qF 'All tests passed' "$frontend_with_composer_output"
+
+non_api_override_repo="$workspace/non-api-override"
+copy_valid_repo "$valid_repo" "$non_api_override_repo"
+printf '{"name":"example/vite-plugin","extra":{"name":"secpal/api"}}\n' \
+    >"$non_api_override_repo/composer.json"
+printf '{"name":"secpal/frontend","devDependencies":{"vite":"latest"}}\n' \
+    >"$non_api_override_repo/package.json"
+non_api_override_output="$workspace/non-api-override.output"
+(
+    cd "$non_api_override_repo"
+    REPO_TYPE=api bash "$VALIDATOR"
+) >"$non_api_override_output" 2>&1
+grep -qF 'Repository Type: frontend' "$non_api_override_output"
+grep -qF 'All tests passed' "$non_api_override_output"
+
+detected_guardguide_repo="$workspace/detected-guardguide"
+copy_valid_repo "$valid_repo" "$detected_guardguide_repo"
+printf '{"name":"secpal/guardguide"}\n' \
+    >"$detected_guardguide_repo/composer.json"
+detected_guardguide_output="$workspace/detected-guardguide.output"
+bash "$VALIDATOR" "$detected_guardguide_repo" \
+    >"$detected_guardguide_output" 2>&1
+grep -qF 'Repository Type: guardguide' "$detected_guardguide_output"
+
+detected_website_repo="$workspace/detected-guardguide-website"
+copy_valid_repo "$valid_repo" "$detected_website_repo"
+printf '{"name":"secpal/guardguide.de"}\n' \
+    >"$detected_website_repo/package.json"
+printf 'export default {};\n' >"$detected_website_repo/astro.config.mjs"
+detected_website_output="$workspace/detected-guardguide-website.output"
+bash "$VALIDATOR" "$detected_website_repo" \
+    >"$detected_website_output" 2>&1
+grep -qF 'Repository Type: website' "$detected_website_output"
 
 symlinked_agents_repo="$workspace/symlinked-agents"
 symlinked_agents_target="$workspace/external-AGENTS.md"
@@ -226,7 +442,7 @@ copy_valid_repo "$valid_repo" "$wrong_sidecar_repo"
 cp "$FIXTURES_DIR/wrong-ai-instructions-license-fixture.txt" \
     "$wrong_sidecar_repo/.github/copilot-instructions.md.license"
 assert_fails_with "$wrong_sidecar_repo" \
-    'Sidecar .license exists but does not declare an allowed license'
+    'copilot-instructions.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 
 malformed_markdown_repo="$workspace/malformed-markdown"
 copy_valid_repo "$valid_repo" "$malformed_markdown_repo"
@@ -240,6 +456,13 @@ sed -i '/^applyTo:/d' \
     "$malformed_frontmatter_repo/.github/instructions/example.instructions.md"
 assert_fails_with "$malformed_frontmatter_repo" \
     'instruction overlays include valid frontmatter'
+
+missing_overlay_license_repo="$workspace/missing-overlay-license"
+copy_valid_repo "$valid_repo" "$missing_overlay_license_repo"
+sed -i '/SPDX-License''-Identifier:/d' \
+    "$missing_overlay_license_repo/.github/instructions/example.instructions.md"
+assert_fails_with "$missing_overlay_license_repo" \
+    '.github/instructions/example.instructions.md has REUSE license'
 
 empty_frontmatter_name_repo="$workspace/empty-frontmatter-name"
 copy_valid_repo "$valid_repo" "$empty_frontmatter_name_repo"

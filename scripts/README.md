@@ -250,7 +250,15 @@ and focused instruction overlays across all repositories.
 2. **REUSE Compliance**
 
    - Validates `AGENTS.md` REUSE metadata
-   - Accepts allowed inline SPDX metadata or a valid `.license` sidecar
+   - Requires the complete repository-policy expression in inline SPDX
+     metadata or a valid `.license` sidecar and rejects conflicting or duplicate
+     declarations across both sources
+   - Requires plain `AGPL-3.0-or-later` for managed baselines and preserves only
+     the API repository's intentional `CC0-1.0` baseline
+   - Preserves exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`,
+     or `MIT` expressions on focused overlays
+   - Rejects the obsolete expression
+     `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`
 
 3. **Markdown Linting**
 
@@ -324,12 +332,17 @@ See `.github/workflows/validate-ai-instructions.yml`
 - `npm ci` in `SecPal/.github` (installs the pinned `markdownlint-cli` and `prettier` CLIs)
 - `ruby` (optional, only for the legacy YAML syntax check)
 
-**Repository Detection:**
+**Repository Identity:**
 
-The script automatically detects repository type:
+Canonical GitHub and Polyscope callers supply trusted repository identity via
+`GITHUB_REPOSITORY` or `SECPAL_REPOSITORY_NAME`. Content-based detection remains
+a local compatibility fallback and does not select production policy when a
+trusted identity is available. Repository-path mode clears ambient identity and
+derives each target independently. The legacy `REPO_TYPE` hint cannot select
+the strict API policy without the exact `secpal/api` manifest:
 
 - **org**: `.github` repository (org-wide instructions)
-- **api**: Laravel API (has `artisan`, `composer.json`)
+- **api**: SecPal API (has Composer package name `secpal/api`)
 - **frontend**: React frontend or Android wrapper (has `package.json` with `vite`)
 - **website**: Astro landing page (has `astro.config.mjs`)
 - **contracts**: OpenAPI contracts (has `package.json` with `openapi` or `docs/openapi.yaml`)

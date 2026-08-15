@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
@@ -22,6 +22,13 @@ Prioritize findings that can change behavior or weaken a repository invariant.
   is safer and easier to validate.
 - Identify compatibility or rollout ordering risks when a shared contract has
   consumers outside the changed file.
+- Reject instruction metadata that adds or restores
+  `LicenseRef-SecPal-Attribution`; verify exact SPDX expressions while
+  preserving intentional CC0, MIT, Apache, third-party, generated-file, and
+  unrelated custom-license metadata.
+- For licensing changes on user-facing official SecPal product surfaces,
+  verify that `Powered by SecPal – A guard's best friend` remains intentional,
+  exact, and mandatory rather than weakened or made configurable.
 
 ## Finding Quality
 

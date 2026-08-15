@@ -31,13 +31,17 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 
-def write_valid_instructions(root: pathlib.Path) -> None:
+def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -> None:
+    license_expression = "CC0-1.0" if repo_name == "api" else "AGPL-3.0-or-later"
     root.joinpath(".github").mkdir(parents=True, exist_ok=True)
     root.joinpath(".markdownlint.json").write_text(repo_root.joinpath(".markdownlint.json").read_text())
+    if repo_name == "api":
+        root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     root.joinpath("AGENTS.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
-        "SPDX-License-" "Identifier: CC0-1.0\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+        "SPDX-License-"
+        f"Identifier: {license_expression}\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
@@ -45,8 +49,9 @@ def write_valid_instructions(root: pathlib.Path) -> None:
     )
     root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"
-        "SPDX-FileCopyrightText: 2026 SecPal\n"
-        "SPDX-License-" "Identifier: CC0-1.0\n"
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
+        "SPDX-License-"
+        f"Identifier: {license_expression}\n"
         "-->\n\n"
         "# Test Review Profile\n\n"
         "- Review the complete diff.\n"
@@ -75,7 +80,7 @@ def run_polyscope_setup(
 native_source_workspace = workspace / "native source roots"
 for repo_name in module.REPO_SETTINGS:
     source_root = native_source_workspace / repo_name
-    write_valid_instructions(source_root)
+    write_valid_instructions(source_root, repo_name)
     source_root.joinpath("package.json").write_text(
         json.dumps({"name": f"source-{repo_name}", "private": True}) + "\n"
     )
@@ -136,14 +141,16 @@ native_env = os.environ.copy()
 native_env["PATH"] = f"{native_fake_bin}:{native_env['PATH']}"
 native_env["NATIVE_SETUP_LOG"] = str(native_setup_log)
 native_env["POLYSCOPE_DB_PATH"] = str(workspace / "native-polyscope.db")
+native_env["GITHUB_REPOSITORY"] = "SecPal/.github"
 
 for repo_name, generated_spec in generated_specs.items():
     setup_commands = module.render_local_config(generated_spec).get("scripts", {}).get("setup", [])
     assert setup_commands, repo_name
     assert "--validate-instruction-worktree" in setup_commands[0], (repo_name, setup_commands)
+    assert f"--instruction-repository-name {repo_name}" in setup_commands[0], (repo_name, setup_commands)
 
     invalid_root = workspace / "native setup ; invalid roots" / repo_name
-    write_valid_instructions(invalid_root)
+    write_valid_instructions(invalid_root, repo_name)
     invalid_root.joinpath("AGENTS.md").write_text("# Missing SPDX metadata\n")
     invalid_root.joinpath("package.json").write_text(
         json.dumps({"name": f"invalid-{repo_name}", "private": True}) + "\n"
@@ -224,7 +231,7 @@ assert ordered_root.joinpath("failure-order.log").read_text().splitlines() == ["
 # repository after entering the single fail-closed boundary.
 for repo_name, generated_spec in generated_specs.items():
     valid_root = workspace / "native setup valid roots with spaces" / repo_name
-    write_valid_instructions(valid_root)
+    write_valid_instructions(valid_root, repo_name)
     valid_root.joinpath("package.json").write_text(
         json.dumps({"name": f"valid-{repo_name}", "private": True}) + "\n"
     )
@@ -239,10 +246,11 @@ for repo_name, generated_spec in generated_specs.items():
         )
         + "\n"
     )
-    valid_root.joinpath("composer.json").write_text(
-        json.dumps({"name": f"secpal/{repo_name.lower().replace('.', '-')}", "scripts": {}}) + "\n"
-    )
-    valid_root.joinpath("composer.lock").write_text("{}\n")
+    if repo_name in {"api", "GuardGuide"}:
+        valid_root.joinpath("composer.json").write_text(
+            json.dumps({"name": f"secpal/{repo_name.lower().replace('.', '-')}", "scripts": {}}) + "\n"
+        )
+        valid_root.joinpath("composer.lock").write_text("{}\n")
     valid_root.joinpath(".env.example").write_text(
         "APP_KEY=base64:test-key\nDB_CONNECTION=sqlite\nDB_DATABASE=database/database.sqlite\n"
     )
@@ -267,7 +275,7 @@ source_workspace = workspace / "source roots"
 repo_state: dict[str, dict[str, str]] = {}
 for index, repo_name in enumerate(module.REPO_SETTINGS, start=1):
     source_root = source_workspace / repo_name
-    write_valid_instructions(source_root)
+    write_valid_instructions(source_root, repo_name)
     repo_state[repo_name] = {
         "id": f"{index:08x}",
         "name": f"SecPal/{repo_name}",

@@ -1,5 +1,5 @@
 ---
-# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: GitHub Workflow and Action Rules
 description: Applies focused security and validation criteria to GitHub automation.
