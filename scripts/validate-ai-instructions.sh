@@ -59,6 +59,39 @@ PY
 }
 
 detect_repo_type() {
+    local repository_name="${1:-}"
+
+    case "$repository_name" in
+        api)
+            printf '%s\n' api
+            return
+            ;;
+        GuardGuide)
+            printf '%s\n' guardguide
+            return
+            ;;
+        frontend)
+            printf '%s\n' frontend
+            return
+            ;;
+        android)
+            printf '%s\n' android
+            return
+            ;;
+        contracts)
+            printf '%s\n' contracts
+            return
+            ;;
+        guardguide.de|secpal.app)
+            printf '%s\n' website
+            return
+            ;;
+        .github)
+            printf '%s\n' org
+            return
+            ;;
+    esac
+
     if [ -n "${REPO_TYPE:-}" ]; then
         printf '%s\n' "$REPO_TYPE"
         return
@@ -84,6 +117,19 @@ detect_repo_type() {
         printf '%s\n' contracts
     else
         printf '%s\n' org
+    fi
+}
+
+trusted_repository_name() {
+    case "${GITHUB_REPOSITORY:-}" in
+        SecPal/*)
+            printf '%s\n' "${GITHUB_REPOSITORY#SecPal/}"
+            return
+            ;;
+    esac
+
+    if [ -n "${SECPAL_REPOSITORY_NAME:-}" ]; then
+        printf '%s\n' "$SECPAL_REPOSITORY_NAME"
     fi
 }
 
@@ -171,16 +217,22 @@ PY
 instruction_license_pattern() {
     local file="$1"
     local repo_type="$2"
+    local repository_name="$3"
 
     case "$file" in
         .github/instructions/*.instructions.md)
             printf '%s\n' 'AGPL-3\.0-or-later|Apache-2\.0|CC0-1\.0|MIT'
             ;;
         *)
-            if [ "$repo_type" = "api" ]; then
+            if [ "$repository_name" = "api" ] \
+                || { [ -z "$repository_name" ] \
+                    && [ "${REPO_TYPE:-}" = "api" ]; }; then
                 printf '%s\n' 'CC0-1\.0'
-            else
+            elif [ "$repository_name" = ".github" ] \
+                || { [ -z "$repository_name" ] && [ -n "${REPO_TYPE:-}" ]; }; then
                 printf '%s\n' 'AGPL-3\.0-or-later'
+            else
+                printf '%s\n' 'AGPL-3\.0-or-later|CC0-1\.0'
             fi
             ;;
     esac
@@ -189,22 +241,28 @@ instruction_license_pattern() {
 instruction_license_description() {
     local file="$1"
     local repo_type="$2"
+    local repository_name="$3"
 
     case "$file" in
         .github/instructions/*.instructions.md)
             printf '%s\n' 'AGPL-3.0-or-later, Apache-2.0, CC0-1.0, or MIT'
             ;;
         *)
-            if [ "$repo_type" = "api" ]; then
+            if [ "$repository_name" = "api" ] \
+                || { [ -z "$repository_name" ] \
+                    && [ "${REPO_TYPE:-}" = "api" ]; }; then
                 printf '%s\n' 'CC0-1.0'
-            else
+            elif [ "$repository_name" = ".github" ] \
+                || { [ -z "$repository_name" ] && [ -n "${REPO_TYPE:-}" ]; }; then
                 printf '%s\n' 'AGPL-3.0-or-later'
+            else
+                printf '%s\n' 'AGPL-3.0-or-later or transitional CC0-1.0'
             fi
             ;;
     esac
 }
 
-has_complete_allowed_instruction_license() {
+complete_allowed_instruction_license_expression() {
     local file="$1"
     local line_limit="$2"
     local expression_pattern="$3"
@@ -228,18 +286,30 @@ has_complete_allowed_instruction_license() {
     allowed_count="$(printf '%s\n' "$metadata" \
         | grep -cE "($bare_pattern)|($html_pattern)" || true)"
 
-    [ "$identifier_count" -eq 1 ] && [ "$allowed_count" -eq 1 ]
+    if [ "$identifier_count" -ne 1 ] || [ "$allowed_count" -ne 1 ]; then
+        return 1
+    fi
+
+    printf '%s\n' "$metadata" \
+        | grep -E "($bare_pattern)|($html_pattern)" \
+        | grep -oE "$expression_pattern"
 }
 
 test_reuse_license() {
     local file="$1"
     local label="$2"
     local repo_type="$3"
+    local repository_name="$4"
     local expression_pattern
     local expected
+    local inline_expression
+    local inline_identifier_count
+    local sidecar_expression
 
-    expression_pattern="$(instruction_license_pattern "$file" "$repo_type")"
-    expected="$(instruction_license_description "$file" "$repo_type")"
+    expression_pattern="$(instruction_license_pattern \
+        "$file" "$repo_type" "$repository_name")"
+    expected="$(instruction_license_description \
+        "$file" "$repo_type" "$repository_name")"
 
     if [ ! -f "$file" ]; then
         print_result "$label has REUSE license" "FAIL" "Missing $file"
@@ -247,8 +317,17 @@ test_reuse_license() {
     fi
 
     if [ -f "$file.license" ]; then
-        if has_complete_allowed_instruction_license \
-            "$file.license" all "$expression_pattern"; then
+        inline_identifier_count="$(grep -cF \
+            'SPDX-License''-Identifier:' "$file" || true)"
+        if ! sidecar_expression="$(complete_allowed_instruction_license_expression \
+            "$file.license" all "$expression_pattern")"; then
+            print_result "$label has REUSE license" "FAIL" \
+                "$label must declare exactly one complete permitted SPDX expression: $expected"
+        elif [ "$inline_identifier_count" -eq 0 ]; then
+            print_result "$label has REUSE license" "PASS"
+        elif inline_expression="$(complete_allowed_instruction_license_expression \
+            "$file" 10 "$expression_pattern")" \
+            && [ "$inline_expression" = "$sidecar_expression" ]; then
             print_result "$label has REUSE license" "PASS"
         else
             print_result "$label has REUSE license" "FAIL" \
@@ -257,7 +336,8 @@ test_reuse_license() {
         return
     fi
 
-    if has_complete_allowed_instruction_license "$file" 10 "$expression_pattern"; then
+    if complete_allowed_instruction_license_expression \
+        "$file" 10 "$expression_pattern" >/dev/null; then
         print_result "$label has REUSE license" "PASS"
     else
         print_result "$label has REUSE license" "FAIL" \
@@ -405,13 +485,15 @@ test_instruction_size_limit() {
 
 main() {
     local file
+    local repository_name
     local repo_type
 
     printf '%s\n' '========================================='
     printf '%s\n' 'SecPal AI Instructions Validation'
     printf '%s\n\n' '========================================='
 
-    repo_type="$(detect_repo_type)"
+    repository_name="$(trusted_repository_name)"
+    repo_type="$(detect_repo_type "$repository_name")"
     printf 'Repository Type: %s\n\n' "$repo_type"
 
     test_instruction_path_boundaries || return 1
@@ -419,11 +501,12 @@ main() {
     test_readable_utf8_markdown AGENTS.md AGENTS.md
     test_readable_utf8_markdown \
         .github/copilot-instructions.md copilot-instructions.md
-    test_reuse_license AGENTS.md AGENTS.md "$repo_type"
+    test_reuse_license AGENTS.md AGENTS.md "$repo_type" "$repository_name"
     test_reuse_license \
-        .github/copilot-instructions.md copilot-instructions.md "$repo_type"
+        .github/copilot-instructions.md copilot-instructions.md \
+        "$repo_type" "$repository_name"
     while IFS= read -r -d '' file; do
-        test_reuse_license "$file" "$file" "$repo_type"
+        test_reuse_license "$file" "$file" "$repo_type" "$repository_name"
     done < <(find .github/instructions -type f -name '*.instructions.md' -print0 2>/dev/null)
     test_instruction_frontmatter
     test_markdown_lint

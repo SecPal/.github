@@ -669,10 +669,14 @@ def build_preview_url_template(preview_prefix: str | None) -> str:
     return "https://{{worktree}}.preview.secpal.dev"
 
 
-def build_workspace_instruction_validation_command() -> str:
+def build_workspace_instruction_validation_command(repo_name: str) -> str:
     """Return the synchronous guard used by Polyscope's native setup runner."""
     rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
-    return f"python3 {rollout_script} --validate-instruction-worktree \"$PWD\""
+    repository_name = shlex.quote(repo_name)
+    return (
+        f"python3 {rollout_script} --instruction-repository-name {repository_name} "
+        '--validate-instruction-worktree "$PWD"'
+    )
 
 
 def build_fail_closed_setup_command(commands: list[str]) -> str:
@@ -1600,7 +1604,7 @@ def cleanup_removed_api_preview_databases(
     clone_root: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
-    validated_instruction_roots: set[pathlib.Path],
+    validated_instruction_roots: set[tuple[pathlib.Path, str]],
     registered_api_worktrees: list[pathlib.Path],
 ) -> list[str]:
     api_clone_root = clone_root / repo_state["api"]["id"]
@@ -3058,6 +3062,7 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
     for repo_name, settings in REPO_SETTINGS.items():
         spec = copy.deepcopy(settings)
         repo_path = workspace_root / repo_name
+        spec["repository_name"] = repo_name
         spec["path"] = repo_path
         spec["agent_instructions"] = repo_path / "AGENTS.md"
         spec["copilot_instructions"] = repo_path / settings["copilot_instructions"]
@@ -3079,7 +3084,7 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         spec[NATIVE_SETUP_COMMANDS_KEY] = native_setup_commands
         spec["local_config"]["scripts"]["setup"] = [
             build_fail_closed_setup_command(
-                [build_workspace_instruction_validation_command(), *native_setup_commands]
+                [build_workspace_instruction_validation_command(repo_name), *native_setup_commands]
             )
         ]
         repo_specs[repo_name] = spec
@@ -3088,10 +3093,12 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
 
 def validate_instruction_root(
     root: pathlib.Path,
-    validated_instruction_roots: set[pathlib.Path],
+    validated_instruction_roots: set[tuple[pathlib.Path, str]],
+    repository_name: str,
 ) -> pathlib.Path:
     resolved_root = root.resolve()
-    if resolved_root in validated_instruction_roots:
+    validation_key = (resolved_root, repository_name)
+    if validation_key in validated_instruction_roots:
         return resolved_root
 
     validator_path = CANONICAL_AI_INSTRUCTIONS_VALIDATOR
@@ -3102,10 +3109,15 @@ def validate_instruction_root(
         )
 
     try:
+        validator_env = os.environ.copy()
+        validator_env.pop("GITHUB_REPOSITORY", None)
+        validator_env.pop("REPO_TYPE", None)
+        validator_env["SECPAL_REPOSITORY_NAME"] = repository_name
         result = subprocess.run(
             [str(validator_path), str(resolved_root)],
             check=False,
             capture_output=True,
+            env=validator_env,
             text=True,
         )
     except OSError as error:
@@ -3126,19 +3138,23 @@ def validate_instruction_root(
             f"(exit {result.returncode}):\n{details}"
         )
 
-    validated_instruction_roots.add(resolved_root)
+    validated_instruction_roots.add(validation_key)
     return resolved_root
 
 
 def require_repo_instruction_files(
     spec: dict[str, Any],
-    validated_instruction_roots: set[pathlib.Path] | None = None,
+    validated_instruction_roots: set[tuple[pathlib.Path, str]] | None = None,
 ) -> str:
     repo_path = pathlib.Path(spec["path"])
     resolved_repo_path = repo_path.resolve()
     if spec.get(CANONICAL_VALIDATION_SPEC_KEY) != resolved_repo_path:
         validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
-        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(repo_path, validation_cache)
+        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
+            repo_path,
+            validation_cache,
+            str(spec["repository_name"]),
+        )
 
     try:
         return pathlib.Path(spec["agent_instructions"]).read_text(encoding="utf-8")
@@ -3151,13 +3167,14 @@ def require_repo_instruction_files(
 
 def validate_repo_instruction_files(
     repo_specs: dict[str, dict[str, Any]],
-    validated_instruction_roots: set[pathlib.Path],
+    validated_instruction_roots: set[tuple[pathlib.Path, str]],
 ) -> None:
-    for spec in repo_specs.values():
+    for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
         spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
             repo_path,
             validated_instruction_roots,
+            repo_name,
         )
 
 
@@ -3489,7 +3506,7 @@ def is_provisionable_worktree(
     worktree_path: pathlib.Path,
     validation_commands: list[str],
     *,
-    validated_instruction_roots: set[pathlib.Path],
+    validated_instruction_roots: set[tuple[pathlib.Path, str]],
     log_skip_reason: bool = True,
 ) -> bool:
     def skip(reason: str) -> bool:
@@ -3511,7 +3528,7 @@ def is_provisionable_worktree(
         if not (android_project_dir / "settings.gradle").is_file():
             return skip("missing committed native Android Gradle project")
 
-    validate_instruction_root(worktree_path, validated_instruction_roots)
+    validate_instruction_root(worktree_path, validated_instruction_roots, repo_name)
 
     package_scripts = load_package_scripts(worktree_path)
     composer_scripts = load_composer_scripts(worktree_path)
@@ -4894,7 +4911,7 @@ def provision_worktrees(
     clone_root: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
-    validated_instruction_roots: set[pathlib.Path] | None = None,
+    validated_instruction_roots: set[tuple[pathlib.Path, str]] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
     resolved_db_path = db_path or default_polyscope_db_path()
@@ -5948,9 +5965,17 @@ def validate_direct_api_worktree_roots(
     worktree_path: pathlib.Path,
 ) -> tuple[pathlib.Path, pathlib.Path]:
     """Validate and resolve the exact source and target roots consumed by a direct mode."""
-    validated_instruction_roots: set[pathlib.Path] = set()
-    resolved_source_repo = validate_instruction_root(source_repo_path, validated_instruction_roots)
-    resolved_worktree = validate_instruction_root(worktree_path, validated_instruction_roots)
+    validated_instruction_roots: set[tuple[pathlib.Path, str]] = set()
+    resolved_source_repo = validate_instruction_root(
+        source_repo_path,
+        validated_instruction_roots,
+        "api",
+    )
+    resolved_worktree = validate_instruction_root(
+        worktree_path,
+        validated_instruction_roots,
+        "api",
+    )
     return resolved_source_repo, resolved_worktree
 
 
@@ -6019,8 +6044,17 @@ def dispatch_validation_only_direct_mode(args: argparse.Namespace) -> int | None
     requested_root = getattr(args, VALIDATION_ONLY_DIRECT_MODE)
     if requested_root is None:
         return None
+    if args.instruction_repository_name is None:
+        raise SystemExit(
+            "--instruction-repository-name is required with "
+            "--validate-instruction-worktree"
+        )
 
-    resolved_root = validate_instruction_root(requested_root, set())
+    resolved_root = validate_instruction_root(
+        requested_root,
+        set(),
+        args.instruction_repository_name,
+    )
     print(f"Canonical AI-instruction validation passed for {resolved_root}")
     return 0
 
@@ -6044,6 +6078,7 @@ def parse_args() -> argparse.Namespace:
             type=pathlib.Path,
         )
     parser.add_argument("--source-repo-path", type=pathlib.Path)
+    parser.add_argument("--instruction-repository-name")
     parser.add_argument("--shell-command")
     parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
     parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
@@ -6133,7 +6168,7 @@ def main() -> int:
 
 def run_rollout(args: argparse.Namespace) -> int:
     repo_specs = build_repo_specs(args.workspace_root)
-    validated_instruction_roots: set[pathlib.Path] = set()
+    validated_instruction_roots: set[tuple[pathlib.Path, str]] = set()
 
     try:
         validate_repo_instruction_files(repo_specs, validated_instruction_roots)

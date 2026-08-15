@@ -523,6 +523,11 @@ SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->'
 
+legacy_header='<!--
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: CC0-1.0
+-->'
+
 create_repo "api" "$api_header
 
 # API Instructions
@@ -565,7 +570,7 @@ applyTo: '**/*.php'
 - Use vendor/bin/pint --dirty after changes.
 "
 
-create_repo "frontend" "$common_header
+create_repo "frontend" "$legacy_header
 
 # Frontend Instructions
 
@@ -1895,20 +1900,20 @@ fixture = workspace / "instruction root with shell $ characters"
     "# Review Profile\n"
 )
 
-validated_roots: set[pathlib.Path] = set()
-resolved_fixture = module.validate_instruction_root(fixture, validated_roots)
+validated_roots: set[tuple[pathlib.Path, str]] = set()
+resolved_fixture = module.validate_instruction_root(fixture, validated_roots, "frontend")
 assert resolved_fixture == fixture.resolve()
-assert validated_roots == {fixture.resolve()}
+assert validated_roots == {(fixture.resolve(), "frontend")}
 
 original_validator = module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR
 missing_validator = workspace / "missing-validate-ai-instructions.sh"
 module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = missing_validator
-assert module.validate_instruction_root(fixture, validated_roots) == fixture.resolve()
+assert module.validate_instruction_root(fixture, validated_roots, "frontend") == fixture.resolve()
 
 uncached_fixture = workspace / "uncached instruction root"
 shutil.copytree(fixture, uncached_fixture)
 try:
-    module.validate_instruction_root(uncached_fixture, validated_roots)
+    module.validate_instruction_root(uncached_fixture, validated_roots, "frontend")
 except module.CanonicalInstructionValidationError as error:
     assert str(uncached_fixture) in str(error), error
     assert str(missing_validator) in str(error), error
@@ -1920,7 +1925,7 @@ nonexecutable_validator = workspace / "nonexecutable-validate-ai-instructions.sh
 nonexecutable_validator.write_text("#!/usr/bin/env bash\nexit 0\n")
 module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = nonexecutable_validator
 try:
-    module.validate_instruction_root(uncached_fixture, validated_roots)
+    module.validate_instruction_root(uncached_fixture, validated_roots, "frontend")
 except module.CanonicalInstructionValidationError as error:
     assert "missing or not executable" in str(error), error
 else:

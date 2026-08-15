@@ -251,9 +251,11 @@ and focused instruction overlays across all repositories.
 
    - Validates `AGENTS.md` REUSE metadata
    - Requires the complete repository-policy expression in inline SPDX
-     metadata or a valid `.license` sidecar
-   - Requires plain `AGPL-3.0-or-later` for managed runtime and review
-     baselines, except the API repository's intentional `CC0-1.0` baseline
+     metadata or a valid `.license` sidecar and rejects conflicting or duplicate
+     declarations across both sources
+   - Requires plain `AGPL-3.0-or-later` for the migrated `.github` baseline,
+     preserves the API repository's intentional `CC0-1.0` baseline, and accepts
+     transitional plain AGPL or CC0 for other managed roots until migration
    - Preserves exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`,
      or `MIT` expressions on focused overlays
    - Rejects the obsolete expression
@@ -331,9 +333,12 @@ See `.github/workflows/validate-ai-instructions.yml`
 - `npm ci` in `SecPal/.github` (installs the pinned `markdownlint-cli` and `prettier` CLIs)
 - `ruby` (optional, only for the legacy YAML syntax check)
 
-**Repository Detection:**
+**Repository Identity:**
 
-The script automatically detects repository type:
+Canonical GitHub and Polyscope callers supply trusted repository identity via
+`GITHUB_REPOSITORY` or `SECPAL_REPOSITORY_NAME`. Content-based detection remains
+a local compatibility fallback and does not select production policy when a
+trusted identity is available:
 
 - **org**: `.github` repository (org-wide instructions)
 - **api**: SecPal API (has Composer package name `secpal/api`)

@@ -160,6 +160,18 @@ sed -i \
 assert_fails_with "$obsolete_copilot_license_repo" \
     'copilot-instructions.md has REUSE license'
 
+obsolete_inline_with_valid_sidecar_repo="$workspace/obsolete-inline-with-valid-sidecar"
+copy_valid_repo "$valid_repo" "$obsolete_inline_with_valid_sidecar_repo"
+printf '%s\n' \
+    'SPDX-FileCopyrightText: 2026 SecPal Contributors' \
+    'SPDX-License''-Identifier: AGPL-3.0-or-later' \
+    >"$obsolete_inline_with_valid_sidecar_repo/.github/copilot-instructions.md.license"
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
+    "$obsolete_inline_with_valid_sidecar_repo/.github/copilot-instructions.md"
+assert_fails_with "$obsolete_inline_with_valid_sidecar_repo" \
+    'copilot-instructions.md has REUSE license'
+
 obsolete_overlay_license_repo="$workspace/obsolete-overlay-license"
 copy_valid_repo "$valid_repo" "$obsolete_overlay_license_repo"
 sed -i \
@@ -189,6 +201,19 @@ sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier
     "$api_license_repo/AGENTS.md" \
     "$api_license_repo/.github/copilot-instructions.md"
 assert_passes "$api_license_repo" "$workspace/allowed-api-cc0.output" api
+
+legacy_frontend_license_repo="$workspace/allowed-legacy-frontend-cc0"
+copy_valid_repo "$valid_repo" "$legacy_frontend_license_repo"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
+    "$legacy_frontend_license_repo/AGENTS.md" \
+    "$legacy_frontend_license_repo/.github/copilot-instructions.md"
+legacy_frontend_output="$workspace/allowed-legacy-frontend-cc0.output"
+(
+    cd "$legacy_frontend_license_repo"
+    SECPAL_REPOSITORY_NAME=frontend bash "$VALIDATOR"
+) >"$legacy_frontend_output" 2>&1
+grep -qF 'Repository Type: frontend' "$legacy_frontend_output"
+grep -qF 'All tests passed' "$legacy_frontend_output"
 
 wrong_org_root_license_repo="$workspace/wrong-org-root-license"
 copy_valid_repo "$valid_repo" "$wrong_org_root_license_repo"
@@ -258,33 +283,31 @@ sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier
     "$detected_api_repo/AGENTS.md" \
     "$detected_api_repo/.github/copilot-instructions.md"
 detected_api_output="$workspace/detected-api.output"
-bash "$VALIDATOR" "$detected_api_repo" >"$detected_api_output" 2>&1
+SECPAL_REPOSITORY_NAME=api \
+    bash "$VALIDATOR" "$detected_api_repo" >"$detected_api_output" 2>&1
 grep -qF 'Repository Type: api' "$detected_api_output"
+
+untrusted_api_manifest_repo="$workspace/untrusted-api-manifest"
+copy_valid_repo "$valid_repo" "$untrusted_api_manifest_repo"
+printf '{"name":"secpal/api"}\n' >"$untrusted_api_manifest_repo/composer.json"
+untrusted_api_manifest_output="$workspace/untrusted-api-manifest.output"
+bash "$VALIDATOR" "$untrusted_api_manifest_repo" \
+    >"$untrusted_api_manifest_output" 2>&1
+grep -qF 'Repository Type: api' "$untrusted_api_manifest_output"
+grep -qF 'All tests passed' "$untrusted_api_manifest_output"
 
 frontend_with_composer_repo="$workspace/frontend-with-composer"
 copy_valid_repo "$valid_repo" "$frontend_with_composer_repo"
-printf '{"name":"example/vite-plugin","extra":{"name":"secpal/api"}}\n' \
+printf '{"name":"secpal/api"}\n' \
     >"$frontend_with_composer_repo/composer.json"
 printf '{"name":"secpal/frontend","devDependencies":{"vite":"latest"}}\n' \
     >"$frontend_with_composer_repo/package.json"
-sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
-    "$frontend_with_composer_repo/AGENTS.md" \
-    "$frontend_with_composer_repo/.github/copilot-instructions.md"
 frontend_with_composer_output="$workspace/frontend-with-composer.output"
-set +e
-bash "$VALIDATOR" "$frontend_with_composer_repo" \
+GITHUB_REPOSITORY=SecPal/frontend \
+    bash "$VALIDATOR" "$frontend_with_composer_repo" \
     >"$frontend_with_composer_output" 2>&1
-frontend_with_composer_status=$?
-set -e
-if [ "$frontend_with_composer_status" -eq 0 ]; then
-    sed -n '1,240p' "$frontend_with_composer_output" >&2
-    echo "a non-API composer.json must not enable the API CC0 exception" >&2
-    exit 1
-fi
 grep -qF 'Repository Type: frontend' "$frontend_with_composer_output"
-grep -qF \
-    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later' \
-    "$frontend_with_composer_output"
+grep -qF 'All tests passed' "$frontend_with_composer_output"
 
 detected_guardguide_repo="$workspace/detected-guardguide"
 copy_valid_repo "$valid_repo" "$detected_guardguide_repo"

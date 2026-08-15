@@ -44,12 +44,14 @@ The validator checks:
 
 - required `AGENTS.md` and `.github/copilot-instructions.md` files;
 - non-empty, readable UTF-8 Markdown with a top-level heading;
-- one complete policy-appropriate SPDX expression in inline metadata or a
-  REUSE `.license` sidecar for every runtime, review, and focused instruction
-  file: plain `AGPL-3.0-or-later` for managed runtime and review baselines,
-  except the intentionally `CC0-1.0` API baseline, with exact deliberate
-  `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT` expressions accepted
-  for focused overlays;
+- one complete policy-appropriate SPDX expression in the authoritative inline
+  metadata or REUSE `.license` sidecar for every runtime, review, and focused
+  instruction file, while rejecting duplicate or conflicting declarations in
+  either source: plain `AGPL-3.0-or-later` for the migrated `.github` baseline,
+  the intentionally `CC0-1.0` API baseline, transitional plain AGPL or CC0 for
+  other managed baselines until their dependency-ordered migrations complete,
+  and exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT`
+  expressions for focused overlays;
 - Markdown structure for runtime, review, and focused instruction files;
 - syntactically valid YAML overlay frontmatter with opening and closing
   delimiters plus non-empty string `name` and `applyTo` values;
@@ -102,15 +104,17 @@ Copilot review profile fails through the same canonical contract.
 `tests/validate-ai-instructions.sh` uses temporary repositories to prove that:
 
 - different valid runtime and review content passes;
-- managed runtime and review baselines require plain `AGPL-3.0-or-later`, the
-  API baseline requires its intentional `CC0-1.0`, and focused overlays retain
-  exact `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, and `MIT` support;
+- the migrated `.github` runtime and review baseline requires plain
+  `AGPL-3.0-or-later`, the API baseline requires its intentional `CC0-1.0`,
+  other managed roots retain transitional plain-AGPL or CC0 compatibility, and
+  focused overlays retain exact `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`,
+  and `MIT` support;
 - the obsolete expression
   `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`, duplicate identifiers,
   and a wrong repository-baseline license fail;
 - API, frontend-with-Composer, GuardGuide, and `guardguide.de` fixtures exercise
-  automatic repository detection so only the exact `secpal/api` Composer
-  identity enables the CC0 baseline exception;
+  trusted repository identity so candidate-controlled manifests cannot select
+  another repository's licensing policy;
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;
@@ -269,9 +273,11 @@ instruction file into another merely to satisfy validation.
 ### REUSE failure
 
 Add one policy-appropriate inline SPDX header near the start of the file or a
-valid companion `.license` sidecar. Managed `AGENTS.md` and Copilot profiles
-require exactly `AGPL-3.0-or-later`, except for the API repository's intentional
-`CC0-1.0` baseline. Focused overlays may retain an intentional exact
+valid companion `.license` sidecar. When both sources declare a license, each
+must contain exactly one identical expression. The migrated `.github` baseline
+requires `AGPL-3.0-or-later`; the API requires its intentional `CC0-1.0`;
+other managed roots accept plain AGPL or transitional CC0 until their migrations
+complete. Focused overlays may retain an intentional exact
 `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT` expression. Longer
 expressions that merely begin with one of those identifiers are rejected.
 
