@@ -32,9 +32,7 @@ spec.loader.exec_module(module)
 
 
 def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -> None:
-    license_expression = (
-        "CC0-1.0" if repo_name in {"api", "frontend"} else "AGPL-3.0-or-later"
-    )
+    license_expression = "CC0-1.0" if repo_name == "api" else "AGPL-3.0-or-later"
     root.joinpath(".github").mkdir(parents=True, exist_ok=True)
     root.joinpath(".markdownlint.json").write_text(repo_root.joinpath(".markdownlint.json").read_text())
     if repo_name == "api":

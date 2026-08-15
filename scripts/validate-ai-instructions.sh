@@ -92,21 +92,24 @@ detect_repo_type() {
             ;;
     esac
 
-    if [ -n "${REPO_TYPE:-}" ]; then
+    if [ -n "${REPO_TYPE:-}" ] \
+        && { [ "$REPO_TYPE" != "api" ] \
+            || { [ -f composer.json ] \
+                && composer_package_is composer.json secpal/api; }; }; then
         printf '%s\n' "$REPO_TYPE"
         return
     fi
 
-    if [ "$(basename "$PWD")" = "GuardGuide" ]; then
+    if [ -f composer.json ] \
+        && composer_package_is composer.json secpal/api; then
+        printf '%s\n' api
+    elif [ "$(basename "$PWD")" = "GuardGuide" ]; then
         printf '%s\n' guardguide
     elif { [ -f composer.json ] \
             && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' composer.json; } \
         || { [ -f package.json ] \
             && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' package.json; }; then
         printf '%s\n' guardguide
-    elif [ -f composer.json ] \
-        && composer_package_is composer.json secpal/api; then
-        printf '%s\n' api
     elif [ -f capacitor.config.ts ] || [ -d android/app/src ]; then
         printf '%s\n' android
     elif [ -f astro.config.mjs ]; then
@@ -117,6 +120,22 @@ detect_repo_type() {
         printf '%s\n' contracts
     else
         printf '%s\n' org
+    fi
+}
+
+instruction_baseline_policy() {
+    local repo_type="$1"
+    local repository_name="$2"
+
+    if [ "$repository_name" = "api" ]; then
+        printf '%s\n' api
+    elif [ -z "$repository_name" ] \
+        && [ "$repo_type" = "api" ] \
+        && [ -f composer.json ] \
+        && composer_package_is composer.json secpal/api; then
+        printf '%s\n' api
+    else
+        printf '%s\n' agpl
     fi
 }
 
@@ -218,22 +237,20 @@ instruction_license_pattern() {
     local file="$1"
     local repo_type="$2"
     local repository_name="$3"
+    local baseline_policy
+
+    baseline_policy="$(instruction_baseline_policy \
+        "$repo_type" "$repository_name")"
 
     case "$file" in
         .github/instructions/*.instructions.md)
             printf '%s\n' 'AGPL-3\.0-or-later|Apache-2\.0|CC0-1\.0|MIT'
             ;;
         *)
-            if [ "$repository_name" = "api" ] \
-                || { [ -z "$repository_name" ] \
-                    && [ "${REPO_TYPE:-}" = "api" ]; }; then
-                printf '%s\n' 'CC0-1\.0'
-            elif [ "$repository_name" = ".github" ] \
-                || { [ -z "$repository_name" ] && [ -n "${REPO_TYPE:-}" ]; }; then
-                printf '%s\n' 'AGPL-3\.0-or-later'
-            else
-                printf '%s\n' 'AGPL-3\.0-or-later|CC0-1\.0'
-            fi
+            case "$baseline_policy" in
+                api) printf '%s\n' 'CC0-1\.0' ;;
+                agpl) printf '%s\n' 'AGPL-3\.0-or-later' ;;
+            esac
             ;;
     esac
 }
@@ -242,22 +259,20 @@ instruction_license_description() {
     local file="$1"
     local repo_type="$2"
     local repository_name="$3"
+    local baseline_policy
+
+    baseline_policy="$(instruction_baseline_policy \
+        "$repo_type" "$repository_name")"
 
     case "$file" in
         .github/instructions/*.instructions.md)
             printf '%s\n' 'AGPL-3.0-or-later, Apache-2.0, CC0-1.0, or MIT'
             ;;
         *)
-            if [ "$repository_name" = "api" ] \
-                || { [ -z "$repository_name" ] \
-                    && [ "${REPO_TYPE:-}" = "api" ]; }; then
-                printf '%s\n' 'CC0-1.0'
-            elif [ "$repository_name" = ".github" ] \
-                || { [ -z "$repository_name" ] && [ -n "${REPO_TYPE:-}" ]; }; then
-                printf '%s\n' 'AGPL-3.0-or-later'
-            else
-                printf '%s\n' 'AGPL-3.0-or-later or transitional CC0-1.0'
-            fi
+            case "$baseline_policy" in
+                api) printf '%s\n' 'CC0-1.0' ;;
+                agpl) printf '%s\n' 'AGPL-3.0-or-later' ;;
+            esac
             ;;
     esac
 }
@@ -541,6 +556,7 @@ if [ "$#" -gt 0 ]; then
 
         (
             cd "$repo_path"
+            unset GITHUB_REPOSITORY SECPAL_REPOSITORY_NAME REPO_TYPE
             "$SCRIPT_DIR/validate-ai-instructions.sh"
         ) || overall_status=1
     done

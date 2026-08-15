@@ -3114,9 +3114,10 @@ def validate_instruction_root(
         validator_env.pop("REPO_TYPE", None)
         validator_env["SECPAL_REPOSITORY_NAME"] = repository_name
         result = subprocess.run(
-            [str(validator_path), str(resolved_root)],
+            [str(validator_path)],
             check=False,
             capture_output=True,
+            cwd=resolved_root,
             env=validator_env,
             text=True,
         )

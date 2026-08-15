@@ -523,11 +523,6 @@ SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->'
 
-legacy_header='<!--
-SPDX-FileCopyrightText: 2026 SecPal Contributors
-SPDX-License-Identifier: CC0-1.0
--->'
-
 create_repo "api" "$api_header
 
 # API Instructions
@@ -570,7 +565,7 @@ applyTo: '**/*.php'
 - Use vendor/bin/pint --dirty after changes.
 "
 
-create_repo "frontend" "$legacy_header
+create_repo "frontend" "$common_header
 
 # Frontend Instructions
 
@@ -1865,8 +1860,9 @@ assert not (fixture / "polyscope.local.json").exists()
 assert not (fixture / ".polyscope-secpal-provisioned.json").exists()
 PY
 
-# Canonical validation uses argv-safe paths, caches each resolved root after a
-# real successful run, and fails closed when its validator cannot execute.
+# Canonical validation uses a resolved working directory with trusted repository
+# identity, caches each root after a real successful run, and fails closed when
+# its validator cannot execute.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
 import pathlib

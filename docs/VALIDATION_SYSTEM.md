@@ -48,10 +48,9 @@ The validator checks:
   metadata or REUSE `.license` sidecar for every runtime, review, and focused
   instruction file, while rejecting duplicate or conflicting declarations in
   either source: plain `AGPL-3.0-or-later` for the migrated `.github` baseline,
-  the intentionally `CC0-1.0` API baseline, transitional plain AGPL or CC0 for
-  other managed baselines until their dependency-ordered migrations complete,
-  and exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT`
-  expressions for focused overlays;
+  the intentionally `CC0-1.0` API baseline, plain `AGPL-3.0-or-later` for other
+  managed baselines, and exact deliberate `AGPL-3.0-or-later`, `Apache-2.0`,
+  `CC0-1.0`, or `MIT` expressions for focused overlays;
 - Markdown structure for runtime, review, and focused instruction files;
 - syntactically valid YAML overlay frontmatter with opening and closing
   delimiters plus non-empty string `name` and `applyTo` values;
@@ -94,6 +93,13 @@ To validate another checked-out repository with this implementation:
 bash scripts/validate-ai-instructions.sh /path/to/repository
 ```
 
+Repository-path mode derives identity independently for each target and clears
+ambient `GITHUB_REPOSITORY`, `SECPAL_REPOSITORY_NAME`, and `REPO_TYPE` values
+before recursion. Without a path argument, canonical callers may supply trusted
+identity through `GITHUB_REPOSITORY` or `SECPAL_REPOSITORY_NAME`. The legacy
+`REPO_TYPE` hint remains available for local compatibility, but cannot select
+the API policy unless the repository has the exact `secpal/api` manifest.
+
 The compatibility entry point `validate-copilot-instructions.sh` always
 delegates to this canonical validator, including for repository-path arguments.
 It has no Copilot-only validation model, so a missing `AGENTS.md` or missing
@@ -104,16 +110,15 @@ Copilot review profile fails through the same canonical contract.
 `tests/validate-ai-instructions.sh` uses temporary repositories to prove that:
 
 - different valid runtime and review content passes;
-- the migrated `.github` runtime and review baseline requires plain
-  `AGPL-3.0-or-later`, the API baseline requires its intentional `CC0-1.0`,
-  other managed roots retain transitional plain-AGPL or CC0 compatibility, and
-  focused overlays retain exact `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`,
-  and `MIT` support;
+- managed runtime and review baselines require plain `AGPL-3.0-or-later`, the
+  API baseline requires its intentional `CC0-1.0`, and focused overlays retain
+  exact `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, and `MIT` support;
 - the obsolete expression
   `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`, duplicate identifiers,
   and a wrong repository-baseline license fail;
 - API, frontend-with-Composer, GuardGuide, and `guardguide.de` fixtures exercise
-  trusted repository identity so candidate-controlled manifests cannot select
+  trusted repository identity, path-local fallback detection, and legacy type
+  hints so ambient identity and misleading manifest values cannot select
   another repository's licensing policy;
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
@@ -274,10 +279,9 @@ instruction file into another merely to satisfy validation.
 
 Add one policy-appropriate inline SPDX header near the start of the file or a
 valid companion `.license` sidecar. When both sources declare a license, each
-must contain exactly one identical expression. The migrated `.github` baseline
-requires `AGPL-3.0-or-later`; the API requires its intentional `CC0-1.0`;
-other managed roots accept plain AGPL or transitional CC0 until their migrations
-complete. Focused overlays may retain an intentional exact
+must contain exactly one identical expression. Managed baselines require
+`AGPL-3.0-or-later`; the API requires its intentional `CC0-1.0`. Focused
+overlays may retain an intentional exact
 `AGPL-3.0-or-later`, `Apache-2.0`, `CC0-1.0`, or `MIT` expression. Longer
 expressions that merely begin with one of those identifiers are rejected.
 

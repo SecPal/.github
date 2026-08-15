@@ -17,12 +17,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   alternate-license preservation, third-party metadata boundary, and official
   SecPal product-branding requirements explicit in the runtime and review
   instructions
-- changed AI-instruction license validation to require plain AGPL for the
-  migrated `.github` baseline, retain the API repository's intentional CC0,
-  preserve transitional CC0 compatibility for dependency-ordered sibling
-  migrations and deliberate focused-overlay licenses, and reject incomplete,
-  duplicate, conflicting, or obsolete expressions without disturbing unrelated
-  custom-license metadata
+- changed AI-instruction license validation to require plain AGPL for managed
+  baselines, retain the API repository's intentional CC0 and deliberate
+  focused-overlay licenses, and reject incomplete, duplicate, conflicting, or
+  obsolete expressions without disturbing unrelated custom-license metadata
 - aligned the Copilot profile's authoritative `.license` sidecar with its
   visible plain-AGPL metadata and the `SecPal Contributors` year convention
 - added Polyscope rollout regressions proving invalid attribution metadata
