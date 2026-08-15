@@ -132,6 +132,36 @@ assert_fails_with() {
     fi
 }
 
+assert_output_contains() {
+    local output_file="$1"
+    local expected="$2"
+
+    if ! grep -qF "$expected" "$output_file"; then
+        sed -n '1,240p' "$output_file" >&2
+        echo "captured output did not include expected result: $expected" >&2
+        exit 1
+    fi
+}
+
+diagnostic_probe_output="$workspace/assert-output-contains-probe.output"
+diagnostic_probe_log="$workspace/assert-output-contains-probe.log"
+printf '%s\n' 'diagnostic probe output' >"$diagnostic_probe_output"
+set +e
+(
+    assert_output_contains "$diagnostic_probe_output" 'missing expected text'
+) >"$diagnostic_probe_log" 2>&1
+diagnostic_probe_status=$?
+set -e
+if [ "$diagnostic_probe_status" -eq 0 ]; then
+    echo "output assertion unexpectedly accepted missing text" >&2
+    exit 1
+fi
+if ! grep -qF 'diagnostic probe output' "$diagnostic_probe_log"; then
+    sed -n '1,240p' "$diagnostic_probe_log" >&2
+    echo "output assertion did not print captured output on failure" >&2
+    exit 1
+fi
+
 valid_repo="$workspace/valid-independent-layers"
 write_valid_repo "$valid_repo"
 valid_output="$workspace/valid-independent-layers.output"
@@ -187,8 +217,8 @@ migrated_deployment_output="$workspace/migrated-deployment.output"
     cd "$migrated_deployment_repo"
     GITHUB_REPOSITORY=SecPal/deployment bash "$VALIDATOR"
 ) >"$migrated_deployment_output" 2>&1
-grep -qF 'Repository Type: deployment' "$migrated_deployment_output"
-grep -qF 'All tests passed' "$migrated_deployment_output"
+assert_output_contains "$migrated_deployment_output" 'Repository Type: deployment'
+assert_output_contains "$migrated_deployment_output" 'All tests passed'
 
 obsolete_deployment_repo="$workspace/obsolete-deployment"
 copy_valid_repo "$migrated_deployment_repo" "$obsolete_deployment_repo"
@@ -208,9 +238,8 @@ if [ "$obsolete_deployment_status" -eq 0 ]; then
     echo "migrated deployment instructions must require plain AGPL" >&2
     exit 1
 fi
-grep -qF \
-    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later' \
-    "$obsolete_deployment_output"
+assert_output_contains "$obsolete_deployment_output" \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 
 duplicate_agents_license_repo="$workspace/duplicate-agents-license"
 copy_valid_repo "$valid_repo" "$duplicate_agents_license_repo"
