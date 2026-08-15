@@ -63,6 +63,57 @@ protected_content_matches() {
     "$(normalize_documented_action_pins <<<"$accepted_content")"
 }
 
+normalize_agents_license_branding_overlay() {
+  local text
+
+  text="$(cat)"
+  python3 - "$text" <<'PY'
+import sys
+
+text = sys.argv[1]
+section = """## Licensing, REUSE, and Branding
+
+- Use `AGPL-3.0-or-later` for SecPal-owned material intentionally covered by
+  the AGPL. Never add or restore `LicenseRef-SecPal-Attribution` after the
+  licensing rollout.
+- Preserve deliberately different licenses, including `CC0-1.0`, `MIT`,
+  `Apache-2.0`, third-party and generated-file licenses, and unrelated custom
+  license references. Do not rewrite third-party copyright or license metadata.
+- Use `SecPal Contributors` where the project copyright convention applies.
+  Preserve each file's first-publication year and extend its year range through
+  the current year when an edited file requires a copyright-year update.
+- Run the relevant REUSE or license validation after changing copyright or
+  license metadata.
+- On user-facing official SecPal product surfaces, preserve
+  `Powered by SecPal – A guard's best friend` where it is intentionally present.
+  A licensing change must not remove, weaken, parameterize, genericize, or make
+  that SecPal branding optional.
+- Do not add fork-oriented `Based on SecPal` guidance to AI instructions, and
+  do not introduce white-label or fork-branding configuration as part of a
+  licensing change."""
+overlay = section + "\n\n"
+copyright_line = "SPDX-FileCopyrightText: 2026 SecPal Contributors"
+
+if text.count(overlay) != 1 or text.count(copyright_line) != 1:
+    raise SystemExit(1)
+
+text = text.replace(overlay, "", 1)
+text = text.replace(
+    copyright_line,
+    "SPDX-FileCopyrightText: 2026 SecPal",
+    1,
+)
+sys.stdout.write(text)
+PY
+}
+
+if sed \
+  "s/that SecPal branding optional/that SecPal branding configurable/" \
+  "$REPO_ROOT/AGENTS.md" \
+  | normalize_agents_license_branding_overlay >/dev/null; then
+  fail 'modified licensing and branding instruction overlay was accepted'
+fi
+
 protected_mode_matches() {
   local accepted_mode="$1"
   local path="$2"
@@ -403,6 +454,10 @@ for path in "${protected_paths[@]}"; do
   accepted_content="$(git -C "$REPO_ROOT" show "$P21_BASELINE:$relative_path")" \
     || fail "accepted protected-file baseline is unavailable: $relative_path"
   current_content="$(<"$path")"
+  if [ "$relative_path" = "AGENTS.md" ]; then
+    current_content="$(normalize_agents_license_branding_overlay <<<"$current_content")" \
+      || fail 'canonical licensing and branding instruction overlay changed'
+  fi
   protected_content_matches "$accepted_content" "$current_content" \
     || fail 'existing review governance or instruction routing changed'
 done
