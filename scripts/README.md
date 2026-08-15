@@ -336,7 +336,7 @@ See `.github/workflows/validate-ai-instructions.yml`
 The script automatically detects repository type:
 
 - **org**: `.github` repository (org-wide instructions)
-- **api**: Laravel API (has `artisan`, `composer.json`)
+- **api**: SecPal API (has Composer package name `secpal/api`)
 - **frontend**: React frontend or Android wrapper (has `package.json` with `vite`)
 - **website**: Astro landing page (has `astro.config.mjs`)
 - **contracts**: OpenAPI contracts (has `package.json` with `openapi` or `docs/openapi.yaml`)

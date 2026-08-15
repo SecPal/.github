@@ -175,6 +175,14 @@ sed -i \
     "$duplicate_agents_license_repo/AGENTS.md"
 assert_fails_with "$duplicate_agents_license_repo" 'AGENTS.md has REUSE license'
 
+late_duplicate_agents_license_repo="$workspace/late-duplicate-agents-license"
+copy_valid_repo "$valid_repo" "$late_duplicate_agents_license_repo"
+printf '%s\n' \
+    '<!-- SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution -->' \
+    >>"$late_duplicate_agents_license_repo/AGENTS.md"
+assert_fails_with "$late_duplicate_agents_license_repo" \
+    'AGENTS.md has REUSE license'
+
 api_license_repo="$workspace/allowed-api-cc0"
 copy_valid_repo "$valid_repo" "$api_license_repo"
 sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
@@ -252,6 +260,31 @@ sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier
 detected_api_output="$workspace/detected-api.output"
 bash "$VALIDATOR" "$detected_api_repo" >"$detected_api_output" 2>&1
 grep -qF 'Repository Type: api' "$detected_api_output"
+
+frontend_with_composer_repo="$workspace/frontend-with-composer"
+copy_valid_repo "$valid_repo" "$frontend_with_composer_repo"
+printf '{"name":"example/vite-plugin","extra":{"name":"secpal/api"}}\n' \
+    >"$frontend_with_composer_repo/composer.json"
+printf '{"name":"secpal/frontend","devDependencies":{"vite":"latest"}}\n' \
+    >"$frontend_with_composer_repo/package.json"
+sed -i 's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: CC0-1.0/' \
+    "$frontend_with_composer_repo/AGENTS.md" \
+    "$frontend_with_composer_repo/.github/copilot-instructions.md"
+frontend_with_composer_output="$workspace/frontend-with-composer.output"
+set +e
+bash "$VALIDATOR" "$frontend_with_composer_repo" \
+    >"$frontend_with_composer_output" 2>&1
+frontend_with_composer_status=$?
+set -e
+if [ "$frontend_with_composer_status" -eq 0 ]; then
+    sed -n '1,240p' "$frontend_with_composer_output" >&2
+    echo "a non-API composer.json must not enable the API CC0 exception" >&2
+    exit 1
+fi
+grep -qF 'Repository Type: frontend' "$frontend_with_composer_output"
+grep -qF \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later' \
+    "$frontend_with_composer_output"
 
 detected_guardguide_repo="$workspace/detected-guardguide"
 copy_valid_repo "$valid_repo" "$detected_guardguide_repo"

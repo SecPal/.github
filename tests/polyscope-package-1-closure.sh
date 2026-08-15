@@ -36,7 +36,7 @@ def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -
     root.joinpath(".github").mkdir(parents=True, exist_ok=True)
     root.joinpath(".markdownlint.json").write_text(repo_root.joinpath(".markdownlint.json").read_text())
     if repo_name == "api":
-        root.joinpath("composer.json").write_text("{}\n")
+        root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     root.joinpath("AGENTS.md").write_text(
         "<!--\n"
         "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"

@@ -36,6 +36,28 @@ print_result() {
     FAILED_TESTS=$((FAILED_TESTS + 1))
 }
 
+composer_package_is() {
+    local manifest="$1"
+    local expected_name="$2"
+
+    python3 - "$manifest" "$expected_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+raise SystemExit(
+    0
+    if isinstance(manifest, dict) and manifest.get("name") == sys.argv[2]
+    else 1
+)
+PY
+}
+
 detect_repo_type() {
     if [ -n "${REPO_TYPE:-}" ]; then
         printf '%s\n' "$REPO_TYPE"
@@ -49,7 +71,8 @@ detect_repo_type() {
         || { [ -f package.json ] \
             && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' package.json; }; then
         printf '%s\n' guardguide
-    elif [ -f artisan ] || [ -f composer.json ]; then
+    elif [ -f composer.json ] \
+        && composer_package_is composer.json secpal/api; then
         printf '%s\n' api
     elif [ -f capacitor.config.ts ] || [ -d android/app/src ]; then
         printf '%s\n' android
@@ -200,8 +223,8 @@ has_complete_allowed_instruction_license() {
         metadata="$(head -n "$line_limit" "$file")"
     fi
 
-    identifier_count="$(printf '%s\n' "$metadata" \
-        | grep -cF 'SPDX-License''-Identifier:' || true)"
+    identifier_count="$(grep -cF 'SPDX-License''-Identifier:' "$file" \
+        || true)"
     allowed_count="$(printf '%s\n' "$metadata" \
         | grep -cE "($bare_pattern)|($html_pattern)" || true)"
 

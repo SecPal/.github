@@ -108,8 +108,9 @@ Copilot review profile fails through the same canonical contract.
 - the obsolete expression
   `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution`, duplicate identifiers,
   and a wrong repository-baseline license fail;
-- API, GuardGuide, and `guardguide.de` fixtures exercise automatic repository
-  detection so GuardGuide remains AGPL and is not mistaken for the CC0 API;
+- API, frontend-with-Composer, GuardGuide, and `guardguide.de` fixtures exercise
+  automatic repository detection so only the exact `secpal/api` Composer
+  identity enables the CC0 baseline exception;
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;

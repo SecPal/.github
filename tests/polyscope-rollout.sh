@@ -43,8 +43,14 @@ digest = hashlib.sha256()
 for path in sorted(root.rglob("*")):
     if not path.is_file():
         continue
-    if path.name not in {"AGENTS.md", "copilot-instructions.md"} \
-            and not path.name.endswith(".instructions.md"):
+    if path.name not in {
+        "AGENTS.md",
+        "AGENTS.md.license",
+        "copilot-instructions.md",
+        "copilot-instructions.md.license",
+    } and not path.name.endswith(
+        (".instructions.md", ".instructions.md.license")
+    ):
         continue
     digest.update(str(path.relative_to(root)).encode())
     digest.update(b"\0")
@@ -65,6 +71,25 @@ assert_no_generated_preflight_action() {
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
+
+instruction_hash_fixture="$workspace/instruction-hash"
+mkdir -p "$instruction_hash_fixture/.github"
+printf '# Runtime instructions\n' >"$instruction_hash_fixture/AGENTS.md"
+printf '%s\n' 'SPDX-License''-Identifier: AGPL-3.0-or-later' \
+    >"$instruction_hash_fixture/AGENTS.md.license"
+instruction_hash_before_sidecar_change="$(
+    instruction_tree_sha256 "$instruction_hash_fixture"
+)"
+printf '%s\n' 'SPDX-License''-Identifier: MIT' \
+    >"$instruction_hash_fixture/AGENTS.md.license"
+instruction_hash_after_sidecar_change="$(
+    instruction_tree_sha256 "$instruction_hash_fixture"
+)"
+if [ "$instruction_hash_before_sidecar_change" \
+    = "$instruction_hash_after_sidecar_change" ]; then
+    echo "instruction tree hash must include REUSE sidecars" >&2
+    exit 1
+fi
 
 fake_setfacl="$workspace/fake-tools/setfacl"
 mkdir -p "$(dirname "$fake_setfacl")"
@@ -175,7 +200,7 @@ for repo_dir in workspace_root.iterdir():
     )
     (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
 
-(workspace_root / "api" / "composer.json").write_text("{}\n")
+(workspace_root / "api" / "composer.json").write_text('{"name":"secpal/api"}\n')
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / "api" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
@@ -273,7 +298,7 @@ seed_api_worktree_files() {
     local worktree_dir="$1"
 
     write_valid_worktree_instructions "$worktree_dir" CC0-1.0
-    printf '{}\n' > "$worktree_dir/composer.json"
+    printf '{"name":"secpal/api"}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
     chmod +x "$worktree_dir/artisan"
 }
@@ -989,7 +1014,7 @@ for executable in ("composer", "php", "psql"):
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
-    (root / "composer.json").write_text("{}\n")
+    (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
         "<!--\n"
         "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
@@ -1253,7 +1278,7 @@ release_first = fixture / "release-first"
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
-    (root / "composer.json").write_text("{}\n")
+    (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
         "<!--\n"
         "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
@@ -1292,7 +1317,7 @@ for instruction_name, instruction_title in (
 (physical_worktree / ".git" / "info").mkdir(parents=True)
 (physical_worktree / ".git" / "hooks").mkdir()
 for repository_root in (source_api, physical_worktree):
-    repository_root.joinpath("composer.json").write_text("{}\n")
+    repository_root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     repository_root.joinpath("artisan").write_text("#!/usr/bin/env php\n")
 fake_bin.mkdir(parents=True)
 race_state.mkdir()
@@ -2061,7 +2086,7 @@ fake_bin.mkdir()
 for instruction_root in (source_api, api_worktree):
     instruction_root.joinpath(".github").mkdir(exist_ok=True)
     shutil.copy2(repo_root / ".markdownlint.json", instruction_root / ".markdownlint.json")
-    instruction_root.joinpath("composer.json").write_text("{}\n")
+    instruction_root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     instruction_root.joinpath("AGENTS.md").write_text(
         "<!--\n"
         "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
@@ -5625,7 +5650,7 @@ EOF
 
 seed_api_worktree_files "$api_clone"
 write_valid_worktree_instructions "$broken_api_clone" CC0-1.0
-printf '{}\n' >"$broken_api_clone/composer.json"
+printf '{"name":"secpal/api"}\n' >"$broken_api_clone/composer.json"
 seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
 seed_node_worktree_files "$broken_android_clone" "android-feat"
 seed_node_worktree_files "$android_clone" "android-auto-hawk"
