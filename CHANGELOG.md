@@ -21,6 +21,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   baselines, retain the API repository's intentional CC0 and deliberate
   focused-overlay licenses, and reject incomplete, duplicate, conflicting, or
   obsolete expressions without disturbing unrelated custom-license metadata
+- added explicit trusted deployment identity coverage that admits its migrated
+  plain-AGPL runtime and review instructions while continuing to reject the
+  obsolete attribution expression
 - aligned the Copilot profile's authoritative `.license` sidecar with its
   visible plain-AGPL metadata and the `SecPal Contributors` year convention
 - added Polyscope rollout regressions proving invalid attribution metadata

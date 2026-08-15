@@ -180,6 +180,38 @@ sed -i \
 assert_fails_with "$obsolete_overlay_license_repo" \
     '.github/instructions/example.instructions.md has REUSE license'
 
+migrated_deployment_repo="$workspace/migrated-deployment"
+copy_valid_repo "$valid_repo" "$migrated_deployment_repo"
+migrated_deployment_output="$workspace/migrated-deployment.output"
+(
+    cd "$migrated_deployment_repo"
+    GITHUB_REPOSITORY=SecPal/deployment bash "$VALIDATOR"
+) >"$migrated_deployment_output" 2>&1
+grep -qF 'Repository Type: deployment' "$migrated_deployment_output"
+grep -qF 'All tests passed' "$migrated_deployment_output"
+
+obsolete_deployment_repo="$workspace/obsolete-deployment"
+copy_valid_repo "$migrated_deployment_repo" "$obsolete_deployment_repo"
+sed -i \
+    's/SPDX-License''-Identifier: AGPL-3.0-or-later/SPDX-License''-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution/' \
+    "$obsolete_deployment_repo/AGENTS.md"
+obsolete_deployment_output="$workspace/obsolete-deployment.output"
+set +e
+(
+    cd "$obsolete_deployment_repo"
+    GITHUB_REPOSITORY=SecPal/deployment bash "$VALIDATOR"
+) >"$obsolete_deployment_output" 2>&1
+obsolete_deployment_status=$?
+set -e
+if [ "$obsolete_deployment_status" -eq 0 ]; then
+    sed -n '1,240p' "$obsolete_deployment_output" >&2
+    echo "migrated deployment instructions must require plain AGPL" >&2
+    exit 1
+fi
+grep -qF \
+    'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later' \
+    "$obsolete_deployment_output"
+
 duplicate_agents_license_repo="$workspace/duplicate-agents-license"
 copy_valid_repo "$valid_repo" "$duplicate_agents_license_repo"
 sed -i \
