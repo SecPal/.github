@@ -6223,7 +6223,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--instruction-repository-name")
     parser.add_argument("--shell-command")
-    parser.add_argument("--workspace-root", type=pathlib.Path, default=pathlib.Path.home() / "code" / "SecPal")
+    parser.add_argument(
+        "--workspace-root",
+        type=pathlib.Path,
+        default=pathlib.Path(
+            os.environ.get(
+                "SECPAL_WORKSPACE_ROOT",
+                pathlib.Path.home() / "code" / "SecPal",
+            )
+        ),
+    )
     parser.add_argument("--db-path", type=pathlib.Path, default=default_polyscope_db_path())
     parser.add_argument("--clone-root", type=pathlib.Path, default=pathlib.Path.home() / ".polyscope" / "clones")
     parser.add_argument("--provision-lock-path", type=pathlib.Path, default=default_provision_lock_path())

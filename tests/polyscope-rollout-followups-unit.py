@@ -10,8 +10,10 @@ import importlib.util
 import inspect
 import io
 import json
+import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import tokenize
 from pathlib import Path
@@ -36,6 +38,27 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_cached_validation_uses_installed_workspace_root(self) -> None:
+        configured_root = Path("/srv/secpal-workspace")
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"SECPAL_WORKSPACE_ROOT": str(configured_root)},
+            ),
+            mock.patch.object(sys, "argv", ["polyscope-rollout.py"]),
+        ):
+            args = rollout.parse_args()
+
+        self.assertEqual(args.workspace_root, configured_root)
+
+    def test_installer_exports_workspace_root_to_cached_setups(self) -> None:
+        installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+
+        self.assertIn(
+            "Environment=SECPAL_WORKSPACE_ROOT=$WORKSPACE_ROOT",
+            installer,
+        )
+
     def test_registered_instruction_identity_rejects_unmanaged_repository_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

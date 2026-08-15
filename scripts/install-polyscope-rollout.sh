@@ -419,6 +419,7 @@ Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
+Environment=SECPAL_WORKSPACE_ROOT=$WORKSPACE_ROOT
 ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
 Restart=on-failure

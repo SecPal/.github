@@ -27,8 +27,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   fails before side effects and valid repository instructions remain unchanged
 - retained compatibility with cached Polyscope setup definitions that predate
   explicit repository-name propagation by deriving trusted identity from the
-  active Polyscope registration while rejecting missing, ambiguous, unmanaged,
-  or worktree-controlled identity
+  active Polyscope registration and the installer-configured managed source
+  root while rejecting missing, ambiguous, unmanaged, or worktree-controlled
+  identity
 
 ---
 

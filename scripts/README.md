@@ -552,8 +552,11 @@ Every generated repository setup sequence starts with the validation-only
 `--validate-instruction-worktree` command and explicit repository name inside
 one strict shell entry. Cached setup definitions without that identity argument
 remain compatible during rollout convergence by resolving the repository from
-the worktree's active Polyscope database registration. Missing, ambiguous, and
-unmanaged registrations fail closed instead of trusting ambient identity or
+the worktree's active Polyscope database registration. The installed user
+service exports the configured workspace root to those cached commands, so
+nondefault installations retain the same managed-source identity boundary.
+Missing, ambiguous, and unmanaged registrations fail closed instead of trusting
+ambient identity or
 mutable worktree manifests. The entry groups the complete native setup with
 fail-fast semantics, so validation or any later command failure prevents every
 remaining npm, Composer, `.env`, database, migration, seed, build, or repository

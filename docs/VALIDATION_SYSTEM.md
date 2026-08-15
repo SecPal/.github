@@ -150,6 +150,9 @@ runs the complete original native setup as fail-fast command groups. Cached
 setup definitions from before repository-name propagation remain valid during
 rollout convergence: when that argument is absent, the validator resolves the
 trusted identity from the candidate's active Polyscope database registration.
+For nondefault installations, the user-service installer exports its configured
+managed workspace root to cached setup processes so this lookup does not fall
+back to `$HOME/code/SecPal`.
 Missing, ambiguous, or unmanaged registrations fail closed; ambient identity
 and mutable worktree manifests cannot select repository policy. Polyscope may
 already have created and registered the candidate at that point, but canonical

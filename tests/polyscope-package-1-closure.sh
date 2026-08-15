@@ -178,11 +178,11 @@ with sqlite3.connect(legacy_db_path) as connection:
 
 legacy_validation_command = (
     f"python3 {shlex.quote(str(script_path))} "
-    f"--workspace-root {shlex.quote(str(native_source_workspace))} "
     '--validate-instruction-worktree "$PWD"'
 )
 legacy_env = native_env.copy()
 legacy_env["POLYSCOPE_DB_PATH"] = str(legacy_db_path)
+legacy_env["SECPAL_WORKSPACE_ROOT"] = str(native_source_workspace)
 legacy_result = run_polyscope_setup(
     legacy_api_root,
     [legacy_validation_command],
@@ -254,7 +254,7 @@ assert unsupported_legacy_result.returncode != 0, (
     unsupported_legacy_result.stdout,
     unsupported_legacy_result.stderr,
 )
-assert "unsupported repository identity" in unsupported_legacy_result.stderr, (
+assert "does not match managed repository source path state" in unsupported_legacy_result.stderr, (
     unsupported_legacy_result.stdout,
     unsupported_legacy_result.stderr,
 )
