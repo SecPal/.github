@@ -3096,6 +3096,7 @@ def validate_instruction_root(
     validated_instruction_roots: set[tuple[pathlib.Path, str]],
     repository_name: str,
 ) -> pathlib.Path:
+    """Validate instructions with an explicit trusted repository identity."""
     resolved_root = root.resolve()
     validation_key = (resolved_root, repository_name)
     if validation_key in validated_instruction_roots:
@@ -3111,6 +3112,7 @@ def validate_instruction_root(
     try:
         validator_env = os.environ.copy()
         validator_env.pop("GITHUB_REPOSITORY", None)
+        validator_env.pop("SECPAL_REPOSITORY_NAME", None)
         validator_env.pop("REPO_TYPE", None)
         validator_env["SECPAL_REPOSITORY_NAME"] = repository_name
         result = subprocess.run(
@@ -3141,6 +3143,90 @@ def validate_instruction_root(
 
     validated_instruction_roots.add(validation_key)
     return resolved_root
+
+
+def resolve_registered_instruction_repository_name(
+    worktree_path: pathlib.Path,
+    db_path: pathlib.Path,
+) -> str:
+    """Resolve a legacy setup caller through its active Polyscope registration."""
+    resolved_worktree = worktree_path.resolve()
+    resolved_db_path = db_path.resolve()
+    requirement = (
+        "validation without --instruction-repository-name requires an active "
+        "Polyscope registration"
+    )
+    if not resolved_db_path.is_file():
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            f"{requirement}; database not found at {resolved_db_path}"
+        )
+
+    try:
+        with sqlite3.connect(
+            f"{resolved_db_path.as_uri()}?mode=ro",
+            uri=True,
+        ) as connection:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(worktrees)")
+            }
+            where_clause = (
+                " where worktrees.status = 'active'"
+                if "status" in columns
+                else ""
+            )
+            rows = connection.execute(
+                """
+                select worktrees.path, repositories.name
+                from worktrees
+                join repositories on repositories.id = worktrees.repo_id
+                """
+                + where_clause
+            ).fetchall()
+    except sqlite3.Error as error:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            f"{requirement}; unable to read {resolved_db_path}: {error}"
+        ) from error
+
+    registered_repositories = []
+    for registered_path, display_name in rows:
+        if not isinstance(registered_path, str) or not registered_path.strip():
+            continue
+        try:
+            registered_worktree = pathlib.Path(registered_path).resolve()
+        except (OSError, ValueError):
+            continue
+        if registered_worktree == resolved_worktree:
+            registered_repositories.append(display_name)
+
+    if not registered_repositories:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            f"{requirement} in {resolved_db_path}"
+        )
+    if len(registered_repositories) != 1:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            "validation without --instruction-repository-name found multiple "
+            f"active Polyscope registrations in {resolved_db_path}"
+        )
+
+    display_name = registered_repositories[0]
+    repository_names = {
+        settings["display_name"]: repo_name
+        for repo_name, settings in REPO_SETTINGS.items()
+    }
+    repository_name = repository_names.get(display_name)
+    if repository_name is None:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {resolved_worktree}: "
+            f"active Polyscope registration has unsupported repository identity "
+            f"{display_name!r}"
+        )
+
+    return repository_name
 
 
 def require_repo_instruction_files(
@@ -6045,16 +6131,17 @@ def dispatch_validation_only_direct_mode(args: argparse.Namespace) -> int | None
     requested_root = getattr(args, VALIDATION_ONLY_DIRECT_MODE)
     if requested_root is None:
         return None
-    if args.instruction_repository_name is None:
-        raise SystemExit(
-            "--instruction-repository-name is required with "
-            "--validate-instruction-worktree"
-        )
 
+    repository_name = args.instruction_repository_name
+    if repository_name is None:
+        repository_name = resolve_registered_instruction_repository_name(
+            requested_root,
+            args.db_path,
+        )
     resolved_root = validate_instruction_root(
         requested_root,
         set(),
-        args.instruction_repository_name,
+        repository_name,
     )
     print(f"Canonical AI-instruction validation passed for {resolved_root}")
     return 0

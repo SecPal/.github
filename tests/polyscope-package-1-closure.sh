@@ -143,6 +143,121 @@ native_env["NATIVE_SETUP_LOG"] = str(native_setup_log)
 native_env["POLYSCOPE_DB_PATH"] = str(workspace / "native-polyscope.db")
 native_env["GITHUB_REPOSITORY"] = "SecPal/.github"
 
+# Setup definitions installed before repository-specific validation identity was
+# introduced must remain executable during rollout convergence. The legacy
+# command must derive the API policy from the authoritative active registration,
+# not ambient identity or mutable worktree manifests.
+legacy_api_root = workspace / "legacy native setup api root"
+write_valid_instructions(legacy_api_root, "api")
+legacy_api_root.joinpath("composer.json").write_text('{"name":"example/not-api"}\n')
+legacy_db_path = workspace / "legacy-native-polyscope.db"
+with sqlite3.connect(legacy_db_path) as connection:
+    connection.executescript(
+        """
+        create table repositories (
+            id text primary key,
+            name text not null,
+            path text not null
+        );
+        create table worktrees (
+            id text primary key,
+            repo_id text not null,
+            path text not null,
+            status text default 'active' not null
+        );
+        """
+    )
+    connection.execute(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        ("legacy-api-repo", "SecPal/api", str(native_source_workspace / "api")),
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+        ("legacy-api-worktree", "legacy-api-repo", str(legacy_api_root)),
+    )
+
+legacy_validation_command = (
+    f"python3 {shlex.quote(str(script_path))} "
+    '--validate-instruction-worktree "$PWD"'
+)
+legacy_env = native_env.copy()
+legacy_env["POLYSCOPE_DB_PATH"] = str(legacy_db_path)
+legacy_result = run_polyscope_setup(
+    legacy_api_root,
+    [legacy_validation_command],
+    legacy_env,
+)
+assert legacy_result.returncode == 0, (
+    legacy_result.stdout,
+    legacy_result.stderr,
+)
+
+with sqlite3.connect(legacy_db_path) as connection:
+    connection.execute(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        ("ambiguous-repo", "SecPal/frontend", str(native_source_workspace / "frontend")),
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+        ("ambiguous-worktree", "ambiguous-repo", str(legacy_api_root)),
+    )
+ambiguous_legacy_result = run_polyscope_setup(
+    legacy_api_root,
+    [legacy_validation_command],
+    legacy_env,
+)
+assert ambiguous_legacy_result.returncode != 0, (
+    ambiguous_legacy_result.stdout,
+    ambiguous_legacy_result.stderr,
+)
+assert "multiple active Polyscope registrations" in ambiguous_legacy_result.stderr, (
+    ambiguous_legacy_result.stdout,
+    ambiguous_legacy_result.stderr,
+)
+with sqlite3.connect(legacy_db_path) as connection:
+    connection.execute("delete from worktrees where id = ?", ("ambiguous-worktree",))
+
+unregistered_legacy_root = workspace / "unregistered legacy setup api root"
+write_valid_instructions(unregistered_legacy_root, "api")
+unregistered_legacy_result = run_polyscope_setup(
+    unregistered_legacy_root,
+    [legacy_validation_command],
+    legacy_env,
+)
+assert unregistered_legacy_result.returncode != 0, (
+    unregistered_legacy_result.stdout,
+    unregistered_legacy_result.stderr,
+)
+assert "requires an active Polyscope registration" in unregistered_legacy_result.stderr, (
+    unregistered_legacy_result.stdout,
+    unregistered_legacy_result.stderr,
+)
+
+unsupported_legacy_root = workspace / "unsupported legacy setup root"
+write_valid_instructions(unsupported_legacy_root)
+with sqlite3.connect(legacy_db_path) as connection:
+    connection.execute(
+        "insert into repositories (id, name, path) values (?, ?, ?)",
+        ("unsupported-repo", "Example/unsupported", str(workspace / "unsupported-source")),
+    )
+    connection.execute(
+        "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+        ("unsupported-worktree", "unsupported-repo", str(unsupported_legacy_root)),
+    )
+unsupported_legacy_result = run_polyscope_setup(
+    unsupported_legacy_root,
+    [legacy_validation_command],
+    legacy_env,
+)
+assert unsupported_legacy_result.returncode != 0, (
+    unsupported_legacy_result.stdout,
+    unsupported_legacy_result.stderr,
+)
+assert "unsupported repository identity" in unsupported_legacy_result.stderr, (
+    unsupported_legacy_result.stdout,
+    unsupported_legacy_result.stderr,
+)
+
 for repo_name, generated_spec in generated_specs.items():
     setup_commands = module.render_local_config(generated_spec).get("scripts", {}).get("setup", [])
     assert setup_commands, repo_name

@@ -25,6 +25,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   visible plain-AGPL metadata and the `SecPal Contributors` year convention
 - added Polyscope rollout regressions proving invalid attribution metadata
   fails before side effects and valid repository instructions remain unchanged
+- retained compatibility with cached Polyscope setup definitions that predate
+  explicit repository-name propagation by deriving trusted identity from the
+  active Polyscope registration while rejecting missing, ambiguous, unmanaged,
+  or worktree-controlled identity
 
 ---
 

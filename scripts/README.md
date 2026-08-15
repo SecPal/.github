@@ -549,12 +549,16 @@ individual denial or repository-integrity failures. The paired daily
 the live database allowlist, locks, and processes.
 
 Every generated repository setup sequence starts with the validation-only
-`--validate-instruction-worktree` command inside one strict shell entry. That
-entry groups the complete native setup with fail-fast semantics, so validation
-or any later command failure prevents every remaining npm, Composer, `.env`,
-database, migration, seed, build, or repository setup command. The external
-provisioner applies the same canonical contract before its local configuration,
-hook, alias, setup, and marker writes.
+`--validate-instruction-worktree` command and explicit repository name inside
+one strict shell entry. Cached setup definitions without that identity argument
+remain compatible during rollout convergence by resolving the repository from
+the worktree's active Polyscope database registration. Missing, ambiguous, and
+unmanaged registrations fail closed instead of trusting ambient identity or
+mutable worktree manifests. The entry groups the complete native setup with
+fail-fast semantics, so validation or any later command failure prevents every
+remaining npm, Composer, `.env`, database, migration, seed, build, or repository
+setup command. The external provisioner applies the same canonical contract
+before its local configuration, hook, alias, setup, and marker writes.
 
 The worktree provision service waits three seconds before each activation to
 coalesce SQLite event bursts and takes a process-shared lock before provisioning.
