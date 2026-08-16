@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -48,6 +48,7 @@ Incorrect:
 
 ## Usage Rules
 
+- Treat these slogans and lockups as official SecPal-family presentation standards, not as additional conditions on AGPL-licensed material.
 - Use the exact capitalization and punctuation shown above.
 - Do not add a period, exclamation mark, or trailing full stop.
 - Do not translate the slogan or the `Powered by` prefix. The English wording above is the only approved wording for every locale and every surface, including German-language pages, marketing copy, app store metadata, and repository profile copy.

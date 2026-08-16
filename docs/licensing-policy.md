@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # SecPal Licensing Policy
 
-This document is the central SecPal policy for contributor licensing, SPDX/REUSE metadata, and AGPL attribution terms across shared repositories such as `api`, `frontend`, and `android`.
+This document is the authoritative SecPal policy for contributor licensing and SPDX/REUSE metadata across shared repositories such as `api`, `frontend`, and `android`.
 
 ## Defined Terms
 
@@ -23,65 +23,47 @@ Use project-based copyright notices for SecPal-owned material:
 
 ```text
 SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
-SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 For files first published in 2026:
 
 ```text
 SPDX-FileCopyrightText: 2026 SecPal Contributors
-SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 Rules:
 
 - Use `SecPal Contributors` for project-owned source code, policy documents, and other repository-owned material.
+- Use the plain SPDX expression `AGPL-3.0-or-later` for SecPal-owned material intentionally covered by the AGPL. Do not add a project-specific attribution term to that expression.
 - Do not use `SecPal` alone as the copyright holder for project-owned code unless SecPal later publishes a clear legal entity or other documented rights holder for that specific use.
 - Keep third-party notices separate. Do not replace upstream names, bundled notices, or vendor copyright statements with `SecPal Contributors`.
 - Do not switch third-party or externally-authored notices to `SecPal Contributors` just for consistency.
 
-## When To Use `LicenseRef-SecPal-Attribution`
+## Active License Model
 
-Use `LicenseRef-SecPal-Attribution` only for SecPal-owned AGPL-covered files or REUSE annotations that are intentionally subject to the SecPal attribution addendum.
+SecPal-owned material intentionally covered by the AGPL is licensed under plain `AGPL-3.0-or-later`. The former SecPal attribution addendum is retired and is not part of the active outbound licensing model.
 
 Rules:
 
-- Pair it only with `AGPL-3.0-or-later` in the same SPDX expression:
-
-  ```text
-  AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
-  ```
-
-- Ship the approved addendum text as [`LICENSES/LicenseRef-SecPal-Attribution.txt`](../LICENSES/LicenseRef-SecPal-Attribution.txt).
-- Do not use `LicenseRef-SecPal-Attribution` by itself.
-- Do not apply it to third-party code, third-party assets, or unrelated custom-license material.
-- Do not use it for CC0, MIT, Apache-2.0, or other non-AGPL repository files.
+- Apply `AGPL-3.0-or-later` only where the material is intentionally AGPL-covered; do not convert deliberately different licenses merely for consistency.
+- Preserve `CC0-1.0`, `MIT`, `Apache-2.0`, third-party licenses, generated-file licenses, and unrelated custom license references where they intentionally apply.
+- Keep per-file SPDX metadata and repository-level REUSE annotations accurate when a repository contains material under multiple licenses.
+- Review new third-party or custom-license material for compatibility and document any required license text without expanding the SecPal-owned AGPL expression.
 
 ## Third-Party And Tailwind Rules
 
 - Third-party notices must remain under their original licensing and attribution terms.
 - Keep third-party REUSE metadata separate from SecPal-owned metadata.
 - Do not add Tailwind-specific licensing terms to `api`, `frontend`, or `android` unless Tailwind-derived material is actually present in that repository.
-- If Tailwind-derived material is present, keep that handling repository-specific and separate from the SecPal attribution addendum.
+- If Tailwind-derived material is present, keep that handling repository-specific and separate from SecPal-owned AGPL metadata.
 
-## SecPal Attribution Terms
+## Branding Is Separate From Licensing
 
-The approved attribution addendum is stored in [`LICENSES/LicenseRef-SecPal-Attribution.txt`](../LICENSES/LicenseRef-SecPal-Attribution.txt).
+Official SecPal branding is separate from the AGPL licensing obligations. The project continues to use `Powered by SecPal – A guard's best friend` on official SecPal product surfaces where the brand documentation requires it, but that official presentation standard is not an additional license condition.
 
-Summary:
-
-- Required attribution for unmodified interactive AGPL-covered SecPal works: `Powered by SecPal`
-- Required attribution for modified or forked interactive AGPL-covered SecPal works: `Based on SecPal`
-- Preferred but not mandatory fuller notice: `Powered by SecPal - A guard's best friend`
-- Preferred/requested but not mandatory: include or link to `https://secpal.app`
-
-The tagline and website link are requests, not license conditions. The enforceable license conditions are the preservation of the appropriate SecPal attribution notice and the no-endorsement / no-misrepresentation rules in the approved addendum text.
-
-Implementation notes:
-
-- Modified versions must not use `Powered by SecPal` in a way that suggests they are the original SecPal release or endorsed by the SecPal project maintainers.
-- The attribution terms do not require a specific footer layout, logo, visual design, or exact placement.
-- Public footer formatting guidance remains in [`docs/brand/footer-wording.md`](./brand/footer-wording.md) and [`docs/brand/licensing-wording.md`](./brand/licensing-wording.md).
+Official-project developers follow [`docs/brand/footer-wording.md`](./brand/footer-wording.md), [`docs/brand/licensing-wording.md`](./brand/licensing-wording.md), and [`docs/brand/slogans.md`](./brand/slogans.md) for brand presentation. Those documents govern SecPal-maintained product surfaces; they do not alter the permissions or obligations of `AGPL-3.0-or-later` or create fork-specific licensing instructions.
 
 ## CLA And Governance Alignment
 
@@ -99,6 +81,7 @@ The Gate 01 review in [`cla-commercial-relicensing-review.md`](cla-commercial-re
 
 Repository follow-up issues for this policy:
 
-- `api`: [SecPal/api#1226](https://github.com/SecPal/api/issues/1226)
-- `frontend`: [SecPal/frontend#1323](https://github.com/SecPal/frontend/issues/1323)
-- `android`: [SecPal/android#313](https://github.com/SecPal/android/issues/313)
+- `api`: [SecPal/api#1425](https://github.com/SecPal/api/issues/1425)
+- `frontend`: [SecPal/frontend#1680](https://github.com/SecPal/frontend/issues/1680)
+- `android`: [SecPal/android#593](https://github.com/SecPal/android/issues/593)
+- `deployment`: [SecPal/deployment#45](https://github.com/SecPal/deployment/issues/45)

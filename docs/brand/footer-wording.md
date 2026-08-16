@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -96,6 +96,7 @@ The SecPal platform/suite entry points at the SecPal GitHub organization because
 
 ## Usage Rules
 
+- The first line is official product branding for SecPal-maintained surfaces, not an additional AGPL license condition. The second line communicates the applicable license and source location; neither line changes the license text.
 - Use the exact strings shown above for SecPal and GuardGuide. Each surface uses its own brand: SecPal pages use `Powered by SecPal`, GuardGuide pages use `Powered by GuardGuide`. Do not write `Powered by SecPal` on GuardGuide surfaces, and do not write `Powered by GuardGuide` on SecPal surfaces.
 - Use the public AGPL link target `https://www.gnu.org/licenses/agpl-3.0.html` for the `AGPL v3+` label in compact public footers. See `licensing-wording.md` for the full link-target rule.
 - Use this pattern only on AGPL-licensed public surfaces. Commercially licensed surfaces must adjust the license label to wording that matches the active commercial terms (see `licensing-wording.md`), but keep the line-1 brand attribution and the Source Code link unchanged.
@@ -103,6 +104,6 @@ The SecPal platform/suite entry points at the SecPal GitHub organization because
 
 ## Rationale
 
-A two-line footer keeps brand attribution and legal/source attribution visually separate while staying compact enough for every surface. The `Powered by <own brand> – <own slogan>` line is the recognisable brand signature that travels unchanged across languages. The second line satisfies the AGPL's source-availability and license-disclosure expectations using the canonical public license URL and the canonical public source location for each product, while letting the Source Code label localize to the reader.
+A two-line footer keeps official brand identity and legal/source information visually separate while staying compact enough for every surface. The `Powered by <own brand> – <own slogan>` line is the recognisable brand signature that travels unchanged across languages. The second line supports AGPL source availability and license transparency using the canonical public license URL and the canonical public source location for each product, while letting the Source Code label localize to the reader.
 
 Linking the `AGPL v3+` label to `https://www.gnu.org/licenses/agpl-3.0.html` rather than to a repo-local snapshot guarantees readers always reach the canonical, up-to-date license text the AGPL itself references.

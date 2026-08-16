@@ -14,7 +14,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REUSABLE_WORKFLOW="$REPO_ROOT/.github/workflows/reusable-license-compatibility.yml"
 LOCAL_WORKFLOW="$REPO_ROOT/.github/workflows/license-compatibility.yml"
 PREFLIGHT_SCRIPT="$REPO_ROOT/scripts/preflight.sh"
-SECPAL_ATTRIBUTION_SHA256="0483f138e65753a0c8a3ba718d8ca9bdcba8633be8262c346d17c3a0b711b638"
+LICENSING_POLICY="$REPO_ROOT/docs/licensing-policy.md"
+LICENSING_WORDING="$REPO_ROOT/docs/brand/licensing-wording.md"
+FOOTER_WORDING="$REPO_ROOT/docs/brand/footer-wording.md"
+SLOGANS="$REPO_ROOT/docs/brand/slogans.md"
+CONTRIBUTING_GUIDE="$REPO_ROOT/CONTRIBUTING.md"
+README_FILE="$REPO_ROOT/README.md"
+LEGAL_COMPLIANCE="$REPO_ROOT/docs/legal-compliance.md"
+CLA_SETUP="$REPO_ROOT/.github/CLA_SETUP.md"
+LICENSE_WHITELIST="$REPO_ROOT/.github/license-whitelist.txt"
+RETIRED_SECPAL_ATTRIBUTION_LICENSE="$REPO_ROOT/LICENSES/LicenseRef-SecPal-Attribution.txt"
 TAILWIND_PLUS_SHA256="f34dfb2ffa166cb60cf0aa4b9cedca33ab8caee1438ef81e14399e24bdadac3c"
 
 failures=()
@@ -93,6 +102,124 @@ preflight_guidance_case() {
 }
 
 # ---------------------------------------------------------------------------
+# plain_agpl_governance_case LABEL
+#   Assert that active central guidance and compatibility checks implement the
+#   plain-AGPL model while preserving official branding as a separate concern.
+# ---------------------------------------------------------------------------
+plain_agpl_governance_case() {
+  local label="$1"
+  local active_guidance_file
+  local agpl_guidance_file
+  local retired_wording
+  local spdx_identifier_prefix
+  local workflow_path
+
+  spdx_identifier_prefix="SPDX-License"
+  spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"
+
+  for active_guidance_file in \
+    "$LICENSING_POLICY" \
+    "$LICENSING_WORDING" \
+    "$FOOTER_WORDING" \
+    "$SLOGANS" \
+    "$CONTRIBUTING_GUIDE" \
+    "$README_FILE" \
+    "$LEGAL_COMPLIANCE" \
+    "$CLA_SETUP" \
+    "$LICENSE_WHITELIST"; do
+    if [ ! -r "$active_guidance_file" ]; then
+      failures+=("FAIL [$label]: $(basename "$active_guidance_file") is missing or unreadable")
+      continue
+    fi
+
+    for retired_wording in 'LicenseRef-SecPal-Attribution' 'Based on SecPal'; do
+      if grep -qF "$retired_wording" "$active_guidance_file"; then
+        failures+=("FAIL [$label]: $(basename "$active_guidance_file") still contains retired wording: $retired_wording")
+      fi
+    done
+  done
+
+  if [ -e "$RETIRED_SECPAL_ATTRIBUTION_LICENSE" ]; then
+    failures+=("FAIL [$label]: retired SecPal attribution LicenseRef text still exists")
+  fi
+
+  for workflow_path in "$REUSABLE_WORKFLOW" "$LOCAL_WORKFLOW"; do
+    if grep -qF 'LicenseRef-SecPal-Attribution' "$workflow_path"; then
+      failures+=("FAIL [$label]: $(basename "$workflow_path") still permits the retired SecPal attribution LicenseRef")
+    fi
+  done
+
+  for agpl_guidance_file in "$LICENSING_POLICY" "$README_FILE" "$CONTRIBUTING_GUIDE"; do
+    if [ ! -r "$agpl_guidance_file" ]; then
+      continue
+    fi
+
+    if ! grep -qxF "$spdx_identifier_prefix AGPL-3.0-or-later" "$agpl_guidance_file"; then
+      failures+=("FAIL [$label]: $(basename "$agpl_guidance_file") does not use plain AGPL-3.0-or-later metadata")
+    fi
+  done
+
+  if [ -r "$LICENSING_POLICY" ] \
+    && ! grep -qF 'Official SecPal branding is separate from the AGPL licensing obligations.' "$LICENSING_POLICY"; then
+    failures+=("FAIL [$label]: licensing policy does not separate official branding from AGPL obligations")
+  fi
+
+  if [ -r "$FOOTER_WORDING" ] \
+    && ! grep -qF "Powered by SecPal – A guard's best friend" "$FOOTER_WORDING"; then
+    failures+=("FAIL [$label]: official SecPal footer branding was not preserved")
+  fi
+
+  if [ -r "$LICENSING_POLICY" ]; then
+    for migration_issue in \
+      'https://github.com/SecPal/api/issues/1425' \
+      'https://github.com/SecPal/frontend/issues/1680' \
+      'https://github.com/SecPal/android/issues/593' \
+      'https://github.com/SecPal/deployment/issues/45'; do
+      if ! grep -qF "$migration_issue" "$LICENSING_POLICY"; then
+        failures+=("FAIL [$label]: licensing policy is missing repository migration tracker $migration_issue")
+      fi
+    done
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# missing_guidance_files_case LABEL
+#   Assert that missing guidance inputs produce structured failures instead of
+#   only emitting raw grep diagnostics.
+# ---------------------------------------------------------------------------
+missing_guidance_files_case() {
+  local label="$1"
+  local original_licensing_policy="$LICENSING_POLICY"
+  local original_licensing_wording="$LICENSING_WORDING"
+  local tmp_dir
+  local -a original_failures=("${failures[@]}")
+  local observed_failures
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/license-guidance.XXXXXX")"
+  LICENSING_POLICY="$tmp_dir/missing-policy.md"
+  LICENSING_WORDING="$tmp_dir/missing-wording.md"
+  failures=()
+
+  plain_agpl_governance_case "$label"
+  observed_failures="$(printf '%s\n' "${failures[@]}")"
+
+  LICENSING_POLICY="$original_licensing_policy"
+  LICENSING_WORDING="$original_licensing_wording"
+  failures=("${original_failures[@]}")
+  rm -rf "$tmp_dir"
+
+  if ! printf '%s\n' "$observed_failures" \
+    | grep -qF 'missing-policy.md is missing or unreadable'; then
+    failures+=("FAIL [$label]: missing AGPL guidance file did not produce a structured failure")
+  fi
+
+  if ! printf '%s\n' "$observed_failures" \
+    | grep -qF 'missing-wording.md is missing or unreadable'; then
+    failures+=("FAIL [$label]: missing active guidance file did not produce a structured failure")
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # custom_license_ref_guard_case LABEL
 #   Assert that both workflow files validate approved custom license text and
 #   reject SPDX expressions that are missing AGPL or use OR-pairing.
@@ -107,14 +234,6 @@ custom_license_ref_guard_case() {
     workflow="$(cat "$workflow_path")"
     workflow_label="$(basename "$workflow_path")"
 
-    if ! printf '%s' "$workflow" | grep -qF "$SECPAL_ATTRIBUTION_SHA256"; then
-      failures+=("FAIL [$label]: $workflow_label does not pin the approved SecPal attribution addendum hash")
-    fi
-
-    if ! printf '%s' "$workflow" | grep -qF 'LICENSES/LicenseRef-SecPal-Attribution.txt'; then
-      failures+=("FAIL [$label]: $workflow_label does not require the SecPal attribution license file")
-    fi
-
     if ! printf '%s' "$workflow" | grep -qF "$TAILWIND_PLUS_SHA256"; then
       failures+=("FAIL [$label]: $workflow_label does not pin the approved Tailwind Plus license text hash")
     fi
@@ -125,7 +244,7 @@ custom_license_ref_guard_case() {
 
     # shellcheck disable=SC2016
     if ! printf '%s' "$workflow" | grep -qF 'must use the approved $reference_label text'; then
-      failures+=("FAIL [$label]: $workflow_label does not reject mismatched SecPal attribution text")
+      failures+=("FAIL [$label]: $workflow_label does not reject mismatched custom-license text")
     fi
 
     # shellcheck disable=SC2016
@@ -237,7 +356,6 @@ setup_custom_license_fixture_tools() {
   local repo_dir="$1"
   mkdir -p "$repo_dir/LICENSES" "$repo_dir/bin"
 
-  printf 'fixture\n' > "$repo_dir/LICENSES/LicenseRef-SecPal-Attribution.txt"
   printf 'fixture\n' > "$repo_dir/LICENSES/LicenseRef-TailwindPlus.txt"
 
   cat <<EOF > "$repo_dir/bin/sha256sum"
@@ -245,9 +363,6 @@ setup_custom_license_fixture_tools() {
 set -euo pipefail
 
 case "\$1" in
-  LICENSES/LicenseRef-SecPal-Attribution.txt)
-    printf '%s  %s\n' "$SECPAL_ATTRIBUTION_SHA256" "\$1"
-    ;;
   LICENSES/LicenseRef-TailwindPlus.txt)
     printf '%s  %s\n' "$TAILWIND_PLUS_SHA256" "\$1"
     ;;
@@ -297,10 +412,25 @@ build_valid_custom_license_fixture() {
 
   write_spdx_fixture \
     "$repo_dir/docs/valid.md" \
-    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
+    "AGPL-3.0-or-later AND LicenseRef-TailwindPlus"
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/valid.md
+LicenseInfoInFile: AGPL-3.0-or-later
+LicenseInfoInFile: LicenseRef-TailwindPlus
+EOF
+}
+
+build_retired_secpal_attribution_fixture() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir/docs"
+
+  write_spdx_fixture \
+    "$repo_dir/docs/retired.md" \
+    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
+
+  cat <<'EOF' > "$repo_dir/reuse.spdx"
+FileName: ./docs/retired.md
 LicenseInfoInFile: AGPL-3.0-or-later
 LicenseInfoInFile: LicenseRef-SecPal-Attribution
 EOF
@@ -312,12 +442,12 @@ build_path_leak_fixture() {
 
   write_spdx_fixture \
     "$repo_dir/docs/AGPL-3.0-or-later/guide.md" \
-    "LicenseRef-SecPal-Attribution"
+    "LicenseRef-TailwindPlus"
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/AGPL-3.0-or-later/guide.md
 LicenseInfoInFile: AGPL-3.0-or-later
-LicenseInfoInFile: LicenseRef-SecPal-Attribution
+LicenseInfoInFile: LicenseRef-TailwindPlus
 EOF
 }
 
@@ -327,7 +457,7 @@ build_reuse_toml_pairing_fixture() {
 
   write_spdx_fixture \
     "$repo_dir/docs/good.md" \
-    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
+    "AGPL-3.0-or-later AND LicenseRef-TailwindPlus"
 
   cat <<'EOF' > "$repo_dir/docs/sidecar-only.md"
 This file relies on REUSE metadata only.
@@ -336,15 +466,15 @@ EOF
   write_reuse_toml_annotation \
     "$repo_dir/REUSE.toml" \
     "docs/sidecar-only.md" \
-    "LicenseRef-SecPal-Attribution"
+    "LicenseRef-TailwindPlus"
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/good.md
 LicenseInfoInFile: AGPL-3.0-or-later
-LicenseInfoInFile: LicenseRef-SecPal-Attribution
+LicenseInfoInFile: LicenseRef-TailwindPlus
 
 FileName: ./docs/sidecar-only.md
-LicenseInfoInFile: LicenseRef-SecPal-Attribution
+LicenseInfoInFile: LicenseRef-TailwindPlus
 EOF
 }
 
@@ -354,7 +484,7 @@ build_dep5_pairing_fixture() {
 
   write_spdx_fixture \
     "$repo_dir/docs/good.md" \
-    "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution"
+    "AGPL-3.0-or-later AND LicenseRef-TailwindPlus"
 
   cat <<'EOF' > "$repo_dir/docs/dep5-only.md"
 This file relies on DEP5 metadata only.
@@ -365,16 +495,16 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 
 Files: docs/dep5-only.md
 Copyright: 2026 SecPal Contributors
-License: LicenseRef-SecPal-Attribution
+License: LicenseRef-TailwindPlus
 EOF
 
   cat <<'EOF' > "$repo_dir/reuse.spdx"
 FileName: ./docs/good.md
 LicenseInfoInFile: AGPL-3.0-or-later
-LicenseInfoInFile: LicenseRef-SecPal-Attribution
+LicenseInfoInFile: LicenseRef-TailwindPlus
 
 FileName: ./docs/dep5-only.md
-LicenseInfoInFile: LicenseRef-SecPal-Attribution
+LicenseInfoInFile: LicenseRef-TailwindPlus
 EOF
 }
 
@@ -462,7 +592,7 @@ positive_case "MIT accepted"                      "MIT"
 positive_case "Apache-2.0 accepted"               "Apache-2.0"
 positive_case "OFL-1.1 accepted"                  "OFL-1.1"
 positive_case "LicenseRef-TailwindPlus accepted"  "LicenseRef-TailwindPlus"
-positive_case "LicenseRef-SecPal-Attribution accepted" "LicenseRef-SecPal-Attribution"
+negative_case "retired SecPal attribution LicenseRef rejected" "LicenseRef-SecPal-Attribution"
 
 # ODbL-1.0 must be in the allowlist (OpenPLZ geo-data and similar datasets).
 positive_case "ODbL-1.0 accepted for data files" "ODbL-1.0"
@@ -475,8 +605,11 @@ negative_case "BUSL-1.1 rejected"      "BUSL-1.1"
 negative_case "proprietary rejected"   "LicenseRef-Proprietary"
 matching_allowlists_case "reusable and local workflow allowlists aligned"
 preflight_guidance_case "preflight guidance covers allowlist alignment"
+plain_agpl_governance_case "central governance uses plain AGPL"
+missing_guidance_files_case "missing governance inputs are reported"
 custom_license_ref_guard_case "custom license reference guards cover both workflow files"
 positive_guard_case "compliant custom-license fixtures stay accepted" build_valid_custom_license_fixture
+negative_guard_case "retired SecPal attribution metadata is rejected" build_retired_secpal_attribution_fixture
 negative_guard_case "path substrings cannot satisfy AGPL SPDX pairing" build_path_leak_fixture
 negative_guard_case "REUSE.toml metadata must keep custom-license AGPL pairing per file" build_reuse_toml_pairing_fixture
 negative_guard_case "DEP5 metadata must keep custom-license AGPL pairing per file" build_dep5_pairing_fixture

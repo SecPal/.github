@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025-2026 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
@@ -383,31 +383,31 @@ All files must include SPDX license headers. **SecPal uses different licenses de
 
 ### License Selection Guide
 
-| File Type            | License                                                                      | Use For                                         |
-| -------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------- |
-| **Application Code** | `AGPL-3.0-or-later` or `AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution` | PHP, TypeScript, JavaScript, React components   |
-| **Configuration**    | `CC0-1.0`                                                                    | YAML, JSON, TOML, `.gitignore`, `.editorconfig` |
-| **Helper Scripts**   | `MIT`                                                                        | Standalone bash/shell scripts, build utilities  |
-| **Documentation**    | `CC0-1.0`                                                                    | Markdown files (except LICENSE itself)          |
+| File Type            | License             | Use For                                         |
+| -------------------- | ------------------- | ----------------------------------------------- |
+| **Application Code** | `AGPL-3.0-or-later` | PHP, TypeScript, JavaScript, React components   |
+| **Configuration**    | `CC0-1.0`           | YAML, JSON, TOML, `.gitignore`, `.editorconfig` |
+| **Helper Scripts**   | `MIT`               | Standalone bash/shell scripts, build utilities  |
+| **Documentation**    | `CC0-1.0`           | Markdown files (except LICENSE itself)          |
 
 ### SPDX Header Examples
 
-**For SecPal-owned AGPL code with the project attribution addendum:**
+**For SecPal-owned AGPL code:**
 
 ```php
 <?php
 // SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
-// SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+// SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 ```javascript
 // SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
-// SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+// SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 ```typescript
 // SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
-// SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+// SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 **For configuration files (CC0-1.0):**
@@ -454,7 +454,7 @@ Run `reuse lint` before committing to verify compliance:
 reuse lint
 
 # Add headers to new files automatically
-reuse annotate --license "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution" --copyright "SecPal Contributors" path/to/file.php
+reuse annotate --license "AGPL-3.0-or-later" --copyright "SecPal Contributors" path/to/file.php
 ```
 
 ### Bulk Licensing with REUSE.toml
@@ -495,11 +495,11 @@ SPDX-License-Identifier = "SEE-LICENSE-IN-PACKAGE"
 
 **How to choose the correct copyright attribution:**
 
-- Use **`SecPal Contributors`** for project-owned code and other SecPal-owned AGPL material that carries the attribution addendum.
+- Use **`SecPal Contributors`** for project-owned code and other SecPal-owned material where the project copyright convention applies.
 - Do **not** replace third-party notices with `SecPal Contributors`; keep upstream notices separate.
 - Do **not** use `SecPal` alone as a code copyright holder unless SecPal later publishes a clear legal entity or documented rights holder for that specific use.
 - Use the current publication year or year range as appropriate.
-- Follow the central policy in [`docs/licensing-policy.md`](docs/licensing-policy.md) for the authoritative rules on `LicenseRef-SecPal-Attribution`, Tailwind-specific terms, and CLA alignment.
+- Follow the central policy in [`docs/licensing-policy.md`](docs/licensing-policy.md) for the authoritative plain-AGPL model, mixed-license safeguards, Tailwind-specific terms, branding separation, and CLA alignment.
 
 Run `reuse lint` to check compliance.
 
