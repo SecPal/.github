@@ -127,6 +127,11 @@ plain_agpl_governance_case() {
     "$LEGAL_COMPLIANCE" \
     "$CLA_SETUP" \
     "$LICENSE_WHITELIST"; do
+    if [ ! -r "$active_guidance_file" ]; then
+      failures+=("FAIL [$label]: $(basename "$active_guidance_file") is missing or unreadable")
+      continue
+    fi
+
     for retired_wording in 'LicenseRef-SecPal-Attribution' 'Based on SecPal'; do
       if grep -qF "$retired_wording" "$active_guidance_file"; then
         failures+=("FAIL [$label]: $(basename "$active_guidance_file") still contains retired wording: $retired_wording")
@@ -145,28 +150,73 @@ plain_agpl_governance_case() {
   done
 
   for agpl_guidance_file in "$LICENSING_POLICY" "$README_FILE" "$CONTRIBUTING_GUIDE"; do
+    if [ ! -r "$agpl_guidance_file" ]; then
+      continue
+    fi
+
     if ! grep -qxF "$spdx_identifier_prefix AGPL-3.0-or-later" "$agpl_guidance_file"; then
       failures+=("FAIL [$label]: $(basename "$agpl_guidance_file") does not use plain AGPL-3.0-or-later metadata")
     fi
   done
 
-  if ! grep -qF 'Official SecPal branding is separate from the AGPL licensing obligations.' "$LICENSING_POLICY"; then
+  if [ -r "$LICENSING_POLICY" ] \
+    && ! grep -qF 'Official SecPal branding is separate from the AGPL licensing obligations.' "$LICENSING_POLICY"; then
     failures+=("FAIL [$label]: licensing policy does not separate official branding from AGPL obligations")
   fi
 
-  if ! grep -qF "Powered by SecPal – A guard's best friend" "$FOOTER_WORDING"; then
+  if [ -r "$FOOTER_WORDING" ] \
+    && ! grep -qF "Powered by SecPal – A guard's best friend" "$FOOTER_WORDING"; then
     failures+=("FAIL [$label]: official SecPal footer branding was not preserved")
   fi
 
-  for migration_issue in \
-    'https://github.com/SecPal/api/issues/1425' \
-    'https://github.com/SecPal/frontend/issues/1680' \
-    'https://github.com/SecPal/android/issues/593' \
-    'https://github.com/SecPal/deployment/issues/45'; do
-    if ! grep -qF "$migration_issue" "$LICENSING_POLICY"; then
-      failures+=("FAIL [$label]: licensing policy is missing repository migration tracker $migration_issue")
-    fi
-  done
+  if [ -r "$LICENSING_POLICY" ]; then
+    for migration_issue in \
+      'https://github.com/SecPal/api/issues/1425' \
+      'https://github.com/SecPal/frontend/issues/1680' \
+      'https://github.com/SecPal/android/issues/593' \
+      'https://github.com/SecPal/deployment/issues/45'; do
+      if ! grep -qF "$migration_issue" "$LICENSING_POLICY"; then
+        failures+=("FAIL [$label]: licensing policy is missing repository migration tracker $migration_issue")
+      fi
+    done
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# missing_guidance_files_case LABEL
+#   Assert that missing guidance inputs produce structured failures instead of
+#   only emitting raw grep diagnostics.
+# ---------------------------------------------------------------------------
+missing_guidance_files_case() {
+  local label="$1"
+  local original_licensing_policy="$LICENSING_POLICY"
+  local original_licensing_wording="$LICENSING_WORDING"
+  local tmp_dir
+  local -a original_failures=("${failures[@]}")
+  local observed_failures
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/license-guidance.XXXXXX")"
+  LICENSING_POLICY="$tmp_dir/missing-policy.md"
+  LICENSING_WORDING="$tmp_dir/missing-wording.md"
+  failures=()
+
+  plain_agpl_governance_case "$label"
+  observed_failures="$(printf '%s\n' "${failures[@]}")"
+
+  LICENSING_POLICY="$original_licensing_policy"
+  LICENSING_WORDING="$original_licensing_wording"
+  failures=("${original_failures[@]}")
+  rm -rf "$tmp_dir"
+
+  if ! printf '%s\n' "$observed_failures" \
+    | grep -qF 'missing-policy.md is missing or unreadable'; then
+    failures+=("FAIL [$label]: missing AGPL guidance file did not produce a structured failure")
+  fi
+
+  if ! printf '%s\n' "$observed_failures" \
+    | grep -qF 'missing-wording.md is missing or unreadable'; then
+    failures+=("FAIL [$label]: missing active guidance file did not produce a structured failure")
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -556,6 +606,7 @@ negative_case "proprietary rejected"   "LicenseRef-Proprietary"
 matching_allowlists_case "reusable and local workflow allowlists aligned"
 preflight_guidance_case "preflight guidance covers allowlist alignment"
 plain_agpl_governance_case "central governance uses plain AGPL"
+missing_guidance_files_case "missing governance inputs are reported"
 custom_license_ref_guard_case "custom license reference guards cover both workflow files"
 positive_guard_case "compliant custom-license fixtures stay accepted" build_valid_custom_license_fixture
 negative_guard_case "retired SecPal attribution metadata is rejected" build_retired_secpal_attribution_fixture
