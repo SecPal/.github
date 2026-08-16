@@ -9,6 +9,24 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-16 - Migrate Central Licensing Policy To Plain AGPL
+
+**Changed:**
+
+- made plain `AGPL-3.0-or-later` the authoritative outbound license expression
+  for SecPal-owned AGPL-covered material while preserving the project-wide
+  `SecPal Contributors` and copyright-year conventions
+- retired the SecPal-specific attribution LicenseRef, its license text, and its
+  local and reusable compatibility-workflow allowance while preserving the
+  unrelated Tailwind-derived custom-license safeguards
+- separated official SecPal product branding from AGPL obligations and retained
+  `Powered by SecPal – A guard's best friend` where the brand guidance requires
+  it on official surfaces
+- retained mixed-license and third-party safeguards and linked the ordered
+  repository migration issues from the central licensing policy
+
+---
+
 ## 2026-08-16 - Confirm CLA And Commercial Relicensing Model
 
 **Changed:**
@@ -842,7 +860,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Changed:**
 
 - added a central [`docs/licensing-policy.md`](docs/licensing-policy.md) reference for SecPal-wide CLA definitions, `SecPal Contributors` SPDX policy, `LicenseRef-SecPal-Attribution` usage, third-party notice separation, Tailwind-specific scoping, and the enforceable versus preferred SecPal attribution wording
-- added the approved [`LICENSES/LicenseRef-SecPal-Attribution.txt`](LICENSES/LicenseRef-SecPal-Attribution.txt) addendum text to this repository so shared governance docs can reference the exact attribution terms already enforced by the reusable license-compatibility workflows
+- added the approved [`LICENSES/LicenseRef-SecPal-Attribution.txt`](https://github.com/SecPal/.github/blob/ba6b659a75e032250a6f5a9cd2238aded1d785fd/LICENSES/LicenseRef-SecPal-Attribution.txt) addendum text to this repository so shared governance docs can reference the exact attribution terms already enforced by the reusable license-compatibility workflows
 - updated [`CLA.md`](CLA.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`README.md`](README.md), and [`docs/brand/licensing-wording.md`](docs/brand/licensing-wording.md) so contributor-facing guidance now defines `SecPal`, `Project Maintainer`, and CLA recipient scope consistently and points repository owners at the central licensing policy
 - fixed the local and reusable license-compatibility workflows so their custom-license guard searches real `SPDX-License-Identifier` headers when validating `LicenseRef-SecPal-Attribution` metadata
 - aligned the custom-license regression fixtures in `tests/license-compatibility.sh` with the new `SecPal Contributors` copyright policy so review guidance and fixture data do not drift

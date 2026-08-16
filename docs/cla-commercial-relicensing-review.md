@@ -31,7 +31,7 @@ The grant is a license, not an assignment. Its express non-exclusive character a
 
 Plain `AGPL-3.0-or-later` is already named in the CLA. The broader rights to sublicense and distribute, together with the separate express commercial-license authorization, do not depend on an outbound additional term. Removing that additional term narrows the conditions imposed on public recipients; it does not require a broader inbound grant from contributors.
 
-The current [SecPal attribution terms](../LICENSES/LicenseRef-SecPal-Attribution.txt) identify themselves as additional terms under AGPL sections 7(b) and 7(c). [AGPL section 7](https://www.gnu.org/licenses/agpl-3.0#section7) separately permits specified notice, attribution, origin, and modification-marking terms. That structure confirms that the addendum supplements the AGPL outbound terms rather than defining the CLA's inbound contributor grant.
+The then-current [SecPal attribution terms](https://github.com/SecPal/.github/blob/ba6b659a75e032250a6f5a9cd2238aded1d785fd/LICENSES/LicenseRef-SecPal-Attribution.txt) identify themselves as additional terms under AGPL sections 7(b) and 7(c). [AGPL section 7](https://www.gnu.org/licenses/agpl-3.0#section7) separately permits specified notice, attribution, origin, and modification-marking terms. That structure confirms that the addendum supplements the AGPL outbound terms rather than defining the CLA's inbound contributor grant.
 
 ## Rights Recipient And Administration
 

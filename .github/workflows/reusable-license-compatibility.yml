@@ -40,9 +40,6 @@ jobs:
 
       - name: Check AGPL compatibility
         run: |
-          secpal_attribution_license_ref="LicenseRef-SecPal-Attribution"
-          secpal_attribution_license_file="LICENSES/LicenseRef-SecPal-Attribution.txt"
-          secpal_attribution_license_sha256="0483f138e65753a0c8a3ba718d8ca9bdcba8633be8262c346d17c3a0b711b638"
           tailwind_plus_license_ref="LicenseRef-TailwindPlus"
           tailwind_plus_license_file="LICENSES/LicenseRef-TailwindPlus.txt"
           tailwind_plus_license_sha256="f34dfb2ffa166cb60cf0aa4b9cedca33ab8caee1438ef81e14399e24bdadac3c"
@@ -181,9 +178,6 @@ jobs:
           #   font files remain under OFL but their use in AGPL projects is allowed)
           # - LicenseRef-TailwindPlus (Catalyst UI Kit: explicitly permits use in open source
           #   projects, components remain under original license but usage is allowed)
-          # - LicenseRef-SecPal-Attribution (accepted only for files that declare
-          #   the approved SecPal attribution addendum for AGPL-licensed SecPal
-          #   repositories; this does not approve arbitrary attribution terms)
 
           compatible_licenses=(
             "AGPL-3.0-or-later"
@@ -202,7 +196,6 @@ jobs:
                           # code-review concern - this check only verifies
                           # AGPL compatibility
             "LicenseRef-TailwindPlus"
-            "LicenseRef-SecPal-Attribution"
           )
 
           incompatible_found=0
@@ -226,12 +219,6 @@ jobs:
             "$tailwind_plus_license_file" \
             "$tailwind_plus_license_sha256" \
             "Tailwind Plus license text"
-          validate_custom_license_ref \
-            "$secpal_attribution_license_ref" \
-            "AGPL-3.0-or-later" \
-            "$secpal_attribution_license_file" \
-            "$secpal_attribution_license_sha256" \
-            "SecPal attribution addendum text"
 
           if [ $incompatible_found -eq 1 ]; then
             echo "ERROR: Found licenses incompatible with AGPL-3.0-or-later"

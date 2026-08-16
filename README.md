@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
-SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # SecPal Organization
@@ -367,7 +367,7 @@ pip install reuse
 reuse lint
 
 # Add missing headers
-reuse annotate --copyright "SecPal Contributors" --license "AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution" <file>
+reuse annotate --copyright "SecPal Contributors" --license "AGPL-3.0-or-later" <file>
 ```
 
 ## License
@@ -390,7 +390,6 @@ All projects are licensed under the [AGPL-3.0-or-later](LICENSES/AGPL-3.0-or-lat
 - Distribute source code to users (including network users)
 - Share modifications under AGPL
 - Preserve copyright and license notices
-- Preserve the required SecPal attribution notice when the project uses the SecPal attribution addendum
 
 #### 2. Commercial License
 
@@ -404,7 +403,7 @@ For use cases **incompatible with AGPL**, we offer commercial licenses that allo
 
 **Interested in a commercial license?** Contact us at [legal@secpal.app](mailto:legal@secpal.app)
 
-The central SecPal policy for SPDX headers, CLA definitions, attribution terms, and `LicenseRef-SecPal-Attribution` lives in [docs/licensing-policy.md](docs/licensing-policy.md).
+The central SecPal policy for plain-AGPL SPDX headers, mixed-license safeguards, copyright conventions, CLA definitions, and the separation of official branding from licensing obligations lives in [docs/licensing-policy.md](docs/licensing-policy.md).
 
 ---
 
