@@ -15,7 +15,7 @@ This document is the central SecPal policy for contributor licensing, SPDX/REUSE
 
 These definitions keep the CLA model as a license grant rather than a copyright assignment: contributors retain copyright ownership and grant SecPal the rights needed for AGPL distribution and commercial relicensing.
 
-[`GOVERNANCE.md`](../GOVERNANCE.md) records the current Project Maintainer and CLA rights recipient and the required process for a later lawful succession. Administrative account, team, repository, or email control does not by itself transfer those rights.
+[`GOVERNANCE.md`](../GOVERNANCE.md) records the current Project Maintainer, through whom SecPal acts as the CLA rights recipient, and the required process for a later lawful succession. Administrative account, team, repository, or email control does not by itself replace that designation or transfer CLA rights.
 
 ## Standard SPDX Copyright Policy
 
@@ -88,7 +88,7 @@ Implementation notes:
 - The CLA is a contributor license agreement, not a copyright assignment.
 - Contributors retain copyright in their own work.
 - Contributors grant SecPal, acting through the Project Maintainer, the rights needed to distribute contributions under the AGPL and to grant commercial licenses.
-- The current Project Maintainer and CLA rights recipient is designated in [`GOVERNANCE.md`](../GOVERNANCE.md).
+- The current Project Maintainer, through whom SecPal acts as the CLA rights recipient, is designated in [`GOVERNANCE.md`](../GOVERNANCE.md).
 - If SecPal later forms or designates a successor legal entity, a legal assignment or other lawful succession must occur and SecPal governance documentation must identify that successor clearly before repository headers or contributor-facing legal text are updated to reflect it.
 
 See [`CLA.md`](../CLA.md) for the operative contributor agreement text and [`CONTRIBUTING.md`](../CONTRIBUTING.md) for day-to-day REUSE guidance.

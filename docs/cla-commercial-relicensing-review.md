@@ -13,7 +13,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Targeted governance update required; no CLA text change required.** The existing individual and corporate contributor grants already cover distribution under plain `AGPL-3.0-or-later` and the grant of commercial licenses. Removing `LicenseRef-SecPal-Attribution` from SecPal's public outbound license expression therefore does not change the contributor-rights model or require contributors to grant additional rights.
 
-The CLA already defines the recipient role but relies on public governance to identify its current holder. [`GOVERNANCE.md`](../GOVERNANCE.md) now makes that designation explicit and defines a succession process without amending the contributor grant.
+The CLA already defines the rights recipient as SecPal acting through the Project Maintainer but relies on public governance to identify the current Project Maintainer through whom SecPal acts. [`GOVERNANCE.md`](../GOVERNANCE.md) now makes that designation explicit and defines a succession process without amending the contributor grant.
 
 This decision is limited to the planned outbound-license simplification. It does not approve a copyright assignment, add an attribution obligation, change product branding, or migrate repository SPDX metadata.
 
@@ -41,7 +41,7 @@ The defined terms in [`CLA.md`](../CLA.md), [`licensing-policy.md`](licensing-po
 - `Project Maintainer` is the person or legal entity designated in public SecPal governance documentation to accept contributions, administer contributor agreements, and grant commercial licenses, including a legal successor or assignee of those rights. The current designee is the individual represented by GitHub account `@aroviqen`, GitHub user ID `266326653`.
 - `CLA rights recipient` is SecPal acting through the Project Maintainer until a successor legal entity is publicly designated in governance documentation.
 
-This designation remains coherent with the current administration paths: [`CLA_SETUP.md`](../.github/CLA_SETUP.md) links the organization-wide CLA service to the canonical CLA, and `legal@secpal.app` is the contact in the CLA for manual signatures, corporate-contributor changes, and legal questions. The governance record makes clear that changing account, team, repository, or email control does not transfer CLA rights. A later succession requires a legal assignment or other lawful succession and a public governance update before the successor is represented as the CLA rights recipient.
+This designation remains coherent with the current administration paths: [`CLA_SETUP.md`](../.github/CLA_SETUP.md) links the organization-wide CLA service to the canonical CLA, and `legal@secpal.app` is the contact in the CLA for manual signatures, corporate-contributor changes, and legal questions. The governance record makes clear that changing account, team, repository, or email control does not replace the Project Maintainer or transfer CLA rights. A later change to the Project Maintainer requires a documented public designation; any change to the CLA rights recipient also requires the legal assignment or other lawful succession needed to preserve the contributor grants.
 
 ## Attribution Dependency Review
 
@@ -65,8 +65,8 @@ Later migration work may rely on these conclusions:
 - The existing grant covers distribution under plain `AGPL-3.0-or-later`.
 - The existing grant separately covers commercial licensing.
 - Removing the public attribution addendum neither expands nor reduces contributor grants.
-- The Project Maintainer remains the administrator and CLA rights recipient for SecPal, subject to the documented public-succession mechanism.
-- The current rights recipient is explicitly designated in public governance; administrative account or team changes alone cannot transfer those rights.
+- The Project Maintainer remains the administrator through whom SecPal acts as the CLA rights recipient, subject to the documented public-succession mechanism.
+- The current Project Maintainer is explicitly designated in public governance; administrative account or team changes alone cannot replace that designation or transfer CLA rights.
 - No new attribution, branding, copyright-assignment, or contributor re-signing requirement follows from this decision.
 
 This is a governance and document-consistency decision for the migration. The external-counsel review tracked in [`legal-compliance.md`](legal-compliance.md) remains the path for a formal legal opinion.
