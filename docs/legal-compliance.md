@@ -11,7 +11,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Update when new requirements identified
 
-**Last Updated:** 2026-07-20
+**Last Updated:** 2026-08-16
 
 **Current architecture baseline:** [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) governs Tenant, global identity, Employee, access, encryption, erasure, and BWR file-export boundaries. Architecture-specific examples in this living document must conform to that accepted baseline.
 
@@ -445,6 +445,7 @@ If targeting alarm response market, additional requirements:
 
 ## Related
 
+- [CLA and commercial relicensing review](cla-commercial-relicensing-review.md)
 - Issue #46: Legal Review of CLA and Commercial Licenses
 - ADR-001: Event Sourcing (ensures BewachV §10 retention)
 - ADR-002: OpenTimestamp (provides tamper-proof evidence)

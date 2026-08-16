@@ -415,7 +415,7 @@ By contributing to SecPal projects, you agree to our [Contributor License Agreem
 - Grants us rights to distribute your contributions under **both** licensing models
 - Allows you to **retain copyright** ownership
 - Ensures your work can benefit both open source and commercial users
-- Defines SecPal and the Project Maintainer clearly enough for contributor license grants without turning the CLA into a copyright assignment
+- Defines SecPal and the Project Maintainer clearly enough for contributor license grants without turning the CLA into a copyright assignment; the current Project Maintainer through whom SecPal acts, and the succession process, are recorded in [GOVERNANCE.md](GOVERNANCE.md)
 
 **CLA Signing Process:**
 

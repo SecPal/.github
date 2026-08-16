@@ -9,6 +9,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-16 - Confirm CLA And Commercial Relicensing Model
+
+**Changed:**
+
+- confirmed that the existing non-exclusive contributor grants already cover
+  plain-AGPL distribution and commercial licensing without changing contributor
+  copyright ownership or the CLA text
+- designated the current Project Maintainer through whom SecPal acts as the CLA
+  rights recipient in public governance and documented a succession process
+  that distinguishes legal assignment from repository, team, account, and email
+  administration
+- aligned the documented organization-wide CLA Assistant repository inventory
+  with the active SecPal repositories while retaining separate live-configuration
+  verification
+
+---
+
 ## 2026-08-15 - Establish AI Licensing And Branding Invariants
 
 **Changed:**
