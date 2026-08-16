@@ -81,13 +81,24 @@ However, this requires manual configuration for each new repository.
 
 ## Active Repositories
 
-The following SecPal repositories are automatically covered by the organization-wide CLA:
+The organization-wide link is expected to cover every active SecPal repository:
 
+- `SecPal/.github` - Organization-wide governance and configuration
+- `SecPal/GuardGuide` - GuardGuide operations platform
+- `SecPal/android` - SecPal Android application
+- `SecPal/api` - SecPal API
 - `SecPal/contracts` - OpenAPI contracts repository
+- `SecPal/deployment` - Deployment and public governance
+- `SecPal/frontend` - SecPal frontend application
+- `SecPal/guardguide.de` - GuardGuide public website
+- `SecPal/secpal.app` - SecPal public website
 - All future SecPal repositories
+
+This inventory describes the expected scope; it does not replace the live-configuration verification required above.
 
 ## References
 
 - CLA Assistant: <https://github.com/cla-assistant/cla-assistant>
 - CLA Document: <https://github.com/SecPal/.github/blob/main/CLA.md>
+- Project Maintainer and CLA rights recipient: [`GOVERNANCE.md`](../GOVERNANCE.md)
 - CLA Assistant Service: <https://cla-assistant.io/>
