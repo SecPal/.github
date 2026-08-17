@@ -39,7 +39,7 @@ jobs:
     # Keep auto-merge decisions on the reviewed immutable workflow revision so
     # Dependabot PRs cannot execute unreviewed policy changes from the same PR.
     # yamllint disable rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@1e32f4903bb62943eaf77bed9550bade29c8076f # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@3d04d34d42b75f8ae5b1ab8261a9db4a4bdccefc # main
     # yamllint enable rule:line-length
     with:
       # Phase 1: Only PATCH updates auto-merge
