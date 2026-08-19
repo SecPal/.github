@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: 🗺️ Epic (Multi-PR Feature)
-description: Large feature that requires multiple PRs with sub-issues for tracking
+name: 🗺️ Epic (Multiple Contracts)
+description: Work holding more than one deliverable contract, tracked through native sub-issues
 title: "[EPIC] "
 labels: ["type/epic"]
 body:
@@ -20,9 +20,9 @@ body:
 
         **Workflow:**
         1. Create this epic first
-        2. Create individual sub-issues for each PR (use "Sub-Issue" template)
+        2. Create one delivery issue per contract (use the "Delivery Issue" template)
         3. Attach them as native sub-issues; GitHub tracks their state and order
-        4. Each PR closes its sub-issue: `Fixes #<sub-issue-number>`
+        4. Each PR closes exactly one delivery issue: `Fixes #<issue-number>`
         5. No PR closes this epic; close it explicitly after the closure evidence comment exists
 
         📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
@@ -44,8 +44,8 @@ body:
     attributes:
       label: 🧭 Sequencing Rationale
       description: |
-        Create one sub-issue per contract with the "Sub-Issue (Part of Epic)"
-        template and attach them as native sub-issues. Their state, order, and
+        Create one delivery issue per contract with the "Delivery Issue (Part of
+        Epic)" template and attach them as native sub-issues. Their state, order, and
         dependencies live in GitHub; do not repeat them here.
         Use this field only to explain sequencing that the graph cannot show,
         such as why a gate exists or which phase must land first.
@@ -124,10 +124,10 @@ body:
 
         ## 📝 Next Steps After Creating This Issue
 
-        1. **Create Sub-Issues**: Use the "Sub-Issue (Part of Epic)" template, one per contract
+        1. **Create Delivery Issues**: Use the "Delivery Issue (Part of Epic)" template, one per contract
         2. **Attach Them Natively**: Add each as a native sub-issue and order them there, not in this body
         3. **Start Work**: Begin with the first sub-issue that has no open blocker
-        4. **PR Linking**: Each PR should reference its sub-issue (`Fixes #<sub-issue>`), not this epic
+        4. **PR Linking**: Each PR closes its delivery issue (`Fixes #<issue>`), never this epic
         5. **Close Epic**: Close this epic explicitly once the closure checklist and evidence comment exist; no PR closes it by keyword
 
         **Required closure comment template:**

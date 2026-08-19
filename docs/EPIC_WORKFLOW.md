@@ -21,14 +21,14 @@ A single contract that merely might need mechanical follow-up PRs stays a regula
 
 ### 1. Create The Parent Epic First
 
-Use the organization issue template: `🗺️ Epic (Multi-PR Feature)`.
+Use the organization issue template: `🗺️ Epic (Multiple Contracts)`.
 
 The epic must define:
 
 - a clear goal
 - acceptance criteria
 - non-goals
-- a sub-issue work plan
+- the native sub-issues that carry its contracts
 
 ### 2. Split Work Into Sub-Issues
 
@@ -62,7 +62,7 @@ Do not close a parent epic until all of the following are true:
 - the exact child issues and PRs that satisfy each acceptance slice are identified
 - any discovered acceptance gap was reopened or re-filed before closure
 - deferred but still relevant work was moved out of the epic into dedicated follow-up issues before closure, so no child stays open under a closed epic
-- the native sub-issue list reflects reality across all touched repositories, and any Markdown mirror of it matches
+- the native sub-issue list reflects reality across all touched repositories, and no Markdown mirror of child state is left behind
 
 If any item above is still unclear, the epic stays open.
 

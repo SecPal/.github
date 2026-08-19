@@ -29,36 +29,19 @@ delivered separately under the parent epic.
 Rules here come in two kinds, and confusing them is how automation ends up
 inventing policy:
 
-- **Graph rules** — sections 1, 3, and 4. They are computable from native data
-  alone, and two correct implementations MUST produce identical results.
+- **Machine-derivable rules** — sections 1, 3, and 4. Given identical inputs from
+  the categories in section 1.1, two implementations MUST derive identical
+  results. Machine-derivable does not mean graph-state-only: section 1.2 names
+  the exact inputs each derived value reads.
 - **Judgment rules** — sections 2 and 5 to 12. They guide a human or an agent
   deciding scope, evidence, and design. Automation MAY report a suspected
   violation; it MUST NOT silently decide one.
 
 ## 1. Source Of Truth
 
-GitHub-native issue data is authoritative, and it carries two different kinds of
-truth that this contract keeps apart.
-
-**Graph state** defines topology and progress. It is exactly these four fields,
-and nothing else ever becomes graph state:
-
-- issue open/closed state and closure reason,
-- native parent/sub-issue hierarchy,
-- native issue dependencies (`blocked by` / `blocks`),
-- native sub-issue ordering inside a parent.
-
-**Issue content** defines what a node promises: its title, body, scope,
-acceptance criteria, and non-goals. Content never changes topology, and topology
-never changes what a node promises.
-
-**Metadata** — labels, milestone, assignees — carries only the meaning this
-contract assigns to it explicitly, currently the priority rank in section 4.3.
-Metadata is neither graph state nor contract, so it MUST NOT override either.
-
-Everything else is a mirror: Markdown task lists, `Parent:` / `Order:` / `Blocked
-by:` lines in issue bodies, project-board fields, roadmap documents, plan files,
-and agent-local notes.
+GitHub-native issue data is authoritative. Everything else is a mirror: Markdown
+task lists, `Parent:` / `Order:` / `Blocked by:` lines in issue bodies,
+project-board fields, roadmap documents, plan files, and agent-local notes.
 
 Rules:
 
@@ -72,7 +55,38 @@ Rules:
 - Duplicating graph state into Markdown SHOULD be avoided entirely. Duplicated
   state is the drift source this contract exists to remove.
 
-### 1.1 Precedence
+### 1.1 Input Categories
+
+Every machine-derivable rule reads from these five categories and from nothing
+else:
+
+- **Native graph state** — issue open/closed state and closure reason, native
+  parent/sub-issue relationships, native issue dependencies, native sibling
+  order.
+- **Structural issue content** — only presence facts needed for execution,
+  currently whether canonical acceptance criteria are structurally present
+  (section 4.1). What those criteria _say_ is judgment, never an input here.
+- **Selection metadata** — the recognized priority labels of section 4.3 and
+  nothing else. Milestone and assignee are not inputs to any derived value.
+- **Execution coordination** — the valid execution claims of section 4.2.
+- **Invocation context** — the scope root, and the current executor identity
+  wherever claim filtering needs it.
+
+### 1.2 Declared Inputs Per Derived Value
+
+| Derived value | Inputs                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| `BLOCKED`     | native graph state                                                                                           |
+| `DONE`        | native graph state                                                                                           |
+| `READY`       | native graph state + structural issue content                                                                |
+| `ACTIVE`      | valid execution claims, relative to one executor identity                                                    |
+| `NEXT`        | scope root + executor identity + native graph state + structural issue content + selection metadata + claims |
+
+Two implementations given identical inputs MUST derive identical `BLOCKED`,
+`READY`, `DONE`, `ACTIVE`, and `NEXT`. Any other input is a hidden input and a
+defect in the implementation, not a permitted extension.
+
+### 1.3 Precedence
 
 When two sources disagree, resolve in this order (highest first):
 
@@ -123,7 +137,9 @@ A coordination node with children.
 An epic whose parent is an epic. It exists to bound one coherent phase, one
 repository scope, or one responsibility cluster of a larger epic.
 
-- A sub-epic follows every epic rule.
+- A sub-epic follows every epic rule, at any depth. Nesting is unbounded and
+  every rule in this contract recurses: a sub-epic of a sub-epic behaves exactly
+  like any other epic.
 - A sub-epic SHOULD exist when an epic would otherwise mix unrelated
   responsibilities, span more than one repository per phase, or carry more
   children than a reviewer can hold in one view (about seven is a practical
@@ -210,6 +226,9 @@ preferred narrative order, or a wish to avoid merge conflicts.
 
 - Dependencies MAY cross repositories and MUST then be written as
   `owner/repo#number`.
+- Dependencies are never inherited. A child is unaffected by an edge on its
+  parent, and a parent is unaffected by an edge on its child; each node is
+  blocked only by its own edges. Every blocker is an explicit native edge.
 - A dependency MAY target an epic. The same satisfaction rule applies to every
   node type.
 - A dependency is satisfied when, and only when, its target is closed with the
@@ -250,14 +269,17 @@ misclassification means moving it between the two, never leaving it in both
   reason to ignore the edges.
 - A leaf with a missing, inaccessible, or unresolvable dependency target is not
   `READY`.
-- Containment MUST also be acyclic. A node MUST NOT be its own ancestor.
+- Containment MUST also be acyclic. A node MUST NOT be its own ancestor. A node
+  inside a containment cycle is malformed: it is not `READY`, and resolution
+  fails closed until the cycle is broken.
 
 ## 4. States, Executable Sets, And `NEXT`
 
 ### 4.1 Derived States
 
 Only open/closed is native. All other states are derived and MUST NOT be
-duplicated into Markdown.
+duplicated into Markdown. They are predicates rather than a mutually exclusive
+lifecycle, so a node may satisfy several at once; only `READY` gates selection.
 
 - **BLOCKED** — an open node with at least one unsatisfied dependency, or a node
   inside a dependency cycle, or a node with an unresolvable dependency target.
@@ -271,8 +293,12 @@ duplicated into Markdown.
   records ownership rather than execution, and one maintainer routinely owns
   many leaves while executing one.
 - **DONE** — a node closed as `completed`. Any other closure reason means the
-  node was abandoned or superseded, which is a valid outcome but not a delivery,
-  and it satisfies no dependency (section 3.2).
+  node was abandoned, duplicated, or superseded, which is a valid outcome but not
+  a delivery, and it satisfies no dependency (section 3.2).
+- **Reopening** returns a node to open. It is then evaluated exactly like any
+  other open node, it is no longer `DONE`, and every dependent it had satisfied
+  becomes `BLOCKED` again. Reopening is therefore a graph change, not a
+  formality, and its effect on dependents MUST be checked before work continues.
 - An epic is never `READY` and never `ACTIVE`. An epic is closable only under
   section 6.3.
 
@@ -280,13 +306,25 @@ duplicated into Markdown.
 not a graph state at all: it belongs to execution coordination (section 4.2) and
 never changes any of the three.
 
-**Structurally complete** means the body contains a Markdown heading whose
-normalized text is `acceptance criteria`, followed by at least one non-blank
-line before the next heading of any level. Normalization is exactly this, in
-order: strip leading emoji and other non-alphanumeric decoration, strip
-surrounding whitespace and trailing punctuation, fold case. So `## Acceptance
-Criteria`, `### ✅ Acceptance Criteria`, and `## acceptance criteria:` all
-qualify, while a body that only mentions the phrase in a sentence does not.
+**Structurally complete** means the body contains a qualifying acceptance-criteria
+heading followed by at least one non-blank line before the next heading of any
+level. A heading qualifies when this exact procedure yields `acceptance criteria`:
+
+1. Take a Markdown ATX heading line, meaning one to six `#` characters followed
+   by a space.
+2. Remove the leading `#` characters and that space.
+3. Remove Unicode whitespace from both ends.
+4. Remove one leading `✅` if present, then remove Unicode whitespace from both
+   ends again. `✅` is the only decorative prefix recognized, because it is the
+   one the canonical issue forms emit.
+5. Remove one trailing `:` if present, then remove trailing Unicode whitespace.
+6. Compare ASCII-case-insensitively against `acceptance criteria`.
+
+Accepted: `## Acceptance Criteria`, `### ✅ Acceptance Criteria`,
+`## acceptance criteria:`, `#### ACCEPTANCE CRITERIA`. Rejected:
+`## Acceptance Criteria (draft)`, `## Criteria`, `**Acceptance Criteria**`,
+`## 🎯 Acceptance Criteria`, and any mention inside a sentence. A qualifying
+heading with nothing but blank lines under it is also rejected.
 
 That is deliberately a presence test. Whether the criteria are _good_ is review
 judgment and MUST NOT be folded into `READY`. A leaf without them is not
@@ -334,9 +372,12 @@ names another executor, then sort by the following keys, in order, and take the
 first:
 
 1. **Priority rank**, descending: `priority: blocker` > `priority: high` >
-   `priority: medium` > everything else. Unlabeled leaves and labels outside this
-   list share the lowest rank; a leaf carrying several priority labels ranks by
-   the highest one present.
+   `priority: medium` > everything else. Recognition is by exact label name.
+   Unlabeled leaves and every other label, including labels a repository has not
+   rolled out and labels invented later, share the lowest rank; a leaf carrying
+   several recognized labels ranks by the highest one present. A graph with no
+   priority labels at all is therefore still fully deterministic, so no
+   repository needs a particular label for correct execution.
 2. **Path order**, ascending: the vector of native sibling positions from the
    scope root down to the leaf, compared lexicographically. Positions are the
    parent's native sub-issue order, counted the same way at every depth and
@@ -370,13 +411,16 @@ plus the acceptance criteria that falsify it.
 
 ### 5.2 Primary Delivery Pull Request
 
-- Exactly one pull request per leaf closes it, using `Fixes #<leaf>` plus
-  `Part of: #<parent>`. That one is the leaf's primary delivery pull request, and
-  it is what the rest of this contract means by delivering the leaf.
-- Other pull requests touching the same leaf are allowed only as a revert, a
-  rollforward for a defect found after merge, or an unblocking infrastructure fix.
-  They MUST NOT carry new contract scope, and a post-merge defect MUST get its own
-  leaf.
+- Exactly one pull request per leaf closes it through a machine-recognizable
+  closing relationship, written as `Fixes #<leaf>`. That one is the leaf's
+  primary delivery pull request, and it is what the rest of this contract means
+  by delivering the leaf.
+- A leaf inside an epic additionally references its parent with
+  `Part of: #<parent>`. A standalone root leaf has no parent, so it carries no
+  `Part of` line, and inventing one to satisfy a template is prohibited.
+- Everything the leaf's own contract needs, including review fixes, belongs in
+  that one pull request, across as many commits as the work takes. Commit count
+  is not a decomposition signal.
 - A pull request MUST NOT close more than one leaf. Work that cannot be
   reviewed, merged, or delivered independently without leaving a broken
   intermediate state is one atomic delivery contract, so it MUST be modeled as
@@ -386,6 +430,23 @@ plus the acceptance criteria that falsify it.
 - A pull request MUST NOT close an epic through a closing keyword. Epics are
   closed by the closure procedure in section 6.3, because keyword closure skips
   the closure evidence that procedure exists to produce.
+
+### 5.3 After The Primary Pull Request Merges
+
+Once the primary pull request merges, the leaf is `DONE` and stops being a
+container for further work:
+
+- A **revert** undoes the delivered change operationally. It does not re-deliver
+  the leaf and does not reopen it; if the scope is still wanted, it needs a new
+  leaf.
+- A **defect found after merge** is new work with its own contract, so it gets
+  its own leaf. The fix, including any rollforward, is delivered against that new
+  leaf and never against the closed one.
+- A **mechanical follow-up** with no independently meaningful contract, such as a
+  formatting pass or an infrastructure fix that unblocks delivery, is not a
+  second delivery and does not make the original work an epic (section 2.4).
+
+No later pull request may treat a `DONE` leaf as its owning node.
 
 ## 6. Delivery And Closure
 
@@ -424,8 +485,11 @@ contract and does not extend it.
 
 ## 7. Replanning
 
-Replanning is normal execution, not failure. The graph is the plan, so replanning
-MUST update the native graph **before** the affected work continues.
+Replanning is normal execution, not failure. The graph is the plan, so any change
+to scope, ownership, or dependency structure MUST land in the native graph
+**before** the affected implementation continues. Work that stays inside the
+current contract needs no graph mutation at all; requiring one for ordinary
+implementation steps would be ceremony, not control.
 
 ### 7.1 Missing Prerequisite
 
@@ -458,14 +522,18 @@ When a leaf is found to carry several contracts, promote it in place:
 
 - The node keeps its identity and issue number and becomes a sub-epic.
 - Its contracts become child leaves, ordered by native sibling order.
-- Nodes that were blocked by the promoted leaf stay blocked by it as a sub-epic.
-  They unblock when it closes as `completed`, exactly as any epic dependency does
-  (section 3.2).
-- Prerequisites the promoted leaf was itself waiting for MUST be reattached only
-  to the child or children that actually need them, and MUST NOT be copied to
-  every child merely because the parent once carried them. A prerequisite that
-  every child genuinely needs MAY stay on the sub-epic instead of being
-  duplicated.
+- Nodes that were blocked by the promoted leaf MAY stay blocked by it as a
+  sub-epic when they need the aggregate result. They unblock when it closes as
+  `completed`, exactly as any epic dependency does (section 3.2).
+- A prerequisite the promoted leaf was waiting for MUST be attached as a native
+  dependency to exactly those children whose implementation it blocks. Children
+  do not inherit blockers from a parent, so a prerequisite left only on the
+  sub-epic blocks nothing below it.
+- A prerequisite MAY remain only on the sub-epic when it gates closure or
+  rollout rather than implementation, meaning children are allowed to proceed
+  before it completes.
+- Nothing is copied to every child by default. Attaching an edge to each child
+  is correct only when each child genuinely needs it.
 - Any open pull request written against the old leaf MUST be re-pointed at the
   child leaf it actually delivers, or closed.
 - The promoted node MUST NOT be delivered by a pull request afterwards.
@@ -594,8 +662,9 @@ execution, real cross-repository contract.
   the assumption rather than the behavior.
 - When real evidence is genuinely unavailable in the environment, the leaf MUST
   record what could not be verified rather than claiming coverage. An unverified
-  seam is material by definition, so the outstanding verification is tracked
-  under section 7.5.
+  seam is material by definition, so the outstanding verification becomes its own
+  node under section 7.5. Tracking it that way is what closes the question; it
+  does not hold the current leaf open.
 
 ### 9.3 Structural And Characterization Evidence
 
@@ -708,10 +777,13 @@ layer must not import the inner layer, or where a shared failure would disable
 both checks at once. Independent enforcement MUST name the authoritative owner it
 defends.
 
-Layers do not have to fail identically. Different error types, messages, and
-status codes are expected and appropriate to each layer. What they MUST NOT do is
-disagree about what is accepted: two layers that admit different input sets are
-two definitions, which is the failure this section exists to prevent.
+Layers do not have to fail identically, and they do not have to see the same
+representation. Different error types, messages, and status codes are expected,
+and an edge layer may accept a transport form that it normalizes before the
+domain sees a canonical form. What layers MUST NOT do is disagree semantically:
+after normalization they must accept the same set of real-world values. Two
+layers that would answer differently about the same value are two definitions,
+which is the failure this section exists to prevent.
 
 The multi-layer authorization guidance in `docs/development-principles.md` is
 such a case. It does not license a second definition of the rule being enforced.
@@ -731,9 +803,13 @@ already available.
 - GitHub-native hierarchy, dependency, state, and ordering MUST NOT be
   reimplemented in SecPal code, per section 1.
 
-This rule does not devalue domain code. SecPal's guard-book rules, tenancy model,
-and regulatory logic are legitimately custom, MUST NOT be contorted into a generic
-library, and MUST NOT be rejected merely for being custom. Equally, a dependency
+The rule bans reimplementing the primitive, never layering policy on top of it.
+Parsing HTML with a standard parser and then applying SecPal content policy,
+resolving symbols through a language API and then applying SecPal rules, or using
+the framework's auth lifecycle and then enforcing SecPal authorization, are all
+the intended shape. SecPal's guard-book rules, tenancy model, and regulatory
+logic are legitimately custom, MUST NOT be contorted into a generic library, and
+MUST NOT be rejected merely for being custom. Equally, a dependency
 MUST NOT be added for something the standard library already does or for logic
 that is trivial and stable.
 

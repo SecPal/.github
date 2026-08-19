@@ -1,20 +1,21 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: 📦 Sub-Issue (Part of Epic)
-description: Individual task/PR within a larger epic
-title: "PR-X: "
+name: 📦 Delivery Issue (Part of Epic)
+description: One deliverable contract inside an epic, closed by exactly one PR
+title: ""
 labels: ["type/sub-issue"]
 body:
   - type: markdown
     attributes:
       value: |
-        ## Sub-Issue Template
+        ## Delivery Issue Template
 
-        Use this template for individual tasks within an epic.
+        Use this template for one deliverable contract inside an epic. Work that
+        needs no epic is a standalone issue and needs no parent.
 
-        **What is a Sub-Issue?**
-        - One task within a larger epic
+        **What is a Delivery Issue?**
+        - One contract inside an epic
         - Carries exactly one contract, delivered by one primary PR
         - Focused on a single logical unit of work
 
@@ -44,7 +45,7 @@ body:
     id: goal
     attributes:
       label: 🎯 Goal
-      description: Specific goal for THIS sub-issue, which carries exactly one contract
+      description: Specific goal for THIS issue, which carries exactly one contract
       placeholder: |
         Implement database migrations for tenant_keys and person tables...
     validations:
@@ -54,7 +55,7 @@ body:
     id: implementation_tasks
     attributes:
       label: 📋 Implementation Tasks
-      description: Checklist of tasks to complete for this sub-issue
+      description: Optional working notes; the contract lives in the acceptance criteria below
       value: |
         - [ ] Task 1
         - [ ] Task 2
@@ -67,7 +68,7 @@ body:
     attributes:
       label: ✅ Acceptance Criteria
       description: |
-        What must be observably true after this sub-issue merges? State the
+        What must be observably true after this issue merges? State the
         contract, not a generic checklist. Evidence is chosen proportionally
         from that contract, so do not add blanket testing or coverage items;
         keeping the existing validation green is validation evidence rather
