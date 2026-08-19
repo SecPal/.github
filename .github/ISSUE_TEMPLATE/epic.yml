@@ -55,7 +55,7 @@ body:
         - [ ] #<!-- issue number --> PR-3: Integration & Testing
         - [ ] #<!-- issue number --> PR-4: Documentation & Hardening
 
-        <!-- Add or remove items as needed. Keep PRs small (~400-600 LOC where feasible) -->
+        <!-- Add or remove items as needed. One sub-issue per contract; PR size is advisory, not a decomposition rule -->
     validations:
       required: true
 

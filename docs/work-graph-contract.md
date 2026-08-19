@@ -26,15 +26,35 @@ delivered separately under the parent epic.
   reason in the issue or pull request.
 - **MAY** marks explicitly allowed options.
 
+Rules here come in two kinds, and confusing them is how automation ends up
+inventing policy:
+
+- **Graph rules** — sections 1, 3, and 4. They are computable from native data
+  alone, and two correct implementations MUST produce identical results.
+- **Judgment rules** — sections 2 and 5 to 12. They guide a human or an agent
+  deciding scope, evidence, and design. Automation MAY report a suspected
+  violation; it MUST NOT silently decide one.
+
 ## 1. Source Of Truth
 
-GitHub-native issue data is authoritative for the work graph:
+GitHub-native issue data is authoritative, and it carries two different kinds of
+truth that this contract keeps apart.
+
+**Graph state** defines topology and progress. It is exactly these four fields,
+and nothing else ever becomes graph state:
 
 - issue open/closed state and closure reason,
 - native parent/sub-issue hierarchy,
 - native issue dependencies (`blocked by` / `blocks`),
-- native sub-issue ordering inside a parent,
-- issue title, body, acceptance criteria, labels, and milestone.
+- native sub-issue ordering inside a parent.
+
+**Issue content** defines what a node promises: its title, body, scope,
+acceptance criteria, and non-goals. Content never changes topology, and topology
+never changes what a node promises.
+
+**Metadata** — labels, milestone, assignees — carries only the meaning this
+contract assigns to it explicitly, currently the priority rank in section 4.3.
+Metadata is neither graph state nor contract, so it MUST NOT override either.
 
 Everything else is a mirror: Markdown task lists, `Parent:` / `Order:` / `Blocked
 by:` lines in issue bodies, project-board fields, roadmap documents, plan files,
@@ -57,14 +77,19 @@ Rules:
 When two sources disagree, resolve in this order (highest first):
 
 1. Security, privacy, legal, and licensing invariants.
-2. Native GitHub graph state as listed above.
+2. Native graph state, for every question about topology and progress.
 3. Accepted ADRs.
-4. The target node's own scope, acceptance criteria, and non-goals.
+4. The target node's content: its contract, acceptance criteria, and non-goals.
 5. This contract.
 6. Repository baselines and stack-specific overlays.
 7. Non-canonical mirrors: boards, docs, plans, generated summaries.
 
-Two consequences make this list usable instead of merely ordered:
+Levels 2 and 4 never compete, because they answer different questions: level 2
+answers where a node sits and whether it is done, level 4 answers what it
+promises. A body that contradicts graph state is a mirror to delete, not a
+competing source.
+
+Two further consequences make this list usable instead of merely ordered:
 
 - Levels 3 and 4 answer **what to build**; levels 5 and 6 answer **how work is
   structured, selected, and evidenced**. A single node MUST NOT redefine level 5
@@ -114,18 +139,16 @@ and this contract describe the same node under different names.
 
 - A leaf MUST carry exactly one contract (see section 5).
 - A leaf MUST have acceptance criteria concrete enough to be falsified by
-  evidence.
+  evidence. Whether they are concrete enough is review judgment; `READY` tests
+  only that they are present (section 4.1).
 - A leaf that turns out to carry more than one contract MUST be promoted to a
   sub-epic (see section 7.3) rather than absorbing the extra scope.
 
 ### 2.4 Epic Threshold
 
-This subsection reconciles the previously divergent wordings: the central
-`AGENTS.md` rule that multiple possible pull requests alone do not require an
-epic, and the Android, frontend, API, and contracts baselines requiring an epic
-whenever work spans more than one pull request.
-
-The unit of decomposition is the **contract**, not the pull-request count.
+The unit of decomposition is the **contract**, not the pull-request count and not
+diff size. This subsection supersedes every earlier repository wording that
+counted pull requests instead.
 
 An epic MUST be created before implementation when any of the following holds:
 
@@ -152,7 +175,8 @@ diff size, or duration does not by itself require an epic.
 
 ### 3.1 Containment (Parent / Sub-Issue)
 
-Native parent/sub-issue links express containment only.
+Native parent/sub-issue links express containment only. A node's **ancestors**
+are its parent and, transitively, that parent's ancestors, up to the root.
 
 - Containment MUST NOT be read as ordering.
 - Containment MUST NOT be read as blocking. A child is not blocked by its parent,
@@ -186,11 +210,15 @@ preferred narrative order, or a wish to avoid merge conflicts.
 
 - Dependencies MAY cross repositories and MUST then be written as
   `owner/repo#number`.
-- A dependency MAY target an epic. An epic dependency is satisfied when the epic
-  is closed.
-- A dependency is satisfied when the target issue is closed as completed.
-- A dependency target closed as not planned does NOT satisfy the dependency. The
-  edge MUST be explicitly removed, and removing it requires confirming that the
+- A dependency MAY target an epic. The same satisfaction rule applies to every
+  node type.
+- A dependency is satisfied when, and only when, its target is closed with the
+  native closure reason `completed`. Any other closure reason, including
+  `not planned` and `duplicate`, leaves the dependency unsatisfied.
+- Superseded work is closed as `not planned` and the edge is re-pointed at the
+  successor. Closing something as superseded is therefore never a way to satisfy
+  a dependency by wording.
+- Removing an unsatisfied edge is allowed only after confirming that the
   dependent node's contract no longer needs that output.
 
 ### 3.3 Sibling Order
@@ -205,15 +233,14 @@ Native sub-issue order inside a parent expresses preferred execution order.
 
 This distinction is binding, because conflating the two stalls parallel work:
 
-- **Real blocker**: expressed as a native dependency edge. It removes the node
-  from the executable set.
-- **Preferred ordering**: expressed as sibling order. It changes selection rank
-  and nothing else.
+- **Real blocker**: a native dependency edge. It removes the node from the
+  executable set.
+- **Preferred ordering**: sibling order. It changes selection rank and nothing
+  else.
 
-Anything not expressed as a dependency edge is preference. If, during execution,
-a preference turns out to be a real blocker, add the dependency edge before
-continuing (section 7.1). If a dependency edge turns out to be mere preference,
-delete the edge and encode it as sibling order instead.
+Anything not expressed as a dependency edge is preference. Correcting a
+misclassification means moving it between the two, never leaving it in both
+(sections 7.1 and 7.4).
 
 ### 3.5 Cycles And Malformed Graphs
 
@@ -234,25 +261,26 @@ duplicated into Markdown.
 
 - **BLOCKED** — an open node with at least one unsatisfied dependency, or a node
   inside a dependency cycle, or a node with an unresolvable dependency target.
-- **READY** — an open leaf that has no children, has acceptance criteria, has no
-  unsatisfied dependency, is not part of a cycle, and has only open ancestors. A
-  closed ancestor above an open leaf is graph drift: the ancestor was closed
-  without its scope being finished, so the leaf stays unexecutable until the
-  ancestor is reopened or the leaf is re-parented.
+- **READY** — an open leaf with no children, no unsatisfied dependency, no cycle,
+  only open ancestors, and a structurally complete contract. A closed ancestor
+  above an open leaf is graph drift: the ancestor was closed before its scope was
+  finished, so the leaf stays unexecutable until the ancestor is reopened or the
+  leaf is re-parented.
 - **ACTIVE** — a `READY` leaf under an explicit execution claim (see section
   4.2). Assignment alone MUST NOT make a leaf `ACTIVE`, because an assignee
   records ownership rather than execution, and one maintainer routinely owns
   many leaves while executing one.
-- **DONE** — a closed leaf whose primary delivery pull request is merged, or a
-  leaf explicitly closed as superseded or not planned with a recorded reason. A
-  node closed without delivered output does not thereby satisfy dependencies on
-  it; those edges MUST be handled under section 3.2.
+- **DONE** — a node closed as `completed`. Any other closure reason means the
+  node was abandoned or superseded, which is a valid outcome but not a delivery,
+  and it satisfies no dependency (section 3.2).
 - An epic is never `READY` and never `ACTIVE`. An epic is closable only under
   section 6.3.
 
-A leaf that is otherwise executable but has no acceptance criteria is NOT
-`READY`. The remedy is to define its contract, never to start work and discover
-the contract afterwards.
+**Structurally complete** means the body states acceptance criteria in a
+recognizable section. That is a presence test, so it stays computable: whether
+those criteria are _good_ is review judgment and MUST NOT be folded into `READY`.
+A leaf without them is not `READY`, and the remedy is to define its contract
+rather than to start work and discover it afterwards.
 
 ### 4.2 Executable Leaf Set
 
@@ -260,48 +288,53 @@ For a scope root R, the executable leaf set is every `READY` leaf in R's subtree
 
 - All members of the executable set MAY be executed in parallel by distinct
   executors. Sibling order does not serialize them.
-- A single executor selecting work MUST exclude leaves that are `ACTIVE` under
-  another executor.
 - If the executable set is empty, the correct output is the blocking explanation,
   meaning which dependencies are unsatisfied and which nodes they belong to. It
   is never permission to start a non-`READY` leaf.
 
 `READY` is derived from the graph and is reproducible by any reader. An execution
 claim is not: it states that an executor is working on the leaf now, so it MUST be
-explicit, machine-readable, attributable to one executor, and releasable or
-time-bounded, or a stale claim parks the leaf forever. An open delivery pull
-request linking the leaf is such a claim.
+explicit, machine-readable, attributable to one named executor, and releasable or
+time-bounded. An open delivery pull request linking the leaf is such a claim.
 
-Whether native data can carry a claim before a pull request exists, and what to
-do if it cannot, is resolution work owned by #669 and #672. Until then an
-executor that cannot observe claims treats the executable set as available and
-lets the delivery pull request reveal a collision.
+Two consequences keep `ACTIVE` from leaking into `READY`. A claim that is
+released, expired, or not attributable to a named executor is void, and the leaf
+is then plain `READY` again. And `ACTIVE` never changes whether a leaf is
+`READY`; it only tells one executor that another is already there.
+
+Whether native data can carry a claim before a pull request exists is resolution
+work owned by #669 and #672. Until then an executor that cannot observe claims
+treats the executable set as available and lets the delivery pull request reveal
+a collision.
 
 ### 4.3 Deterministic `NEXT` Selection
 
 `NEXT` is the single leaf a lone executor takes now. It MUST be deterministic:
 the same graph state MUST always yield the same answer.
 
-Take the executable set, remove every leaf that is `ACTIVE` under another
+Take the executable set of the scope root, remove every leaf claimed by another
 executor, then sort by the following keys, in order, and take the first:
 
 1. **Priority rank**, descending: `priority: blocker` > `priority: high` >
-   `priority: medium` > everything else. Unlabeled nodes and any label outside
-   this list share the lowest rank, so an unrecognized label can never make
-   selection undefined.
+   `priority: medium` > everything else. Unlabeled leaves and labels outside this
+   list share the lowest rank; a leaf carrying several priority labels ranks by
+   the highest one present.
 2. **Path order**, ascending: the vector of native sibling positions from the
-   scope root down to the leaf, compared lexicographically. A shorter vector that
-   is a prefix of a longer one sorts first.
-3. **Unblock impact**, descending: the number of open nodes that transitively
-   depend on the leaf.
-4. **Repository name**, ascending, as `owner/repo`.
-5. **Issue number**, ascending.
+   scope root down to the leaf, compared lexicographically. Positions are the
+   parent's native sub-issue order, counted the same way at every depth and
+   across repositories. A shorter vector that is a prefix of a longer one sorts
+   first.
+3. **Repository name**, ascending, as `owner/repo`.
+4. **Issue number**, ascending.
 
-Keys 4 and 5 guarantee a total order, so `NEXT` is always unique.
+Keys 3 and 4 guarantee a total order, so `NEXT` is always unique, and the result
+is always inside the scope root's subtree because the executable set is.
 
-Rationale for the key order: explicit human priority outranks plan shape, plan
-shape outranks heuristics, and the heuristic that shortens the critical path
-outranks arbitrary identifiers.
+Explicit human priority outranks plan shape, and plan shape outranks arbitrary
+identifiers. There is deliberately no critical-path heuristic: counting
+transitive dependents costs a full traversal, invites disagreement about whether
+nodes outside the scope root count, and rarely changes the answer that sibling
+order already gives.
 
 ## 5. One Contract Per Leaf, One Primary Delivery Pull Request
 
@@ -320,8 +353,9 @@ plus the acceptance criteria that falsify it.
 ### 5.2 Primary Delivery Pull Request
 
 - Exactly one pull request per leaf closes it, using `Fixes #<leaf>` plus
-  `Part of: #<parent>`.
-- Additional pull requests touching the same leaf are allowed only as a revert, a
+  `Part of: #<parent>`. That one is the leaf's primary delivery pull request, and
+  it is what the rest of this contract means by delivering the leaf.
+- Other pull requests touching the same leaf are allowed only as a revert, a
   rollforward for a defect found after merge, or an unblocking infrastructure fix.
   They MUST NOT carry new contract scope, and a post-merge defect MUST get its own
   leaf.
@@ -358,12 +392,17 @@ an acceptable substitute for either outcome.
 
 ### 6.3 Epic Closure
 
-An epic closes only when every child is `DONE`, superseded, or explicitly
-deferred into a linked node, and a closure comment maps each acceptance criterion
-to the exact child issues and pull requests that satisfied it. The epic is then
-closed explicitly, not by a pull-request keyword. The closure procedure, its
-checklist, and its comment structure live in `docs/EPIC_WORKFLOW.md`, which
-implements this contract and does not extend it.
+An epic closes only when no child of it is still open. Delivered children are
+closed as `completed`, abandoned ones as `not planned`, and deferred work is
+re-parented out of the epic or re-filed elsewhere before closure. Leaving an open
+child under a closed epic is the drift that section 4.1 makes unexecutable, so
+closure is not a way to defer.
+
+Closure also requires a comment mapping each acceptance criterion to the exact
+child issues and pull requests that satisfied it. The epic is then closed
+explicitly, not by a pull-request keyword. The closure procedure, its checklist,
+and its comment structure live in `docs/EPIC_WORKFLOW.md`, which implements this
+contract and does not extend it.
 
 ## 7. Replanning
 
@@ -470,7 +509,8 @@ class determines where the work belongs and whether the current leaf may still
 close:
 
 1. **In-contract defect** — the finding breaks a promise the current leaf makes.
-   Fix it in the current pull request, with evidence.
+   Fix it in the current pull request, with evidence. After that pull request
+   merged, the same defect becomes its own leaf instead (section 5.2).
 2. **Missing prerequisite** — the finding cannot be resolved without work that
    does not exist yet. Handle it under section 7.1.
 3. **New responsibility** — the finding is real but outside the current
@@ -514,13 +554,14 @@ user-visible behavior.
 
 ### 9.2 Integration And Real Evidence
 
-At least one check that exercises the real collaborator instead of a substitute:
-real database, real HTTP layer, real filesystem, real serialization, real
-workflow execution, real cross-repository contract.
+A check that exercises the real collaborator instead of a substitute: real
+database, real HTTP layer, real filesystem, real serialization, real workflow
+execution, real cross-repository contract.
 
 - Required when the leaf's risk lives in a seam: persistence, I/O, authentication
   and authorization, protocol or schema compatibility, CI and automation
-  behavior, or cross-repository contracts.
+  behavior, or cross-repository contracts. One check per identified seam is
+  sufficient; seams are counted by distinct collaborator, not by call site.
 - A mock-only proof is insufficient for a seam contract, because a mock asserts
   the assumption rather than the behavior.
 - When real evidence is genuinely unavailable in the environment, the leaf MUST
@@ -571,15 +612,25 @@ Stop adding evidence once all of the following are sufficiently proven:
 - every seam identified in section 9.2,
 - every named security or data-integrity invariant it touches.
 
-Two things that never justify another test: a coverage percentage below a
-repository floor, and a review finding that names no new contract distinction or
-failure class. A new test is justified by a distinction the existing evidence
-cannot express. Repository coverage floors remain floors; passing one proves
-nothing about contract satisfaction, and neither does exceeding it.
+A new test is justified by a distinction the existing evidence cannot express. A
+review finding that names no new distinction or failure class is not such a
+justification. Where a distinction fits inside an existing test, strengthen that
+test instead of adding a parallel one.
+
+Coverage is a gate, never evidence. A configured repository coverage floor is an
+independent validation gate that MUST still be satisfied, and a percentage names
+no behavior, failure class, or invariant, so it never proves the contract. Satisfy
+a floor with meaningful contract or failure-path evidence. If only meaningless
+tests could satisfy it, the coverage policy needs its own review under section
+7.5; do not weaken or bypass the gate inside the current leaf, and do not
+manufacture redundant or implementation-shape tests to clear it.
 
 ### 10.3 Pruning And Consolidation
 
-During the refactor step, and before requesting review, the author MUST:
+These obligations cover only the tests this change touches: the ones it adds,
+modifies, or makes obsolete, and the ones it exposes as redundant by replacing
+the contract they protected. Within that boundary, and before requesting review,
+the author MUST:
 
 - merge tests that differ only in irrelevant fixture detail into parameterized
   cases,
@@ -587,6 +638,11 @@ During the refactor step, and before requesting review, the author MUST:
 - delete tests that assert internals that the change just made private or
   removed,
 - delete tests that pin prose or implementation shape without a named invariant.
+
+Unrelated legacy test debt is out of scope by definition and MUST NOT enter the
+current leaf, however tempting the cleanup looks. Ignore it when immaterial,
+track it when it clears section 7.5, and never absorb it merely because this
+section discusses pruning (sections 7.2 and 7.5).
 
 Test count is not a quality metric. Redundant tests slow every future change,
 so leaving them behind is a cost, not caution. Deleting a test to silence a
@@ -640,11 +696,12 @@ Prefer an existing standard, platform feature, framework mechanism, or maintaine
 library when it exists, is maintained, matches the required semantics, and is
 already available.
 
-- Security-sensitive primitives MUST NOT be hand-rolled: cryptography,
-  authentication and token handling, URL, email, date, and HTML parsing, and
-  canonicalization or escaping.
-- GitHub-native mechanisms MUST be preferred over home-grown metadata for
-  anything this contract calls native, per section 1.
+- These MUST NOT be hand-rolled: cryptography, authentication and token handling,
+  parsers and protocol primitives including URL, email, date, and HTML,
+  canonicalization and escaping, scope and symbol analysis of a language, and
+  framework lifecycle behavior.
+- GitHub-native hierarchy, dependency, state, and ordering MUST NOT be
+  reimplemented in SecPal code, per section 1.
 
 This rule does not devalue domain code. SecPal's guard-book rules, tenancy model,
 and regulatory logic are legitimately custom, MUST NOT be contorted into a generic

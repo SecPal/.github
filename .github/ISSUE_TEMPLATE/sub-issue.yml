@@ -15,7 +15,7 @@ body:
 
         **What is a Sub-Issue?**
         - One task within a larger epic
-        - Carries exactly one contract, delivered by one primary PR (~400-600 LOC)
+        - Carries exactly one contract, delivered by one primary PR
         - Focused on a single logical unit of work
 
         **Workflow:**
@@ -41,7 +41,7 @@ body:
     id: goal
     attributes:
       label: 🎯 Goal
-      description: Specific goal for THIS sub-issue/PR (keep focused and small ~400-600 LOC)
+      description: Specific goal for THIS sub-issue (one contract; the ~400-600 LOC hint is advisory size guidance, not a decomposition rule)
       placeholder: |
         Implement database migrations for tenant_keys and person tables...
     validations:

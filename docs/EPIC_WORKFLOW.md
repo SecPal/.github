@@ -61,7 +61,7 @@ Do not close a parent epic until all of the following are true:
 - every linked acceptance criterion is satisfied by merged work, not just planned work
 - the exact child issues and PRs that satisfy each acceptance slice are identified
 - any discovered acceptance gap was reopened or re-filed before closure
-- deferred but still relevant work was linked as dedicated follow-up issues before closure
+- deferred but still relevant work was moved out of the epic into dedicated follow-up issues before closure, so no child stays open under a closed epic
 - the native sub-issue list reflects reality across all touched repositories, and any Markdown mirror of it matches
 
 If any item above is still unclear, the epic stays open.
@@ -113,7 +113,7 @@ If epic closure review finds that something was assumed complete but is not actu
 1. Reopen the relevant issue if the original scope still applies.
 2. Create a new follow-up issue if the remaining work is distinct.
 3. Link that issue from the parent epic before closing it.
-4. Keep the epic open until the remaining scope is either done or explicitly tracked as deferred.
+4. Keep the epic open until the remaining scope is either done or tracked outside the epic.
 
 Do not close the epic first and clean up the tracking later.
 
