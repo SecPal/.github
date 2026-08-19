@@ -11,6 +11,7 @@ this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import total_ordering
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
@@ -84,9 +85,15 @@ class ScopeRootUnresolved(Exception):
     """The requested scope root itself could not be resolved."""
 
 
+@total_ordering
 @dataclass(frozen=True)
 class SelectionKey:
-    """The four ordering keys of section 4.3, highest priority first."""
+    """The four ordering keys of section 4.3, highest priority first.
+
+    Priority ranks descending while the remaining keys ascend, so the ordering
+    cannot come from the dataclass field order and is derived from `__lt__` and
+    the dataclass equality instead.
+    """
 
     priority_rank: int
     path: tuple[int, ...]

@@ -397,6 +397,12 @@ class NextSelectionTests(TestCase):
             resolver.SelectionKey(priority_rank=1, path=(0, 0), repository=REPO, number=1),
         ]
         self.assertEqual(sorted(ordered), ordered)
+        # The ordering is a total order, so every comparison operator answers
+        # consistently rather than only the one `sorted` happens to call.
+        first, second = ordered[0], ordered[1]
+        self.assertTrue(first < second and first <= second and second > first and second >= first)
+        self.assertTrue(first <= first and first >= first)
+        self.assertFalse(first > second or second < first)
 
     def test_path_order_compares_vectors_lexicographically(self):
         snapshot = build_snapshot(
