@@ -137,6 +137,35 @@ class ReadyPredicateTests(TestCase):
         )
 
 
+class MalformedContainmentTests(TestCase):
+    """Section 3.1 and 3.5 containment defects the resolver can observe."""
+
+    def test_unresolvable_sub_issue_leaves_the_executable_set_incomplete(self):
+        snapshot = build_snapshot([epic(1, (key(2), key(404))), leaf(2, parent=key(1))])
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertEqual(resolution.ready_leaves(), (key(2),))
+        self.assertFalse(resolution.complete)
+        self.assertIn(
+            resolver.FINDING_UNRESOLVED_SUB_ISSUE,
+            {finding.code for finding in resolution.findings},
+        )
+
+    def test_a_second_parent_is_reported_without_inventing_a_state_rule(self):
+        snapshot = build_snapshot(
+            [
+                epic(1, (key(2), key(3))),
+                epic(2, (key(9),), parent=key(1)),
+                epic(3, (key(9),), parent=key(1)),
+                leaf(9, parent=key(2)),
+            ]
+        )
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertIn(
+            model.Finding(resolver.FINDING_MULTIPLE_PARENTS, key(9), f"{key(2)}, {key(3)}"),
+            resolution.findings,
+        )
+
+
 class DependencyTests(TestCase):
     """Sections 3.2 and 3.5 dependency semantics."""
 
@@ -205,6 +234,21 @@ class DependencyTests(TestCase):
             resolver.FINDING_DEPENDENCY_CYCLE,
             {finding.code for finding in resolution.findings},
         )
+
+    def test_depending_on_a_cycle_fails_closed_without_participating_in_it(self):
+        # Section 4.1 makes only a participant `BLOCKED`; section 3.5 still keeps
+        # every node that depends on a cycle out of `READY`.
+        snapshot = build_snapshot(
+            [
+                leaf(1, blocked_by=(key(2),)),
+                leaf(2, blocked_by=(key(3),), **closed()),
+                leaf(3, blocked_by=(key(2),), **closed()),
+            ]
+        )
+        state = resolver.resolve(snapshot, key(1)).states[key(1)]
+        self.assertFalse(state.ready)
+        self.assertFalse(state.blocked)
+        self.assertEqual(state.reasons, (resolver.REASON_DEPENDENCY_CYCLE,))
 
     def test_dependencies_are_never_inherited_through_containment(self):
         snapshot = build_snapshot(
@@ -428,16 +472,11 @@ class AcceptanceCriteriaTests(TestCase):
     }
 
     def test_structural_detection_matches_the_canonical_procedure(self):
-        for label, body in self.ACCEPTED.items():
-            with self.subTest(accepted=label):
-                self.assertTrue(acceptance_criteria.has_acceptance_criteria(body))
-        for label, body in self.REJECTED.items():
-            with self.subTest(rejected=label):
-                self.assertFalse(acceptance_criteria.has_acceptance_criteria(body))
-
-    def test_batch_detection_preserves_input_order(self):
-        bodies = ["## Acceptance Criteria\n\ntext\n", "nothing", "## acceptance criteria:\n\ntext\n"]
-        self.assertEqual(acceptance_criteria.detect(bodies), [True, False, True])
+        labels = list(self.ACCEPTED) + list(self.REJECTED)
+        bodies = list(self.ACCEPTED.values()) + list(self.REJECTED.values())
+        expected = [True] * len(self.ACCEPTED) + [False] * len(self.REJECTED)
+        # One batch call also proves detection stays aligned with its input order.
+        self.assertEqual(dict(zip(labels, acceptance_criteria.detect(bodies))), dict(zip(labels, expected)))
 
     def test_detection_failure_is_raised_rather_than_defaulted(self):
         with self.assertRaises(acceptance_criteria.MarkdownParserUnavailable):

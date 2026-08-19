@@ -73,7 +73,6 @@ ISSUE_QUERY = f"""query WorkGraphIssue($owner: String!, $name: String!, $number:
           number
           url
           state
-          isDraft
           author {{ login }}
           repository {{ nameWithOwner }}
         }}
@@ -98,7 +97,7 @@ def _page_query(
 }}"""
 
 
-_CLAIM_SELECTION = "number url state isDraft author { login } repository { nameWithOwner }"
+_CLAIM_SELECTION = "number url state author { login } repository { nameWithOwner }"
 
 # Each paginated connection, keyed by the field name used in the issue query.
 PAGE_QUERIES: Mapping[str, str] = {
@@ -114,10 +113,12 @@ PAGE_QUERIES: Mapping[str, str] = {
     ),
 }
 
-# Connections whose absence means the native relationship data is unreadable.
-# Section 3.5 forbids treating that as "no relationship"; claims are the single
-# exception the contract allows (section 4.2).
-REQUIRED_CONNECTIONS = ("labels", "subIssues", "blockedBy", "blocking")
+# Connections whose absence means data a canonical predicate reads is
+# unreadable. Section 3.5 forbids treating that as "no relationship". Claims are
+# the exception section 4.2 allows, and `blocking` is excluded on purpose: it
+# feeds only the advisory section 3.2 limit finding, so letting it gate `READY`
+# would make a derived value depend on an input section 1.2 never declares.
+REQUIRED_CONNECTIONS = ("labels", "subIssues", "blockedBy")
 
 VIEWER_QUERY = "query WorkGraphViewer { viewer { login } }"
 
@@ -368,20 +369,35 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> Snapshot:
 
 
 def resolve_reference(reference: str, *, default_repository: str | None = None) -> str:
-    """Normalize a user-supplied issue reference to a canonical identity."""
+    """Normalize a user-supplied issue reference to a canonical identity.
+
+    Every accepted form is validated here, so an unusable reference is invalid
+    input rather than a failure deeper in the read boundary.
+    """
     value = reference.strip()
     if value.startswith("http://") or value.startswith("https://"):
         parts = [part for part in value.split("/") if part]
-        if len(parts) >= 5 and parts[-2] in {"issues", "pull"}:
-            return node_key(f"{parts[-4]}/{parts[-3]}", int(parts[-1]))
+        if len(parts) >= 5 and parts[-2] in {"issues", "pull"} and parts[-1].isdigit():
+            return _canonical(f"{parts[-4]}/{parts[-3]}", parts[-1], reference)
         raise ValueError(f"not a GitHub issue URL: {reference}")
     if "#" in value:
         repository, _, number = value.rpartition("#")
         if repository:
-            return node_key(repository, int(number))
+            return _canonical(repository, number, reference)
         value = number
     if not value.isdigit():
         raise ValueError(f"not an issue reference: {reference}")
     if not default_repository:
         raise ValueError(f"{reference} needs a repository; use owner/repo#number or --repo")
-    return node_key(default_repository, int(value))
+    return _canonical(default_repository, value, reference)
+
+
+def _canonical(repository: str, number: str, reference: str) -> str:
+    if not number.isdigit():
+        raise ValueError(f"not an issue number in {reference}")
+    key = node_key(repository, int(number))
+    try:
+        parse_node_key(key)
+    except ValueError as error:
+        raise ValueError(f"{reference} is not repository-qualified as owner/repo#number") from error
+    return key

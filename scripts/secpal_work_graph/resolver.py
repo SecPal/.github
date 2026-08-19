@@ -146,9 +146,13 @@ class Resolution:
     def complete(self) -> bool:
         return not any(finding.code in INCOMPLETE_FINDINGS for finding in self.findings)
 
+    def resolved_states(self) -> tuple[NodeState, ...]:
+        """Subtree states in traversal order, skipping nodes that stayed unresolved."""
+        return tuple(self.states[key] for key in self.order if key in self.states)
+
     def ready_leaves(self) -> tuple[str, ...]:
         """Section 4.2 executable leaf set, in section 4.3 selection order."""
-        ready = [self.states[key] for key in self.order if self.states[key].ready]
+        ready = [state for state in self.resolved_states() if state.ready]
         return tuple(state.key for state in sorted(ready, key=lambda state: state.selection_key))
 
     def select_next(self, executor: str) -> NextResult:
@@ -187,12 +191,21 @@ def _ancestor_chain(snapshot: Snapshot, key: str) -> tuple[tuple[str, ...], str 
     return tuple(reversed(upward)), None
 
 
-def _dependency_cycles(snapshot: Snapshot) -> tuple[frozenset[str], tuple[tuple[str, ...], ...]]:
-    """Return the nodes tainted by a dependency cycle and the cycles themselves.
+@dataclass(frozen=True)
+class DependencyCycles:
+    """Section 3.5 cycle facts.
 
-    Section 3.5 removes both cycle members and everything depending on them from
-    `READY`, so the taint is propagated along reverse dependency edges.
+    `members` are the nodes that participate in a cycle, which is what section
+    4.1 makes `BLOCKED`. `tainted` additionally holds the nodes that depend on a
+    member, which section 3.5 keeps out of `READY` without making them `BLOCKED`.
     """
+
+    members: frozenset[str]
+    tainted: frozenset[str]
+    cycles: tuple[tuple[str, ...], ...]
+
+
+def _dependency_cycles(snapshot: Snapshot) -> DependencyCycles:
     index: dict[str, int] = {}
     low: dict[str, int] = {}
     on_stack: dict[str, bool] = {}
@@ -254,7 +267,7 @@ def _dependency_cycles(snapshot: Snapshot) -> tuple[frozenset[str], tuple[tuple[
             if dependent not in tainted:
                 tainted.add(dependent)
                 queue.append(dependent)
-    return frozenset(tainted), tuple(sorted(components))
+    return DependencyCycles(frozenset(members), frozenset(tainted), tuple(sorted(components)))
 
 
 def _subtree(snapshot: Snapshot, root: str) -> tuple[tuple[str, ...], dict[str, tuple[int, ...]]]:
@@ -285,7 +298,7 @@ def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
 
     order, paths = _subtree(snapshot, scope_root)
     root_ancestors, _ = _ancestor_chain(snapshot, scope_root)
-    tainted_by_cycle, cycles = _dependency_cycles(snapshot)
+    cycles = _dependency_cycles(snapshot)
 
     states: dict[str, NodeState] = {}
     findings: list[Finding] = []
@@ -301,16 +314,11 @@ def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
                 )
             )
             continue
-        state, node_findings = _derive(
-            snapshot,
-            node,
-            path=paths[key],
-            tainted_by_cycle=tainted_by_cycle,
-        )
+        state, node_findings = _derive(snapshot, node, path=paths[key], cycles=cycles)
         states[key] = state
         findings.extend(node_findings)
 
-    for cycle in cycles:
+    for cycle in cycles.cycles:
         if any(member in states for member in cycle):
             findings.append(Finding(FINDING_DEPENDENCY_CYCLE, cycle[0], ", ".join(cycle)))
 
@@ -347,7 +355,7 @@ def _derive(
     node: Node,
     *,
     path: tuple[int, ...],
-    tainted_by_cycle: frozenset[str],
+    cycles: DependencyCycles,
 ) -> tuple[NodeState, list[Finding]]:
     findings: list[Finding] = []
     reasons: set[str] = set()
@@ -391,7 +399,7 @@ def _derive(
             findings.append(Finding(FINDING_UNRESOLVED_DEPENDENCY, node.key, target_key))
         elif not target.is_done:
             reasons.add(REASON_UNSATISFIED_DEPENDENCY)
-    if node.key in tainted_by_cycle:
+    if node.key in cycles.tainted:
         reasons.add(REASON_DEPENDENCY_CYCLE)
 
     if not node.has_acceptance_criteria:
@@ -412,15 +420,13 @@ def _derive(
     if not node.claims_observable:
         findings.append(Finding(FINDING_CLAIMS_UNOBSERVABLE, node.key))
 
-    # Section 4.1 `BLOCKED`: an open node with an unsatisfied, unresolvable, or
-    # cyclic dependency. Malformed containment is deliberately not `BLOCKED`.
-    blocked = is_open and bool(
-        reasons
-        & {
-            REASON_UNSATISFIED_DEPENDENCY,
-            REASON_UNRESOLVED_DEPENDENCY,
-            REASON_DEPENDENCY_CYCLE,
-        }
+    # Section 4.1 `BLOCKED`: an open node with an unsatisfied or unresolvable
+    # dependency, or one that itself participates in a dependency cycle. Merely
+    # depending on a cycle member is not participation, and malformed
+    # containment is deliberately not `BLOCKED` either.
+    blocked = is_open and (
+        bool(reasons & {REASON_UNSATISFIED_DEPENDENCY, REASON_UNRESOLVED_DEPENDENCY})
+        or node.key in cycles.members
     )
     ready = not reasons
     claims = tuple(sorted(node.claims)) if node.claims_observable else ()

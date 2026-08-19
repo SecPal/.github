@@ -77,8 +77,3 @@ def detect(
         any(qualifies(heading["text"]) and heading["hasContent"] for heading in headings)
         for headings in parsed
     ]
-
-
-def has_acceptance_criteria(body: str | None, **options) -> bool:
-    """Convenience wrapper around :func:`detect` for a single body."""
-    return detect([body], **options)[0]

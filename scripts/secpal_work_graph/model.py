@@ -76,8 +76,10 @@ class Claim:
 class Node:
     """One normalized issue.
 
-    Only fields the canonical contract consumes, or that are required to explain
-    a structural finding, belong here.
+    A field belongs here only when a canonical predicate consumes it, when it is
+    required to explain a structural finding, or when it identifies the node for
+    a reader. `title` and `url` are identification only and are never read by the
+    resolver.
     """
 
     repository: str

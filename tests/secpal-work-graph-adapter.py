@@ -128,7 +128,6 @@ def issue_payload(
                                 "number": pull_number,
                                 "url": f"https://github.com/{repository}/pull/{pull_number}",
                                 "state": pull_state,
-                                "isDraft": False,
                                 "author": ({"login": login} if login else None),
                                 "repository": {"nameWithOwner": repository},
                             }
@@ -189,6 +188,17 @@ class AdapterTestCase(TestCase):
             for line in self.log_path.read_text(encoding="utf-8").splitlines()
             if line
         ]
+
+    def run_command(self, script, *arguments):
+        """Drive the real CLI against the fake gh, which it inherits from the environment."""
+        self.script_path.write_text(json.dumps(script), encoding="utf-8")
+        os.environ["FAKE_GH_SCRIPT"] = str(self.script_path)
+        os.environ["FAKE_GH_LOG"] = str(self.log_path)
+        self.addCleanup(os.environ.pop, "FAKE_GH_SCRIPT", None)
+        self.addCleanup(os.environ.pop, "FAKE_GH_LOG", None)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = cli.main(["--gh", str(self.gh_path), *arguments], stdout=stdout, stderr=stderr)
+        return code, stdout.getvalue(), stderr.getvalue()
 
 
 class SnapshotLoadingTests(AdapterTestCase):
@@ -354,6 +364,26 @@ class FailureTests(AdapterTestCase):
         self.assertFalse(missing.resolved)
         self.assertEqual(missing.unresolved_reason, "NOT_FOUND")
 
+    def test_an_unreadable_sub_issue_reports_incompleteness_instead_of_failing(self):
+        script = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(
+                1, sub_issues=(f"{REPO}#2", f"{REPO}#404")
+            ),
+            "WorkGraphIssue:SecPal/.github#2:": issue_payload(2, parent=f"{REPO}#1"),
+            "WorkGraphIssue:SecPal/.github#404:": {
+                "data": {"repository": {"issue": None}},
+                "errors": [{"type": "NOT_FOUND", "path": ["repository", "issue"]}],
+            },
+        }
+        code, output, _ = self.run_command(script, "ready", f"{REPO}#1")
+        document = json.loads(output)
+        self.assertEqual(code, 0)
+        self.assertEqual([node["key"] for node in document["ready"]], [f"{REPO}#2"])
+        self.assertFalse(document["complete"])
+        self.assertIn(
+            "unresolved_sub_issue", {finding["code"] for finding in document["findings"]}
+        )
+
     def test_operational_failures_are_raised_instead_of_becoming_absence(self):
         cases = {
             "unparseable output": {"__raw": "not json at all", "__exit": 0},
@@ -408,20 +438,11 @@ class CommandTests(AdapterTestCase):
         "WorkGraphIssue:SecPal/.github#4:": issue_payload(4),
     }
 
-    def run_command(self, *arguments):
-        self.script_path.write_text(json.dumps(self.SCRIPT), encoding="utf-8")
-        os.environ["FAKE_GH_SCRIPT"] = str(self.script_path)
-        os.environ["FAKE_GH_LOG"] = str(self.log_path)
-        self.addCleanup(os.environ.pop, "FAKE_GH_SCRIPT", None)
-        self.addCleanup(os.environ.pop, "FAKE_GH_LOG", None)
-        stdout, stderr = io.StringIO(), io.StringIO()
-        code = cli.main(
-            ["--gh", str(self.gh_path), *arguments], stdout=stdout, stderr=stderr
-        )
-        return code, stdout.getvalue(), stderr.getvalue()
+    def command(self, *arguments):
+        return self.run_command(self.SCRIPT, *arguments)
 
     def test_show_renders_the_normalized_subtree(self):
-        code, output, _ = self.run_command("show", f"{REPO}#1")
+        code, output, _ = self.command("show", f"{REPO}#1")
         document = json.loads(output)
         self.assertEqual(code, 0)
         self.assertEqual([node["key"] for node in document["nodes"]], [f"{REPO}#{n}" for n in (1, 2, 3)])
@@ -429,7 +450,7 @@ class CommandTests(AdapterTestCase):
         self.assertTrue(document["complete"])
 
     def test_ready_returns_only_the_executable_leaf(self):
-        code, output, _ = self.run_command("ready", f"{REPO}#1")
+        code, output, _ = self.command("ready", f"{REPO}#1")
         document = json.loads(output)
         self.assertEqual(code, 0)
         self.assertEqual([node["key"] for node in document["ready"]], [f"{REPO}#2"])
@@ -444,7 +465,7 @@ class CommandTests(AdapterTestCase):
         )
 
     def test_next_selects_one_leaf_for_the_given_executor(self):
-        code, output, _ = self.run_command("next", f"{REPO}#1", "--executor", "alice")
+        code, output, _ = self.command("next", f"{REPO}#1", "--executor", "alice")
         document = json.loads(output)
         self.assertEqual(code, 0)
         self.assertEqual(document["selected"]["key"], f"{REPO}#2")
@@ -452,7 +473,7 @@ class CommandTests(AdapterTestCase):
         self.assertEqual(document["executor"], "alice")
 
     def test_validate_reports_structural_findings_only(self):
-        code, output, _ = self.run_command("validate", f"{REPO}#1")
+        code, output, _ = self.command("validate", f"{REPO}#1")
         document = json.loads(output)
         self.assertEqual(code, 1)
         self.assertEqual(
@@ -461,8 +482,8 @@ class CommandTests(AdapterTestCase):
         )
 
     def test_validate_issue_explains_one_issue(self):
-        ready_code, ready_output, _ = self.run_command("validate-issue", f"{REPO}#2")
-        blocked_code, blocked_output, _ = self.run_command("validate-issue", f"{REPO}#3")
+        ready_code, ready_output, _ = self.command("validate-issue", f"{REPO}#2")
+        blocked_code, blocked_output, _ = self.command("validate-issue", f"{REPO}#3")
         self.assertEqual(ready_code, 0)
         self.assertTrue(json.loads(ready_output)["issue"]["ready"])
         self.assertEqual(blocked_code, 1)
@@ -474,31 +495,44 @@ class CommandTests(AdapterTestCase):
         )
 
     def test_machine_output_is_deterministic_and_text_uses_the_same_model(self):
-        first = self.run_command("show", f"{REPO}#1")[1]
-        second = self.run_command("show", f"{REPO}#1")[1]
+        first = self.command("show", f"{REPO}#1")[1]
+        second = self.command("show", f"{REPO}#1")[1]
         self.assertEqual(first, second)
-        text = self.run_command("--format", "text", "ready", f"{REPO}#1")[1]
+        text = self.command("--format", "text", "ready", f"{REPO}#1")[1]
         self.assertIn(f"READY {REPO}#2", text)
         self.assertIn(f"{REPO}#3", text)
 
     def test_invalid_references_are_rejected_without_contacting_github(self):
-        code, _, stderr = self.run_command("show", "not-an-issue")
-        self.assertEqual(code, 2)
-        self.assertEqual(json.loads(stderr)["error"]["code"], "invalid_reference")
+        for reference in ("not-an-issue", "foo#1", "12", "https://example.com/x", "SecPal/.github#x"):
+            with self.subTest(reference=reference):
+                code, _, stderr = self.command("show", reference)
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(stderr)["error"]["code"], "invalid_reference")
         self.assertEqual(self.calls(), [])
+
+    def test_a_bare_number_resolves_against_an_explicit_repository(self):
+        code, output, _ = self.command("--repo", REPO, "validate-issue", "2")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output)["issue"]["key"], f"{REPO}#2")
 
 
 class SubprocessSafetyTests(TestCase):
-    def test_the_adapter_never_uses_a_shell(self):
+    def test_github_access_is_bounded_and_never_shelled_out(self):
+        # Structural evidence for the stated invariant that the read boundary
+        # runs gh as an argument vector, never through a shell.
         source = (ROOT / "scripts/secpal_work_graph/github.py").read_text(encoding="utf-8")
         self.assertNotIn("shell=True", source)
-        self.assertIn("timeout=", source)
+        self.assertGreater(github.GitHubReadAdapter().timeout, 0)
 
-    def test_the_entrypoint_compiles(self):
-        subprocess.run(
-            [sys.executable, "-m", "py_compile", str(ROOT / "scripts/secpal-work-graph.py")],
+    def test_the_entrypoint_runs(self):
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/secpal-work-graph.py"), "--help"],
+            capture_output=True,
+            text=True,
             check=True,
         )
+        for command in ("show", "validate", "ready", "next", "validate-issue"):
+            self.assertIn(command, completed.stdout)
 
 
 if __name__ == "__main__":

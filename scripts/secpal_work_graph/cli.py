@@ -132,12 +132,9 @@ def _envelope(command: str, resolution: resolver.Resolution) -> dict[str, Any]:
 
 def _not_ready_leaves(resolution: resolver.Resolution) -> list[dict[str, Any]]:
     return [
-        {"key": key, "reasons": list(resolution.states[key].reasons)}
-        for key in resolution.order
-        if key in resolution.states
-        and resolution.states[key].leaf
-        and resolution.states[key].open
-        and not resolution.states[key].ready
+        {"key": state.key, "reasons": list(state.reasons)}
+        for state in resolution.resolved_states()
+        if state.leaf and state.open and not state.ready
     ]
 
 
@@ -154,7 +151,7 @@ def build_document(command: str, resolution: resolver.Resolution, *, executor: s
             }
             for key in resolution.ancestors
         ]
-        document["nodes"] = [_node_json(resolution, key) for key in resolution.order if key in resolution.states]
+        document["nodes"] = [_node_json(resolution, state.key) for state in resolution.resolved_states()]
     elif command == "validate":
         document["finding_count"] = len(resolution.findings)
     elif command == "ready":
