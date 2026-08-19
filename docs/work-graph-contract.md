@@ -137,9 +137,14 @@ A coordination node with children.
 An epic whose parent is an epic. It exists to bound one coherent phase, one
 repository scope, or one responsibility cluster of a larger epic.
 
-- A sub-epic follows every epic rule, at any depth. Nesting is unbounded and
+- A sub-epic follows every epic rule at every depth GitHub supports natively, and
   every rule in this contract recurses: a sub-epic of a sub-epic behaves exactly
   like any other epic.
+- The graph MUST stay inside GitHub's native limits, currently up to 100
+  sub-issues per parent and up to eight levels of nested sub-issues. A plan that
+  would exceed either limit MUST be restructured or flattened; inventing custom
+  hierarchy storage to hold it is prohibited, because native containment is the
+  only authoritative hierarchy.
 - A sub-epic SHOULD exist when an epic would otherwise mix unrelated
   responsibilities, span more than one repository per phase, or carry more
   children than a reviewer can hold in one view (about seven is a practical
@@ -294,7 +299,10 @@ lifecycle, so a node may satisfy several at once; only `READY` gates selection.
   many leaves while executing one.
 - **DONE** — a node closed as `completed`. Any other closure reason means the
   node was abandoned, duplicated, or superseded, which is a valid outcome but not
-  a delivery, and it satisfies no dependency (section 3.2).
+  a delivery, and it satisfies no dependency (section 3.2). `DONE` is a state
+  predicate, not proof: closing an undelivered leaf as `completed` makes it `DONE`
+  while violating section 6.1, so a resolver reports the state faithfully and
+  governance validation reports the violation.
 - **Reopening** returns a node to open. It is then evaluated exactly like any
   other open node, it is no longer `DONE`, and every dependent it had satisfied
   becomes `BLOCKED` again. Reopening is therefore a graph change, not a
@@ -302,9 +310,10 @@ lifecycle, so a node may satisfy several at once; only `READY` gates selection.
 - An epic is never `READY` and never `ACTIVE`. An epic is closable only under
   section 6.3.
 
-`BLOCKED`, `READY`, and `DONE` are derived from graph state alone. `ACTIVE` is
-not a graph state at all: it belongs to execution coordination (section 4.2) and
-never changes any of the three.
+`BLOCKED` and `DONE` read native graph state only. `READY` additionally reads the
+structural issue content defined below, and nothing else. `ACTIVE` is not a graph
+state at all: it belongs to execution coordination (section 4.2) and never
+changes the other three. Section 1.2 remains the authoritative input list.
 
 **Structurally complete** means the body contains a qualifying acceptance-criteria
 heading followed by at least one non-blank line before the next heading of any
@@ -452,9 +461,15 @@ No later pull request may treat a `DONE` leaf as its owning node.
 
 ### 6.1 Leaf Closure
 
-A leaf closes when its acceptance criteria are satisfied by merged work and the
-evidence rules in sections 9 and 10 are met. Green CI is supporting evidence, not
-proof of contract satisfaction.
+A leaf may be closed as `completed` only when its acceptance criteria are
+satisfied by merged work and the evidence rules in sections 9 and 10 are met.
+Green CI is supporting evidence, not proof of contract satisfaction. Where
+delivery happens through a pull request, that leaf's primary delivery pull
+request must have merged.
+
+This is the governance side of `DONE`. Closing a leaf that does not meet these
+conditions still makes it `DONE` in GitHub (section 4.1); it makes the closure
+wrong, not the state ambiguous.
 
 ### 6.2 Deferred Scope
 
@@ -493,17 +508,32 @@ implementation steps would be ceremony, not control.
 
 ### 7.1 Missing Prerequisite
 
-When a leaf cannot satisfy its acceptance criteria because a prerequisite does
-not exist:
+First decide whether the discovered work is a separate contract at all. Work that
+is genuinely part of the current contract, not independently deliverable, and in
+need of no acceptance criteria of its own stays in the current leaf under the
+scope rules of section 5.1. Everything else is an independent contract and
+follows the steps below before implementation continues.
+
+When the current leaf has a parent:
 
 1. Create the prerequisite as a leaf under the same parent.
 2. Add a native dependency: the current leaf is blocked by the new leaf.
 3. Leave the current work parked; the current leaf is now `BLOCKED`, not `READY`.
 4. Re-select `NEXT`.
 
-The prerequisite MAY instead be implemented inside the current pull request only
-when it is small, in-topic, and already inside the current contract. If it needs
-its own acceptance criteria, it is not in the current contract.
+When the current leaf is a standalone root leaf, it has no parent to create the
+prerequisite under, and no parent may be invented. Two independent contracts also
+mean the epic threshold of section 2.4 is now met, so:
+
+1. Create an epic for the aggregate goal.
+2. Attach the original leaf and the new prerequisite leaf to it as native
+   sub-issues, preserving the original leaf's contract unchanged.
+3. Add the native dependency from the original leaf to the prerequisite.
+4. Continue under normal `READY` and `NEXT` semantics.
+
+The original leaf keeps its identity, its number, and its contract in both paths.
+Absorbing the prerequisite because the leaf happened to start standalone is
+prohibited.
 
 ### 7.2 New Responsibility
 
@@ -660,11 +690,9 @@ execution, real cross-repository contract.
   it into one check per seam is the counting error section 10.1 prohibits.
 - A mock-only proof is insufficient for a seam contract, because a mock asserts
   the assumption rather than the behavior.
-- When real evidence is genuinely unavailable in the environment, the leaf MUST
-  record what could not be verified rather than claiming coverage. An unverified
-  seam is material by definition, so the outstanding verification becomes its own
-  node under section 7.5. Tracking it that way is what closes the question; it
-  does not hold the current leaf open.
+- When real evidence is unavailable, what happens depends on whose contract needs
+  it, and section 9.4 decides that. Filing a follow-up node never converts missing
+  required evidence into sufficient evidence.
 
 ### 9.3 Structural And Characterization Evidence
 
@@ -679,7 +707,29 @@ imports.
   implementation preference or a prose shape without a stated invariant is noise
   and MUST be removed.
 
-### 9.4 Leaves Without Executable Behavior
+### 9.4 Evidence That Cannot Be Produced Yet
+
+Some evidence exists only after deployment, on real hardware, in a live
+environment, or once another repository exists. That is not a reason to lower the
+bar; it is a question about which contract owns the evidence, and the answer is
+decided before implementation is called complete.
+
+- If the leaf promises the real-world outcome, that evidence is required for
+  closure. Missing access does not satisfy the contract, and filing a follow-up
+  node does not either. The leaf stays open, or its contract is replanned under
+  section 7 to promise only what it can actually prove.
+- If the real-world validation is deliberately a later contract, model it that
+  way first: an implementation leaf plus a validation leaf under a shared parent,
+  with a dependency wherever the real requirement gates it. The implementation
+  leaf then closes on its own contract, while the aggregate goal stays incomplete
+  until the validation leaf is `DONE`, because an epic cannot close with an open
+  child (section 6.3).
+
+Splitting evidence into its own leaf is a contract decision, not a routine step.
+One validation leaf can carry many seams at once, and this section never
+justifies one leaf per seam or per test.
+
+### 9.5 Leaves Without Executable Behavior
 
 A leaf that changes no executable behavior, such as governance text or
 documentation, MUST state that explicitly and provide the relevant structural or
@@ -706,7 +756,7 @@ Stop adding evidence once all of the following are sufficiently proven:
 
 - every materially distinct behavior the leaf promises,
 - every distinct failure class it must handle,
-- every seam identified in section 9.2,
+- every seam identified in section 9.2 that this leaf's own contract covers,
 - every named security or data-integrity invariant it touches.
 
 A new test is justified by a distinction the existing evidence cannot express. A
