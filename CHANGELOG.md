@@ -9,6 +9,29 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-19 - Implement Read-Only SecPal Work-Graph Resolution
+
+**Added:**
+
+- `scripts/secpal-work-graph.py` with `show`, `validate`, `ready`, `next`, and
+  `validate-issue`, resolving GitHub-native hierarchy, dependencies, sibling
+  order, state, closure reason, and closing pull-request relationships into the
+  machine-derived states defined by `docs/work-graph-contract.md`
+- `scripts/secpal_work_graph/` holding the GitHub read boundary, the immutable
+  normalized snapshot, the pure state resolver, structural acceptance-criteria
+  detection, and deterministic rendering, so JSON and human output derive from
+  one resolved model
+- a `Work-Graph Resolver` job in `.github/workflows/quality.yml` running the
+  hermetic resolver, acceptance-criteria, fake-GitHub adapter, and command tests
+
+**Changed:**
+
+- `markdown-it` is now an explicit dev dependency, providing the
+  standards-compliant Markdown parsing that structural acceptance-criteria
+  detection requires
+
+---
+
 ## 2026-08-19 - Define The Canonical SecPal Work-Graph Contract
 
 **Added:**
