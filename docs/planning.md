@@ -7,6 +7,8 @@ SPDX-License-Identifier: CC0-1.0
 
 This document is the canonical planning guide for SecPal contributors.
 
+Work-graph semantics — node types, native hierarchy and dependency meaning, `READY` and `NEXT` selection, replanning, and evidence rules — are defined once in `docs/work-graph-contract.md`. This guide covers where work is planned; the contract covers how the work graph behaves.
+
 ## Governance Decision
 
 SecPal uses an issue-first planning model.
@@ -26,7 +28,7 @@ The decision rationale is recorded in ADR-013: `docs/adr/20260415-issue-first-pl
 - GitHub Issues in the correct repository
 - linked PRs and review state
 - milestones and labels
-- epic plus sub-issue structure for multi-PR work
+- epic plus sub-issue structure for work holding more than one deliverable contract
 
 ### Supporting But Non-Canonical
 
@@ -67,7 +69,7 @@ Create work in the repository that owns the change.
 
 1. Open or refine a GitHub Issue in the correct repository.
 2. Add the smallest useful labels and milestone.
-3. If the work needs more than one PR, create an epic first and split it into sub-issues.
+3. If the work holds more than one deliverable contract, create an epic first and split it into sub-issues. See the epic threshold in `docs/work-graph-contract.md`.
 4. If the issue needs durable rationale, write an ADR.
 5. Implement from a dedicated topic branch and open a draft PR linked to the issue.
 6. Let board automation mirror progress only if the project board is enabled.
@@ -76,6 +78,7 @@ Create work in the repository that owns the change.
 
 | Document                            | Role                                          | Status                       |
 | ----------------------------------- | --------------------------------------------- | ---------------------------- |
+| `docs/work-graph-contract.md`       | Canonical work-graph and governance semantics | Active                       |
 | `docs/planning.md`                  | Canonical planning and contributor onboarding | Active                       |
 | `docs/project-board-integration.md` | Optional board setup and usage guide          | Active, non-canonical        |
 | `docs/feature-requirements.md`      | Historical specification archive              | Archived for active planning |
@@ -93,6 +96,7 @@ If the board is unavailable or out of date, planning continues through issues, l
 
 ## Related Guidance
 
+- `docs/work-graph-contract.md`
 - `docs/EPIC_WORKFLOW.md`
 - `docs/labels.md`
 - `docs/project-board-integration.md`

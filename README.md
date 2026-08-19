@@ -55,10 +55,10 @@ cat docs/project-board-integration.md
 
 1. **Open or refine an issue** in the repository that owns the work
 2. **Add labels and milestone** to make priority and delivery intent explicit
-3. **Split multi-PR work** into an epic plus sub-issues before implementation
+3. **Split work into an epic plus sub-issues** before implementation whenever it holds more than one deliverable contract
 4. **Open a draft PR** linked to the issue; board automation mirrors progress only when enabled
 
-See [docs/planning.md](docs/planning.md) for the canonical process and [docs/project-board-integration.md](docs/project-board-integration.md) for the optional board layer.
+See [docs/work-graph-contract.md](docs/work-graph-contract.md) for the canonical work-graph and governance semantics, [docs/planning.md](docs/planning.md) for the canonical process, and [docs/project-board-integration.md](docs/project-board-integration.md) for the optional board layer.
 
 ### 🤖 Automated Project Board Management
 

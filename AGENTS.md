@@ -9,6 +9,10 @@ This file is the concise, provider-neutral runtime baseline for work in this
 repository. Path-specific review criteria live in focused instruction files,
 including `.github/instructions/github-workflows.instructions.md`.
 
+Work structure, ordering, selection, delivery, and evidence semantics are defined
+once in `docs/work-graph-contract.md`. This baseline references that contract and
+does not restate it.
+
 ## Scope and Safety
 
 - Inspect `git status --short --branch` and the relevant repository context
@@ -95,9 +99,11 @@ including `.github/instructions/github-workflows.instructions.md`.
 - Create an out-of-scope issue only when the finding is technically proven,
   material, not already tracked, unsuitable for a small in-scope fix, and can
   be expressed with concrete acceptance criteria.
-- Use an EPIC only for genuinely multi-deliverable work, meaningful
-  cross-repository sequencing, or implementation spanning multiple work
-  sessions. Multiple possible pull requests alone do not require an EPIC.
+- Decide EPIC versus single issue with the epic threshold in
+  `docs/work-graph-contract.md`: the unit of decomposition is the contract, not
+  the pull-request count. Follow that contract for hierarchy, dependencies,
+  ordering, `READY`/`NEXT` selection, replanning, and evidence rules instead of
+  applying a local variant.
 
 ## Security and Repository Invariants
 

@@ -9,16 +9,13 @@ Large SecPal work often spans multiple repositories, multiple PRs, or both. When
 
 This guide defines the minimum structure and closure evidence required so an epic reflects reality instead of just merged PR count.
 
+It is the procedural companion to `docs/work-graph-contract.md`, which defines the underlying semantics. Where this guide and the contract appear to disagree, the contract governs.
+
 ## When To Use An Epic
 
-Create an epic before implementation when work:
+The epic threshold is defined in [docs/work-graph-contract.md](work-graph-contract.md#24-epic-threshold). In short: an epic is required when the work holds more than one independently deliverable contract, sequences changes across repositories, has separately reviewable and mergeable phases, or cannot be reviewed safely as one topic.
 
-- needs more than one PR or probably will
-- spans multiple repositories
-- has distinct implementation phases or milestones
-- cannot be reviewed safely as one topic-sized change
-
-For single-PR work, use a regular issue instead.
+A single contract that merely might need mechanical follow-up PRs stays a regular issue. If it is genuinely unclear whether the work holds one contract or several, create the epic.
 
 ## Required Structure
 
@@ -35,14 +32,14 @@ The epic must define:
 
 ### 2. Split Work Into Sub-Issues
 
-Use one sub-issue per PR-sized slice of work.
+Use one sub-issue per contract, delivered by one primary pull request.
 
 Each sub-issue must:
 
-- link back to the parent epic
-- stay focused on one logical change
+- link back to the parent epic through the native parent/sub-issue link
+- carry exactly one contract
 - carry its own acceptance criteria
-- note dependencies when order matters
+- record real blockers as native issue dependencies, and preferred sequence as native sub-issue order
 
 ### 3. Link PRs To Sub-Issues, Not The Epic
 
@@ -55,7 +52,7 @@ Fixes #<sub-issue-number>
 Part of: #<epic-number>
 ```
 
-Only the final PR may close the epic, and only when the epic closure checklist below is satisfied.
+No PR closes the epic through a closing keyword. The epic is closed explicitly once the closure checklist below is satisfied and the closure comment exists, so that closure evidence is never skipped by a merge.
 
 ## Parent Epic Closure Checklist
 
@@ -65,7 +62,7 @@ Do not close a parent epic until all of the following are true:
 - the exact child issues and PRs that satisfy each acceptance slice are identified
 - any discovered acceptance gap was reopened or re-filed before closure
 - deferred but still relevant work was linked as dedicated follow-up issues before closure
-- the sub-issue tasklist reflects reality across all touched repositories
+- the native sub-issue list reflects reality across all touched repositories, and any Markdown mirror of it matches
 
 If any item above is still unclear, the epic stays open.
 
@@ -154,6 +151,7 @@ If a workflow depends on repository settings or external services, merged code a
 
 ## Related Guidance
 
+- [docs/work-graph-contract.md](work-graph-contract.md)
 - [README.md](../README.md)
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [.github/ISSUE_TEMPLATE/epic.yml](../.github/ISSUE_TEMPLATE/epic.yml)

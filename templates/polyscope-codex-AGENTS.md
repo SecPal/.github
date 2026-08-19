@@ -7,6 +7,11 @@ SPDX-License-Identifier: CC0-1.0
 
 Apply these rules only when the session says it is running inside Polyscope.
 
+Work-graph semantics — node types, dependencies, ordering, `READY` and `NEXT`
+selection, replanning, and evidence — come from the canonical contract in
+`SecPal/.github`, `docs/work-graph-contract.md`. These coordination rules layer on
+top of it and never redefine it.
+
 ## Linked Repositories
 
 - Treat every entry in `workspace_roots` as a separate repository and execution

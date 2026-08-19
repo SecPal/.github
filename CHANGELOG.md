@@ -9,6 +9,42 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-19 - Define The Canonical SecPal Work-Graph Contract
+
+**Added:**
+
+- `docs/work-graph-contract.md` as the single organization-wide definition of
+  epic, sub-epic, and leaf-delivery semantics, native hierarchy, dependency and
+  sibling-order meaning, derived `BLOCKED`/`READY`/`ACTIVE`/`DONE` states,
+  executable leaf sets, and deterministic `NEXT` selection
+- explicit precedence rules for source-of-truth conflicts, for scope and design
+  constraints versus test-driven development and review evidence, and for
+  repository baselines versus the central contract
+- a five-way review-finding classification covering in-contract defects, missing
+  prerequisites, new responsibilities, non-blocking follow-up, and invalid
+  findings, so a finding's class decides where the work belongs
+- contract-oriented evidence classes, an evidence stop condition, test pruning
+  and consolidation obligations, single authoritative invariant ownership with
+  trust-boundary defense-in-depth exceptions, and standards-before-custom plus
+  finite-allowlist guidance
+
+**Changed:**
+
+- reconciled the central `AGENTS.md` epic threshold with the stricter Android,
+  frontend, API, and contracts guidance by making the deliverable contract, not
+  the pull-request count, the unit of decomposition
+- pointed `AGENTS.md`, `README.md`, `docs/planning.md`,
+  `docs/EPIC_WORKFLOW.md`, `docs/development-principles.md`, the epic and
+  sub-issue templates, and the Polyscope coordination template at the contract
+  instead of restating work-graph semantics locally
+- made epic closure an explicit, evidence-backed step instead of a closing
+  keyword in the last delivery pull request, so closure evidence cannot be
+  skipped by a merge
+- recorded that GitHub-native issue state, hierarchy, and dependencies are
+  authoritative over duplicated Markdown state
+
+---
+
 ## 2026-08-16 - Migrate Central Licensing Policy To Plain AGPL
 
 **Changed:**

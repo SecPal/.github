@@ -15,16 +15,18 @@ body:
 
         **What is a Sub-Issue?**
         - One task within a larger epic
-        - Typically results in one PR (~400-600 LOC)
+        - Carries exactly one contract, delivered by one primary PR (~400-600 LOC)
         - Focused on a single logical unit of work
 
         **Workflow:**
         1. This sub-issue should be linked in the parent epic's tasklist
         2. Your PR should close THIS sub-issue: `Fixes #<this-sub-issue-number>`
         3. Your PR should reference the epic: `Part of: #<epic-number>`
-        4. Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
+        4. Never use `Fixes #<epic-number>`; the epic is closed explicitly after its closure evidence comment
 
         📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
+
+        📐 Canonical semantics: See [docs/work-graph-contract.md](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md)
 
   - type: input
     id: parent_epic
@@ -77,7 +79,11 @@ body:
     id: dependencies
     attributes:
       label: 🔗 Dependencies
-      description: Does this depend on or block other sub-issues?
+      description: |
+        Record real blockers as native GitHub issue dependencies. Native links
+        are authoritative; this field only mirrors them for readers.
+        A preferred sequence that is not a real blocker belongs in the parent's
+        sub-issue order instead.
       placeholder: |
         - Depends on: #52 (migrations must exist first)
         - Blocks: #55, #60 (middleware needs these keys)
@@ -122,7 +128,7 @@ body:
         ```
 
         **⚠️ Important:**
-        - Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
+        - Never use `Fixes #<epic-number>`; closing the epic is a separate step
         - The epic should only close when ALL sub-issues are complete
         - If you discover remaining in-scope gaps, reopen or file follow-up issues before asking to close the parent epic
         - If you're unsure, ask in the epic discussion thread
