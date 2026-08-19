@@ -99,9 +99,11 @@ def _node_json(resolution: resolver.Resolution, key: str) -> dict[str, Any]:
         "state": node.state,
         "state_reason": node.state_reason,
         "parent": node.parent,
+        "parent_observable": node.parent_observable,
         "children": list(node.children),
         "blocked_by": list(node.blocked_by),
         "priority_labels": list(node.priority_labels),
+        "priority_labels_observable": node.priority_labels_observable,
         "has_acceptance_criteria": node.has_acceptance_criteria,
         "path": list(state.path),
         "depth": state.depth,
@@ -162,8 +164,13 @@ def build_document(command: str, resolution: resolver.Resolution, *, executor: s
         document["executor"] = executor
         document["selected"] = _node_json(resolution, result.selected) if result.selected else None
         document["no_selection_reason"] = result.no_selection_reason
+        document["incomplete_reason"] = result.incomplete_reason
         document["candidates"] = list(result.candidates)
         document["ready"] = list(resolution.ready_leaves())
+        if result.incomplete_reason is not None:
+            # Not a canonical no-selection result: the declared inputs were not
+            # fully observable, so no canonical `NEXT` exists for this scope.
+            document["status"] = "incomplete_inputs"
         if result.no_selection_reason == resolver.NO_READY_LEAF:
             document["not_ready_leaves"] = _not_ready_leaves(resolution)
     elif command == "validate-issue":
@@ -194,6 +201,8 @@ def _render_text(document: Mapping[str, Any]) -> str:
     elif command == "next":
         if document["selected"]:
             lines.append(f"  NEXT {document['selected']['key']} {document['selected']['title']}")
+        elif document["incomplete_reason"]:
+            lines.append(f"  no canonical NEXT: {document['incomplete_reason']}")
         else:
             lines.append(f"  no selection: {document['no_selection_reason']}")
         for entry in document.get("not_ready_leaves", []):
@@ -239,6 +248,10 @@ def _exit_code(command: str, document: Mapping[str, Any]) -> int:
         return EXIT_REPORTED if document["findings"] else EXIT_OK
     if command == "validate-issue":
         return EXIT_OK if document["issue"]["ready"] else EXIT_REPORTED
+    if command == "next":
+        # Both canonical no-selection reasons are ordinary answers; incomplete
+        # inputs are not.
+        return EXIT_REPORTED if document["incomplete_reason"] else EXIT_OK
     return EXIT_OK
 
 

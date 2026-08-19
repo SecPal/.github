@@ -33,6 +33,7 @@ REASON_UNSATISFIED_DEPENDENCY = "unsatisfied_dependency"
 REASON_UNRESOLVED_DEPENDENCY = "unresolved_dependency"
 REASON_DEPENDENCY_CYCLE = "dependency_cycle"
 REASON_CONTAINMENT_CYCLE = "containment_cycle"
+REASON_CONTAINMENT_INCONSISTENT = "containment_inconsistent"
 REASON_UNRESOLVED_ANCESTOR = "unresolved_ancestor"
 REASON_CLOSED_ANCESTOR = "closed_ancestor"
 REASON_MISSING_ACCEPTANCE_CRITERIA = "missing_acceptance_criteria"
@@ -41,6 +42,7 @@ REASON_ORDER = (
     REASON_CLOSED,
     REASON_NOT_LEAF,
     REASON_CONTAINMENT_CYCLE,
+    REASON_CONTAINMENT_INCONSISTENT,
     REASON_UNRESOLVED_ANCESTOR,
     REASON_CLOSED_ANCESTOR,
     REASON_DEPENDENCY_CYCLE,
@@ -50,9 +52,12 @@ REASON_ORDER = (
 )
 
 # Section 3.5 fail-closed containment conditions, as distinct from `BLOCKED`.
-MALFORMED_REASONS = frozenset({REASON_CONTAINMENT_CYCLE, REASON_UNRESOLVED_ANCESTOR})
+MALFORMED_REASONS = frozenset(
+    {REASON_CONTAINMENT_CYCLE, REASON_CONTAINMENT_INCONSISTENT, REASON_UNRESOLVED_ANCESTOR}
+)
 
 FINDING_CONTAINMENT_CYCLE = "containment_cycle"
+FINDING_CONTAINMENT_INCONSISTENT = "containment_inconsistent"
 FINDING_UNRESOLVED_ANCESTOR = "unresolved_ancestor"
 FINDING_CLOSED_ANCESTOR = "closed_ancestor"
 FINDING_DEPENDENCY_CYCLE = "dependency_cycle"
@@ -71,14 +76,27 @@ FINDING_CLAIMS_UNOBSERVABLE = "claims_unobservable"
 INCOMPLETE_FINDINGS = frozenset(
     {
         FINDING_CONTAINMENT_CYCLE,
+        FINDING_CONTAINMENT_INCONSISTENT,
         FINDING_UNRESOLVED_ANCESTOR,
         FINDING_UNRESOLVED_DEPENDENCY,
         FINDING_UNRESOLVED_SUB_ISSUE,
     }
 )
 
+# Findings that leave the set of possible `READY` candidates, or their path
+# order, unknown. A leaf that merely fails closed on its own inputs is not one
+# of these: that is a complete answer about that leaf, and section 3.1 keeps it
+# from affecting a sibling.
+CANDIDATE_SCOPE_FINDINGS = frozenset({FINDING_UNRESOLVED_SUB_ISSUE, FINDING_CONTAINMENT_INCONSISTENT})
+
 NO_READY_LEAF = "no_ready_leaf"
 ALL_CANDIDATES_CLAIMED = "all_candidates_claimed"
+
+# `NEXT` is undecidable rather than empty when its declared inputs are unknown.
+# These are not canonical no-selection reasons: section 4.3 defines those two
+# only for a complete input set.
+INCOMPLETE_CANDIDATE_SCOPE = "incomplete_candidate_scope"
+INCOMPLETE_SELECTION_METADATA = "incomplete_selection_metadata"
 
 
 class ScopeRootUnresolved(Exception):
@@ -123,6 +141,7 @@ class NodeState:
     malformed: bool
     reasons: tuple[str, ...]
     priority_rank: int
+    priority_observable: bool
     claims: tuple[Claim, ...]
 
     @property
@@ -133,11 +152,17 @@ class NodeState:
 
 @dataclass(frozen=True)
 class NextResult:
-    """Section 4.3 result: exactly one leaf, or a canonical no-selection reason."""
+    """Section 4.3 result.
+
+    Exactly one of three shapes: a selected leaf, a canonical no-selection
+    reason, or an incompleteness reason meaning the declared inputs were not
+    fully observable and no canonical answer exists.
+    """
 
     selected: str | None
     no_selection_reason: str | None
     candidates: tuple[str, ...]
+    incomplete_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -162,7 +187,18 @@ class Resolution:
         ready = [state for state in self.resolved_states() if state.ready]
         return tuple(state.key for state in sorted(ready, key=lambda state: state.selection_key))
 
+    def next_inputs_incomplete(self) -> str | None:
+        """Return why `NEXT` is undecidable here, or None when it is decidable."""
+        if any(finding.code in CANDIDATE_SCOPE_FINDINGS for finding in self.findings):
+            return INCOMPLETE_CANDIDATE_SCOPE
+        if any(not self.states[key].priority_observable for key in self.ready_leaves()):
+            return INCOMPLETE_SELECTION_METADATA
+        return None
+
     def select_next(self, executor: str) -> NextResult:
+        incomplete = self.next_inputs_incomplete()
+        if incomplete is not None:
+            return NextResult(None, None, (), incomplete)
         executable = self.ready_leaves()
         candidates = tuple(
             key for key in executable if not _claimed_by_another(self.states[key].claims, executor)
@@ -185,7 +221,13 @@ def _ancestor_chain(snapshot: Snapshot, key: str) -> tuple[tuple[str, ...], str 
     seen = {key}
     upward: list[str] = []
     current = snapshot.get(key)
-    while current is not None and current.parent is not None:
+    while current is not None:
+        if not current.parent_observable:
+            # An inaccessible parent is not an absent parent, so the chain ends
+            # unresolved rather than at a root.
+            return tuple(reversed(upward)), REASON_UNRESOLVED_ANCESTOR
+        if current.parent is None:
+            break
         parent_key = current.parent
         if parent_key in seen:
             return tuple(reversed(upward)), REASON_CONTAINMENT_CYCLE
@@ -277,10 +319,21 @@ def _dependency_cycles(snapshot: Snapshot) -> DependencyCycles:
     return DependencyCycles(frozenset(members), frozenset(tainted), tuple(sorted(components)))
 
 
-def _subtree(snapshot: Snapshot, root: str) -> tuple[tuple[str, ...], dict[str, tuple[int, ...]]]:
+@dataclass(frozen=True)
+class Subtree:
+    order: tuple[str, ...]
+    paths: Mapping[str, tuple[int, ...]]
+    # Children a parent listed whose own native parent does not confirm the edge.
+    # One invocation reads issues through several requests, so the two views can
+    # disagree; neither is preferred over the other.
+    inconsistent: Mapping[str, str]
+
+
+def _subtree(snapshot: Snapshot, root: str) -> Subtree:
     """Walk native containment downwards, recording the section 4.3 path vector."""
     order: list[str] = []
     paths: dict[str, tuple[int, ...]] = {}
+    inconsistent: dict[str, str] = {}
     stack: list[tuple[str, tuple[int, ...]]] = [(root, ())]
     while stack:
         key, path = stack.pop()
@@ -292,9 +345,12 @@ def _subtree(snapshot: Snapshot, root: str) -> tuple[tuple[str, ...], dict[str, 
         if node is None or not node.resolved:
             continue
         for position, child in reversed(list(enumerate(node.children))):
+            child_node = snapshot.get(child)
+            if child_node is not None and child_node.resolved and child_node.parent != key:
+                inconsistent[child] = key
             if child not in paths:
                 stack.append((child, path + (position,)))
-    return tuple(order), paths
+    return Subtree(tuple(order), paths, inconsistent)
 
 
 def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
@@ -303,7 +359,8 @@ def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
     if root_node is None or not root_node.resolved:
         raise ScopeRootUnresolved(scope_root)
 
-    order, paths = _subtree(snapshot, scope_root)
+    subtree = _subtree(snapshot, scope_root)
+    order = subtree.order
     root_ancestors, _ = _ancestor_chain(snapshot, scope_root)
     cycles = _dependency_cycles(snapshot)
 
@@ -321,7 +378,13 @@ def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
                 )
             )
             continue
-        state, node_findings = _derive(snapshot, node, path=paths[key], cycles=cycles)
+        state, node_findings = _derive(
+            snapshot,
+            node,
+            path=subtree.paths[key],
+            cycles=cycles,
+            listing_parent=subtree.inconsistent.get(key),
+        )
         states[key] = state
         findings.extend(node_findings)
 
@@ -363,6 +426,7 @@ def _derive(
     *,
     path: tuple[int, ...],
     cycles: DependencyCycles,
+    listing_parent: str | None = None,
 ) -> tuple[NodeState, list[Finding]]:
     findings: list[Finding] = []
     reasons: set[str] = set()
@@ -373,6 +437,10 @@ def _derive(
         reasons.add(REASON_CLOSED)
     if not is_leaf:
         reasons.add(REASON_NOT_LEAF)
+
+    if listing_parent is not None:
+        reasons.add(REASON_CONTAINMENT_INCONSISTENT)
+        findings.append(Finding(FINDING_CONTAINMENT_INCONSISTENT, node.key, listing_parent))
 
     # Section 4.1 reads every ancestor up to the graph root, not just the ones
     # inside the requested scope.
@@ -451,6 +519,7 @@ def _derive(
         malformed=bool(reasons & MALFORMED_REASONS),
         reasons=tuple(reason for reason in REASON_ORDER if reason in reasons),
         priority_rank=node.priority_rank,
+        priority_observable=node.priority_labels_observable,
         claims=claims,
     )
     return state, findings

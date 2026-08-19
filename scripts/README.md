@@ -121,8 +121,10 @@ Options: `--gh` (path to the `gh` executable), `--timeout` (per-request seconds)
 `--max-nodes` (issues read per invocation). `next` resolves its executor identity
 from `--executor`, and otherwise from the authenticated `gh` identity.
 
-Exit codes: `0` success, `1` structural findings reported (`validate`) or issue
-not `READY` (`validate-issue`), `2` invalid input, `3` GitHub or parser failure.
+Exit codes: `0` success, `1` structural findings reported (`validate`), issue not
+`READY` (`validate-issue`), or `NEXT` inputs not fully observable (`next`), `2`
+invalid input, `3` GitHub or parser failure. Both canonical `NEXT` no-selection
+results are ordinary answers and exit `0`.
 
 Requirements: an authenticated `gh` CLI, Python 3, and `npm ci` so the
 `markdown-it` parser used for structural acceptance-criteria detection is

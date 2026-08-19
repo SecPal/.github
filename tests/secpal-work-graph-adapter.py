@@ -313,6 +313,101 @@ class SnapshotLoadingTests(AdapterTestCase):
         self.assertEqual(sorted(documents), [1, 2, 3])
 
 
+def with_error(payload, kind, *path_tail):
+    """Attach a field-level GraphQL access error to an otherwise readable issue."""
+    document = json.loads(json.dumps(payload))
+    document.setdefault("errors", []).append(
+        {"type": kind, "path": ["repository", "issue", *path_tail], "message": "not accessible"}
+    )
+    return document
+
+
+class RequiredInputObservabilityTests(AdapterTestCase):
+    """Section 3.5: an inaccessible native input never becomes absent data."""
+
+    def test_an_unobservable_parent_is_not_reported_as_a_root(self):
+        cases = {
+            "forbidden": with_error(issue_payload(1), "FORBIDDEN", "parent"),
+            "not found": with_error(issue_payload(1), "NOT_FOUND", "parent"),
+            "nested path": with_error(issue_payload(1), "FORBIDDEN", "parent", "repository"),
+        }
+        for label, payload in cases.items():
+            with self.subTest(case=label):
+                snapshot = github.load_snapshot(
+                    self.adapter({"WorkGraphIssue:SecPal/.github#1:": payload}), f"{REPO}#1"
+                )
+                node = snapshot.nodes[f"{REPO}#1"]
+                self.assertIsNone(node.parent)
+                self.assertFalse(node.parent_observable)
+                state = resolver.resolve(snapshot, f"{REPO}#1").states[f"{REPO}#1"]
+                self.assertFalse(state.ready)
+                self.assertTrue(state.malformed)
+
+    def test_a_null_parent_without_an_access_error_is_a_legitimate_root(self):
+        snapshot = github.load_snapshot(
+            self.adapter({"WorkGraphIssue:SecPal/.github#1:": issue_payload(1)}), f"{REPO}#1"
+        )
+        node = snapshot.nodes[f"{REPO}#1"]
+        self.assertIsNone(node.parent)
+        self.assertTrue(node.parent_observable)
+        self.assertTrue(resolver.resolve(snapshot, f"{REPO}#1").states[f"{REPO}#1"].ready)
+
+    def test_partially_readable_relationship_data_is_not_a_complete_list(self):
+        # A payload carrying usable nodes plus an access error underneath the
+        # connection must never be normalized into a shorter complete list.
+        for connection, kind in (("subIssues", "FORBIDDEN"), ("blockedBy", "NOT_FOUND")):
+            with self.subTest(connection=connection, error=kind):
+                base = issue_payload(
+                    2, parent=f"{REPO}#1", sub_issues=(f"{REPO}#5",), blocked_by=(f"{REPO}#6",)
+                )
+                script = {
+                    "WorkGraphIssue:SecPal/.github#1:": issue_payload(
+                        1, sub_issues=(f"{REPO}#2", f"{REPO}#3")
+                    ),
+                    "WorkGraphIssue:SecPal/.github#2:": with_error(base, kind, connection, "nodes", "1"),
+                    "WorkGraphIssue:SecPal/.github#3:": issue_payload(3, parent=f"{REPO}#1"),
+                    "WorkGraphIssue:SecPal/.github#5:": issue_payload(5, parent=f"{REPO}#2"),
+                    "WorkGraphIssue:SecPal/.github#6:": issue_payload(6),
+                }
+                snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+                unreadable = snapshot.nodes[f"{REPO}#2"]
+                self.assertFalse(unreadable.resolved)
+                self.assertEqual(unreadable.unresolved_reason, kind)
+                resolution = resolver.resolve(snapshot, f"{REPO}#1")
+                self.assertFalse(resolution.complete)
+                self.assertIsNone(resolution.select_next("alice").selected)
+
+    def test_a_partial_follow_up_page_is_not_a_successful_page(self):
+        script = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(
+                1, sub_issues=(f"{REPO}#2",), sub_cursor="SUB1"
+            ),
+            "WorkGraphSubIssues:SecPal/.github#1:SUB1": with_error(
+                page("subIssues", (f"{REPO}#3",)), "FORBIDDEN", "subIssues", "nodes", "0"
+            ),
+            "WorkGraphIssue:SecPal/.github#2:": issue_payload(2, parent=f"{REPO}#1"),
+            "WorkGraphIssue:SecPal/.github#3:": issue_payload(3, parent=f"{REPO}#1"),
+        }
+        # Every referenced issue is readable, so only the partial page can fail this.
+        with self.assertRaises(github.GitHubError):
+            github.load_snapshot(self.adapter(script), f"{REPO}#1")
+
+    def test_unreadable_labels_leave_the_node_resolvable(self):
+        # Selection metadata is not an input to READY, so it must not make the
+        # whole node unresolved.
+        snapshot = github.load_snapshot(
+            self.adapter(
+                {"WorkGraphIssue:SecPal/.github#1:": with_error(issue_payload(1), "FORBIDDEN", "labels")}
+            ),
+            f"{REPO}#1",
+        )
+        node = snapshot.nodes[f"{REPO}#1"]
+        self.assertTrue(node.resolved)
+        self.assertFalse(node.priority_labels_observable)
+        self.assertEqual(node.priority_labels, ())
+        self.assertTrue(resolver.resolve(snapshot, f"{REPO}#1").states[f"{REPO}#1"].ready)
+
+
 class ClaimObservationTests(AdapterTestCase):
     def test_only_open_pull_requests_with_a_named_author_are_claims(self):
         script = {
@@ -471,6 +566,30 @@ class CommandTests(AdapterTestCase):
         self.assertEqual(document["selected"]["key"], f"{REPO}#2")
         self.assertIsNone(document["no_selection_reason"])
         self.assertEqual(document["executor"], "alice")
+
+    def test_next_reports_incomplete_inputs_instead_of_a_canonical_answer(self):
+        script = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(
+                1, sub_issues=(f"{REPO}#404", f"{REPO}#2")
+            ),
+            "WorkGraphIssue:SecPal/.github#2:": issue_payload(2, parent=f"{REPO}#1"),
+            "WorkGraphIssue:SecPal/.github#404:": {
+                "data": {"repository": {"issue": None}},
+                "errors": [{"type": "NOT_FOUND", "path": ["repository", "issue"]}],
+            },
+        }
+        code, output, _ = self.run_command(script, "next", f"{REPO}#1", "--executor", "alice")
+        document = json.loads(output)
+        self.assertEqual(code, 1)
+        self.assertEqual(document["status"], "incomplete_inputs")
+        self.assertIsNone(document["selected"])
+        self.assertIsNone(document["no_selection_reason"])
+        self.assertEqual(document["incomplete_reason"], "incomplete_candidate_scope")
+        # The known sibling is still truthfully READY on the `ready` surface.
+        self.assertEqual(document["ready"], [f"{REPO}#2"])
+        ready_code, ready_output, _ = self.run_command(script, "ready", f"{REPO}#1")
+        self.assertEqual(ready_code, 0)
+        self.assertEqual([node["key"] for node in json.loads(ready_output)["ready"]], [f"{REPO}#2"])
 
     def test_validate_reports_structural_findings_only(self):
         code, output, _ = self.command("validate", f"{REPO}#1")

@@ -150,6 +150,92 @@ class MalformedContainmentTests(TestCase):
             {finding.code for finding in resolution.findings},
         )
 
+    def test_an_unobservable_parent_is_not_a_standalone_root(self):
+        # Section 3.5: an inaccessible parent is not the same as no parent, and
+        # that holds wherever it sits in the chain.
+        blind = {"parent": None, "parent_observable": False}
+        cases = {
+            "the leaf itself": ([leaf(1, **blind)], key(1)),
+            "an ancestor": ([epic(1, (key(2),), **blind), leaf(2, parent=key(1))], key(2)),
+        }
+        for label, (nodes, subject) in cases.items():
+            with self.subTest(unobservable_on=label):
+                state = resolver.resolve(build_snapshot(nodes), key(1)).states[subject]
+                self.assertFalse(state.ready)
+                self.assertTrue(state.malformed)
+                self.assertIn(resolver.REASON_UNRESOLVED_ANCESTOR, state.reasons)
+
+    def test_a_containment_edge_the_child_does_not_confirm_is_not_selectable(self):
+        # One invocation reads several issues, so a parent's sub-issue list and
+        # the child's own parent can disagree. Neither is preferred.
+        for label, child_parent in (("another parent", key(8)), ("no parent", None)):
+            with self.subTest(child_says=label):
+                snapshot = build_snapshot(
+                    [epic(1, (key(2), key(3))), leaf(2, parent=child_parent), leaf(3, parent=key(1))]
+                )
+                resolution = resolver.resolve(snapshot, key(1))
+                state = resolution.states[key(2)]
+                self.assertFalse(state.ready)
+                self.assertTrue(state.malformed)
+                self.assertIn(resolver.REASON_CONTAINMENT_INCONSISTENT, state.reasons)
+                self.assertIn(
+                    model.Finding(resolver.FINDING_CONTAINMENT_INCONSISTENT, key(2), key(1)),
+                    resolution.findings,
+                )
+                self.assertNotIn(key(2), resolution.ready_leaves())
+                self.assertIsNone(resolution.select_next("alice").selected)
+
+
+class SelectionInputTests(TestCase):
+    """Sections 1.1 and 1.2: selection metadata is an input to `NEXT` only."""
+
+    def test_unobservable_priority_labels_do_not_change_ready(self):
+        snapshot = build_snapshot([leaf(1, priority_labels_observable=False)])
+        state = resolver.resolve(snapshot, key(1)).states[key(1)]
+        self.assertTrue(state.ready)
+        self.assertFalse(state.blocked)
+
+    def test_unobservable_priority_labels_are_never_silently_ranked_as_unlabeled(self):
+        snapshot = build_snapshot([leaf(1, priority_labels_observable=False)])
+        result = resolver.resolve(snapshot, key(1)).select_next("alice")
+        self.assertIsNone(result.selected)
+        self.assertIsNone(result.no_selection_reason)
+        self.assertEqual(result.incomplete_reason, resolver.INCOMPLETE_SELECTION_METADATA)
+
+
+class NextCandidateUniverseTests(TestCase):
+    """Section 4.2 and 4.3: `NEXT` needs the whole candidate set, not a subset."""
+
+    def test_an_unreadable_sibling_suspends_next_but_not_the_known_ready_leaf(self):
+        snapshot = build_snapshot([epic(1, (key(404), key(2))), leaf(2, parent=key(1))])
+        resolution = resolver.resolve(snapshot, key(1))
+        # Section 3.1: containment never blocks a sibling, so the known leaf is
+        # still truthfully READY and `ready`/`show` may report it.
+        self.assertTrue(resolution.states[key(2)].ready)
+        self.assertEqual(resolution.ready_leaves(), (key(2),))
+        self.assertFalse(resolution.complete)
+        # The unreadable sibling could outrank it, so `NEXT` is not derivable.
+        result = resolution.select_next("alice")
+        self.assertIsNone(result.selected)
+        self.assertIsNone(result.no_selection_reason)
+        self.assertEqual(result.incomplete_reason, resolver.INCOMPLETE_CANDIDATE_SCOPE)
+
+    def test_a_locally_failed_closed_leaf_still_leaves_next_derivable(self):
+        # An unresolved dependency makes that leaf canonically non-READY, which
+        # is a complete answer, so a fully known sibling stays selectable.
+        snapshot = build_snapshot(
+            [
+                epic(1, (key(2), key(3))),
+                leaf(2, parent=key(1), blocked_by=(key(404),)),
+                leaf(3, parent=key(1)),
+            ]
+        )
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertFalse(resolution.complete)
+        result = resolution.select_next("alice")
+        self.assertEqual(result.selected, key(3))
+        self.assertIsNone(result.incomplete_reason)
+
     def test_a_second_parent_is_reported_without_inventing_a_state_rule(self):
         snapshot = build_snapshot(
             [
@@ -428,15 +514,19 @@ class NextSelectionTests(TestCase):
         self.assertEqual(result.candidates, (key(4),))
 
     def test_no_ready_leaf_and_all_candidates_claimed_are_distinct(self):
+        # Both are ordinary answers over a complete input set, so neither is an
+        # incompleteness result.
         blocked = self.parallel_epic(leaf(5, parent=key(1), has_acceptance_criteria=False))
         empty = blocked.select_next("alice")
         self.assertIsNone(empty.selected)
         self.assertEqual(empty.no_selection_reason, resolver.NO_READY_LEAF)
+        self.assertIsNone(empty.incomplete_reason)
 
         claimed = self.parallel_epic(leaf(5, parent=key(1), claims=(Claim("bob", f"{REPO}#10"),)))
         result = claimed.select_next("alice")
         self.assertIsNone(result.selected)
         self.assertEqual(result.no_selection_reason, resolver.ALL_CANDIDATES_CLAIMED)
+        self.assertIsNone(result.incomplete_reason)
 
     def test_cross_repository_containment_keeps_native_order(self):
         snapshot = build_snapshot(

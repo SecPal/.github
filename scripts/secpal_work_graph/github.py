@@ -113,12 +113,19 @@ PAGE_QUERIES: Mapping[str, str] = {
     ),
 }
 
-# Connections whose absence means data a canonical predicate reads is
-# unreadable. Section 3.5 forbids treating that as "no relationship". Claims are
-# the exception section 4.2 allows, and `blocking` is excluded on purpose: it
-# feeds only the advisory section 3.2 limit finding, so letting it gate `READY`
-# would make a derived value depend on an input section 1.2 never declares.
-REQUIRED_CONNECTIONS = ("labels", "subIssues", "blockedBy")
+# Relationship inputs a canonical predicate enumerates. If one of them is
+# unreadable, even partially, section 3.5 forbids treating the readable part as
+# the complete list, so the whole node stays unresolved. Observability is
+# all-or-nothing per connection.
+#
+# `parent` is handled separately because it is a single field: an unreadable
+# parent is recorded as unobservable containment rather than an unresolved node,
+# which is what keeps it distinct from a genuinely absent parent.
+#
+# Deliberately excluded: `labels` are selection metadata that section 1.2 keeps
+# out of `READY`, claims are the exception section 4.2 allows, and `blocking`
+# feeds only the advisory section 3.2 limit finding.
+REQUIRED_CONNECTIONS = ("subIssues", "blockedBy")
 
 VIEWER_QUERY = "query WorkGraphViewer { viewer { login } }"
 
@@ -132,8 +139,13 @@ class GraphQLResponse:
     data: Mapping[str, Any] | None
     errors: tuple[Mapping[str, Any], ...]
 
-    def errors_under(self, *path_tail: str) -> tuple[Mapping[str, Any], ...]:
-        return tuple(error for error in self.errors if tuple(error.get("path") or ())[-1:] == path_tail)
+    def errors_touching(self, field: str) -> tuple[Mapping[str, Any], ...]:
+        """Errors anywhere under ``field``, including nested and per-node paths."""
+        return tuple(
+            error
+            for error in self.errors
+            if field in [str(segment) for segment in (error.get("path") or ())]
+        )
 
 
 @dataclass
@@ -196,10 +208,23 @@ def _reference(payload: Mapping[str, Any] | None) -> str | None:
     return node_key(str(repository), int(number))
 
 
+def _references(entries: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    return tuple(reference for reference in (_reference(entry) for entry in entries) if reference)
+
+
 def _connection_nodes(payload: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
     if not payload:
         return []
     return [entry for entry in (payload.get("nodes") or []) if entry]
+
+
+class ConnectionUnreadable(Exception):
+    """One connection could not be read completely, so its list is unknown."""
+
+    def __init__(self, connection: str, reason: str) -> None:
+        super().__init__(f"{connection} could not be read completely")
+        self.connection = connection
+        self.reason = reason
 
 
 def _paginate(
@@ -207,8 +232,17 @@ def _paginate(
     connection: str,
     issue: Mapping[str, Any],
     variables: Mapping[str, Any],
+    errors: tuple[Mapping[str, Any], ...] = (),
 ) -> list[Mapping[str, Any]]:
-    """Consume every remaining page of one connection."""
+    """Consume every remaining page of one connection, or report it unreadable.
+
+    A payload carrying some nodes plus an access error underneath it is a
+    partial read, never a complete short list.
+    """
+    if errors:
+        raise ConnectionUnreadable(connection, _unresolved_reason(errors))
+    if issue.get(connection) is None:
+        raise ConnectionUnreadable(connection, "unresolved")
     collected = _connection_nodes(issue.get(connection))
     page_info = (issue.get(connection) or {}).get("pageInfo") or {}
     while page_info.get("hasNextPage"):
@@ -216,11 +250,14 @@ def _paginate(
         if not cursor:
             raise GitHubError(f"{connection} reported another page without a cursor")
         response = adapter.query(PAGE_QUERIES[connection], {**variables, "cursor": cursor})
+        page_errors = response.errors_touching(connection)
+        if page_errors:
+            raise ConnectionUnreadable(connection, _unresolved_reason(page_errors))
         nested = ((response.data or {}).get("repository") or {}).get("issue") or {}
         payload = nested.get(connection)
         if payload is None:
             # A page that cannot be read is not an empty page.
-            raise GitHubError(f"{connection} page after {cursor} could not be read")
+            raise ConnectionUnreadable(connection, "unresolved")
         collected.extend(_connection_nodes(payload))
         page_info = payload.get("pageInfo") or {}
     return collected
@@ -256,27 +293,30 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> tuple[Node, str | None]:
     issue = ((response.data or {}).get("repository") or {}).get("issue")
     if not issue:
         return unresolved_node(key, _unresolved_reason(response.errors)), None
-    if any(issue.get(connection) is None for connection in REQUIRED_CONNECTIONS):
-        return unresolved_node(key, _unresolved_reason(response.errors)), None
 
-    claims_errors = response.errors_under("closedByPullRequestsReferences")
+    try:
+        relationships = {
+            connection: _references(
+                _paginate(adapter, connection, issue, variables, response.errors_touching(connection))
+            )
+            for connection in REQUIRED_CONNECTIONS
+        }
+    except ConnectionUnreadable as unreadable:
+        return unresolved_node(key, unreadable.reason), None
+
+    # Selection metadata and claims degrade on their own instead of taking the
+    # node down with them, because section 1.2 keeps them out of `READY`.
+    try:
+        labels = {
+            str(entry.get("name"))
+            for entry in _paginate(adapter, "labels", issue, variables, response.errors_touching("labels"))
+        }
+        priority_labels_observable = True
+    except ConnectionUnreadable:
+        labels, priority_labels_observable = set(), False
+
+    claims_errors = response.errors_touching("closedByPullRequestsReferences")
     claims_observable = not claims_errors and issue.get("closedByPullRequestsReferences") is not None
-
-    labels = {str(entry.get("name")) for entry in _paginate(adapter, "labels", issue, variables)}
-    children = tuple(
-        reference
-        for reference in (
-            _reference(entry) for entry in _paginate(adapter, "subIssues", issue, variables)
-        )
-        if reference
-    )
-    blocked_by = tuple(
-        reference
-        for reference in (
-            _reference(entry) for entry in _paginate(adapter, "blockedBy", issue, variables)
-        )
-        if reference
-    )
     claims = (
         _claims(_paginate(adapter, "closedByPullRequestsReferences", issue, variables))
         if claims_observable
@@ -292,10 +332,12 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> tuple[Node, str | None]:
         state=OPEN if str(issue.get("state", "")).upper() == "OPEN" else CLOSED,
         state_reason=str(state_reason).lower() if state_reason else None,
         parent=_reference(issue.get("parent")),
-        children=children,
-        blocked_by=blocked_by,
+        parent_observable=not response.errors_touching("parent"),
+        children=relationships["subIssues"],
+        blocked_by=relationships["blockedBy"],
         blocking_count=int((issue.get("blocking") or {}).get("totalCount") or 0),
         priority_labels=tuple(sorted(label for label in labels if label in PRIORITY_RANKS)),
+        priority_labels_observable=priority_labels_observable,
         claims=claims,
         claims_observable=claims_observable,
         mirror_relationships=mirror_relationships(issue.get("body")),

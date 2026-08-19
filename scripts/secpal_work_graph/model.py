@@ -89,10 +89,17 @@ class Node:
     state: str = OPEN
     state_reason: str | None = None
     parent: str | None = None
+    # False when the native parent field itself could not be read. Section 3.5
+    # makes that different from a genuinely absent parent, so the two are never
+    # collapsed into `parent is None`.
+    parent_observable: bool = True
     children: tuple[str, ...] = ()
     blocked_by: tuple[str, ...] = ()
     blocking_count: int = 0
     priority_labels: tuple[str, ...] = ()
+    # False when the priority labels could not be read. Section 1.2 keeps them
+    # out of `READY`, so this only suspends `NEXT` ranking.
+    priority_labels_observable: bool = True
     has_acceptance_criteria: bool = False
     claims: tuple[Claim, ...] = ()
     claims_observable: bool = True
