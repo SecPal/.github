@@ -284,15 +284,28 @@ def _unresolved_reason(errors: Iterable[Mapping[str, Any]]) -> str:
     return next((str(error.get("type")) for error in errors if error.get("type")), "unresolved")
 
 
-def _fetch(adapter: GitHubReadAdapter, key: str) -> tuple[Node, str | None]:
-    """Fetch one issue. Returns the raw node and its body, or an unresolved node."""
+@dataclass(frozen=True)
+class Fetched:
+    """One issue read, under the identity GitHub itself returned for it."""
+
+    canonical_key: str
+    node: Node
+    body: str | None
+
+
+def _fetch(adapter: GitHubReadAdapter, key: str) -> Fetched:
+    """Fetch one issue, or return an unresolved node under the requested key."""
     repository, number = parse_node_key(key)
     owner, name = repository.split("/", 1)
     variables = {"owner": owner, "name": name, "number": number}
     response = adapter.query(ISSUE_QUERY, variables)
     issue = ((response.data or {}).get("repository") or {}).get("issue")
     if not issue:
-        return unresolved_node(key, _unresolved_reason(response.errors)), None
+        return Fetched(key, unresolved_node(key, _unresolved_reason(response.errors)), None)
+    if int(issue.get("number", number)) != number:
+        # GitHub canonicalizes a repository spelling, never an issue number, so
+        # a different number means the answer does not belong to this lookup.
+        raise GitHubError(f"{key} resolved to issue number {issue.get('number')}")
 
     try:
         relationships = {
@@ -302,7 +315,7 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> tuple[Node, str | None]:
             for connection in REQUIRED_CONNECTIONS
         }
     except ConnectionUnreadable as unreadable:
-        return unresolved_node(key, unreadable.reason), None
+        return Fetched(key, unresolved_node(key, unreadable.reason), None)
 
     # Selection metadata and claims degrade on their own instead of taking the
     # node down with them, because section 1.2 keeps them out of `READY`.
@@ -315,13 +328,19 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> tuple[Node, str | None]:
     except ConnectionUnreadable:
         labels, priority_labels_observable = set(), False
 
-    claims_errors = response.errors_touching("closedByPullRequestsReferences")
-    claims_observable = not claims_errors and issue.get("closedByPullRequestsReferences") is not None
-    claims = (
-        _claims(_paginate(adapter, "closedByPullRequestsReferences", issue, variables))
-        if claims_observable
-        else ()
-    )
+    try:
+        claims = _claims(
+            _paginate(
+                adapter,
+                "closedByPullRequestsReferences",
+                issue,
+                variables,
+                response.errors_touching("closedByPullRequestsReferences"),
+            )
+        )
+        claims_observable = True
+    except ConnectionUnreadable:
+        claims, claims_observable = (), False
 
     state_reason = issue.get("stateReason")
     node = Node(
@@ -342,7 +361,7 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> tuple[Node, str | None]:
         claims_observable=claims_observable,
         mirror_relationships=mirror_relationships(issue.get("body")),
     )
-    return node, issue.get("body") or ""
+    return Fetched(node.key, node, issue.get("body") or "")
 
 
 SCOPE = "scope"
@@ -350,7 +369,7 @@ ANCESTOR = "ancestor"
 DEPENDENCY = "dependency"
 
 
-def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> Snapshot:
+def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot, str]:
     """Collect one immutable snapshot for ``scope_root``.
 
     Traversal reads exactly what the canonical predicates need: the scope root's
@@ -358,17 +377,22 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> Snapshot:
     targets section 3.5 needs to detect unsatisfied edges and cycles. Ancestors
     contribute their own containment chain only, because section 3.2 never
     inherits dependencies and siblings above the scope root are out of scope.
+
+    Returns the snapshot together with the canonical scope root, because GitHub
+    accepts repository spellings it then canonicalizes. Every node is keyed by
+    the identity GitHub returned, so one issue is never two graph nodes.
     """
     fetched: dict[str, Node] = {}
     bodies: dict[str, str] = {}
+    canonical: dict[str, str] = {}
     expanded: set[tuple[str, str]] = set()
     pending: list[tuple[str, str]] = [(scope_root, SCOPE)]
 
     while pending:
-        key, mode = pending.pop(0)
+        requested, mode = pending.pop(0)
+        key = canonical.get(requested, requested)
         if (key, mode) in expanded:
             continue
-        expanded.add((key, mode))
 
         node = fetched.get(key)
         if node is None:
@@ -377,18 +401,26 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> Snapshot:
                     f"graph exceeds the configured budget of {adapter.max_nodes} issues; "
                     "narrow the scope root"
                 )
-            node, body = _fetch(adapter, key)
+            result = _fetch(adapter, requested)
+            key, node = result.canonical_key, result.node
+            if key != requested:
+                canonical[requested] = key
+            if (key, mode) in expanded:
+                continue
             fetched[key] = node
-            if body is None:
-                if key == scope_root:
+            if result.body is None:
+                expanded.add((key, mode))
+                if requested == scope_root:
                     raise GitHubError(
                         f"cannot resolve the scope root {scope_root}: {node.unresolved_reason}"
                     )
                 continue
-            bodies[key] = body
+            bodies[key] = result.body
         elif not node.resolved:
+            expanded.add((key, mode))
             continue
 
+        expanded.add((key, mode))
         if mode == SCOPE:
             pending.extend((child, SCOPE) for child in node.children)
             pending.extend((target, DEPENDENCY) for target in node.blocked_by)
@@ -402,12 +434,13 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> Snapshot:
 
     ordered_bodies = list(bodies)
     detected = dict(zip(ordered_bodies, acceptance_criteria.detect([bodies[key] for key in ordered_bodies])))
-    return Snapshot(
+    snapshot = Snapshot(
         {
             key: (replace(node, has_acceptance_criteria=detected[key]) if key in detected else node)
             for key, node in fetched.items()
         }
     )
+    return snapshot, canonical.get(scope_root, scope_root)
 
 
 def resolve_reference(reference: str, *, default_repository: str | None = None) -> str:

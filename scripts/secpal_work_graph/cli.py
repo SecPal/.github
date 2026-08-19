@@ -276,7 +276,10 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None) -> int:
         executor = getattr(arguments, "executor", None)
         if command == "next" and not executor:
             executor = adapter.viewer_login()
-        snapshot: Snapshot = github.load_snapshot(adapter, scope_root)
+        # GitHub may canonicalize the requested repository spelling, so the
+        # resolver runs against the identity it returned, not the one typed.
+        snapshot: Snapshot
+        snapshot, scope_root = github.load_snapshot(adapter, scope_root)
     except github.GitHubError as error:
         _emit(_failure(command, "github_unavailable", str(error)), arguments.format, stderr)
         return EXIT_GITHUB

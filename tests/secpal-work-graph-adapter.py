@@ -140,23 +140,22 @@ def issue_payload(
     }
 
 
+def page_payload(connection, payload):
+    return {"data": {"repository": {"issue": {connection: payload}}}}
+
+
 def page(connection, nodes, *, cursor=None):
     def reference(value):
         repository, _, number = value.rpartition("#")
         return {"number": int(number), "repository": {"nameWithOwner": repository}}
 
-    return {
-        "data": {
-            "repository": {
-                "issue": {
-                    connection: {
-                        "pageInfo": {"hasNextPage": cursor is not None, "endCursor": cursor},
-                        "nodes": [reference(value) for value in nodes],
-                    }
-                }
-            }
-        }
-    }
+    return page_payload(
+        connection,
+        {
+            "pageInfo": {"hasNextPage": cursor is not None, "endCursor": cursor},
+            "nodes": [reference(value) for value in nodes],
+        },
+    )
 
 
 class AdapterTestCase(TestCase):
@@ -224,7 +223,7 @@ class SnapshotLoadingTests(AdapterTestCase):
                 3, state="CLOSED", state_reason="COMPLETED"
             ),
         }
-        snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+        snapshot, _ = github.load_snapshot(self.adapter(script), f"{REPO}#1")
 
         root = snapshot.nodes[f"{REPO}#1"]
         self.assertEqual(root.children, (f"{OTHER_REPO}#7", f"{REPO}#2"))
@@ -274,7 +273,7 @@ class SnapshotLoadingTests(AdapterTestCase):
             "WorkGraphIssue:SecPal/.github#4:": issue_payload(4),
             "WorkGraphIssue:SecPal/.github#5:": issue_payload(5),
         }
-        snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+        snapshot, _ = github.load_snapshot(self.adapter(script), f"{REPO}#1")
         root = snapshot.nodes[f"{REPO}#1"]
         self.assertEqual(root.children, (f"{REPO}#2", f"{REPO}#3"))
         self.assertEqual(root.blocked_by, (f"{REPO}#4", f"{REPO}#5"))
@@ -291,7 +290,7 @@ class SnapshotLoadingTests(AdapterTestCase):
             ),
             "WorkGraphIssue:SecPal/.github#2:": issue_payload(2, parent=f"{REPO}#1"),
         }
-        snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#2")
+        snapshot, _ = github.load_snapshot(self.adapter(script), f"{REPO}#2")
         self.assertIn(f"{REPO}#1", snapshot.nodes)
         self.assertNotIn(f"{REPO}#9", snapshot.nodes)
         state = resolver.resolve(snapshot, f"{REPO}#2").states[f"{REPO}#2"]
@@ -333,7 +332,7 @@ class RequiredInputObservabilityTests(AdapterTestCase):
         }
         for label, payload in cases.items():
             with self.subTest(case=label):
-                snapshot = github.load_snapshot(
+                snapshot, _ = github.load_snapshot(
                     self.adapter({"WorkGraphIssue:SecPal/.github#1:": payload}), f"{REPO}#1"
                 )
                 node = snapshot.nodes[f"{REPO}#1"]
@@ -344,7 +343,7 @@ class RequiredInputObservabilityTests(AdapterTestCase):
                 self.assertTrue(state.malformed)
 
     def test_a_null_parent_without_an_access_error_is_a_legitimate_root(self):
-        snapshot = github.load_snapshot(
+        snapshot, _ = github.load_snapshot(
             self.adapter({"WorkGraphIssue:SecPal/.github#1:": issue_payload(1)}), f"{REPO}#1"
         )
         node = snapshot.nodes[f"{REPO}#1"]
@@ -369,7 +368,7 @@ class RequiredInputObservabilityTests(AdapterTestCase):
                     "WorkGraphIssue:SecPal/.github#5:": issue_payload(5, parent=f"{REPO}#2"),
                     "WorkGraphIssue:SecPal/.github#6:": issue_payload(6),
                 }
-                snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+                snapshot, _ = github.load_snapshot(self.adapter(script), f"{REPO}#1")
                 unreadable = snapshot.nodes[f"{REPO}#2"]
                 self.assertFalse(unreadable.resolved)
                 self.assertEqual(unreadable.unresolved_reason, kind)
@@ -395,7 +394,7 @@ class RequiredInputObservabilityTests(AdapterTestCase):
     def test_unreadable_labels_leave_the_node_resolvable(self):
         # Selection metadata is not an input to READY, so it must not make the
         # whole node unresolved.
-        snapshot = github.load_snapshot(
+        snapshot, _ = github.load_snapshot(
             self.adapter(
                 {"WorkGraphIssue:SecPal/.github#1:": with_error(issue_payload(1), "FORBIDDEN", "labels")}
             ),
@@ -416,7 +415,7 @@ class ClaimObservationTests(AdapterTestCase):
                 claims=((10, "OPEN", "alice"), (11, "CLOSED", "bob"), (12, "OPEN", None)),
             )
         }
-        snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+        snapshot, _ = github.load_snapshot(self.adapter(script), f"{REPO}#1")
         node = snapshot.nodes[f"{REPO}#1"]
         self.assertEqual(node.claims, (model.Claim("alice", f"{REPO}#10", node.claims[0].url),))
         self.assertTrue(node.claims_observable)
@@ -431,12 +430,76 @@ class ClaimObservationTests(AdapterTestCase):
                 "message": "Resource not accessible",
             }
         ]
-        snapshot = github.load_snapshot(
+        snapshot, _ = github.load_snapshot(
             self.adapter({"WorkGraphIssue:SecPal/.github#1:": payload}), f"{REPO}#1"
         )
         node = snapshot.nodes[f"{REPO}#1"]
         self.assertFalse(node.claims_observable)
         self.assertEqual(node.claims, ())
+
+    def test_an_unreadable_claim_page_degrades_exactly_like_an_unreadable_first_page(self):
+        # Claim observability is all-or-nothing per invocation, so a readable
+        # first page plus an unreadable continuation is not a complete claim set.
+        first = issue_payload(1, claims=((10, "OPEN", "alice"),))
+        connection = first["data"]["repository"]["issue"]["closedByPullRequestsReferences"]
+        connection["pageInfo"] = {"hasNextPage": True, "endCursor": "CLAIM1"}
+        continuation = with_error(
+            page_payload(
+                "closedByPullRequestsReferences",
+                {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []},
+            ),
+            "FORBIDDEN",
+            "closedByPullRequestsReferences",
+            "nodes",
+            "0",
+        )
+        snapshot, root = github.load_snapshot(
+            self.adapter(
+                {
+                    "WorkGraphIssue:SecPal/.github#1:": first,
+                    "WorkGraphClaims:SecPal/.github#1:CLAIM1": continuation,
+                }
+            ),
+            f"{REPO}#1",
+        )
+        node = snapshot.nodes[f"{REPO}#1"]
+        self.assertFalse(node.claims_observable)
+        self.assertEqual(node.claims, ())
+        state = resolver.resolve(snapshot, root).states[f"{REPO}#1"]
+        self.assertTrue(state.ready)
+        self.assertFalse(state.active)
+
+
+class CanonicalIdentityTests(AdapterTestCase):
+    """One issue has exactly one identity: the one GitHub returns."""
+
+    CANONICAL = {
+        "WorkGraphIssue:SecPal/.github#1:": issue_payload(1, sub_issues=(f"{REPO}#2",)),
+        "WorkGraphIssue:SecPal/.github#2:": issue_payload(2, parent=f"{REPO}#1"),
+    }
+
+    def test_a_reference_github_canonicalizes_resolves_to_the_canonical_identity(self):
+        # GitHub accepts `secpal/.github` and answers with `SecPal/.github`. The
+        # requested spelling is an input reference, never a second graph node.
+        variant = dict(self.CANONICAL)
+        variant["WorkGraphIssue:secpal/.github#1:"] = variant.pop(
+            "WorkGraphIssue:SecPal/.github#1:"
+        )
+        code, output, _ = self.run_command(variant, "ready", "secpal/.github#1")
+        document = json.loads(output)
+        self.assertEqual(code, 0)
+        self.assertEqual(document["scope_root"], f"{REPO}#1")
+        self.assertEqual([node["key"] for node in document["ready"]], [f"{REPO}#2"])
+        self.assertTrue(document["complete"])
+        self.assertEqual(document["findings"], [])
+
+        canonical = self.run_command(self.CANONICAL, "ready", f"{REPO}#1")
+        self.assertEqual((code, output), canonical[:2])
+
+    def test_an_incoherent_issue_number_is_a_read_boundary_failure(self):
+        script = {"WorkGraphIssue:SecPal/.github#1:": issue_payload(7)}
+        with self.assertRaises(github.GitHubError):
+            github.load_snapshot(self.adapter(script), f"{REPO}#1")
 
 
 class FailureTests(AdapterTestCase):
@@ -454,7 +517,7 @@ class FailureTests(AdapterTestCase):
                 ],
             },
         }
-        snapshot = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+        snapshot, _ = github.load_snapshot(self.adapter(script), f"{REPO}#1")
         missing = snapshot.nodes[f"{REPO}#404"]
         self.assertFalse(missing.resolved)
         self.assertEqual(missing.unresolved_reason, "NOT_FOUND")
