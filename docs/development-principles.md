@@ -482,7 +482,7 @@ function updateCustomer(customer: Customer, data: UpdateData): Customer {
    - Services validate business rules
    - This is a trust-boundary exception to single authoritative invariant
      ownership, because each entry point is independently reachable. See
-     [work-graph-contract.md](work-graph-contract.md#111-defense-in-depth-exceptions).
+     [work-graph-contract.md](work-graph-contract.md#111-multiple-enforcement-points).
 
 **Example:**
 

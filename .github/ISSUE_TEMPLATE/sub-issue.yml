@@ -61,7 +61,7 @@ body:
         - [ ] Task 2
         - [ ] Task 3
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: acceptance_criteria

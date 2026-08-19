@@ -130,7 +130,8 @@ A coordination node with children.
   contract of its own.
 - An epic defines goal, acceptance criteria, non-goals, and its child work plan.
 - An epic MAY contain leaves, sub-epics, or both.
-- An epic is never `READY`. Its state is derived from its children.
+- An epic is never `READY` and never `ACTIVE` (section 4.1). Whether it may close
+  is governed by section 6.3.
 
 ### 2.2 Sub-Epic
 
@@ -229,8 +230,17 @@ the two apart.
 A dependency edge MUST NOT be used to express taste, review convenience, a
 preferred narrative order, or a wish to avoid merge conflicts.
 
-- Dependencies MAY cross repositories and MUST then be written as
-  `owner/repo#number`.
+- Dependencies MAY cross repositories. A cross-repository target MUST be
+  identified by its fully qualified issue URL, or an equivalent
+  repository-qualified canonical identity, and the relationship MUST remain a
+  native GitHub issue dependency.
+- If a dependency target cannot be read or resolved, section 3.5 applies and
+  resolution fails closed. A native dependency that cannot be created or read
+  MUST NOT be replaced by a `Blocked by:` line in a body or by any other mirror.
+- GitHub links at most 50 issues per relationship type, so a node carries at most
+  50 `blocked by` and 50 `blocks` edges. A plan needing more MUST be restructured,
+  for example by depending on an epic that aggregates the prerequisites. Creating
+  a second dependency store is prohibited.
 - Dependencies are never inherited. A child is unaffected by an edge on its
   parent, and a parent is unaffected by an edge on its child; each node is
   blocked only by its own edges. Every blocker is an explicit native edge.
@@ -277,6 +287,12 @@ misclassification means moving it between the two, never leaving it in both
 - Containment MUST also be acyclic. A node MUST NOT be its own ancestor. A node
   inside a containment cycle is malformed: it is not `READY`, and resolution
   fails closed until the cycle is broken.
+- A node whose native parent, or any ancestor needed to evaluate `READY` or path
+  order, cannot be resolved is malformed in the same way: it is not `READY` and
+  resolution fails closed. An inaccessible parent is not the same as no parent,
+  so such a node MUST NOT be treated as a standalone root leaf, and no mirror
+  hierarchy may stand in for it. This applies recursively to every required
+  ancestor.
 
 ## 4. States, Executable Sets, And `NEXT`
 
@@ -286,8 +302,11 @@ Only open/closed is native. All other states are derived and MUST NOT be
 duplicated into Markdown. They are predicates rather than a mutually exclusive
 lifecycle, so a node may satisfy several at once; only `READY` gates selection.
 
-- **BLOCKED** — an open node with at least one unsatisfied dependency, or a node
-  inside a dependency cycle, or a node with an unresolvable dependency target.
+- **BLOCKED** — true only when the node is open **and** at least one of these
+  holds: it has an unsatisfied dependency, it participates in a dependency cycle,
+  or one of its dependency targets is missing, inaccessible, or otherwise
+  unresolvable. A closed node is never `BLOCKED`. Malformed containment is not
+  `BLOCKED` either; it is the separate fail-closed condition of section 3.5.
 - **READY** — an open leaf with no children, no unsatisfied dependency, no cycle,
   only open ancestors, and a structurally complete contract. A closed ancestor
   above an open leaf is graph drift: the ancestor was closed before its scope was
@@ -318,24 +337,35 @@ state at all: it belongs to execution coordination (section 4.2) and never
 changes the other three. Section 1.2 remains the authoritative input list.
 
 **Structurally complete** means the body contains a qualifying acceptance-criteria
-heading followed by at least one non-blank line before the next heading of any
-level. A heading qualifies when this exact procedure yields `acceptance criteria`:
+heading whose section holds at least one non-empty block before the next heading
+of any level.
 
-1. Take a Markdown ATX heading line, meaning one to six `#` characters followed
-   by a space.
-2. Remove the leading `#` characters and that space.
-3. Remove Unicode whitespace from both ends.
-4. Remove one leading `✅` if present, then remove Unicode whitespace from both
+The candidate MUST be a real top-level ATX heading of the body read as Markdown,
+as a standards-compliant parser reports it. Text that only looks like a heading
+does not qualify: a heading inside a fenced or indented code block is code, a
+heading inside a blockquote or any other container block belongs to that
+container, and bold text or a sentence mentioning the phrase is neither. This
+specification states the semantic result only; choosing the parser is #669 work,
+and hand-rolling one would violate section 12.1.
+
+Once a real heading is identified, it qualifies when this exact procedure yields
+`acceptance criteria`:
+
+1. Take the heading's text content, without the leading `#` characters.
+2. Remove Unicode whitespace from both ends.
+3. Remove one leading `✅` if present, then remove Unicode whitespace from both
    ends again. `✅` is the only decorative prefix recognized, because it is the
    one the canonical issue forms emit.
-5. Remove one trailing `:` if present, then remove trailing Unicode whitespace.
-6. Compare ASCII-case-insensitively against `acceptance criteria`.
+4. Remove one trailing `:` if present, then remove trailing Unicode whitespace.
+5. Compare ASCII-case-insensitively against `acceptance criteria`.
 
 Accepted: `## Acceptance Criteria`, `### ✅ Acceptance Criteria`,
-`## acceptance criteria:`, `#### ACCEPTANCE CRITERIA`. Rejected:
-`## Acceptance Criteria (draft)`, `## Criteria`, `**Acceptance Criteria**`,
-`## 🎯 Acceptance Criteria`, and any mention inside a sentence. A qualifying
-heading with nothing but blank lines under it is also rejected.
+`## acceptance criteria:`, `#### ACCEPTANCE CRITERIA`.
+
+Rejected: the same headings inside a fenced code block, inside an indented code
+block, or inside a blockquote; `## Acceptance Criteria (draft)`; `## Criteria`;
+`**Acceptance Criteria**`; `## 🎯 Acceptance Criteria`; any mention inside a
+sentence; and a qualifying heading whose section is empty.
 
 That is deliberately a presence test. Whether the criteria are _good_ is review
 judgment and MUST NOT be folded into `READY`. A leaf without them is not
@@ -348,9 +378,11 @@ For a scope root R, the executable leaf set is every `READY` leaf in R's subtree
 
 - All members of the executable set MAY be executed in parallel by distinct
   executors. Sibling order does not serialize them.
-- If the executable set is empty, the correct output is the blocking explanation,
-  meaning which dependencies are unsatisfied and which nodes they belong to. It
-  is never permission to start a non-`READY` leaf.
+- If the executable set is empty, resolution reports why the relevant leaves are
+  not `READY`. The reasons are the `READY` conditions themselves: unsatisfied
+  dependencies, structurally incomplete contracts, closed ancestors, unresolvable
+  or cyclic containment, dependency cycles, or no open leaf in the subtree at all.
+  An empty set is never permission to start a non-`READY` leaf.
 
 `READY` is derived from the graph and is reproducible by any reader. An execution
 claim is not: it states that an executor is working on the leaf now, so it MUST be
@@ -532,8 +564,20 @@ implementation steps would be ceremony, not control.
 First decide whether the discovered work is a separate contract at all. Work that
 is genuinely part of the current contract, not independently deliverable, and in
 need of no acceptance criteria of its own stays in the current leaf under the
-scope rules of section 5.1. Everything else is an independent contract and
-follows the steps below before implementation continues.
+scope rules of section 5.1. Everything else is an independent contract, and the
+next question is whether an issue for it already exists.
+
+**The prerequisite already exists.** Add the native dependency from the current
+leaf to that issue, leave its ownership and hierarchy exactly as they are, and
+park the current leaf until the dependency is satisfied. Do not duplicate the
+issue, do not re-parent it because this leaf discovered it, and do not create an
+epic merely to give both the same parent. This holds whether the current leaf is
+a root leaf or already sits inside an epic, and whether the prerequisite lives in
+this repository or another one, since dependencies may cross repositories
+(section 3.2) while containment stays untouched.
+
+**The prerequisite does not exist yet.** Only then do the creation flows below
+apply, and they still run before implementation continues.
 
 When the current leaf has a parent:
 
@@ -573,9 +617,14 @@ When a leaf is found to carry several contracts, promote it in place:
 
 - The node keeps its identity and issue number and becomes a sub-epic.
 - Its contracts become child leaves, ordered by native sibling order.
-- Nodes that were blocked by the promoted leaf MAY stay blocked by it as a
-  sub-epic when they need the aggregate result. They unblock when it closes as
-  `completed`, exactly as any epic dependency does (section 3.2).
+- A dependent that needs the aggregate result MAY stay blocked by the promoted
+  node as a sub-epic. It unblocks when that node closes as `completed`, exactly as
+  any epic dependency does (section 3.2).
+- A dependent that needs only part of the promoted work MUST have its edge
+  re-pointed to exactly the child or children producing what it needs. Leaving it
+  blocked on the whole sub-epic for convenience is prohibited, the edge MUST NOT
+  be duplicated to unrelated children, and keeping both an aggregate edge and a
+  child edge is correct only when both are independently real prerequisites.
 - A prerequisite the promoted leaf was waiting for MUST be attached as a native
   dependency to exactly those children whose implementation it blocks. Children
   do not inherit blockers from a parent, so a prerequisite left only on the
