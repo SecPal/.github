@@ -276,11 +276,22 @@ duplicated into Markdown.
 - An epic is never `READY` and never `ACTIVE`. An epic is closable only under
   section 6.3.
 
-**Structurally complete** means the body states acceptance criteria in a
-recognizable section. That is a presence test, so it stays computable: whether
-those criteria are _good_ is review judgment and MUST NOT be folded into `READY`.
-A leaf without them is not `READY`, and the remedy is to define its contract
-rather than to start work and discover it afterwards.
+`BLOCKED`, `READY`, and `DONE` are derived from graph state alone. `ACTIVE` is
+not a graph state at all: it belongs to execution coordination (section 4.2) and
+never changes any of the three.
+
+**Structurally complete** means the body contains a Markdown heading whose
+normalized text is `acceptance criteria`, followed by at least one non-blank
+line before the next heading of any level. Normalization is exactly this, in
+order: strip leading emoji and other non-alphanumeric decoration, strip
+surrounding whitespace and trailing punctuation, fold case. So `## Acceptance
+Criteria`, `### ✅ Acceptance Criteria`, and `## acceptance criteria:` all
+qualify, while a body that only mentions the phrase in a sentence does not.
+
+That is deliberately a presence test. Whether the criteria are _good_ is review
+judgment and MUST NOT be folded into `READY`. A leaf without them is not
+`READY`, and the remedy is to define its contract rather than to start work and
+discover it afterwards.
 
 ### 4.2 Executable Leaf Set
 
@@ -295,12 +306,14 @@ For a scope root R, the executable leaf set is every `READY` leaf in R's subtree
 `READY` is derived from the graph and is reproducible by any reader. An execution
 claim is not: it states that an executor is working on the leaf now, so it MUST be
 explicit, machine-readable, attributable to one named executor, and releasable or
-time-bounded. An open delivery pull request linking the leaf is such a claim.
+time-bounded.
 
-Two consequences keep `ACTIVE` from leaking into `READY`. A claim that is
-released, expired, or not attributable to a named executor is void, and the leaf
-is then plain `READY` again. And `ACTIVE` never changes whether a leaf is
-`READY`; it only tells one executor that another is already there.
+A claim that is released, expired, or not attributable to a named executor is
+void, and a void claim leaves the leaf plain `READY`. An open pull request counts
+as a claim only when it is that leaf's primary delivery pull request under
+section 5.2, meaning it carries the machine-recognizable closing relationship to
+the leaf. A textual `Part of` reference is not a claim, and neither is a pull
+request that merely mentions the leaf.
 
 Whether native data can carry a claim before a pull request exists is resolution
 work owned by #669 and #672. Until then an executor that cannot observe claims
@@ -309,11 +322,16 @@ a collision.
 
 ### 4.3 Deterministic `NEXT` Selection
 
-`NEXT` is the single leaf a lone executor takes now. It MUST be deterministic:
-the same graph state MUST always yield the same answer.
+`NEXT` is the single leaf a lone executor takes now. It is deterministic over
+three inputs together: one scope root, one snapshot of native graph state, and
+one snapshot of the valid execution claims at that moment. Given identical
+inputs, every implementation MUST return the same leaf. Graph state alone does
+not determine `NEXT`, because valid claims remove candidates; that is why the
+claim snapshot is part of the input rather than an afterthought.
 
-Take the executable set of the scope root, remove every leaf claimed by another
-executor, then sort by the following keys, in order, and take the first:
+Take the executable set of the scope root, remove every leaf whose valid claim
+names another executor, then sort by the following keys, in order, and take the
+first:
 
 1. **Priority rank**, descending: `priority: blocker` > `priority: high` >
    `priority: medium` > everything else. Unlabeled leaves and labels outside this
@@ -440,9 +458,14 @@ When a leaf is found to carry several contracts, promote it in place:
 
 - The node keeps its identity and issue number and becomes a sub-epic.
 - Its contracts become child leaves, ordered by native sibling order.
-- Inbound dependency edges stay on the promoted node and are satisfied when it
-  closes; outbound edges MUST be re-pointed to the specific child that needs
-  them.
+- Nodes that were blocked by the promoted leaf stay blocked by it as a sub-epic.
+  They unblock when it closes as `completed`, exactly as any epic dependency does
+  (section 3.2).
+- Prerequisites the promoted leaf was itself waiting for MUST be reattached only
+  to the child or children that actually need them, and MUST NOT be copied to
+  every child merely because the parent once carried them. A prerequisite that
+  every child genuinely needs MAY stay on the sub-epic instead of being
+  duplicated.
 - Any open pull request written against the old leaf MUST be re-pointed at the
   child leaf it actually delivers, or closed.
 - The promoted node MUST NOT be delivered by a pull request afterwards.
@@ -558,10 +581,15 @@ A check that exercises the real collaborator instead of a substitute: real
 database, real HTTP layer, real filesystem, real serialization, real workflow
 execution, real cross-repository contract.
 
-- Required when the leaf's risk lives in a seam: persistence, I/O, authentication
-  and authorization, protocol or schema compatibility, CI and automation
-  behavior, or cross-repository contracts. One check per identified seam is
-  sufficient; seams are counted by distinct collaborator, not by call site.
+- Required when the leaf's risk lives in a seam. A **seam** is one materially
+  distinct integration contract or risk boundary, not a collaborator and not a
+  call site: one database can hold several seams, while many call sites can share
+  one. Typical seams are persistence, I/O, authentication and authorization,
+  protocol or schema compatibility, CI and automation behavior, and
+  cross-repository contracts.
+- Prove every materially distinct seam with the smallest sufficient evidence set.
+  One realistic scenario that crosses several seams proves all of them; splitting
+  it into one check per seam is the counting error section 10.1 prohibits.
 - A mock-only proof is insufficient for a seam contract, because a mock asserts
   the assumption rather than the behavior.
 - When real evidence is genuinely unavailable in the environment, the leaf MUST

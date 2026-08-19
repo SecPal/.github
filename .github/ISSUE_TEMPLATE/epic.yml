@@ -21,7 +21,7 @@ body:
         **Workflow:**
         1. Create this epic first
         2. Create individual sub-issues for each PR (use "Sub-Issue" template)
-        3. Link sub-issues in the tasklist below
+        3. Attach them as native sub-issues; GitHub tracks their state and order
         4. Each PR closes its sub-issue: `Fixes #<sub-issue-number>`
         5. No PR closes this epic; close it explicitly after the closure evidence comment exists
 
@@ -40,24 +40,20 @@ body:
       required: true
 
   - type: textarea
-    id: sub_issues
+    id: sequencing
     attributes:
-      label: 📋 Sub-Issues & Work Plan
+      label: 🧭 Sequencing Rationale
       description: |
-        Create sub-issues with the "Sub-Issue (Part of Epic)" template and attach them as native sub-issues.
-        Native sub-issue links and their order are authoritative; the list below is only a readable mirror.
-      value: |
-        ### Implementation Tasks
-
-        - [ ] #<!-- issue number --> PR-0: Setup & Prerequisites
-        - [ ] #<!-- issue number --> PR-1: Core Implementation Part 1
-        - [ ] #<!-- issue number --> PR-2: Core Implementation Part 2
-        - [ ] #<!-- issue number --> PR-3: Integration & Testing
-        - [ ] #<!-- issue number --> PR-4: Documentation & Hardening
-
-        <!-- Add or remove items as needed. One sub-issue per contract; PR size is advisory, not a decomposition rule -->
+        Create one sub-issue per contract with the "Sub-Issue (Part of Epic)"
+        template and attach them as native sub-issues. Their state, order, and
+        dependencies live in GitHub; do not repeat them here.
+        Use this field only to explain sequencing that the graph cannot show,
+        such as why a gate exists or which phase must land first.
+      placeholder: |
+        The schema change gates everything else, because both consumers read it.
+        The Android work can run in parallel once the contract is published.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: technical_approach
@@ -75,13 +71,13 @@ body:
     id: acceptance_criteria
     attributes:
       label: ✅ Acceptance Criteria
-      description: What must be true for this epic to be considered complete?
-      value: |
-        - [ ] All sub-issues are closed
-        - [ ] All PRs merged to main
-        - [ ] CI/CD passing on all PRs
-        - [ ] Documentation complete
-        - [ ] Test coverage ≥80% (or project standard)
+      description: |
+        What must be observably true once this epic is done? Describe the
+        outcome, not child status: native sub-issue state already shows what is
+        closed, and generic testing or coverage items belong to no contract.
+      placeholder: |
+        - [ ] A guard can open a shift offline and it syncs without data loss
+        - [ ] The published API contract covers every field the app consumes
     validations:
       required: true
 
@@ -94,7 +90,7 @@ body:
         - [ ] Each acceptance criterion is mapped to exact child issues and merged PRs
         - [ ] Cross-repo work was checked repo by repo where applicable
         - [ ] Any discovered acceptance gap was reopened or re-filed before closure
-        - [ ] Deferred but still relevant work is linked as dedicated follow-up issues
+        - [ ] Deferred but still relevant work was moved out of this epic, so no child stays open under it
         - [ ] A closure comment will be posted with the final acceptance mapping
     validations:
       required: true
@@ -128,9 +124,9 @@ body:
 
         ## 📝 Next Steps After Creating This Issue
 
-        1. **Create Sub-Issues**: Use the "Sub-Issue (Part of Epic)" template for each planned PR
-        2. **Update This Epic**: Edit the "Sub-Issues & Work Plan" section with actual issue numbers
-        3. **Start Work**: Begin with the first sub-issue
+        1. **Create Sub-Issues**: Use the "Sub-Issue (Part of Epic)" template, one per contract
+        2. **Attach Them Natively**: Add each as a native sub-issue and order them there, not in this body
+        3. **Start Work**: Begin with the first sub-issue that has no open blocker
         4. **PR Linking**: Each PR should reference its sub-issue (`Fixes #<sub-issue>`), not this epic
         5. **Close Epic**: Close this epic explicitly once the closure checklist and evidence comment exist; no PR closes it by keyword
 

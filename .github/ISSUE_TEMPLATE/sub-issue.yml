@@ -19,7 +19,7 @@ body:
         - Focused on a single logical unit of work
 
         **Workflow:**
-        1. This sub-issue should be linked in the parent epic's tasklist
+        1. Attach this sub-issue natively to its parent epic
         2. Your PR should close THIS sub-issue: `Fixes #<this-sub-issue-number>`
         3. Your PR should reference the epic: `Part of: #<epic-number>`
         4. Never use `Fixes #<epic-number>`; the epic is closed explicitly after its closure evidence comment
@@ -31,17 +31,20 @@ body:
   - type: input
     id: parent_epic
     attributes:
-      label: 📌 Parent Epic
-      description: Issue number of the parent epic
+      label: 📌 Parent Epic (bootstrap only)
+      description: |
+        Fill this in only when you cannot attach the issue as a native sub-issue
+        during creation. The native parent is authoritative; delete this line
+        from the body once the native relationship exists.
       placeholder: "#50"
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: goal
     attributes:
       label: 🎯 Goal
-      description: Specific goal for THIS sub-issue (one contract; the ~400-600 LOC hint is advisory size guidance, not a decomposition rule)
+      description: Specific goal for THIS sub-issue, which carries exactly one contract
       placeholder: |
         Implement database migrations for tenant_keys and person tables...
     validations:
@@ -56,8 +59,6 @@ body:
         - [ ] Task 1
         - [ ] Task 2
         - [ ] Task 3
-        - [ ] Tests written
-        - [ ] Documentation updated
     validations:
       required: true
 
@@ -65,13 +66,15 @@ body:
     id: acceptance_criteria
     attributes:
       label: ✅ Acceptance Criteria
-      description: What must be true for this specific sub-issue to be considered complete?
-      value: |
-        - [ ] All tests passing
-        - [ ] Code follows project style guidelines (Pint, PHPStan, etc.)
-        - [ ] Test coverage maintained or improved
-        - [ ] No breaking changes (or documented if necessary)
-        - [ ] PR addresses one logical topic and remains reviewable; line-count warnings are advisory
+      description: |
+        What must be observably true after this sub-issue merges? State the
+        contract, not a generic checklist. Evidence is chosen proportionally
+        from that contract, so do not add blanket testing or coverage items;
+        keeping the existing validation green is validation evidence rather
+        than an acceptance criterion.
+      placeholder: |
+        - [ ] Shift list endpoint rejects an out-of-tenant shift id with 404
+        - [ ] Existing callers keep working without a contract change
     validations:
       required: true
 
@@ -80,13 +83,14 @@ body:
     attributes:
       label: 🔗 Dependencies
       description: |
-        Record real blockers as native GitHub issue dependencies. Native links
-        are authoritative; this field only mirrors them for readers.
+        Record real blockers as native GitHub issue dependencies; native links
+        are authoritative and this field is not a second list of them. Use it
+        for why a dependency exists, when that reason is not obvious.
         A preferred sequence that is not a real blocker belongs in the parent's
         sub-issue order instead.
       placeholder: |
-        - Depends on: #52 (migrations must exist first)
-        - Blocks: #55, #60 (middleware needs these keys)
+        This work consumes the tenant key schema, so it cannot be defined before
+        the migration lands.
     validations:
       required: false
 
@@ -104,12 +108,14 @@ body:
   - type: textarea
     id: testing_strategy
     attributes:
-      label: 🧪 Testing Strategy
-      description: How will this be tested?
+      label: 🧪 Evidence Plan
+      description: |
+        Which evidence would prove this contract? Pick the smallest set that
+        covers the distinct behavior, failure classes, and integration seams
+        this work actually has.
       placeholder: |
-        - Unit tests for encryption/decryption functions
-        - Integration tests for database operations
-        - Feature tests for API endpoints
+        - Behavior: rejected out-of-tenant lookup returns 404
+        - Real evidence: one round trip against the real database
     validations:
       required: false
 
