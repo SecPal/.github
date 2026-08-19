@@ -79,7 +79,7 @@ else:
 | `BLOCKED`     | native graph state                                                                                           |
 | `DONE`        | native graph state                                                                                           |
 | `READY`       | native graph state + structural issue content                                                                |
-| `ACTIVE`      | valid execution claims, relative to one executor identity                                                    |
+| `ACTIVE`      | everything `READY` reads + valid execution claims                                                            |
 | `NEXT`        | scope root + executor identity + native graph state + structural issue content + selection metadata + claims |
 
 Two implementations given identical inputs MUST derive identical `BLOCKED`,
@@ -293,10 +293,12 @@ lifecycle, so a node may satisfy several at once; only `READY` gates selection.
   above an open leaf is graph drift: the ancestor was closed before its scope was
   finished, so the leaf stays unexecutable until the ancestor is reopened or the
   leaf is re-parented.
-- **ACTIVE** — a `READY` leaf under an explicit execution claim (see section
-  4.2). Assignment alone MUST NOT make a leaf `ACTIVE`, because an assignee
-  records ownership rather than execution, and one maintainer routinely owns
-  many leaves while executing one.
+- **ACTIVE** — a `READY` leaf carrying a valid execution claim (see section 4.2).
+  Deciding it therefore needs everything `READY` needs plus the claims; the claim
+  itself names the executor, so current executor identity is required only to ask
+  whether the claim is someone else's, which is what `NEXT` does. Assignment alone
+  MUST NOT make a leaf `ACTIVE`, because an assignee records ownership rather than
+  execution, and one maintainer routinely owns many leaves while executing one.
 - **DONE** — a node closed as `completed`. Any other closure reason means the
   node was abandoned, duplicated, or superseded, which is a valid outcome but not
   a delivery, and it satisfies no dependency (section 3.2). `DONE` is a state
@@ -369,16 +371,13 @@ a collision.
 
 ### 4.3 Deterministic `NEXT` Selection
 
-`NEXT` is the single leaf a lone executor takes now. It is deterministic over
-three inputs together: one scope root, one snapshot of native graph state, and
-one snapshot of the valid execution claims at that moment. Given identical
-inputs, every implementation MUST return the same leaf. Graph state alone does
-not determine `NEXT`, because valid claims remove candidates; that is why the
-claim snapshot is part of the input rather than an afterthought.
+`NEXT` is the leaf a lone executor takes now. Its inputs are exactly the ones
+section 1.2 declares for it, taken as one consistent snapshot. Given identical
+inputs, every implementation MUST return the same result.
 
 Take the executable set of the scope root, remove every leaf whose valid claim
-names another executor, then sort by the following keys, in order, and take the
-first:
+names another executor, then sort the remaining candidates by the following keys,
+in order, and take the first:
 
 1. **Priority rank**, descending: `priority: blocker` > `priority: high` >
    `priority: medium` > everything else. Recognition is by exact label name.
@@ -395,8 +394,22 @@ first:
 3. **Repository name**, ascending, as `owner/repo`.
 4. **Issue number**, ascending.
 
-Keys 3 and 4 guarantee a total order, so `NEXT` is always unique, and the result
-is always inside the scope root's subtree because the executable set is.
+When the candidate set is non-empty, keys 3 and 4 guarantee a total order, so
+`NEXT` is exactly one leaf, always inside the scope root's subtree because the
+executable set is.
+
+When the candidate set is empty, `NEXT` is **no selection**, and the result MUST
+carry which of these two reasons applies:
+
+- **no ready leaf** — the subtree contains no `READY` leaf at all, so the answer
+  belongs with the blocking explanation of section 4.2;
+- **all candidates claimed** — `READY` leaves exist, but every one of them
+  carries a valid claim naming another executor.
+
+Both are ordinary answers, not failures. A resolver MUST NOT respond to either by
+ignoring claims, returning a leaf claimed elsewhere, or starting a non-`READY`
+leaf. How the two reasons are encoded is an implementation choice that #669
+owns.
 
 Explicit human priority outranks plan shape, and plan shape outranks arbitrary
 identifiers. There is deliberately no critical-path heuristic: counting
@@ -486,11 +499,19 @@ an acceptable substitute for either outcome.
 
 ### 6.3 Epic Closure
 
-An epic closes only when no child of it is still open. Delivered children are
-closed as `completed`, abandoned ones as `not planned`, and deferred work is
-re-parented out of the epic or re-filed elsewhere before closure. Leaving an open
-child under a closed epic is the drift that section 4.1 makes unexecutable, so
-closure is not a way to defer.
+An epic closes validly only when no descendant anywhere in its native subtree is
+still open, not merely its direct children. Every sub-epic inside it must satisfy
+this same rule recursively, so an already-closed sub-epic that still contains an
+open leaf does not make its ancestor closable; that sub-epic was closed wrongly
+and MUST be reopened or emptied first. Delivered descendants are closed as
+`completed`, abandoned ones as `not planned`, and deferred work is re-parented out
+of the subtree or re-filed elsewhere before closure. Leaving an open descendant
+under a closed epic is the drift that section 4.1 makes unexecutable, so closure
+is not a way to defer.
+
+This is a closure rule, not a change to `DONE`. A wrongly closed epic is still
+`DONE` in GitHub, exactly as section 4.1 describes, and the invalid closure is
+what validation reports.
 
 Closure also requires a comment mapping each acceptance criterion to the exact
 child issues and pull requests that satisfied it. The epic is then closed
