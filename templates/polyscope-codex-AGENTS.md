@@ -74,3 +74,12 @@ Apply these rules only when the session says it is running inside Polyscope.
   PR reactions, or unrelated feedback.
 - Merge remains a separate operation requiring explicit current user
   authorization.
+
+## Work-graph semantics
+
+- Node types, native hierarchy and dependency meaning, sibling order, `READY`,
+  deterministic `NEXT` selection, replanning, and evidence rules come from the
+  canonical contract in `SecPal/.github`, `docs/work-graph-contract.md`.
+- These coordination rules layer on top of that contract and never redefine it.
+  Where a session-local instruction and the contract disagree about work-graph
+  semantics, the contract governs.

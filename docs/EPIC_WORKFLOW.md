@@ -9,40 +9,39 @@ Large SecPal work often spans multiple repositories, multiple PRs, or both. When
 
 This guide defines the minimum structure and closure evidence required so an epic reflects reality instead of just merged PR count.
 
+It is the procedural companion to `docs/work-graph-contract.md`, which defines the underlying semantics. Where this guide and the contract appear to disagree, the contract governs.
+
 ## When To Use An Epic
 
-Create an epic before implementation when work:
+The epic threshold is defined in [docs/work-graph-contract.md](work-graph-contract.md#24-epic-threshold). In short: an epic is required when the work holds more than one independently deliverable contract, sequences changes across repositories, has separately reviewable and mergeable phases, or cannot be reviewed safely as one topic.
 
-- needs more than one PR or probably will
-- spans multiple repositories
-- has distinct implementation phases or milestones
-- cannot be reviewed safely as one topic-sized change
-
-For single-PR work, use a regular issue instead.
+A single contract that merely might need mechanical follow-up PRs stays a regular issue. If it is genuinely unclear whether the work holds one contract or several, create the epic.
 
 ## Required Structure
 
 ### 1. Create The Parent Epic First
 
-Use the organization issue template: `🗺️ Epic (Multi-PR Feature)`.
+Use the organization issue template: `🗺️ Epic (Multiple Contracts)`.
 
 The epic must define:
 
 - a clear goal
 - acceptance criteria
 - non-goals
-- a sub-issue work plan
+- the native sub-issues that carry its contracts
 
 ### 2. Split Work Into Sub-Issues
 
-Use one sub-issue per PR-sized slice of work.
+Use one delivery sub-issue per contract, delivered by one primary pull request.
 
-Each sub-issue must:
+A sub-issue that itself gains children becomes a sub-epic: it carries no contract of its own, is never delivered by a PR, and applies this same structure to its own children. See sections 2.2 and 2.3 of [docs/work-graph-contract.md](work-graph-contract.md).
 
-- link back to the parent epic
-- stay focused on one logical change
+Each delivery sub-issue must:
+
+- link back to the parent epic through the native parent/sub-issue link
+- carry exactly one contract
 - carry its own acceptance criteria
-- note dependencies when order matters
+- record real blockers as native issue dependencies, and preferred sequence as native sub-issue order
 
 ### 3. Link PRs To Sub-Issues, Not The Epic
 
@@ -55,7 +54,7 @@ Fixes #<sub-issue-number>
 Part of: #<epic-number>
 ```
 
-Only the final PR may close the epic, and only when the epic closure checklist below is satisfied.
+No PR closes the epic through a closing keyword. The epic is closed explicitly once the closure checklist below is satisfied and the closure comment exists, so that closure evidence is never skipped by a merge.
 
 ## Parent Epic Closure Checklist
 
@@ -64,8 +63,8 @@ Do not close a parent epic until all of the following are true:
 - every linked acceptance criterion is satisfied by merged work, not just planned work
 - the exact child issues and PRs that satisfy each acceptance slice are identified
 - any discovered acceptance gap was reopened or re-filed before closure
-- deferred but still relevant work was linked as dedicated follow-up issues before closure
-- the sub-issue tasklist reflects reality across all touched repositories
+- deferred but still relevant work was moved out of the epic into dedicated follow-up issues before closure, so no child stays open under a closed epic
+- the native sub-issue list reflects reality across all touched repositories, and no Markdown mirror of child state is left behind
 
 If any item above is still unclear, the epic stays open.
 
@@ -116,7 +115,7 @@ If epic closure review finds that something was assumed complete but is not actu
 1. Reopen the relevant issue if the original scope still applies.
 2. Create a new follow-up issue if the remaining work is distinct.
 3. Link that issue from the parent epic before closing it.
-4. Keep the epic open until the remaining scope is either done or explicitly tracked as deferred.
+4. Keep the epic open until the remaining scope is either done or tracked outside the epic.
 
 Do not close the epic first and clean up the tracking later.
 
@@ -154,6 +153,7 @@ If a workflow depends on repository settings or external services, merged code a
 
 ## Related Guidance
 
+- [docs/work-graph-contract.md](work-graph-contract.md)
 - [README.md](../README.md)
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [.github/ISSUE_TEMPLATE/epic.yml](../.github/ISSUE_TEMPLATE/epic.yml)

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: 🗺️ Epic (Multi-PR Feature)
-description: Large feature that requires multiple PRs with sub-issues for tracking
+name: 🗺️ Epic (Multiple Contracts)
+description: Work holding more than one deliverable contract, tracked through native sub-issues
 title: "[EPIC] "
 labels: ["type/epic"]
 body:
@@ -11,21 +11,23 @@ body:
       value: |
         ## Epic Issue Template
 
-        Use this template for large features that require multiple PRs (3+).
+        Use this template for work that holds more than one deliverable contract.
 
         **What is an Epic?**
-        - Large feature requiring multiple PRs
-        - Multi-phase implementation (setup → core → integration → docs)
-        - Work spanning multiple areas (DB, API, auth, etc.)
+        - Work holding several independently deliverable contracts
+        - Multi-phase implementation whose phases merge separately
+        - Work sequencing changes across repositories or areas (DB, API, auth, etc.)
 
         **Workflow:**
         1. Create this epic first
-        2. Create individual sub-issues for each PR (use "Sub-Issue" template)
-        3. Link sub-issues in the tasklist below
-        4. Each PR closes its sub-issue: `Fixes #<sub-issue-number>`
-        5. Only the LAST PR closes this epic: `Closes #<epic-number>`
+        2. Create one delivery issue per contract (use the "Delivery Issue" template)
+        3. Attach them as native sub-issues; GitHub tracks their state and order
+        4. Each PR closes exactly one delivery issue: `Fixes #<issue-number>`
+        5. No PR closes this epic; close it explicitly after the closure evidence comment exists
 
         📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
+
+        📐 Canonical semantics: See [docs/work-graph-contract.md](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md)
 
   - type: textarea
     id: goal
@@ -38,24 +40,20 @@ body:
       required: true
 
   - type: textarea
-    id: sub_issues
+    id: sequencing
     attributes:
-      label: 📋 Sub-Issues & Work Plan
+      label: 🧭 Sequencing Rationale
       description: |
-        Create sub-issues and link them here. GitHub will automatically track progress.
-        Use the "Sub-Issue (Part of Epic)" template to create individual tasks.
-      value: |
-        ### Implementation Tasks
-
-        - [ ] #<!-- issue number --> PR-0: Setup & Prerequisites
-        - [ ] #<!-- issue number --> PR-1: Core Implementation Part 1
-        - [ ] #<!-- issue number --> PR-2: Core Implementation Part 2
-        - [ ] #<!-- issue number --> PR-3: Integration & Testing
-        - [ ] #<!-- issue number --> PR-4: Documentation & Hardening
-
-        <!-- Add or remove items as needed. Keep PRs small (~400-600 LOC where feasible) -->
+        Create one delivery issue per contract with the "Delivery Issue (Part of
+        Epic)" template and attach them as native sub-issues. Their state, order, and
+        dependencies live in GitHub; do not repeat them here.
+        Use this field only to explain sequencing that the graph cannot show,
+        such as why a gate exists or which phase must land first.
+      placeholder: |
+        The schema change gates everything else, because both consumers read it.
+        The Android work can run in parallel once the contract is published.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: technical_approach
@@ -73,13 +71,13 @@ body:
     id: acceptance_criteria
     attributes:
       label: ✅ Acceptance Criteria
-      description: What must be true for this epic to be considered complete?
-      value: |
-        - [ ] All sub-issues are closed
-        - [ ] All PRs merged to main
-        - [ ] CI/CD passing on all PRs
-        - [ ] Documentation complete
-        - [ ] Test coverage ≥80% (or project standard)
+      description: |
+        What must be observably true once this epic is done? Describe the
+        outcome, not child status: native sub-issue state already shows what is
+        closed, and generic testing or coverage items belong to no contract.
+      placeholder: |
+        - [ ] A guard can open a shift offline and it syncs without data loss
+        - [ ] The published API contract covers every field the app consumes
     validations:
       required: true
 
@@ -92,7 +90,7 @@ body:
         - [ ] Each acceptance criterion is mapped to exact child issues and merged PRs
         - [ ] Cross-repo work was checked repo by repo where applicable
         - [ ] Any discovered acceptance gap was reopened or re-filed before closure
-        - [ ] Deferred but still relevant work is linked as dedicated follow-up issues
+        - [ ] Deferred but still relevant work was moved out of this epic, so no child stays open under it
         - [ ] A closure comment will be posted with the final acceptance mapping
     validations:
       required: true
@@ -126,11 +124,11 @@ body:
 
         ## 📝 Next Steps After Creating This Issue
 
-        1. **Create Sub-Issues**: Use the "Sub-Issue (Part of Epic)" template for each planned PR
-        2. **Update This Epic**: Edit the "Sub-Issues & Work Plan" section with actual issue numbers
-        3. **Start Work**: Begin with the first sub-issue
-        4. **PR Linking**: Each PR should reference its sub-issue (`Fixes #<sub-issue>`), not this epic
-        5. **Close Epic**: Only the LAST PR should close this epic (`Closes #<epic-number>`) and only after the closure checklist is satisfied
+        1. **Create Delivery Issues**: Use the "Delivery Issue (Part of Epic)" template, one per contract
+        2. **Attach Them Natively**: Add each as a native sub-issue and order them there, not in this body
+        3. **Start Work**: Take the delivery issue that `NEXT` selects in the canonical contract; having no open blocker does not by itself make a node executable
+        4. **PR Linking**: Each PR closes its delivery issue (`Fixes #<issue>`), never this epic
+        5. **Close Epic**: Close this epic explicitly once the closure checklist and evidence comment exist; no PR closes it by keyword
 
         **Required closure comment template:**
 

@@ -1,45 +1,51 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: 📦 Sub-Issue (Part of Epic)
-description: Individual task/PR within a larger epic
-title: "PR-X: "
+name: 📦 Delivery Issue (Part of Epic)
+description: One deliverable contract inside an epic, closed by exactly one PR
+title: ""
 labels: ["type/sub-issue"]
 body:
   - type: markdown
     attributes:
       value: |
-        ## Sub-Issue Template
+        ## Delivery Issue Template
 
-        Use this template for individual tasks within an epic.
+        Use this template for one deliverable contract inside an epic. Work that
+        needs no epic is a standalone issue and needs no parent.
 
-        **What is a Sub-Issue?**
-        - One task within a larger epic
-        - Typically results in one PR (~400-600 LOC)
+        **What is a Delivery Issue?**
+        - One contract inside an epic
+        - Carries exactly one contract, delivered by one primary PR
         - Focused on a single logical unit of work
 
         **Workflow:**
-        1. This sub-issue should be linked in the parent epic's tasklist
+        1. Attach this sub-issue natively to its parent epic
         2. Your PR should close THIS sub-issue: `Fixes #<this-sub-issue-number>`
         3. Your PR should reference the epic: `Part of: #<epic-number>`
-        4. Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
+        4. Never use `Fixes #<epic-number>`; the epic is closed explicitly after its closure evidence comment
 
         📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
+
+        📐 Canonical semantics: See [docs/work-graph-contract.md](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md)
 
   - type: input
     id: parent_epic
     attributes:
-      label: 📌 Parent Epic
-      description: Issue number of the parent epic
+      label: 📌 Parent Epic (bootstrap only)
+      description: |
+        Fill this in only when you cannot attach the issue as a native sub-issue
+        during creation. The native parent is authoritative; delete this line
+        from the body once the native relationship exists.
       placeholder: "#50"
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: goal
     attributes:
       label: 🎯 Goal
-      description: Specific goal for THIS sub-issue/PR (keep focused and small ~400-600 LOC)
+      description: Specific goal for THIS issue, which carries exactly one contract
       placeholder: |
         Implement database migrations for tenant_keys and person tables...
     validations:
@@ -49,27 +55,27 @@ body:
     id: implementation_tasks
     attributes:
       label: 📋 Implementation Tasks
-      description: Checklist of tasks to complete for this sub-issue
+      description: Optional working notes; the contract lives in the acceptance criteria below
       value: |
         - [ ] Task 1
         - [ ] Task 2
         - [ ] Task 3
-        - [ ] Tests written
-        - [ ] Documentation updated
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: acceptance_criteria
     attributes:
       label: ✅ Acceptance Criteria
-      description: What must be true for this specific sub-issue to be considered complete?
-      value: |
-        - [ ] All tests passing
-        - [ ] Code follows project style guidelines (Pint, PHPStan, etc.)
-        - [ ] Test coverage maintained or improved
-        - [ ] No breaking changes (or documented if necessary)
-        - [ ] PR addresses one logical topic and remains reviewable; line-count warnings are advisory
+      description: |
+        What must be observably true after this issue merges? State the
+        contract, not a generic checklist. Evidence is chosen proportionally
+        from that contract, so do not add blanket testing or coverage items;
+        keeping the existing validation green is validation evidence rather
+        than an acceptance criterion.
+      placeholder: |
+        - [ ] Shift list endpoint rejects an out-of-tenant shift id with 404
+        - [ ] Existing callers keep working without a contract change
     validations:
       required: true
 
@@ -77,10 +83,15 @@ body:
     id: dependencies
     attributes:
       label: 🔗 Dependencies
-      description: Does this depend on or block other sub-issues?
+      description: |
+        Record real blockers as native GitHub issue dependencies; native links
+        are authoritative and this field is not a second list of them. Use it
+        for why a dependency exists, when that reason is not obvious.
+        A preferred sequence that is not a real blocker belongs in the parent's
+        sub-issue order instead.
       placeholder: |
-        - Depends on: #52 (migrations must exist first)
-        - Blocks: #55, #60 (middleware needs these keys)
+        This work consumes the tenant key schema, so it cannot be defined before
+        the migration lands.
     validations:
       required: false
 
@@ -98,12 +109,14 @@ body:
   - type: textarea
     id: testing_strategy
     attributes:
-      label: 🧪 Testing Strategy
-      description: How will this be tested?
+      label: 🧪 Evidence Plan
+      description: |
+        Which evidence would prove this contract? Pick the smallest set that
+        covers the distinct behavior, failure classes, and integration seams
+        this work actually has.
       placeholder: |
-        - Unit tests for encryption/decryption functions
-        - Integration tests for database operations
-        - Feature tests for API endpoints
+        - Behavior: rejected out-of-tenant lookup returns 404
+        - Real evidence: one round trip against the real database
     validations:
       required: false
 
@@ -122,7 +135,7 @@ body:
         ```
 
         **⚠️ Important:**
-        - Do NOT use `Fixes #<epic-number>` unless this is the LAST sub-issue
+        - Never use `Fixes #<epic-number>`; closing the epic is a separate step
         - The epic should only close when ALL sub-issues are complete
         - If you discover remaining in-scope gaps, reopen or file follow-up issues before asking to close the parent epic
         - If you're unsure, ask in the epic discussion thread
