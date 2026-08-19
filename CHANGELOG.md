@@ -23,9 +23,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 - a five-way review-finding classification covering in-contract defects, missing
   prerequisites, new responsibilities, non-blocking follow-up, and invalid
   findings, so a finding's class decides where the work belongs
-- contract-oriented evidence classes, an evidence stop condition, test pruning
-  and consolidation obligations, single authoritative invariant ownership with
-  trust-boundary defense-in-depth exceptions, and standards-before-custom plus
+- contract-oriented evidence classes with a proportional-evidence rule, so one
+  evidence item may prove several acceptance criteria and neither test count nor
+  coverage count is treated as quality, plus a stop condition tied to materially
+  distinct behavior, failure classes, seams, and named security invariants
+- a materiality threshold that keeps proven, material, actionable, non-duplicate,
+  still-relevant out-of-scope work tracked while stopping cosmetic observations
+  from becoming issues, with acceptance-criteria gaps and real prerequisites
+  always tracked
+- authoritative invariant ownership defined as one owning definition rather than
+  one enforcement point, so defense in depth stays available at trust boundaries
+  as long as no second definition appears, plus standards-before-custom and
   finite-allowlist guidance
 
 **Changed:**

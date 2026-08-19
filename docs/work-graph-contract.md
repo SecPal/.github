@@ -239,8 +239,10 @@ duplicated into Markdown.
   closed ancestor above an open leaf is graph drift: the ancestor was closed
   without its scope being finished, so the leaf stays unexecutable until the
   ancestor is reopened or the leaf is re-parented.
-- **ACTIVE** — a `READY` leaf already claimed, meaning it has an assignee or an
-  open primary delivery pull request.
+- **ACTIVE** — a `READY` leaf under an explicit execution claim (see section
+  4.2). Assignment alone MUST NOT make a leaf `ACTIVE`, because an assignee
+  records ownership rather than execution, and one maintainer routinely owns
+  many leaves while executing one.
 - **DONE** — a closed leaf whose primary delivery pull request is merged, or a
   leaf explicitly closed as superseded or not planned with a recorded reason. A
   node closed without delivered output does not thereby satisfy dependencies on
@@ -263,6 +265,17 @@ For a scope root R, the executable leaf set is every `READY` leaf in R's subtree
 - If the executable set is empty, the correct output is the blocking explanation,
   meaning which dependencies are unsatisfied and which nodes they belong to. It
   is never permission to start a non-`READY` leaf.
+
+`READY` is derived from the graph and is reproducible by any reader. An execution
+claim is not: it states that an executor is working on the leaf now, so it MUST be
+explicit, machine-readable, attributable to one executor, and releasable or
+time-bounded, or a stale claim parks the leaf forever. An open delivery pull
+request linking the leaf is such a claim.
+
+Whether native data can carry a claim before a pull request exists, and what to
+do if it cannot, is resolution work owned by #669 and #672. Until then an
+executor that cannot observe claims treats the executable set as available and
+lets the delivery pull request reveal a collision.
 
 ### 4.3 Deterministic `NEXT` Selection
 
@@ -312,15 +325,12 @@ plus the acceptance criteria that falsify it.
   rollforward for a defect found after merge, or an unblocking infrastructure fix.
   They MUST NOT carry new contract scope, and a post-merge defect MUST get its own
   leaf.
-- A pull request MUST NOT close more than one leaf. If a change genuinely
-  satisfies two leaves, one of them was mis-modeled: merge them into one leaf
-  before delivery.
-- Narrow exception: a pull request MAY deliver more than one leaf when splitting
-  it would ship a broken intermediate state, for example a rename that must land
-  atomically across a contract and its only consumer. The exception MUST be
-  stated in the pull request with the reason and the exact leaves covered, and it
-  MUST NOT be used for convenience, batching, or review fatigue. Anything else is
-  mis-modeling, not an exception.
+- A pull request MUST NOT close more than one leaf. Work that cannot be
+  reviewed, merged, or delivered independently without leaving a broken
+  intermediate state is one atomic delivery contract, so it MUST be modeled as
+  one leaf rather than delivered as an exception. Needing to close two leaves at
+  once is therefore a modeling defect, and the remedy is to merge them before
+  delivery.
 - A pull request MUST NOT close an epic through a closing keyword. Epics are
   closed by the closure procedure in section 6.3, because keyword closure skips
   the closure evidence that procedure exists to produce.
@@ -335,9 +345,16 @@ proof of contract satisfaction.
 
 ### 6.2 Deferred Scope
 
-Scope discovered but not delivered MUST become a tracked node in the graph before
-the discovering leaf closes. Untracked follow-up work, including `TODO` and
-`FIXME` markers left for later, is not permitted.
+Two obligations always hold, and neither has a materiality threshold:
+
+- An unsatisfied acceptance criterion of the current leaf MUST be resolved or
+  replanned. It is never deferred silently.
+- A prerequisite the leaf actually needs MUST be tracked under section 7.1.
+
+Everything else discovered along the way becomes a node only when it clears the
+materiality threshold in section 7.5. A finding below that threshold is
+mentioned in the pull request or dropped, and a `TODO` or `FIXME` marker is not
+an acceptable substitute for either outcome.
 
 ### 6.3 Epic Closure
 
@@ -369,10 +386,14 @@ its own acceptance criteria, it is not in the current contract.
 
 ### 7.2 New Responsibility
 
-Work discovered outside the current contract MUST become a new node. The current
-leaf's contract MUST NOT grow to absorb it. This applies to defects found in
-already-merged work, missing tests, documentation gaps, warnings, audit findings,
-and deprecations.
+Work discovered outside the current contract MUST NOT be absorbed by the current
+leaf, whatever its size. That rule is absolute: an out-of-scope finding is never
+answered by growing the pull request.
+
+Whether it becomes a node is a separate question, answered by section 7.5.
+Material work is tracked; immaterial observations are not, because a graph full
+of cosmetic nodes hides the work that matters exactly as effectively as losing
+the work would.
 
 ### 7.3 Sub-Epic Promotion
 
@@ -392,6 +413,26 @@ When a leaf is found to carry several contracts, promote it in place:
 If execution merely suggests a nicer order, adjust sibling order. Do NOT add a
 dependency edge. Preference is not a blocker (section 3.4).
 
+### 7.5 Materiality Threshold For New Nodes
+
+A discovery becomes its own node only when it is all of the following:
+
+- **proven** — reproducible, or supported by file and line evidence, rather than
+  suspected,
+- **material** — its absence has a real cost to users, operators, security, data
+  integrity, or maintainability,
+- **actionable** — it can be expressed with concrete acceptance criteria,
+- **non-duplicate** — no existing node already covers it,
+- **still relevant** — it survives the change currently being delivered,
+- **outside the current contract** — otherwise it is delivered here.
+
+Below the threshold, no node is created. A speculative cleanup idea, a cosmetic
+observation, an insignificant warning, a stylistic preference, and a concern
+already covered elsewhere are all mentioned in the pull request at most.
+
+Two exceptions sit above the threshold by definition and are always tracked: an
+unresolved acceptance-criteria gap, and a prerequisite the work actually needs.
+
 ## 8. Precedence Between Scope And Evidence
 
 Test-driven development and review feedback are binding process rules, and they
@@ -400,7 +441,8 @@ in this order (highest first):
 
 1. Security, privacy, data-integrity, legal, and licensing invariants.
 2. Correctness of the promised contract.
-3. Accepted ADRs, then the leaf's declared scope and non-goals.
+3. Accepted ADRs, then the leaf's declared scope and non-goals, then the design
+   constraints in sections 7.3, 11, and 12.
 4. Test-driven development and evidence obligations (sections 9 and 10).
 5. Structural preferences, style, and automated review suggestions.
 
@@ -409,6 +451,9 @@ Consequences:
 - A failing test MUST NOT be answered by expanding the leaf's scope, weakening a
   security invariant, or contradicting an ADR. The answer is a replanning node
   (section 7) or an ADR change.
+- Making a test pass never justifies a second definition of an invariant
+  (section 11), keeping a leaf that should be split (section 7.3), or hand-rolling
+  what a standard already provides (section 12).
 - A test MUST NOT be deleted, skipped, or weakened to make a build pass. Either
   it found a defect or it encodes an obsolete contract clause, and the second
   requires an explicit contract-change note in the pull request.
@@ -431,18 +476,26 @@ close:
 3. **New responsibility** — the finding is real but outside the current
    contract. Handle it under section 7.2; the current leaf still closes.
 4. **Non-blocking follow-up** — the finding is real, outside the contract, and
-   not urgent. Track it as its own node before the current leaf closes.
+   not urgent. Track it as its own node when it clears section 7.5, and mention
+   it in the pull request otherwise.
 5. **Invalid finding** — the finding does not survive classification. Reply with
    the evidence that refutes it and change no code.
 
 Classes 3 and 4 MUST NOT be answered by growing the current pull request, and
 class 5 MUST NOT be answered by a defensive code change made only to silence the
-reviewer.
+reviewer. No class obliges a new test: a finding justifies one only when it names
+a contract distinction or failure class the existing evidence cannot express
+(section 10.2).
 
 ## 9. Evidence Classes
 
-Every leaf that changes executable behavior MUST produce evidence in the classes
-below. The classes are complements, not alternatives.
+A leaf MUST be evidenced in proportion to what it promises and to how it can
+fail. The classes below are the available kinds of proof, not a checklist to
+fill: an acceptance criterion is satisfied by whichever class actually proves
+it, and one evidence item MAY prove several criteria at once.
+
+Evidence is never counted. Neither a test count nor a coverage percentage tells
+anyone whether the contract holds.
 
 ### 9.1 Behavior And Contract Evidence
 
@@ -450,10 +503,14 @@ Tests that assert the promised observable behavior at the contract boundary: the
 public API, HTTP contract, CLI surface, exported function, workflow effect, or
 user-visible behavior.
 
-- Required for every leaf that changes executable behavior.
+- Required wherever a leaf changes observable behavior, at the granularity of
+  materially distinct behavior rather than per acceptance criterion.
 - Written first and observed failing before the implementation exists.
 - Asserts the promise, not the implementation shape. A test that must change
   whenever an internal helper is renamed is not behavior evidence.
+- A behavior-preserving refactor SHOULD leave these tests untouched. Having to
+  rewrite them is evidence that they were pinned to structure, or that the
+  refactor changed behavior after all.
 
 ### 9.2 Integration And Real Evidence
 
@@ -467,8 +524,9 @@ workflow execution, real cross-repository contract.
 - A mock-only proof is insufficient for a seam contract, because a mock asserts
   the assumption rather than the behavior.
 - When real evidence is genuinely unavailable in the environment, the leaf MUST
-  record what could not be verified and MUST track the verification as its own
-  node rather than claiming coverage.
+  record what could not be verified rather than claiming coverage. An unverified
+  seam is material by definition, so the outstanding verification is tracked
+  under section 7.5.
 
 ### 9.3 Structural And Characterization Evidence
 
@@ -477,10 +535,11 @@ structural invariant such as licensing headers, action pinning, or forbidden
 imports.
 
 - Legitimate and often valuable, especially before refactoring untested code.
-- Never a substitute for behavior evidence.
+- MUST be classified as structural where it is recorded, so it cannot be read as
+  proof that the promised behavior holds.
 - MUST be tied to a stated invariant. A structural test that encodes an
-  implementation preference without a stated invariant is noise and MUST be
-  removed.
+  implementation preference or a prose shape without a stated invariant is noise
+  and MUST be removed.
 
 ### 9.4 Leaves Without Executable Behavior
 
@@ -490,47 +549,64 @@ review evidence instead. It MUST NOT claim behavior evidence it does not have.
 
 ## 10. Evidence Stop Condition And Test Pruning
 
-### 10.1 Stop Condition
+### 10.1 Proportional Evidence
 
-Stop adding tests when all of the following hold:
+The obligation is that the contract is sufficiently proven, not that each clause
+owns a test:
 
-- every acceptance criterion has at least one behavior test that failed before
-  the implementation and passes now,
-- every seam identified in section 9.2 has real evidence,
-- every failure mode and negative case named in the leaf's scope is covered once,
-- the next test would only re-cover an already-covered equivalence class or
-  assert implementation shape.
+- Every acceptance criterion MUST be sufficiently evidenced, by whichever class
+  fits its nature: behavior, integration or real-system, structural, or a
+  recorded manual verification.
+- One test or evidence item MAY prove several acceptance criteria. Splitting it
+  to achieve a one-to-one mapping is prohibited.
+- The target is the smallest non-redundant evidence set that proves the
+  contract, not the largest defensible one.
 
-Coverage percentages are floors set per repository, not a stop condition. Reaching
-a coverage number proves nothing about contract satisfaction, and neither does
-adding tests past the stop condition.
+### 10.2 Stop Condition
 
-### 10.2 Pruning And Consolidation
+Stop adding evidence once all of the following are sufficiently proven:
+
+- every materially distinct behavior the leaf promises,
+- every distinct failure class it must handle,
+- every seam identified in section 9.2,
+- every named security or data-integrity invariant it touches.
+
+Two things that never justify another test: a coverage percentage below a
+repository floor, and a review finding that names no new contract distinction or
+failure class. A new test is justified by a distinction the existing evidence
+cannot express. Repository coverage floors remain floors; passing one proves
+nothing about contract satisfaction, and neither does exceeding it.
+
+### 10.3 Pruning And Consolidation
 
 During the refactor step, and before requesting review, the author MUST:
 
-- keep one canonical test per contract clause and one per distinct failure mode,
 - merge tests that differ only in irrelevant fixture detail into parameterized
   cases,
 - delete tests that no longer map to any contract clause,
 - delete tests that assert internals that the change just made private or
-  removed.
+  removed,
+- delete tests that pin prose or implementation shape without a named invariant.
 
 Test count is not a quality metric. Redundant tests slow every future change,
 so leaving them behind is a cost, not caution. Deleting a test to silence a
 failure is prohibited (section 8).
 
-## 11. Single Authoritative Invariant Ownership
+## 11. Authoritative Invariant Ownership
 
-Every invariant MUST have exactly one authoritative enforcement point, and that
-owner MUST be identifiable from the code or its documentation. Other layers may
-rely on it rather than re-deriving it.
+Every invariant MUST have exactly one authoritative owner: one definition of
+what the rule is, identifiable from the code or its documentation. Ownership is
+about the definition, not about the number of places that enforce it.
 
-Duplicated enforcement without a named owner is drift: the copies diverge, and no
-copy can be trusted afterwards. Copy-pasted validation logic carrying three
-independent literal lists is the canonical failure.
+Enforcement MAY happen at as many points as the architecture and its trust
+boundaries require. Each enforcement point MUST derive from, reference, or stay
+demonstrably consistent with the authoritative definition.
 
-### 11.1 Defense-In-Depth Exceptions
+What this forbids is a second definition: copy-pasted validation carrying its own
+literal list, so that the copies drift and no reader can tell which one the
+system actually means.
+
+### 11.1 Multiple Enforcement Points
 
 Redundant enforcement is expected, not discouraged, at trust boundaries:
 
@@ -542,16 +618,19 @@ Redundant enforcement is expected, not discouraged, at trust boundaries:
   reach the database,
 - fail-closed safety checks whose failure would be catastrophic or irreversible.
 
-An exception is valid only when both of the following hold:
+Sharing the implementation is the default, and independent enforcement is
+allowed where sharing it would weaken the boundary, for example where the outer
+layer must not import the inner layer, or where a shared failure would disable
+both checks at once. Independent enforcement MUST name the authoritative owner it
+defends.
 
-- the redundant check derives from the same authoritative definition, such as a
-  shared constant, schema, or enum, or is explicitly documented as an independent
-  last line of defense naming the authoritative owner, and
-- it fails the same way, so an inconsistency cannot silently pick a winner.
+Layers do not have to fail identically. Different error types, messages, and
+status codes are expected and appropriate to each layer. What they MUST NOT do is
+disagree about what is accepted: two layers that admit different input sets are
+two definitions, which is the failure this section exists to prevent.
 
 The multi-layer authorization guidance in `docs/development-principles.md` is
-such an exception. It does not license duplicating ordinary invariants across
-layers.
+such a case. It does not license a second definition of the rule being enforced.
 
 ## 12. Standards Before Custom, And Finite Allowlists
 
@@ -594,8 +673,11 @@ which is a worse outcome than the control's absence.
   and MAY define stack-specific detail such as commands, frameworks, and paths.
 - On conflict, this contract wins for work-graph and governance semantics, and
   the repository baseline wins for stack-specific technical detail.
-- Rollout across repositories, graph resolution tooling, and validation are out of
-  scope here and are tracked under the parent epic.
+- Adoption by the other SecPal repositories is owned by rollout epic #666 and its
+  repository migration issues. It is deliberately not a condition for this
+  specification being complete, since #666 depends on this foundation.
+- Graph resolution tooling and validation are owned by #669 and #670. This
+  document stays free of tooling.
 
 ## Related Guidance
 
