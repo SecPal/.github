@@ -126,7 +126,7 @@ body:
 
         1. **Create Delivery Issues**: Use the "Delivery Issue (Part of Epic)" template, one per contract
         2. **Attach Them Natively**: Add each as a native sub-issue and order them there, not in this body
-        3. **Start Work**: Begin with the first sub-issue that has no open blocker
+        3. **Start Work**: Take the delivery issue that `NEXT` selects in the canonical contract; having no open blocker does not by itself make a node executable
         4. **PR Linking**: Each PR closes its delivery issue (`Fixes #<issue>`), never this epic
         5. **Close Epic**: Close this epic explicitly once the closure checklist and evidence comment exist; no PR closes it by keyword
 

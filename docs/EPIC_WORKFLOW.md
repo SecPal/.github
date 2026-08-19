@@ -32,9 +32,11 @@ The epic must define:
 
 ### 2. Split Work Into Sub-Issues
 
-Use one sub-issue per contract, delivered by one primary pull request.
+Use one delivery sub-issue per contract, delivered by one primary pull request.
 
-Each sub-issue must:
+A sub-issue that itself gains children becomes a sub-epic: it carries no contract of its own, is never delivered by a PR, and applies this same structure to its own children. See sections 2.2 and 2.3 of [docs/work-graph-contract.md](work-graph-contract.md).
+
+Each delivery sub-issue must:
 
 - link back to the parent epic through the native parent/sub-issue link
 - carry exactly one contract

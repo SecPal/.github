@@ -10,9 +10,13 @@ SPDX-License-Identifier: CC0-1.0
 Canonical. This document is the single organization-wide definition of how
 SecPal work is structured, ordered, selected, delivered, and evidenced.
 
-Every SecPal repository baseline (`AGENTS.md`, `.github/copilot-instructions.md`,
-`.github/instructions/*.instructions.md`) and every Polyscope runtime instruction
-set references this contract instead of redefining its semantics locally.
+Any repository baseline or Polyscope runtime instruction set that states
+work-graph semantics — `AGENTS.md`, and any `.github/copilot-instructions.md` or
+`.github/instructions/*.instructions.md` overlay that touches them — MUST
+reference this contract instead of redefining them locally. A document that
+states none of these semantics, such as an independent review profile, needs no
+delegation. Which baselines have already adopted it is rollout state owned by
+section 13, not a claim this document makes.
 
 This document defines semantics only. It intentionally contains no tooling, no
 schema, and no automation. Read-only graph resolution and advisory validation are

@@ -480,8 +480,9 @@ function updateCustomer(customer: Customer, data: UpdateData): Customer {
    - Middleware checks permissions
    - Controllers double-check with policies
    - Services validate business rules
-   - This is a trust-boundary exception to single authoritative invariant
-     ownership, because each entry point is independently reachable. See
+   - This is defense in depth under one authoritative definition: each entry
+     point is independently reachable, so each enforces the same authorization
+     rule rather than defining its own. See
      [work-graph-contract.md](work-graph-contract.md#111-multiple-enforcement-points).
 
 **Example:**
