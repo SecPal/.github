@@ -114,6 +114,58 @@ if sed \
   fail 'modified licensing and branding instruction overlay was accepted'
 fi
 
+normalize_agents_work_graph_overlay() {
+  local text
+
+  text="$(cat)"
+  python3 - "$text" <<'PY'
+import sys
+
+text = sys.argv[1]
+reference = """Work structure, ordering, selection, delivery, and evidence semantics are defined
+once in `docs/work-graph-contract.md`. This baseline references that contract and
+does not restate it."""
+overlay = reference + "\n\n"
+accepted_threshold = """- Decide EPIC versus single issue with the epic threshold in
+  `docs/work-graph-contract.md`: the unit of decomposition is the contract, not
+  the pull-request count. Follow that contract for hierarchy, dependencies,
+  ordering, `READY`/`NEXT` selection, replanning, and evidence rules instead of
+  applying a local variant."""
+baseline_threshold = """- Use an EPIC only for genuinely multi-deliverable work, meaningful
+  cross-repository sequencing, or implementation spanning multiple work
+  sessions. Multiple possible pull requests alone do not require an EPIC."""
+
+if (
+    text.count(overlay) != 1
+    or text.count(accepted_threshold) != 1
+    or baseline_threshold in text
+):
+    raise SystemExit(1)
+
+text = text.replace(overlay, "", 1)
+text = text.replace(accepted_threshold, baseline_threshold, 1)
+sys.stdout.write(text)
+PY
+}
+
+if sed \
+  "s/This baseline references that contract/This baseline may restate that contract/" \
+  "$REPO_ROOT/AGENTS.md" \
+  | normalize_agents_work_graph_overlay >/dev/null; then
+  fail 'modified work-graph contract reference was accepted'
+fi
+if sed \
+  "s/the unit of decomposition is the contract, not/the unit of decomposition is the pull request, not/" \
+  "$REPO_ROOT/AGENTS.md" \
+  | normalize_agents_work_graph_overlay >/dev/null; then
+  fail 'modified epic-threshold instruction was accepted'
+fi
+if normalize_agents_license_branding_overlay <"$REPO_ROOT/AGENTS.md" \
+  | normalize_agents_work_graph_overlay \
+  | grep -Fq 'docs/work-graph-contract.md'; then
+  fail 'work-graph overlay normalization left instruction text behind'
+fi
+
 protected_mode_matches() {
   local accepted_mode="$1"
   local path="$2"
@@ -457,6 +509,8 @@ for path in "${protected_paths[@]}"; do
   if [ "$relative_path" = "AGENTS.md" ]; then
     current_content="$(normalize_agents_license_branding_overlay <<<"$current_content")" \
       || fail 'canonical licensing and branding instruction overlay changed'
+    current_content="$(normalize_agents_work_graph_overlay <<<"$current_content")" \
+      || fail 'canonical work-graph contract instruction overlay changed'
   fi
   protected_content_matches "$accepted_content" "$current_content" \
     || fail 'existing review governance or instruction routing changed'
