@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: SecPal/.github/.github/workflows/reusable-deploy-main.yml@b58f918f6d2ef4c395cc18d490766d5c2045f9f7 # main
+    uses: SecPal/.github/.github/workflows/reusable-deploy-main.yml@d1a586c0180ff76cc67f46aa1bf8b74936167564 # main
     secrets:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_PORT: ${{ secrets.VPS_PORT }}
