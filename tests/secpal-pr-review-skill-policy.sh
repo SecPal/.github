@@ -192,7 +192,15 @@ blocks = units(text)
 if WORK_GRAPH not in text:
     raise SystemExit(1)
 
-if not any("EPIC" in unit and WORK_GRAPH in unit for unit in blocks):
+if not any(
+    WORK_GRAPH in unit
+    and re.search(
+        r"\b(delegate|delegates|follow|follows|govern)\b|come from",
+        unit,
+        re.IGNORECASE,
+    )
+    for unit in blocks
+):
     raise SystemExit(1)
 
 pr_count_decomposition = re.compile(
@@ -226,6 +234,14 @@ PY
 
 assert_agents_work_graph_invariants <"$REPO_ROOT/AGENTS.md" \
   || fail 'AGENTS.md no longer delegates work-graph semantics to the contract'
+assert_agents_work_graph_invariants <"$POLYSCOPE_TEMPLATE" \
+  || fail 'managed Polyscope instructions no longer delegate work-graph semantics to the contract'
+if sed \
+  's/never redefine it\./never redefine it. Create an EPIC for more than one PR./' \
+  "$POLYSCOPE_TEMPLATE" \
+  | assert_agents_work_graph_invariants; then
+  fail 'managed Polyscope instructions accepted a pull-request-count EPIC rule'
+fi
 if (
   work_graph_fixtures="$(mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-skill-policy.XXXXXX")"
   trap 'rm -rf -- "$work_graph_fixtures"' EXIT

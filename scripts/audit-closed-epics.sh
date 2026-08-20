@@ -21,7 +21,8 @@ while [ $# -gt 0 ]; do
       cat <<'EOF'
 Usage: bash scripts/audit-closed-epics.sh [--org ORG] [--repo REPO]...
 
-Audit Epic issues for checklist drift by checking checklist-linked child issues.
+Legacy migration-compatibility audit for checklist drift. It compares Markdown
+checklist mirrors with issue state; it is report-only and never graph authority.
 
 Options:
   --org ORG    GitHub organization or owner to inspect (default: SecPal)

@@ -121,8 +121,9 @@ Do not close the epic first and clean up the tracking later.
 
 ## Retrospective Audit Helper
 
-When you need to verify already-closed epics, use the audit helper in this
-repository:
+For migration comparison of historical checklist mirrors, use the legacy audit
+helper in this repository. It is report-only: native issue state, hierarchy,
+and dependencies remain authoritative under the canonical contract.
 
 ```bash
 bash scripts/audit-closed-epics.sh
@@ -135,10 +136,8 @@ epics:
 bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
 ```
 
-This catches stale checklist state, open child issues, and checked items that do
-not resolve to closed issues. It also catches open epics whose child issues are
-already closed but whose checklist was never updated, so closure-ready epics do
-not silently drift.
+This compares stale checklist state with current issue state. It does not make
+an epic closure-ready, resolve graph state, or replace native relationships.
 
 ## CLA And Other External Services
 
