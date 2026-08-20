@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from secpal_work_graph import audit  # noqa: E402
 from secpal_work_graph import acceptance_criteria  # noqa: E402
+from secpal_work_graph import resolver  # noqa: E402
 from secpal_work_graph.model import CLOSED, COMPLETED, Node, build_snapshot  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("work_graph_audit_cli", ROOT / "scripts" / "secpal-work-graph-audit.py")
@@ -145,6 +146,84 @@ class AuditClassificationTests(TestCase):
         child = Node(other, 2, parent=key(1), has_acceptance_criteria=False)
         findings = self.findings([parent, child])
         self.assertTrue(all(item["repository"] == REPO for item in findings))
+
+    def test_cross_repository_dependency_cycle_is_attributed_to_local_member(self):
+        frontend = "SecPal/frontend"
+        api = "SecPal/api"
+        root = f"{frontend}#1"
+        frontend_leaf = f"{frontend}#10"
+        api_dependency = f"{api}#2"
+        snapshot = build_snapshot(
+            [
+                Node(frontend, 1, children=(frontend_leaf,)),
+                Node(
+                    frontend,
+                    10,
+                    parent=root,
+                    blocked_by=(api_dependency,),
+                    has_acceptance_criteria=True,
+                ),
+                Node(
+                    api,
+                    2,
+                    blocked_by=(frontend_leaf,),
+                    has_acceptance_criteria=True,
+                ),
+            ]
+        )
+
+        resolution = resolver.resolve(snapshot, root)
+        canonical = next(
+            finding
+            for finding in resolution.findings
+            if finding.code == resolver.FINDING_DEPENDENCY_CYCLE
+        )
+        self.assertEqual(canonical.node, api_dependency)
+
+        findings = audit.classify_native(snapshot, root, repository=frontend)
+        cycle = next(item for item in findings if item["kind"] == "dependency_cycle")
+        self.assertEqual(cycle["classification"], "execution_blocker")
+        self.assertEqual(cycle["issue"], frontend_leaf)
+        self.assertFalse(
+            any(
+                item["kind"] == "dependency_cycle"
+                for item in audit.classify_native(
+                    snapshot, root, repository="SecPal/contracts"
+                )
+            )
+        )
+
+    def test_cross_repository_unresolved_child_is_attributed_to_local_parent(self):
+        frontend = "SecPal/frontend"
+        root = f"{frontend}#1"
+        missing_child = "SecPal/api#2"
+        snapshot = build_snapshot([Node(frontend, 1, children=(missing_child,))])
+
+        findings = audit.classify_native(snapshot, root, repository=frontend)
+        unresolved = next(
+            item for item in findings if item["kind"] == "unresolved_sub_issue"
+        )
+        self.assertEqual(unresolved["issue"], root)
+        self.assertEqual(unresolved["classification"], "execution_blocker")
+
+    def test_cross_repository_inconsistent_child_is_attributed_to_local_parent(self):
+        frontend = "SecPal/frontend"
+        root = f"{frontend}#1"
+        inconsistent_child = "SecPal/api#2"
+        snapshot = build_snapshot(
+            [
+                Node(frontend, 1, children=(inconsistent_child,)),
+                Node("SecPal/api", 2, has_acceptance_criteria=True),
+            ]
+        )
+
+        findings = audit.classify_native(snapshot, root, repository=frontend)
+        inconsistent = next(
+            item for item in findings
+            if item["kind"] == "containment_inconsistent"
+        )
+        self.assertEqual(inconsistent["issue"], root)
+        self.assertEqual(inconsistent["classification"], "execution_blocker")
 
     def test_document_is_deterministic_and_explicitly_clean(self):
         first = {"repository": "SecPal/z", "status": "clean", "findings": []}

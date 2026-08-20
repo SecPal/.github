@@ -144,6 +144,42 @@ def classify_advisory(facts: AdvisoryIssueFacts) -> list[dict]:
     return findings
 
 
+def _attribution_node(snapshot, resolution, finding, repository: str) -> Node | None:
+    """Return the audited-repository node materially affected by a finding."""
+    representative = snapshot.require(finding.node or resolution.scope_root)
+    if representative.repository == repository:
+        return representative
+
+    if finding.code == resolver.FINDING_DEPENDENCY_CYCLE:
+        # Finding.detail is the resolver's stable, sorted cycle-member shape.
+        # Finding has no structured member collection, so keep this audit-side
+        # interpretation limited to that exact canonical finding form.
+        members = tuple(finding.detail.split(", ")) if finding.detail else ()
+        if finding.node not in members:
+            return None
+        candidate_keys = members
+    elif finding.code in {
+        resolver.FINDING_UNRESOLVED_SUB_ISSUE,
+        resolver.FINDING_CONTAINMENT_INCONSISTENT,
+    }:
+        candidate_keys = tuple(
+            key
+            for key in resolution.order
+            if (candidate := snapshot.get(key)) is not None
+            and finding.node in candidate.children
+        )
+    else:
+        return None
+
+    local_nodes = [
+        node
+        for key in candidate_keys
+        if (node := snapshot.get(key)) is not None
+        and node.repository == repository
+    ]
+    return min(local_nodes, key=lambda node: node.key) if local_nodes else None
+
+
 def classify_native(snapshot: Snapshot, root: str, *, repository: str) -> list[dict]:
     """Classify facts; all graph predicates are delegated to ``resolver``."""
     resolution = resolver.resolve(snapshot, root)
@@ -185,8 +221,8 @@ def classify_native(snapshot: Snapshot, root: str, *, repository: str) -> list[d
         if finding.code in resolver.INCOMPLETE_FINDINGS or finding.code in {
             resolver.FINDING_CONTAINMENT_CYCLE, resolver.FINDING_DEPENDENCY_CYCLE,
         }:
-            node = snapshot.require(finding.node or root)
-            if node.repository == repository:
+            node = _attribution_node(snapshot, resolution, finding, repository)
+            if node is not None:
                 findings.append(
                     _finding(
                         node,
