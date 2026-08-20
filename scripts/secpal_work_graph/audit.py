@@ -21,80 +21,193 @@ _PRIORITY = {"before_rollout": 0, "normal": 1, "cleanup": 2}
 
 
 @dataclass(frozen=True)
-class Candidate:
+class AdvisoryIssueFacts:
+    """Audit-local discovery evidence that never becomes resolver input."""
+
     key: str
+    repository: str
     discovery_source: str
-    status_checklist: bool = False
-    epic_candidate: bool = False
+    relationship_mirrors: tuple[str, ...] = ()
+    has_status_checklist: bool = False
+    legacy_epic_candidate: bool = False
+    native_children_count: int = 0
+    closing_pull_requests: tuple[str, ...] = ()
+    blocked_by_count: int = 0
+    blocking_count: int = 0
 
 
-def is_epic(node: Node) -> bool:
-    """A native epic is only a node with native children."""
-    return bool(node.children)
+def _finding(
+    node: Node,
+    kind: str,
+    classification: str,
+    source: str,
+    evidence: str,
+    **extra,
+):
+    return _issue_finding(
+        node.repository, node.key, kind, classification, source, evidence, **extra
+    )
 
 
-def _finding(node: Node, kind: str, classification: str, source: str, evidence: str, **extra):
-    result = {"kind": kind, "classification": classification,
-              "migration_priority": "before_rollout" if classification == "execution_blocker" else "normal",
-              "repository": node.repository, "issue": node.key,
-              "discovery_source": source, "requires_judgment": False, "evidence": evidence}
+def _issue_finding(
+    repository: str,
+    issue: str,
+    kind: str,
+    classification: str,
+    source: str,
+    evidence: str,
+    **extra,
+):
+    result = {
+        "kind": kind,
+        "classification": classification,
+        "migration_priority": (
+            "before_rollout" if classification == "execution_blocker" else "normal"
+        ),
+        "repository": repository,
+        "issue": issue,
+        "discovery_source": source,
+        "requires_judgment": False,
+        "evidence": evidence,
+    }
     result.update(extra)
     return result
 
 
-def classify(
-    snapshot: Snapshot,
-    root: str,
-    candidate: Candidate,
-    *,
-    repository: str,
-    closing_pull_requests_by_issue: dict[str, tuple[str, ...]] | None = None,
-) -> list[dict]:
+def classify_advisory(facts: AdvisoryIssueFacts) -> list[dict]:
+    """Classify migration evidence without constructing canonical graph state."""
+    findings: list[dict] = []
+    if facts.relationship_mirrors:
+        findings.append(
+            _issue_finding(
+                facts.repository,
+                facts.key,
+                "body_relationship_mirror",
+                "migration_debt",
+                facts.discovery_source,
+                "Markdown mirrors: " + ", ".join(facts.relationship_mirrors),
+            )
+        )
+        missing_dependency = (
+            any(name in {"blocked by", "depends on"} for name in facts.relationship_mirrors)
+            and facts.blocked_by_count == 0
+        ) or ("blocks" in facts.relationship_mirrors and facts.blocking_count == 0)
+        if missing_dependency:
+            findings.append(
+                _issue_finding(
+                    facts.repository,
+                    facts.key,
+                    "prose_only_blocker",
+                    "migration_debt",
+                    facts.discovery_source,
+                    "Dependency mirror has no corresponding native relationship",
+                )
+            )
+    if facts.has_status_checklist:
+        findings.append(
+            _issue_finding(
+                facts.repository,
+                facts.key,
+                "duplicated_markdown_status",
+                "migration_debt",
+                facts.discovery_source,
+                "Parser-derived Markdown task-list status mirror",
+            )
+        )
+    if len(facts.closing_pull_requests) > 1:
+        findings.append(
+            _issue_finding(
+                facts.repository,
+                facts.key,
+                "multi_contract_leaf_candidate",
+                "migration_debt",
+                facts.discovery_source,
+                "Multiple native closing pull-request relationships; review its delivery contract",
+                requires_judgment=True,
+            )
+        )
+    if (
+        facts.native_children_count > 0 or facts.legacy_epic_candidate
+    ) and facts.closing_pull_requests:
+        for pull_request in facts.closing_pull_requests:
+            findings.append(
+                _issue_finding(
+                    facts.repository,
+                    facts.key,
+                    "direct_epic_delivery_pull_request",
+                    "migration_debt",
+                    facts.discovery_source,
+                    "Epic has a native closing pull-request relationship",
+                    pull_request=pull_request,
+                )
+            )
+    return findings
+
+
+def classify_native(snapshot: Snapshot, root: str, *, repository: str) -> list[dict]:
     """Classify facts; all graph predicates are delegated to ``resolver``."""
     resolution = resolver.resolve(snapshot, root)
-    closing_pull_requests_by_issue = closing_pull_requests_by_issue or {}
     findings: list[dict] = []
     for state in resolution.resolved_states():
         node = snapshot.nodes[state.key]
         if node.repository != repository:
             continue
-        source = candidate.discovery_source if state.key == candidate.key else "native"
-        if node.mirror_relationships:
-            findings.append(_finding(node, "body_relationship_mirror", "migration_debt", source,
-                "Markdown mirrors: " + ", ".join(node.mirror_relationships)))
-            if any(name in {"blocked by", "blocks", "depends on"} for name in node.mirror_relationships) and not node.blocked_by:
-                findings.append(_finding(node, "prose_only_blocker", "migration_debt", source,
-                    "Dependency mirror has no native dependency"))
-        if state.leaf and node.is_open and resolver.REASON_MISSING_ACCEPTANCE_CRITERIA in state.reasons:
-            findings.append(_finding(node, "structurally_incomplete_delivery_leaf", "execution_blocker", source,
-                "Canonical resolver reports missing_acceptance_criteria"))
-        closing_pull_requests = closing_pull_requests_by_issue.get(node.key, ())
-        if state.leaf and len(closing_pull_requests) > 1:
-            findings.append(_finding(node, "multi_contract_leaf_candidate", "migration_debt", source,
-                "Multiple native closing pull-request relationships; review its delivery contract",
-                requires_judgment=True))
+        source = "native"
+        if (
+            state.leaf
+            and node.is_open
+            and resolver.REASON_MISSING_ACCEPTANCE_CRITERIA in state.reasons
+        ):
+            findings.append(
+                _finding(
+                    node,
+                    "structurally_incomplete_delivery_leaf",
+                    "execution_blocker",
+                    source,
+                    "Canonical resolver reports missing_acceptance_criteria",
+                )
+            )
         if node.state == CLOSED and node.children:
             for child_key in node.children:
                 child = snapshot.get(child_key)
                 if child and child.is_open:
-                    findings.append(_finding(node, "closed_parent_open_child", "execution_blocker", source,
-                        "Native child remains open", related_issue=child_key))
-        if (is_epic(node) or (node.key == candidate.key and candidate.epic_candidate)) and closing_pull_requests:
-            for pull_request in closing_pull_requests:
-                findings.append(_finding(node, "direct_epic_delivery_pull_request", "migration_debt", source,
-                    "Epic has a native closing pull-request relationship", pull_request=pull_request))
-    if candidate.status_checklist:
-        node = snapshot.require(candidate.key)
-        findings.append(_finding(node, "duplicated_markdown_status", "migration_debt", candidate.discovery_source,
-            "Parser-derived Markdown task-list status mirror"))
+                    findings.append(
+                        _finding(
+                            node,
+                            "closed_parent_open_child",
+                            "execution_blocker",
+                            source,
+                            "Native child remains open",
+                            related_issue=child_key,
+                        )
+                    )
     for finding in resolution.findings:
         if finding.code in resolver.INCOMPLETE_FINDINGS or finding.code in {
             resolver.FINDING_CONTAINMENT_CYCLE, resolver.FINDING_DEPENDENCY_CYCLE,
         }:
             node = snapshot.require(finding.node or root)
             if node.repository == repository:
-                findings.append(_finding(node, finding.code, "execution_blocker", "native", finding.detail or finding.code))
+                findings.append(
+                    _finding(
+                        node,
+                        finding.code,
+                        "execution_blocker",
+                        "native",
+                        finding.detail or finding.code,
+                    )
+                )
     return findings
+
+
+def deduplicate_findings(findings: Iterable[dict]) -> list[dict]:
+    """Deduplicate complete semantic finding documents deterministically."""
+    import json
+
+    unique = {
+        json.dumps(finding, sort_keys=True, separators=(",", ":")): finding
+        for finding in findings
+    }
+    return [unique[key] for key in sorted(unique)]
 
 
 def document(results: Iterable[dict]) -> dict:

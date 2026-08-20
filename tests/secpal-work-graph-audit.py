@@ -29,16 +29,61 @@ def leaf(number, **kwargs): return Node(REPO, number, has_acceptance_criteria=Tr
 
 
 class AuditClassificationTests(TestCase):
-    def findings(self, nodes, candidate=None, repository=REPO, closing_pull_requests_by_issue=None):
+    @staticmethod
+    def discovery_adapter(rows):
+        class DiscoveryAdapter:
+            def __init__(self, **_kwargs):
+                pass
+
+            def query(self, _document, _variables):
+                return audit_cli.github.GraphQLResponse(
+                    {
+                        "repository": {
+                            "issues": {
+                                "nodes": rows,
+                                "pageInfo": {"hasNextPage": False},
+                            }
+                        }
+                    },
+                    (),
+                )
+
+        return DiscoveryAdapter
+
+    @staticmethod
+    def discovery_row(number, *, body="", parent=None, children=0, closing=()):
+        return {
+            "number": number,
+            "title": f"Issue {number}",
+            "body": body,
+            "repository": {"nameWithOwner": REPO},
+            "parent": parent,
+            "subIssues": {"totalCount": children},
+            "blockedBy": {"totalCount": 0},
+            "blocking": {"totalCount": 0},
+            "labels": {"nodes": []},
+            "closedByPullRequestsReferences": {
+                "totalCount": len(closing),
+                "nodes": [
+                    {"number": number, "repository": {"nameWithOwner": REPO}}
+                    for number in closing
+                ],
+            },
+        }
+
+    def findings(self, nodes, repository=REPO):
         snapshot = build_snapshot(nodes)
-        candidate = candidate or audit.Candidate(nodes[0].key, "native")
-        return audit.classify(snapshot, nodes[0].key, candidate, repository=repository, closing_pull_requests_by_issue=closing_pull_requests_by_issue)
+        return audit.classify_native(snapshot, nodes[0].key, repository=repository)
 
     def test_clean_native_graph_is_clean(self):
         self.assertEqual(self.findings([leaf(1)]), [])
 
     def test_mirrors_are_migration_debt_not_graph_authority(self):
-        findings = self.findings([leaf(1, mirror_relationships=("blocked by",))])
+        findings = audit.classify_advisory(
+            audit.AdvisoryIssueFacts(
+                key(1), REPO, "legacy_candidate", relationship_mirrors=("blocked by",)
+            )
+        )
         self.assertEqual({item["kind"] for item in findings}, {"body_relationship_mirror", "prose_only_blocker"})
         self.assertTrue(all(item["classification"] == "migration_debt" for item in findings))
 
@@ -50,22 +95,48 @@ class AuditClassificationTests(TestCase):
         self.assertTrue(all(item["classification"] == "execution_blocker" for item in findings))
 
     def test_direct_epic_pr_and_multiple_delivery_prs_are_advisory(self):
-        epic = Node(REPO, 1, title="[EPIC] rollout", children=(key(2),))
-        child = leaf(2, parent=key(1))
-        findings = self.findings([epic, child], closing_pull_requests_by_issue={key(1): (f"{REPO}#9",), key(2): (f"{REPO}#10", f"{REPO}#11")})
+        findings = audit.classify_advisory(
+            audit.AdvisoryIssueFacts(
+                key(1),
+                REPO,
+                "native",
+                native_children_count=1,
+                closing_pull_requests=(f"{REPO}#9",),
+            )
+        ) + audit.classify_advisory(
+            audit.AdvisoryIssueFacts(
+                key(2),
+                REPO,
+                "native",
+                closing_pull_requests=(f"{REPO}#10", f"{REPO}#11"),
+            )
+        )
         direct = next(item for item in findings if item["kind"] == "direct_epic_delivery_pull_request")
         multi = next(item for item in findings if item["kind"] == "multi_contract_leaf_candidate")
         self.assertEqual(direct["classification"], "migration_debt")
         self.assertTrue(multi["requires_judgment"])
 
     def test_legacy_epic_label_remains_epic_evidence_for_closing_prs(self):
-        node = leaf(1)
-        findings = self.findings([node], audit.Candidate(node.key, "legacy_candidate", epic_candidate=True), closing_pull_requests_by_issue={key(1): (f"{REPO}#9",)})
+        findings = audit.classify_advisory(
+            audit.AdvisoryIssueFacts(
+                key(1),
+                REPO,
+                "legacy_candidate",
+                legacy_epic_candidate=True,
+                closing_pull_requests=(f"{REPO}#9",),
+            )
+        )
         self.assertIn("direct_epic_delivery_pull_request", {item["kind"] for item in findings})
 
     def test_leaf_title_does_not_make_an_epic(self):
-        node = leaf(1, title="Fix epic synchronization failure")
-        findings = self.findings([node], closing_pull_requests_by_issue={key(1): (f"{REPO}#9",)})
+        row = self.discovery_row(1, closing=(9,))
+        row["title"] = "Fix epic synchronization failure"
+        facts = audit_cli._advisory_facts(
+            row,
+            acceptance_criteria.StructuralBody(False, ()),
+            REPO,
+        )
+        findings = audit.classify_advisory(facts)
         self.assertNotIn("direct_epic_delivery_pull_request", {item["kind"] for item in findings})
 
     def test_cross_repository_nodes_are_reported_only_by_their_repository(self):
@@ -96,6 +167,71 @@ class AuditClassificationTests(TestCase):
             self.assertEqual(audit_cli.main(["--repo", REPO]), 0)
         document = __import__("json").loads(output.getvalue())
         self.assertEqual(document["repositories"], [{"repository": REPO, "status": "clean", "findings": []}])
+
+    def test_checklist_only_issue_is_advisory_without_snapshot_resolution(self):
+        rows = [self.discovery_row(1, body="- [ ] one\n- [x] two")]
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter", self.discovery_adapter(rows)),
+            patch.object(audit_cli.github, "load_snapshot") as load_snapshot,
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main(["--repo", REPO]), 0)
+        findings = __import__("json").loads(output.getvalue())["repositories"][0]["findings"]
+        self.assertEqual({item["kind"] for item in findings}, {"duplicated_markdown_status"})
+        self.assertEqual(findings[0]["classification"], "migration_debt")
+        load_snapshot.assert_not_called()
+
+    def test_many_checklist_only_issues_do_not_fan_out_snapshot_resolution(self):
+        rows = [self.discovery_row(number, body="- [ ] migrate") for number in range(1, 126)]
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter", self.discovery_adapter(rows)),
+            patch.object(audit_cli.github, "load_snapshot") as load_snapshot,
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main(["--repo", REPO]), 0)
+        findings = __import__("json").loads(output.getvalue())["repositories"][0]["findings"]
+        self.assertEqual(len(findings), 125)
+        self.assertEqual({item["kind"] for item in findings}, {"duplicated_markdown_status"})
+        load_snapshot.assert_not_called()
+
+    def test_one_native_root_serves_advisory_descendants_without_reresolution(self):
+        parent = {"number": 1, "repository": {"nameWithOwner": REPO}}
+        rows = [
+            self.discovery_row(1, children=3),
+            self.discovery_row(2, parent=parent, body="- [ ] migrate"),
+            self.discovery_row(3, parent=parent, body="Blocked by: #9"),
+            self.discovery_row(4, parent=parent, closing=(10, 11)),
+        ]
+        snapshot = build_snapshot(
+            [
+                Node(REPO, 1, children=(key(2), key(3), key(4))),
+                Node(REPO, 2, parent=key(1), has_acceptance_criteria=False),
+                leaf(3, parent=key(1)),
+                leaf(4, parent=key(1)),
+            ]
+        )
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter", self.discovery_adapter(rows)),
+            patch.object(
+                audit_cli.github,
+                "load_snapshot",
+                return_value=(snapshot, key(1)),
+            ) as load_snapshot,
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main(["--repo", REPO]), 0)
+        kinds = {
+            item["kind"]
+            for item in __import__("json").loads(output.getvalue())["repositories"][0]["findings"]
+        }
+        self.assertIn("structurally_incomplete_delivery_leaf", kinds)
+        self.assertIn("duplicated_markdown_status", kinds)
+        self.assertIn("body_relationship_mirror", kinds)
+        self.assertIn("multi_contract_leaf_candidate", kinds)
+        load_snapshot.assert_called_once()
 
     def test_cli_marks_operational_failure_and_returns_three(self):
         class FailingAdapter:
