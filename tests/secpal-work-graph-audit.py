@@ -6,13 +6,21 @@
 from __future__ import annotations
 
 import sys
+import importlib.util
+import io
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from secpal_work_graph import audit  # noqa: E402
 from secpal_work_graph.model import CLOSED, COMPLETED, Node, build_snapshot  # noqa: E402
+
+SPEC = importlib.util.spec_from_file_location("work_graph_audit_cli", ROOT / "scripts" / "secpal-work-graph-audit.py")
+audit_cli = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+SPEC.loader.exec_module(audit_cli)
 
 REPO = "SecPal/.github"
 def key(number): return f"{REPO}#{number}"
@@ -20,10 +28,10 @@ def leaf(number, **kwargs): return Node(REPO, number, has_acceptance_criteria=Tr
 
 
 class AuditClassificationTests(TestCase):
-    def findings(self, nodes, candidate=None):
+    def findings(self, nodes, candidate=None, repository=REPO):
         snapshot = build_snapshot(nodes)
         candidate = candidate or audit.Candidate(nodes[0].key, "native")
-        return audit.classify(snapshot, nodes[0].key, candidate)
+        return audit.classify(snapshot, nodes[0].key, candidate, repository=repository)
 
     def test_clean_native_graph_is_clean(self):
         self.assertEqual(self.findings([leaf(1)]), [])
@@ -40,19 +48,61 @@ class AuditClassificationTests(TestCase):
         self.assertEqual({item["kind"] for item in findings}, {"closed_parent_open_child", "structurally_incomplete_delivery_leaf"})
         self.assertTrue(all(item["classification"] == "execution_blocker" for item in findings))
 
-    def test_direct_epic_pr_and_multi_contract_candidate_are_advisory(self):
+    def test_direct_epic_pr_and_multiple_delivery_prs_are_advisory(self):
         epic = Node(REPO, 1, title="[EPIC] rollout", children=(key(2),), closing_pull_requests=(f"{REPO}#9",))
-        child = leaf(2, parent=key(1), blocking_count=2)
+        child = leaf(2, parent=key(1), closing_pull_requests=(f"{REPO}#10", f"{REPO}#11"))
         findings = self.findings([epic, child])
         direct = next(item for item in findings if item["kind"] == "direct_epic_delivery_pull_request")
         multi = next(item for item in findings if item["kind"] == "multi_contract_leaf_candidate")
         self.assertEqual(direct["classification"], "migration_debt")
         self.assertTrue(multi["requires_judgment"])
 
+    def test_legacy_epic_label_remains_epic_evidence_for_closing_prs(self):
+        node = leaf(1, closing_pull_requests=(f"{REPO}#9",))
+        findings = self.findings([node], audit.Candidate(node.key, "legacy_candidate", epic_candidate=True))
+        self.assertIn("direct_epic_delivery_pull_request", {item["kind"] for item in findings})
+
+    def test_cross_repository_nodes_are_reported_only_by_their_repository(self):
+        other = "SecPal/api"
+        parent = Node(REPO, 1, children=(f"{other}#2",))
+        child = Node(other, 2, parent=key(1), has_acceptance_criteria=False)
+        findings = self.findings([parent, child])
+        self.assertTrue(all(item["repository"] == REPO for item in findings))
+
     def test_document_is_deterministic_and_explicitly_clean(self):
         first = {"repository": "SecPal/z", "status": "clean", "findings": []}
         second = {"repository": "SecPal/a", "status": "clean", "findings": []}
         self.assertEqual(audit.document([first, second]), audit.document([second, first]))
+        self.assertEqual(len(audit.DEFAULT_REPOSITORIES), 9)
+
+    def test_cli_returns_zero_for_a_clean_repository(self):
+        class EmptyAdapter:
+            def __init__(self, **_kwargs):
+                pass
+
+            def query(self, _document, _variables):
+                return audit_cli.github.GraphQLResponse(
+                    {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}, ()
+                )
+
+        output = io.StringIO()
+        with patch.object(audit_cli.github, "GitHubReadAdapter", EmptyAdapter), patch("sys.stdout", output):
+            self.assertEqual(audit_cli.main(["--repo", REPO]), 0)
+        document = __import__("json").loads(output.getvalue())
+        self.assertEqual(document["repositories"], [{"repository": REPO, "status": "clean", "findings": []}])
+
+    def test_cli_marks_operational_failure_and_returns_three(self):
+        class FailingAdapter:
+            def __init__(self, **_kwargs):
+                pass
+
+            def query(self, _document, _variables):
+                raise audit_cli.github.GitHubError("unavailable")
+
+        output = io.StringIO()
+        with patch.object(audit_cli.github, "GitHubReadAdapter", FailingAdapter), patch("sys.stdout", output):
+            self.assertEqual(audit_cli.main(["--repo", REPO]), 3)
+        self.assertEqual(__import__("json").loads(output.getvalue())["repositories"][0]["status"], "unavailable")
 
 
 if __name__ == "__main__":

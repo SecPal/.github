@@ -25,6 +25,7 @@ class Candidate:
     key: str
     discovery_source: str
     status_checklist: bool = False
+    epic_candidate: bool = False
 
 
 def is_epic(node: Node) -> bool:
@@ -40,12 +41,16 @@ def _finding(node: Node, kind: str, classification: str, source: str, evidence: 
     return result
 
 
-def classify(snapshot: Snapshot, root: str, candidate: Candidate) -> list[dict]:
+def classify(
+    snapshot: Snapshot, root: str, candidate: Candidate, *, repository: str
+) -> list[dict]:
     """Classify facts; all graph predicates are delegated to ``resolver``."""
     resolution = resolver.resolve(snapshot, root)
     findings: list[dict] = []
     for state in resolution.resolved_states():
         node = snapshot.nodes[state.key]
+        if node.repository != repository:
+            continue
         source = candidate.discovery_source if state.key == candidate.key else "native"
         if node.mirror_relationships:
             findings.append(_finding(node, "body_relationship_mirror", "migration_debt", source,
@@ -56,9 +61,9 @@ def classify(snapshot: Snapshot, root: str, candidate: Candidate) -> list[dict]:
         if state.leaf and node.is_open and resolver.REASON_MISSING_ACCEPTANCE_CRITERIA in state.reasons:
             findings.append(_finding(node, "structurally_incomplete_delivery_leaf", "execution_blocker", source,
                 "Canonical resolver reports missing_acceptance_criteria"))
-        if state.leaf and node.blocking_count > 1:
+        if state.leaf and len(node.closing_pull_requests) > 1:
             findings.append(_finding(node, "multi_contract_leaf_candidate", "migration_debt", source,
-                "Multiple issues are natively blocked by this leaf; review its delivery contract",
+                "Multiple native closing pull-request relationships; review its delivery contract",
                 requires_judgment=True))
         if node.state == CLOSED and node.children:
             for child_key in node.children:
@@ -66,7 +71,7 @@ def classify(snapshot: Snapshot, root: str, candidate: Candidate) -> list[dict]:
                 if child and child.is_open:
                     findings.append(_finding(node, "closed_parent_open_child", "execution_blocker", source,
                         "Native child remains open", related_issue=child_key))
-        if is_epic(node) and node.closing_pull_requests:
+        if (is_epic(node) or (node.key == candidate.key and candidate.epic_candidate)) and node.closing_pull_requests:
             for pull_request in node.closing_pull_requests:
                 findings.append(_finding(node, "direct_epic_delivery_pull_request", "migration_debt", source,
                     "Epic has a native closing pull-request relationship", pull_request=pull_request))
@@ -79,7 +84,8 @@ def classify(snapshot: Snapshot, root: str, candidate: Candidate) -> list[dict]:
             resolver.FINDING_CONTAINMENT_CYCLE, resolver.FINDING_DEPENDENCY_CYCLE,
         }:
             node = snapshot.require(finding.node or root)
-            findings.append(_finding(node, finding.code, "execution_blocker", "native", finding.detail or finding.code))
+            if node.repository == repository:
+                findings.append(_finding(node, finding.code, "execution_blocker", "native", finding.detail or finding.code))
     return findings
 
 

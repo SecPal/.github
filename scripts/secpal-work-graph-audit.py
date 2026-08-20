@@ -41,7 +41,8 @@ def main(argv=None):
    for row,fact in zip(rows,facts):
     labels={str(x.get("name", "")).casefold() for x in ((row.get("labels") or {}).get("nodes") or [])}
     native=bool(row.get("parent")) or bool(((row.get("subIssues") or {}).get("totalCount") or 0))
-    legacy="epic" in labels or "[epic]" in str(row.get("title","")).casefold() or bool(fact.relationship_mirrors) or fact.has_status_checklist
+    legacy_epic="epic" in labels or "[epic]" in str(row.get("title","")).casefold()
+    legacy=legacy_epic or bool(fact.relationship_mirrors) or fact.has_status_checklist
     # A native subtree is resolved once from its highest local container.  Its
     # descendants are classified from that canonical resolver result, avoiding
     # repeated overlapping graph reads.  Cross-repository children remain roots
@@ -49,11 +50,11 @@ def main(argv=None):
     parent_repo = ((row.get("parent") or {}).get("repository") or {}).get("nameWithOwner")
     native_root = native and (bool(((row.get("subIssues") or {}).get("totalCount") or 0)) and not row.get("parent") or parent_repo not in (None, repository))
     if native_root or legacy:
-     key=f"{repository}#{int(row['number'])}"; candidates.append(audit.Candidate(key,"native" if native else "legacy_candidate",fact.has_status_checklist))
+     key=f"{repository}#{int(row['number'])}"; candidates.append(audit.Candidate(key,"native" if native else "legacy_candidate",fact.has_status_checklist,legacy_epic))
    findings=[]
    for candidate in sorted(candidates,key=lambda x:x.key):
     snapshot,root=github.load_snapshot(adapter,candidate.key)
-    findings.extend(audit.classify(snapshot,root,candidate))
+    findings.extend(audit.classify(snapshot,root,candidate,repository=repository))
    results.append({"repository":repository,"status":"findings" if findings else "clean","findings":findings})
   except (github.GitHubError, MarkdownParserUnavailable) as error:
    failed=True; results.append({"repository":repository,"status":"unavailable","findings":[],"error":str(error)})
