@@ -114,7 +114,7 @@ def classify_advisory(facts: AdvisoryIssueFacts) -> list[dict]:
                 "Parser-derived Markdown task-list status mirror",
             )
         )
-    if len(facts.closing_pull_requests) > 1:
+    if facts.native_children_count == 0 and len(facts.closing_pull_requests) > 1:
         findings.append(
             _issue_finding(
                 facts.repository,

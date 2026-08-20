@@ -52,7 +52,16 @@ class AuditClassificationTests(TestCase):
         return DiscoveryAdapter
 
     @staticmethod
-    def discovery_row(number, *, body="", parent=None, children=0, closing=()):
+    def discovery_row(
+        number,
+        *,
+        body="",
+        parent=None,
+        children=0,
+        blocked_by=0,
+        blocking=0,
+        closing=(),
+    ):
         return {
             "number": number,
             "title": f"Issue {number}",
@@ -60,8 +69,8 @@ class AuditClassificationTests(TestCase):
             "repository": {"nameWithOwner": REPO},
             "parent": parent,
             "subIssues": {"totalCount": children},
-            "blockedBy": {"totalCount": 0},
-            "blocking": {"totalCount": 0},
+            "blockedBy": {"totalCount": blocked_by},
+            "blocking": {"totalCount": blocking},
             "labels": {"nodes": []},
             "closedByPullRequestsReferences": {
                 "totalCount": len(closing),
@@ -116,6 +125,40 @@ class AuditClassificationTests(TestCase):
         multi = next(item for item in findings if item["kind"] == "multi_contract_leaf_candidate")
         self.assertEqual(direct["classification"], "migration_debt")
         self.assertTrue(multi["requires_judgment"])
+
+    def test_native_epic_is_not_a_multi_contract_leaf_candidate(self):
+        epic_findings = audit.classify_advisory(
+            audit.AdvisoryIssueFacts(
+                key(1),
+                REPO,
+                "native",
+                native_children_count=1,
+                closing_pull_requests=(f"{REPO}#10", f"{REPO}#11"),
+            )
+        )
+        self.assertEqual(
+            [item["kind"] for item in epic_findings],
+            [
+                "direct_epic_delivery_pull_request",
+                "direct_epic_delivery_pull_request",
+            ],
+        )
+
+        leaf_findings = audit.classify_advisory(
+            audit.AdvisoryIssueFacts(
+                key(2),
+                REPO,
+                "native",
+                closing_pull_requests=(f"{REPO}#12", f"{REPO}#13"),
+            )
+        )
+        candidate = next(
+            item
+            for item in leaf_findings
+            if item["kind"] == "multi_contract_leaf_candidate"
+        )
+        self.assertEqual(candidate["classification"], "migration_debt")
+        self.assertTrue(candidate["requires_judgment"])
 
     def test_legacy_epic_label_remains_epic_evidence_for_closing_prs(self):
         findings = audit.classify_advisory(
@@ -274,6 +317,82 @@ class AuditClassificationTests(TestCase):
         self.assertEqual(len(findings), 125)
         self.assertEqual({item["kind"] for item in findings}, {"duplicated_markdown_status"})
         load_snapshot.assert_not_called()
+
+    def test_standalone_dependency_root_reports_unresolved_dependency(self):
+        rows = [self.discovery_row(1, blocked_by=1)]
+        adapter = self.discovery_adapter(rows)()
+        snapshot = build_snapshot([leaf(1, blocked_by=(key(404),))])
+        with patch.object(
+            audit_cli.github,
+            "load_snapshot",
+            return_value=(snapshot, key(1)),
+        ) as load_snapshot:
+            result = audit_cli._audit_repository(adapter, REPO)
+
+        self.assertEqual(result["status"], "findings")
+        unresolved = next(
+            item
+            for item in result["findings"]
+            if item["kind"] == "unresolved_dependency"
+        )
+        self.assertEqual(unresolved["classification"], "execution_blocker")
+        load_snapshot.assert_called_once_with(adapter, key(1))
+
+    def test_standalone_dependency_root_reports_dependency_cycle(self):
+        rows = [self.discovery_row(1, blocked_by=1)]
+        adapter = self.discovery_adapter(rows)()
+        peer = "SecPal/api#2"
+        snapshot = build_snapshot(
+            [
+                leaf(1, blocked_by=(peer,)),
+                Node(
+                    "SecPal/api",
+                    2,
+                    blocked_by=(key(1),),
+                    has_acceptance_criteria=True,
+                ),
+            ]
+        )
+        with patch.object(
+            audit_cli.github,
+            "load_snapshot",
+            return_value=(snapshot, key(1)),
+        ) as load_snapshot:
+            result = audit_cli._audit_repository(adapter, REPO)
+
+        cycle = next(
+            item
+            for item in result["findings"]
+            if item["kind"] == "dependency_cycle"
+        )
+        self.assertEqual(cycle["classification"], "execution_blocker")
+        load_snapshot.assert_called_once_with(adapter, key(1))
+
+    def test_contained_dependency_leaf_does_not_add_native_root(self):
+        parent = {"number": 1, "repository": {"nameWithOwner": REPO}}
+        rows = [
+            self.discovery_row(1, children=1),
+            self.discovery_row(2, parent=parent, blocked_by=1),
+        ]
+        adapter = self.discovery_adapter(rows)()
+        snapshot = build_snapshot(
+            [
+                Node(REPO, 1, children=(key(2),)),
+                leaf(2, parent=key(1), blocked_by=(key(404),)),
+            ]
+        )
+        with patch.object(
+            audit_cli.github,
+            "load_snapshot",
+            return_value=(snapshot, key(1)),
+        ) as load_snapshot:
+            result = audit_cli._audit_repository(adapter, REPO)
+
+        self.assertIn(
+            "unresolved_dependency",
+            {item["kind"] for item in result["findings"]},
+        )
+        load_snapshot.assert_called_once_with(adapter, key(1))
 
     def test_one_native_root_serves_advisory_descendants_without_reresolution(self):
         parent = {"number": 1, "repository": {"nameWithOwner": REPO}}

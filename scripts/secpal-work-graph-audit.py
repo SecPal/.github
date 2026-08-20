@@ -121,10 +121,14 @@ def _advisory_facts(row, structural, repository: str) -> audit.AdvisoryIssueFact
 def _native_root(row, repository: str) -> str | None:
     parent = row.get("parent")
     children = int((row.get("subIssues") or {}).get("totalCount") or 0)
+    blocked_by = int((row.get("blockedBy") or {}).get("totalCount") or 0)
     parent_repository = ((parent or {}).get("repository") or {}).get(
         "nameWithOwner"
     )
-    if (children and not parent) or parent_repository not in (None, repository):
+    if (
+        (not parent and (children or blocked_by))
+        or parent_repository not in (None, repository)
+    ):
         return f"{repository}#{int(row['number'])}"
     return None
 
