@@ -128,6 +128,15 @@ import re
 import sys
 
 WORK_GRAPH = "docs/work-graph-contract.md"
+WORK_GRAPH_SUBJECT = re.compile(r"\bwork[- ]graphs?\b", re.IGNORECASE)
+DELEGATION_RELATION = re.compile(
+    r"\bdelegat(?:e|es|ed|ing)\b"
+    r"|\bfollow(?:s|ed|ing)?\b"
+    r"|\bcome(?:s)? from\b"
+    r"|\bsource of truth\b"
+    r"|\bauthoritative\b",
+    re.IGNORECASE,
+)
 
 
 def units(text):
@@ -147,13 +156,40 @@ def units(text):
     return grouped
 
 
-def delegates(unit):
-    if WORK_GRAPH in unit:
+def semantic_units(text):
+    context = ""
+    for unit in units(text):
+        first_line = unit.split("\n", 1)[0]
+        if first_line.startswith("#"):
+            context = first_line
+        yield unit, context
+
+
+def delegates(unit, context):
+    candidate = f"{context}\n{unit}".replace(WORK_GRAPH, "")
+    normalized = candidate.casefold()
+    has_work_graph_context = WORK_GRAPH_SUBJECT.search(candidate) or all(
+        subject in normalized
+        for subject in ("structure", "ordering", "selection", "delivery", "evidence semantics")
+    )
+    has_delegation_relation = DELEGATION_RELATION.search(unit) or re.search(
+        r"\bdefined\s+once\b", unit, re.IGNORECASE
+    )
+    if (
+        WORK_GRAPH in unit
+        and has_work_graph_context
+        and has_delegation_relation
+    ):
         return True
+    # Normalize the superseded local PR-count rule out of the accepted baseline.
     return "EPIC" in unit and re.search(r"pull requests?", unit) is not None
 
 
-kept = [unit for unit in units(sys.argv[1]) if unit.strip() and not delegates(unit)]
+kept = [
+    unit
+    for unit, context in semantic_units(sys.argv[1])
+    if unit.strip() and not delegates(unit, context)
+]
 sys.stdout.write("\n".join(kept))
 PY
 }
@@ -167,6 +203,15 @@ import re
 import sys
 
 WORK_GRAPH = "docs/work-graph-contract.md"
+WORK_GRAPH_SUBJECT = re.compile(r"\bwork[- ]graphs?\b", re.IGNORECASE)
+DELEGATION_RELATION = re.compile(
+    r"\bdelegat(?:e|es|ed|ing)\b"
+    r"|\bfollow(?:s|ed|ing)?\b"
+    r"|\bcome(?:s)? from\b"
+    r"|\bsource of truth\b"
+    r"|\bauthoritative\b",
+    re.IGNORECASE,
+)
 text = sys.argv[1]
 
 
@@ -189,18 +234,31 @@ def units(body):
 
 blocks = units(text)
 
+
+def semantic_units(blocks):
+    context = ""
+    for unit in blocks:
+        first_line = unit.split("\n", 1)[0]
+        if first_line.startswith("#"):
+            context = first_line
+        yield unit, context
+
+
+def delegates(unit, context):
+    candidate = f"{context}\n{unit}".replace(WORK_GRAPH, "")
+    return (
+        WORK_GRAPH in unit
+        and WORK_GRAPH_SUBJECT.search(candidate)
+        and DELEGATION_RELATION.search(unit)
+    )
+
+
+semantic_blocks = list(semantic_units(blocks))
+
 if WORK_GRAPH not in text:
     raise SystemExit(1)
 
-if not any(
-    WORK_GRAPH in unit
-    and re.search(
-        r"\b(delegate|delegates|follow|follows|govern)\b|come from",
-        unit,
-        re.IGNORECASE,
-    )
-    for unit in blocks
-):
+if not any(delegates(unit, context) for unit, context in semantic_blocks):
     raise SystemExit(1)
 
 pr_count_decomposition = re.compile(
@@ -220,8 +278,8 @@ for unit in blocks:
 # smuggled into them would never be compared. Every sentence inside such a unit
 # must therefore be about the contract it delegates to; unrelated policy is
 # rejected here instead of disappearing.
-for unit in blocks:
-    if WORK_GRAPH not in unit:
+for unit, context in semantic_blocks:
+    if not delegates(unit, context):
         continue
     for sentence in re.split(r"(?<=[.!?])\s+", unit):
         if not re.search(r"[A-Za-z]", sentence):
@@ -288,6 +346,44 @@ PY
   :
 else
   fail 'editorial rewording of the work-graph delegation was rejected'
+fi
+if (
+  unrelated_fixtures="$(mktemp -d "${TMPDIR:-/tmp}/secpal-pr-review-skill-policy.XXXXXX")"
+  trap 'rm -rf -- "$unrelated_fixtures"' EXIT
+  unrelated_reference="$unrelated_fixtures/unrelated-reference-AGENTS.md"
+  python3 - "$REPO_ROOT/AGENTS.md" "$unrelated_reference" <<'PY'
+import sys
+
+WORK_GRAPH = "docs/work-graph-contract.md"
+source, target = sys.argv[1], sys.argv[2]
+lines = open(source, encoding="utf-8").read().split("\n")
+rewritten = []
+replacements = 0
+index = 0
+while index < len(lines):
+    line = lines[index]
+    if line.startswith("- "):
+        block = [line]
+        index += 1
+        while index < len(lines) and lines[index].startswith("  "):
+            block.append(lines[index])
+            index += 1
+        joined = " ".join(part.strip() for part in block)
+        if WORK_GRAPH in joined and "work-graph" in joined.casefold():
+            rewritten.append(f"- Licensing policy follows `{WORK_GRAPH}`.")
+            replacements += 1
+        else:
+            rewritten.extend(block)
+        continue
+    rewritten.append(line)
+    index += 1
+if replacements != 1:
+    raise SystemExit(f"expected one work-graph delegation, replaced {replacements}")
+open(target, "w", encoding="utf-8").write("\n".join(rewritten))
+PY
+  assert_agents_work_graph_invariants <"$unrelated_reference"
+); then
+  fail 'unrelated contract reference replaced the actual work-graph delegation'
 fi
 if printf '%s\n' \
   '- Decide EPIC scope with docs/work-graph-contract.md: the unit of' \
