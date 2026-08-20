@@ -68,7 +68,7 @@ ISSUE_QUERY = f"""query WorkGraphIssue($owner: String!, $name: String!, $number:
         nodes {{ {_REFERENCE_FIELDS} }}
       }}
       blocking(first: 1) {{ totalCount }}
-      closedByPullRequestsReferences(first: {CLAIM_PAGE_SIZE}, includeClosedPrs: false) {{
+      closedByPullRequestsReferences(first: {CLAIM_PAGE_SIZE}, includeClosedPrs: true) {{
         pageInfo {{ hasNextPage endCursor }}
         nodes {{
           number
@@ -110,7 +110,7 @@ PAGE_QUERIES: Mapping[str, str] = {
         "closedByPullRequestsReferences",
         CLAIM_PAGE_SIZE,
         _CLAIM_SELECTION,
-        ", includeClosedPrs: false",
+        ", includeClosedPrs: true",
     ),
 }
 
@@ -286,6 +286,11 @@ def _claims(entries: Iterable[Mapping[str, Any]]) -> tuple[Claim, ...]:
     return tuple(sorted(claims))
 
 
+def _closing_pull_requests(entries: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Return all native closing PR identities for advisory governance checks."""
+    return tuple(sorted(reference for reference in (_reference(entry) for entry in entries) if reference))
+
+
 def _unresolved_reason(errors: Iterable[Mapping[str, Any]]) -> str:
     return next((str(error.get("type")) for error in errors if error.get("type")), "unresolved")
 
@@ -338,18 +343,18 @@ def _fetch(
         labels, priority_labels_observable = set(), False
 
     try:
-        claims = _claims(
-            _paginate(
-                adapter,
-                "closedByPullRequestsReferences",
-                issue,
-                variables,
-                response.errors_touching("closedByPullRequestsReferences"),
-            )
+        claim_entries = _paginate(
+            adapter,
+            "closedByPullRequestsReferences",
+            issue,
+            variables,
+            response.errors_touching("closedByPullRequestsReferences"),
         )
+        claims = _claims(claim_entries)
+        closing_pull_requests = _closing_pull_requests(claim_entries)
         claims_observable = True
     except ConnectionUnreadable:
-        claims, claims_observable = (), False
+        claims, closing_pull_requests, claims_observable = (), (), False
 
     state_reason = issue.get("stateReason")
     node = Node(
@@ -370,6 +375,7 @@ def _fetch(
         priority_labels_observable=priority_labels_observable,
         claims=claims,
         claims_observable=claims_observable,
+        closing_pull_requests=closing_pull_requests,
     )
     return Fetched(node.key, node, issue.get("body") or "")
 

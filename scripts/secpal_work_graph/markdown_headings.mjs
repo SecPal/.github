@@ -91,7 +91,13 @@ function relationshipMirrors(tokens) {
 
 function bodyFacts(body) {
   const tokens = parser.parse(body ?? "", {});
-  return { headings: headings(tokens), relationshipMirrors: relationshipMirrors(tokens) };
+  return {
+    headings: headings(tokens),
+    relationshipMirrors: relationshipMirrors(tokens),
+    // A task list is migration evidence only.  The audit never derives issue
+    // state or relationships from it.
+    hasStatusChecklist: tokens.some(token => token.type === "inline" && token.level === 1 && /\[[ xX]\]/.test(token.content)),
+  };
 }
 
 const chunks = [];
