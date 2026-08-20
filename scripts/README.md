@@ -186,9 +186,9 @@ bash scripts/check-domains.sh
 
 ### `audit-closed-epics.sh`
 
-Audits Epic issues and reports checklist drift, such as closed child issues
-that remain unchecked in open or closed epics, or child issues that are still
-open even though the parent epic is already closed.
+Legacy migration-compatibility helper that compares Epic checklist mirrors with
+current issue state. It is report-only; the canonical resolver and GitHub-native
+relationships remain authoritative.
 
 **Usage:**
 

@@ -99,11 +99,9 @@ does not restate it.
 - Create an out-of-scope issue only when the finding is technically proven,
   material, not already tracked, unsuitable for a small in-scope fix, and can
   be expressed with concrete acceptance criteria.
-- Decide EPIC versus single issue with the epic threshold in
-  `docs/work-graph-contract.md`: the unit of decomposition is the contract, not
-  the pull-request count. Follow that contract for hierarchy, dependencies,
-  ordering, `READY`/`NEXT` selection, replanning, and evidence rules instead of
-  applying a local variant.
+- Delegate every work-graph decision to `docs/work-graph-contract.md`; do not
+  restate its decomposition, topology, selection, replanning, or evidence
+  semantics locally.
 
 ## Security and Repository Invariants
 
