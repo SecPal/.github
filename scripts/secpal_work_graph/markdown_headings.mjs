@@ -89,6 +89,20 @@ function relationshipMirrors(tokens) {
   return [...mirrors].sort();
 }
 
+function hasStatusChecklist(tokens) {
+  let listDepth = 0;
+  for (const token of tokens) {
+    if (token.type === "list_item_open") {
+      listDepth += 1;
+    } else if (token.type === "list_item_close") {
+      listDepth -= 1;
+    } else if (listDepth > 0 && token.type === "inline" && /\[[ xX]\]/.test(token.content)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function bodyFacts(body) {
   const tokens = parser.parse(body ?? "", {});
   return {
@@ -96,7 +110,7 @@ function bodyFacts(body) {
     relationshipMirrors: relationshipMirrors(tokens),
     // A task list is migration evidence only.  The audit never derives issue
     // state or relationships from it.
-    hasStatusChecklist: tokens.some(token => token.type === "inline" && token.level === 1 && /\[[ xX]\]/.test(token.content)),
+    hasStatusChecklist: hasStatusChecklist(tokens),
   };
 }
 

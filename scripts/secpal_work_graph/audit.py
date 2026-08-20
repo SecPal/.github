@@ -29,7 +29,8 @@ class Candidate:
 
 
 def is_epic(node: Node) -> bool:
-    return bool(node.children) or "epic" in node.title.casefold() or "epic" in node.priority_labels
+    """A native epic is only a node with native children."""
+    return bool(node.children)
 
 
 def _finding(node: Node, kind: str, classification: str, source: str, evidence: str, **extra):
@@ -42,10 +43,16 @@ def _finding(node: Node, kind: str, classification: str, source: str, evidence: 
 
 
 def classify(
-    snapshot: Snapshot, root: str, candidate: Candidate, *, repository: str
+    snapshot: Snapshot,
+    root: str,
+    candidate: Candidate,
+    *,
+    repository: str,
+    closing_pull_requests_by_issue: dict[str, tuple[str, ...]] | None = None,
 ) -> list[dict]:
     """Classify facts; all graph predicates are delegated to ``resolver``."""
     resolution = resolver.resolve(snapshot, root)
+    closing_pull_requests_by_issue = closing_pull_requests_by_issue or {}
     findings: list[dict] = []
     for state in resolution.resolved_states():
         node = snapshot.nodes[state.key]
@@ -61,7 +68,8 @@ def classify(
         if state.leaf and node.is_open and resolver.REASON_MISSING_ACCEPTANCE_CRITERIA in state.reasons:
             findings.append(_finding(node, "structurally_incomplete_delivery_leaf", "execution_blocker", source,
                 "Canonical resolver reports missing_acceptance_criteria"))
-        if state.leaf and len(node.closing_pull_requests) > 1:
+        closing_pull_requests = closing_pull_requests_by_issue.get(node.key, ())
+        if state.leaf and len(closing_pull_requests) > 1:
             findings.append(_finding(node, "multi_contract_leaf_candidate", "migration_debt", source,
                 "Multiple native closing pull-request relationships; review its delivery contract",
                 requires_judgment=True))
@@ -71,8 +79,8 @@ def classify(
                 if child and child.is_open:
                     findings.append(_finding(node, "closed_parent_open_child", "execution_blocker", source,
                         "Native child remains open", related_issue=child_key))
-        if (is_epic(node) or (node.key == candidate.key and candidate.epic_candidate)) and node.closing_pull_requests:
-            for pull_request in node.closing_pull_requests:
+        if (is_epic(node) or (node.key == candidate.key and candidate.epic_candidate)) and closing_pull_requests:
+            for pull_request in closing_pull_requests:
                 findings.append(_finding(node, "direct_epic_delivery_pull_request", "migration_debt", source,
                     "Epic has a native closing pull-request relationship", pull_request=pull_request))
     if candidate.status_checklist:

@@ -95,9 +95,6 @@ class Node:
     has_acceptance_criteria: bool = False
     claims: tuple[Claim, ...] = ()
     claims_observable: bool = True
-    # Closing references are advisory evidence.  Unlike ``claims`` they include
-    # merged PRs and are never consumed by canonical resolution.
-    closing_pull_requests: tuple[str, ...] = ()
     resolved: bool = True
     unresolved_reason: str | None = None
     mirror_relationships: tuple[str, ...] = ()
