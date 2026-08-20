@@ -685,7 +685,14 @@ class CommandTests(AdapterTestCase):
         self.assertIn(f"{REPO}#3", text)
 
     def test_invalid_references_are_rejected_without_contacting_github(self):
-        for reference in ("not-an-issue", "foo#1", "12", "https://example.com/x", "SecPal/.github#x"):
+        for reference in (
+            "not-an-issue",
+            "foo#1",
+            "12",
+            "https://example.com/x",
+            "https://gitlab.com/acme/project/issues/5",
+            "SecPal/.github#x",
+        ):
             with self.subTest(reference=reference):
                 code, _, stderr = self.command("show", reference)
                 self.assertEqual(code, 2)

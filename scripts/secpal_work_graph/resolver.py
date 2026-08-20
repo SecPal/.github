@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import total_ordering
-from types import MappingProxyType
+from types import MappingProxyType, NotImplementedType
 from typing import Iterable, Mapping
 
 from .model import (
@@ -121,7 +121,9 @@ class SelectionKey:
     def _ordering(self) -> tuple[int, tuple[int, ...], str, int]:
         return (-self.priority_rank, self.path, self.repository, self.number)
 
-    def __lt__(self, other: "SelectionKey") -> bool:
+    def __lt__(self, other: object) -> bool | NotImplementedType:
+        if not isinstance(other, SelectionKey):
+            return NotImplemented
         return self._ordering() < other._ordering()
 
 
@@ -210,7 +212,7 @@ class Resolution:
 
 
 def _claimed_by_another(claims: Iterable[Claim], executor: str) -> bool:
-    return any(claim.executor != executor for claim in claims)
+    return any(claim.executor.casefold() != executor.casefold() for claim in claims)
 
 
 def _ancestor_chain(snapshot: Snapshot, key: str) -> tuple[tuple[str, ...], str | None]:
@@ -252,6 +254,14 @@ class DependencyCycles:
     members: frozenset[str]
     tainted: frozenset[str]
     cycles: tuple[tuple[str, ...], ...]
+
+
+def _dependents(snapshot: Snapshot) -> Mapping[str, tuple[str, ...]]:
+    dependents: dict[str, list[str]] = {}
+    for key, node in snapshot.nodes.items():
+        for target in node.blocked_by:
+            dependents.setdefault(target, []).append(key)
+    return MappingProxyType({key: tuple(value) for key, value in dependents.items()})
 
 
 def _dependency_cycles(snapshot: Snapshot) -> DependencyCycles:
@@ -303,10 +313,7 @@ def _dependency_cycles(snapshot: Snapshot) -> DependencyCycles:
                     components.append(tuple(sorted(component)))
 
     members = {member for component in components for member in component}
-    dependents: dict[str, list[str]] = {}
-    for key, node in snapshot.nodes.items():
-        for target in node.blocked_by:
-            dependents.setdefault(target, []).append(key)
+    dependents = _dependents(snapshot)
 
     tainted = set(members)
     queue = list(members)
@@ -344,6 +351,10 @@ def _subtree(snapshot: Snapshot, root: str) -> Subtree:
         node = snapshot.get(key)
         if node is None or not node.resolved:
             continue
+        if key in inconsistent:
+            # The child itself stays visible with its malformed containment
+            # finding, but its descendants are outside a provable scope.
+            continue
         for position, child in reversed(list(enumerate(node.children))):
             child_node = snapshot.get(child)
             if child_node is not None and child_node.resolved and child_node.parent != key:
@@ -351,6 +362,24 @@ def _subtree(snapshot: Snapshot, root: str) -> Subtree:
             if child not in paths:
                 stack.append((child, path + (position,)))
     return Subtree(tuple(order), paths, inconsistent)
+
+
+def _cycle_reaches_scope(
+    cycle: tuple[str, ...], dependents: Mapping[str, Iterable[str]], scope_keys: Iterable[str]
+) -> bool:
+    """Return whether one cycle can block a node in the requested scope."""
+    scope = set(scope_keys)
+    pending = list(cycle)
+    reached = set(cycle)
+    while pending:
+        key = pending.pop()
+        if key in scope:
+            return True
+        for dependent in dependents.get(key, ()):
+            if dependent not in reached:
+                reached.add(dependent)
+                pending.append(dependent)
+    return False
 
 
 def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
@@ -363,6 +392,7 @@ def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
     order = subtree.order
     root_ancestors, _ = _ancestor_chain(snapshot, scope_root)
     cycles = _dependency_cycles(snapshot)
+    dependents = _dependents(snapshot)
 
     states: dict[str, NodeState] = {}
     findings: list[Finding] = []
@@ -389,7 +419,7 @@ def resolve(snapshot: Snapshot, scope_root: str) -> Resolution:
         findings.extend(node_findings)
 
     for cycle in cycles.cycles:
-        if any(member in states for member in cycle):
+        if _cycle_reaches_scope(cycle, dependents, states):
             findings.append(Finding(FINDING_DEPENDENCY_CYCLE, cycle[0], ", ".join(cycle)))
 
     findings.extend(_multiple_parent_findings(snapshot, order))

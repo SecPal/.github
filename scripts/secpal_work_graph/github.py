@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlparse
 
 from . import acceptance_criteria
 from .model import (
@@ -386,10 +388,10 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
     bodies: dict[str, str] = {}
     canonical: dict[str, str] = {}
     expanded: set[tuple[str, str]] = set()
-    pending: list[tuple[str, str]] = [(scope_root, SCOPE)]
+    pending: deque[tuple[str, str]] = deque([(scope_root, SCOPE)])
 
     while pending:
-        requested, mode = pending.pop(0)
+        requested, mode = pending.popleft()
         key = canonical.get(requested, requested)
         if (key, mode) in expanded:
             continue
@@ -451,9 +453,15 @@ def resolve_reference(reference: str, *, default_repository: str | None = None) 
     """
     value = reference.strip()
     if value.startswith("http://") or value.startswith("https://"):
-        parts = [part for part in value.split("/") if part]
-        if len(parts) >= 5 and parts[-2] in {"issues", "pull"} and parts[-1].isdigit():
-            return _canonical(f"{parts[-4]}/{parts[-3]}", parts[-1], reference)
+        parsed = urlparse(value)
+        parts = [part for part in parsed.path.split("/") if part]
+        if (
+            parsed.hostname == "github.com"
+            and len(parts) == 4
+            and parts[2] in {"issues", "pull"}
+            and parts[3].isdigit()
+        ):
+            return _canonical(f"{parts[0]}/{parts[1]}", parts[3], reference)
         raise ValueError(f"not a GitHub issue URL: {reference}")
     if "#" in value:
         repository, _, number = value.rpartition("#")

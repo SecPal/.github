@@ -20,6 +20,7 @@ from typing import Sequence
 CANONICAL_HEADING = "acceptance criteria"
 DECORATIVE_PREFIX = "✅"
 DEFAULT_TIMEOUT_SECONDS = 30
+DETECTION_BATCH_SIZE = 100
 
 _BRIDGE = Path(__file__).resolve().parent / "markdown_headings.mjs"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -52,28 +53,32 @@ def detect(
     """Return, per body, whether it structurally carries acceptance criteria."""
     if not bodies:
         return []
-    payload = json.dumps([body or "" for body in bodies])
-    try:
-        completed = subprocess.run(
-            [node_executable, str(_BRIDGE)],
-            input=payload,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-            cwd=str(_REPOSITORY_ROOT),
+    detected: list[bool] = []
+    for start in range(0, len(bodies), DETECTION_BATCH_SIZE):
+        batch = bodies[start : start + DETECTION_BATCH_SIZE]
+        payload = json.dumps([body or "" for body in batch])
+        try:
+            completed = subprocess.run(
+                [node_executable, str(_BRIDGE)],
+                input=payload,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                cwd=str(_REPOSITORY_ROOT),
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise MarkdownParserUnavailable(f"cannot run the Markdown parser: {error}") from error
+        if completed.returncode != 0:
+            raise MarkdownParserUnavailable(completed.stderr.strip() or "Markdown parsing failed")
+        try:
+            parsed = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise MarkdownParserUnavailable(f"unreadable Markdown parser output: {error}") from error
+        if not isinstance(parsed, list) or len(parsed) != len(batch):
+            raise MarkdownParserUnavailable("Markdown parser returned an unexpected result")
+        detected.extend(
+            any(qualifies(heading["text"]) and heading["hasContent"] for heading in headings)
+            for headings in parsed
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise MarkdownParserUnavailable(f"cannot run the Markdown parser: {error}") from error
-    if completed.returncode != 0:
-        raise MarkdownParserUnavailable(completed.stderr.strip() or "Markdown parsing failed")
-    try:
-        parsed = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        raise MarkdownParserUnavailable(f"unreadable Markdown parser output: {error}") from error
-    if not isinstance(parsed, list) or len(parsed) != len(bodies):
-        raise MarkdownParserUnavailable("Markdown parser returned an unexpected result")
-    return [
-        any(qualifies(heading["text"]) and heading["hasContent"] for heading in headings)
-        for headings in parsed
-    ]
+    return detected

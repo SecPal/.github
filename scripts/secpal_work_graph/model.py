@@ -60,7 +60,32 @@ def mirror_relationships(body: str | None) -> tuple[str, ...]:
     """Return the lowercased mirror relationship keywords present in a body."""
     if not body:
         return ()
-    return tuple(sorted({match.group(1).lower() for match in _MIRROR_PATTERN.finditer(body)}))
+    return tuple(
+        sorted(
+            {
+                match.group(1).lower()
+                for match in _MIRROR_PATTERN.finditer("\n".join(_semantic_lines(body)))
+            }
+        )
+    )
+
+
+def _semantic_lines(body: str) -> Iterable[str]:
+    """Yield body lines excluding Markdown containers that are examples, not metadata."""
+    fenced = False
+    fence = None
+    for line in body.splitlines():
+        fence_match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not fenced:
+                fenced, fence = True, marker[0]
+            elif marker[0] == fence:
+                fenced, fence = False, None
+            continue
+        if fenced or line.startswith(("    ", "\t", ">")):
+            continue
+        yield line
 
 
 @dataclass(frozen=True, order=True)

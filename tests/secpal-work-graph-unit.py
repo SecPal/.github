@@ -11,9 +11,12 @@ GitHub access happens here.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -185,6 +188,20 @@ class MalformedContainmentTests(TestCase):
                 self.assertNotIn(key(2), resolution.ready_leaves())
                 self.assertIsNone(resolution.select_next("alice").selected)
 
+    def test_an_inconsistent_containment_edge_does_not_admit_its_descendants(self):
+        snapshot = build_snapshot(
+            [
+                epic(1, (key(2),)),
+                epic(2, (key(3),), parent=key(8)),
+                leaf(3, parent=key(2)),
+                leaf(8),
+            ]
+        )
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertIn(resolver.REASON_CONTAINMENT_INCONSISTENT, resolution.states[key(2)].reasons)
+        self.assertNotIn(key(3), resolution.states)
+        self.assertFalse(resolution.complete)
+
 
 class SelectionInputTests(TestCase):
     """Sections 1.1 and 1.2: selection metadata is an input to `NEXT` only."""
@@ -336,6 +353,20 @@ class DependencyTests(TestCase):
         self.assertFalse(state.blocked)
         self.assertEqual(state.reasons, (resolver.REASON_DEPENDENCY_CYCLE,))
 
+    def test_a_cycle_outside_the_scope_is_reported_when_it_taints_a_scope_node(self):
+        snapshot = build_snapshot(
+            [
+                leaf(1, blocked_by=(key(2),)),
+                leaf(2, blocked_by=(key(3),), **closed()),
+                leaf(3, blocked_by=(key(2),), **closed()),
+            ]
+        )
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertIn(
+            model.Finding(resolver.FINDING_DEPENDENCY_CYCLE, key(2), f"{key(2)}, {key(3)}"),
+            resolution.findings,
+        )
+
     def test_dependencies_are_never_inherited_through_containment(self):
         snapshot = build_snapshot(
             [
@@ -393,6 +424,10 @@ class MirrorTests(TestCase):
         body = "Parent: #1\n- Blocked by: #2\n**Order:** 3\nParenthetical: no\n"
         self.assertEqual(model.mirror_relationships(body), ("blocked by", "order", "parent"))
         self.assertEqual(model.mirror_relationships("no relationships here"), ())
+
+    def test_mirror_detection_ignores_code_examples(self):
+        body = "```markdown\nParent: #1\n```\n\n    Blocked by: #2\n"
+        self.assertEqual(model.mirror_relationships(body), ())
 
 
 class DoneTests(TestCase):
@@ -484,6 +519,10 @@ class NextSelectionTests(TestCase):
         ]
         self.assertEqual(sorted(ordered), ordered)
 
+    def test_selection_key_returns_not_implemented_for_other_types(self):
+        selection_key = resolver.SelectionKey(1, (), REPO, 1)
+        self.assertIs(selection_key.__lt__(object()), NotImplemented)
+
     def test_path_order_compares_vectors_lexicographically(self):
         snapshot = build_snapshot(
             [
@@ -506,6 +545,12 @@ class NextSelectionTests(TestCase):
         result = resolution.select_next("alice")
         self.assertEqual(result.selected, key(4))
         self.assertEqual(result.candidates, (key(4),))
+
+    def test_claim_logins_compare_case_insensitively(self):
+        resolution = self.parallel_epic(
+            leaf(5, parent=key(1), claims=(Claim("Alice", f"{REPO}#10"),)),
+        )
+        self.assertEqual(resolution.select_next("alice").selected, key(5))
 
     def test_no_ready_leaf_and_all_candidates_claimed_are_distinct(self):
         # Both are ordinary answers over a complete input set, so neither is an
@@ -571,6 +616,20 @@ class AcceptanceCriteriaTests(TestCase):
     def test_detection_failure_is_raised_rather_than_defaulted(self):
         with self.assertRaises(acceptance_criteria.MarkdownParserUnavailable):
             acceptance_criteria.detect(["text"], node_executable="definitely-not-node")
+
+    def test_detection_uses_bounded_parser_batches_in_input_order(self):
+        calls: list[list[str]] = []
+
+        def parser_run(*args, **kwargs):
+            bodies = json.loads(kwargs["input"])
+            calls.append(bodies)
+            return subprocess.CompletedProcess(args, 0, json.dumps([[] for _ in bodies]), "")
+
+        with patch.object(acceptance_criteria, "DETECTION_BATCH_SIZE", 2, create=True), patch.object(
+            acceptance_criteria.subprocess, "run", side_effect=parser_run
+        ):
+            self.assertEqual(acceptance_criteria.detect(["one", "two", "three"]), [False, False, False])
+        self.assertEqual(calls, [["one", "two"], ["three"]])
 
 
 if __name__ == "__main__":
