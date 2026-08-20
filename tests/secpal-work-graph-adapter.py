@@ -278,6 +278,23 @@ class SnapshotLoadingTests(AdapterTestCase):
         self.assertEqual(root.children, (f"{REPO}#2", f"{REPO}#3"))
         self.assertEqual(root.blocked_by, (f"{REPO}#4", f"{REPO}#5"))
 
+    def test_pagination_rejects_a_repeated_cursor(self):
+        class RepeatingCursorAdapter:
+            calls = 0
+
+            def query(self, document, variables):
+                self.calls += 1
+                if self.calls > 1:
+                    raise AssertionError("pagination requested the repeated cursor again")
+                payload = page("subIssues", (), cursor="SAME")
+                return github.GraphQLResponse(payload["data"], ())
+
+        adapter = RepeatingCursorAdapter()
+        issue = issue_payload(1, sub_cursor="SAME")["data"]["repository"]["issue"]
+        with self.assertRaisesRegex(github.GitHubError, "cursor"):
+            github._paginate(adapter, "subIssues", issue, {"owner": "SecPal", "name": ".github", "number": 1})
+        self.assertEqual(adapter.calls, 1)
+
     def test_ancestors_are_read_without_pulling_in_sibling_scopes(self):
         # The fake gh fails on any unscripted request, so the absence of a
         # request for #9 is asserted by the run completing at all.
@@ -375,6 +392,20 @@ class RequiredInputObservabilityTests(AdapterTestCase):
                 resolution = resolver.resolve(snapshot, f"{REPO}#1")
                 self.assertFalse(resolution.complete)
                 self.assertIsNone(resolution.select_next("alice").selected)
+
+    def test_dependency_reads_do_not_require_irrelevant_sub_issues(self):
+        dependency = with_error(
+            issue_payload(2, state="CLOSED", state_reason="COMPLETED"),
+            "FORBIDDEN",
+            "subIssues",
+        )
+        script = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(1, blocked_by=(f"{REPO}#2",)),
+            "WorkGraphIssue:SecPal/.github#2:": dependency,
+        }
+        snapshot, root = github.load_snapshot(self.adapter(script), f"{REPO}#1")
+        self.assertTrue(snapshot.nodes[f"{REPO}#2"].is_done)
+        self.assertTrue(resolver.resolve(snapshot, root).states[f"{REPO}#1"].ready)
 
     def test_a_partial_follow_up_page_is_not_a_successful_page(self):
         script = {
@@ -691,6 +722,7 @@ class CommandTests(AdapterTestCase):
             "12",
             "https://example.com/x",
             "https://gitlab.com/acme/project/issues/5",
+            "https://github.com/SecPal/.github/pull/5",
             "SecPal/.github#x",
         ):
             with self.subTest(reference=reference):

@@ -72,18 +72,22 @@ def mirror_relationships(body: str | None) -> tuple[str, ...]:
 
 def _semantic_lines(body: str) -> Iterable[str]:
     """Yield body lines excluding Markdown containers that are examples, not metadata."""
-    fenced = False
-    fence = None
+    fence: tuple[str, int] | None = None
     for line in body.splitlines():
-        fence_match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if not fenced:
-                fenced, fence = True, marker[0]
-            elif marker[0] == fence:
-                fenced, fence = False, None
+        if fence is None:
+            opening = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
+            if opening:
+                marker = opening.group(1)
+                fence = marker[0], len(marker)
+                continue
+        else:
+            closing = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$", line)
+            if closing:
+                marker = closing.group(1)
+                if marker[0] == fence[0] and len(marker) >= fence[1]:
+                    fence = None
             continue
-        if fenced or line.startswith(("    ", "\t", ">")):
+        if line.startswith(("    ", "\t", ">")):
             continue
         yield line
 

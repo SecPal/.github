@@ -202,6 +202,24 @@ class MalformedContainmentTests(TestCase):
         self.assertNotIn(key(3), resolution.states)
         self.assertFalse(resolution.complete)
 
+    def test_a_late_second_parent_does_not_leave_descendants_in_scope(self):
+        # The matching parent is traversed first and expands the child's
+        # descendants before the second parent's conflicting listing is seen.
+        snapshot = build_snapshot(
+            [
+                epic(1, (key(2), key(3))),
+                epic(2, (key(4),), parent=key(1)),
+                epic(3, (key(4),), parent=key(1)),
+                epic(4, (key(5),), parent=key(2)),
+                leaf(5, parent=key(4)),
+            ]
+        )
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertIn(resolver.REASON_CONTAINMENT_INCONSISTENT, resolution.states[key(4)].reasons)
+        self.assertNotIn(key(5), resolution.states)
+        self.assertNotIn(key(5), resolution.ready_leaves())
+        self.assertFalse(resolution.complete)
+
 
 class SelectionInputTests(TestCase):
     """Sections 1.1 and 1.2: selection metadata is an input to `NEXT` only."""
@@ -428,6 +446,15 @@ class MirrorTests(TestCase):
     def test_mirror_detection_ignores_code_examples(self):
         body = "```markdown\nParent: #1\n```\n\n    Blocked by: #2\n"
         self.assertEqual(model.mirror_relationships(body), ())
+
+    def test_mirror_detection_keeps_shorter_fences_inside_a_long_fence(self):
+        bodies = (
+            "````markdown\n```\nParent: #1\n````\n",
+            "````markdown\n```not-a-close\nParent: #1\n````\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertEqual(model.mirror_relationships(body), ())
 
 
 class DoneTests(TestCase):

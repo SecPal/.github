@@ -361,7 +361,29 @@ def _subtree(snapshot: Snapshot, root: str) -> Subtree:
                 inconsistent[child] = key
             if child not in paths:
                 stack.append((child, path + (position,)))
-    return Subtree(tuple(order), paths, inconsistent)
+
+    # A conflicting listing can be discovered after the matching parent has
+    # already expanded the child. Keep the malformed child visible, but remove
+    # every descendant whose membership and path therefore remain unprovable.
+    excluded: set[str] = set()
+    pending: list[str] = []
+    for key in inconsistent:
+        node = snapshot.get(key)
+        if node is not None and node.resolved:
+            pending.extend(node.children)
+    while pending:
+        key = pending.pop()
+        if key == root or key in excluded:
+            continue
+        excluded.add(key)
+        node = snapshot.get(key)
+        if node is not None and node.resolved:
+            pending.extend(node.children)
+
+    filtered_order = tuple(key for key in order if key not in excluded)
+    filtered_paths = {key: path for key, path in paths.items() if key not in excluded}
+    filtered_inconsistent = {key: parent for key, parent in inconsistent.items() if key not in excluded}
+    return Subtree(filtered_order, filtered_paths, filtered_inconsistent)
 
 
 def _cycle_reaches_scope(

@@ -115,10 +115,11 @@ PAGE_QUERIES: Mapping[str, str] = {
     ),
 }
 
-# Relationship inputs a canonical predicate enumerates. If one of them is
-# unreadable, even partially, section 3.5 forbids treating the readable part as
-# the complete list, so the whole node stays unresolved. Observability is
-# all-or-nothing per connection.
+# Relationship inputs that a scope traversal consumes. If one is unreadable,
+# even partially, section 3.5 forbids treating the readable part as the complete
+# list, so the scope node stays unresolved. Dependency traversal consumes only
+# `blockedBy` for cycle detection; ancestors consume neither connection.
+# Observability is all-or-nothing per consumed connection.
 #
 # `parent` is handled separately because it is a single field: an unreadable
 # parent is recorded as unobservable containment rather than an unresolved node,
@@ -247,10 +248,14 @@ def _paginate(
         raise ConnectionUnreadable(connection, "unresolved")
     collected = _connection_nodes(issue.get(connection))
     page_info = (issue.get(connection) or {}).get("pageInfo") or {}
+    seen_cursors: set[str] = set()
     while page_info.get("hasNextPage"):
         cursor = page_info.get("endCursor")
         if not cursor:
             raise GitHubError(f"{connection} reported another page without a cursor")
+        if cursor in seen_cursors:
+            raise GitHubError(f"{connection} repeated pagination cursor {cursor!r}")
+        seen_cursors.add(cursor)
         response = adapter.query(PAGE_QUERIES[connection], {**variables, "cursor": cursor})
         page_errors = response.errors_touching(connection)
         if page_errors:
@@ -295,7 +300,9 @@ class Fetched:
     body: str | None
 
 
-def _fetch(adapter: GitHubReadAdapter, key: str) -> Fetched:
+def _fetch(
+    adapter: GitHubReadAdapter, key: str, *, required_connections: Iterable[str]
+) -> Fetched:
     """Fetch one issue, or return an unresolved node under the requested key."""
     repository, number = parse_node_key(key)
     owner, name = repository.split("/", 1)
@@ -314,7 +321,7 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> Fetched:
             connection: _references(
                 _paginate(adapter, connection, issue, variables, response.errors_touching(connection))
             )
-            for connection in REQUIRED_CONNECTIONS
+            for connection in required_connections
         }
     except ConnectionUnreadable as unreadable:
         return Fetched(key, unresolved_node(key, unreadable.reason), None)
@@ -354,8 +361,8 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> Fetched:
         state_reason=str(state_reason).lower() if state_reason else None,
         parent=_reference(issue.get("parent")),
         parent_observable=not response.errors_touching("parent"),
-        children=relationships["subIssues"],
-        blocked_by=relationships["blockedBy"],
+        children=relationships.get("subIssues", ()),
+        blocked_by=relationships.get("blockedBy", ()),
         blocking_count=int((issue.get("blocking") or {}).get("totalCount") or 0),
         priority_labels=tuple(sorted(label for label in labels if label in PRIORITY_RANKS)),
         priority_labels_observable=priority_labels_observable,
@@ -369,6 +376,14 @@ def _fetch(adapter: GitHubReadAdapter, key: str) -> Fetched:
 SCOPE = "scope"
 ANCESTOR = "ancestor"
 DEPENDENCY = "dependency"
+
+
+def _required_connections(mode: str) -> tuple[str, ...]:
+    if mode == SCOPE:
+        return REQUIRED_CONNECTIONS
+    if mode == DEPENDENCY:
+        return ("blockedBy",)
+    return ()
 
 
 def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot, str]:
@@ -403,7 +418,7 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
                     f"graph exceeds the configured budget of {adapter.max_nodes} issues; "
                     "narrow the scope root"
                 )
-            result = _fetch(adapter, requested)
+            result = _fetch(adapter, requested, required_connections=_required_connections(mode))
             key, node = result.canonical_key, result.node
             if key != requested:
                 canonical[requested] = key
@@ -458,7 +473,7 @@ def resolve_reference(reference: str, *, default_repository: str | None = None) 
         if (
             parsed.hostname == "github.com"
             and len(parts) == 4
-            and parts[2] in {"issues", "pull"}
+            and parts[2] == "issues"
             and parts[3].isdigit()
         ):
             return _canonical(f"{parts[0]}/{parts[1]}", parts[3], reference)
