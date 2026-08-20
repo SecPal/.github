@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import string
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -34,6 +35,14 @@ class MarkdownParserUnavailable(RuntimeError):
     """
 
 
+@dataclass(frozen=True)
+class StructuralBody:
+    """Markdown syntax facts consumed by the work-graph normalizer."""
+
+    has_acceptance_criteria: bool
+    relationship_mirrors: tuple[str, ...]
+
+
 def qualifies(heading_text: str) -> bool:
     """Apply the five normalization steps of section 4.1 to a heading's text."""
     value = heading_text.strip()
@@ -44,16 +53,16 @@ def qualifies(heading_text: str) -> bool:
     return value.translate(_ASCII_LOWER) == CANONICAL_HEADING
 
 
-def detect(
+def parse(
     bodies: Sequence[str | None],
     *,
     node_executable: str = "node",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> list[bool]:
-    """Return, per body, whether it structurally carries acceptance criteria."""
+) -> list[StructuralBody]:
+    """Parse structural body facts through the shared Markdown bridge."""
     if not bodies:
         return []
-    detected: list[bool] = []
+    detected: list[StructuralBody] = []
     for start in range(0, len(bodies), DETECTION_BATCH_SIZE):
         batch = bodies[start : start + DETECTION_BATCH_SIZE]
         payload = json.dumps([body or "" for body in batch])
@@ -77,8 +86,27 @@ def detect(
             raise MarkdownParserUnavailable(f"unreadable Markdown parser output: {error}") from error
         if not isinstance(parsed, list) or len(parsed) != len(batch):
             raise MarkdownParserUnavailable("Markdown parser returned an unexpected result")
-        detected.extend(
-            any(qualifies(heading["text"]) and heading["hasContent"] for heading in headings)
-            for headings in parsed
-        )
+        for item in parsed:
+            headings = item.get("headings") if isinstance(item, dict) else None
+            mirrors = item.get("relationshipMirrors") if isinstance(item, dict) else None
+            if (
+                not isinstance(headings, list)
+                or any(
+                    not isinstance(heading, dict)
+                    or not isinstance(heading.get("text"), str)
+                    or not isinstance(heading.get("hasContent"), bool)
+                    for heading in headings
+                )
+                or not isinstance(mirrors, list)
+                or any(not isinstance(mirror, str) for mirror in mirrors)
+            ):
+                raise MarkdownParserUnavailable("Markdown parser returned an unexpected result")
+            detected.append(
+                StructuralBody(
+                    has_acceptance_criteria=any(
+                        qualifies(heading["text"]) and heading["hasContent"] for heading in headings
+                    ),
+                    relationship_mirrors=tuple(sorted(set(mirrors))),
+                )
+            )
     return detected

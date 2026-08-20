@@ -201,6 +201,41 @@ class AdapterTestCase(TestCase):
 
 
 class SnapshotLoadingTests(AdapterTestCase):
+    def test_snapshot_upgrades_a_dependency_read_when_it_becomes_scope(self):
+        dependency_first = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(
+                1, sub_issues=(f"{REPO}#3",), blocked_by=(f"{REPO}#2",)
+            ),
+            "WorkGraphIssue:SecPal/.github#3:": issue_payload(
+                3, parent=f"{REPO}#1", sub_issues=(f"{REPO}#2",)
+            ),
+            "WorkGraphIssue:SecPal/.github#2:": issue_payload(
+                2, parent=f"{REPO}#3", sub_issues=(f"{REPO}#4",)
+            ),
+            "WorkGraphIssue:SecPal/.github#4:": issue_payload(4, parent=f"{REPO}#2"),
+        }
+        snapshot, root = github.load_snapshot(self.adapter(dependency_first), f"{REPO}#1")
+        resolution = resolver.resolve(snapshot, root)
+        self.assertEqual(snapshot.nodes[f"{REPO}#2"].children, (f"{REPO}#4",))
+        self.assertFalse(resolution.states[f"{REPO}#2"].leaf)
+        self.assertTrue(resolution.states[f"{REPO}#4"].ready)
+        numbers = [json.loads(call["body"])["variables"]["number"] for call in self.calls()]
+        self.assertEqual(numbers.count(2), 2)
+
+        scope_first = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(
+                1, sub_issues=(f"{REPO}#2",), blocked_by=(f"{REPO}#2",)
+            ),
+            "WorkGraphIssue:SecPal/.github#2:": issue_payload(
+                2, parent=f"{REPO}#1", sub_issues=(f"{REPO}#3",)
+            ),
+            "WorkGraphIssue:SecPal/.github#3:": issue_payload(3, parent=f"{REPO}#2"),
+        }
+        self.log_path.write_text("", encoding="utf-8")
+        github.load_snapshot(self.adapter(scope_first), f"{REPO}#1")
+        numbers = [json.loads(call["body"])["variables"]["number"] for call in self.calls()]
+        self.assertEqual(numbers.count(2), 1)
+
     def test_native_relationships_become_a_normalized_snapshot(self):
         script = {
             "WorkGraphIssue:SecPal/.github#1:": issue_payload(
@@ -684,6 +719,23 @@ class CommandTests(AdapterTestCase):
         ready_code, ready_output, _ = self.run_command(script, "ready", f"{REPO}#1")
         self.assertEqual(ready_code, 0)
         self.assertEqual([node["key"] for node in json.loads(ready_output)["ready"]], [f"{REPO}#2"])
+
+    def test_all_closed_leaves_explain_an_empty_executable_set(self):
+        script = {
+            "WorkGraphIssue:SecPal/.github#1:": issue_payload(1, sub_issues=(f"{REPO}#2",)),
+            "WorkGraphIssue:SecPal/.github#2:": issue_payload(
+                2, parent=f"{REPO}#1", state="CLOSED", state_reason="COMPLETED"
+            ),
+        }
+        code, output, _ = self.run_command(script, "next", f"{REPO}#1", "--executor", "alice")
+        document = json.loads(output)
+        self.assertEqual(code, 0)
+        self.assertEqual(document["no_selection_reason"], resolver.NO_READY_LEAF)
+        self.assertEqual(document["not_ready_leaves"], [{"key": f"{REPO}#2", "reasons": ["closed"]}])
+        _, text, _ = self.run_command(
+            script, "--format", "text", "next", f"{REPO}#1", "--executor", "alice"
+        )
+        self.assertIn(f"---  {REPO}#2 closed", text)
 
     def test_validate_reports_structural_findings_only(self):
         code, output, _ = self.command("validate", f"{REPO}#1")

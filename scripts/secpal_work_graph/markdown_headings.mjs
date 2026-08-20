@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 SecPal Contributors
 // SPDX-License-Identifier: MIT
 
-// Structural heading extraction for the SecPal work-graph resolver.
+// Structural Markdown extraction for the SecPal work-graph resolver.
 //
 // Reads a JSON array of issue bodies on stdin and writes a JSON array of
-// per-body heading records. It reports only what a standards-compliant parser
+// per-body structural facts. It reports only what a standards-compliant parser
 // sees; the canonical normalization procedure of docs/work-graph-contract.md
 // section 4.1 is applied by the caller.
 //
-// A record is emitted for every real ATX heading at the document's top level,
-// which excludes headings inside fenced or indented code and inside any
+// Heading records are emitted only for real ATX headings at the document's top
+// level, excluding headings inside fenced or indented code and inside any
 // container block such as a blockquote or a list item.
 
 import { createRequire } from "node:module";
@@ -19,21 +19,20 @@ const MarkdownIt = require("markdown-it");
 
 const parser = new MarkdownIt();
 
-function textContent(inlineToken) {
-  if (!inlineToken || !inlineToken.children) {
-    return inlineToken ? inlineToken.content : "";
+const mirrorPattern =
+  /^[ \t]*(?:\*\*|__)?(parent|order|blocked by|blocks|depends on)(?:\*\*|__)?[ \t]*:/gim;
+
+function textContent(token) {
+  if (!token) {
+    return "";
   }
-  return inlineToken.children
-    .map((child) => {
-      if (child.type === "text" || child.type === "code_inline") {
-        return child.content;
-      }
-      if (child.type === "softbreak" || child.type === "hardbreak") {
-        return " ";
-      }
-      return "";
-    })
-    .join("");
+  if (token.children) {
+    return token.children.map(textContent).join("");
+  }
+  if (token.type === "softbreak" || token.type === "hardbreak") {
+    return " ";
+  }
+  return token.content || "";
 }
 
 function hasContent(tokens, start) {
@@ -58,8 +57,7 @@ function hasContent(tokens, start) {
   return false;
 }
 
-function headings(body) {
-  const tokens = parser.parse(body ?? "", {});
+function headings(tokens) {
   const records = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -76,9 +74,29 @@ function headings(body) {
   return records;
 }
 
+function relationshipMirrors(tokens) {
+  const mirrors = new Set();
+  for (let index = 1; index < tokens.length; index += 1) {
+    const previous = tokens[index - 1];
+    const token = tokens[index];
+    if (token.type !== "inline" || previous.type !== "paragraph_open" || previous.level !== 0) {
+      continue;
+    }
+    for (const match of token.content.matchAll(mirrorPattern)) {
+      mirrors.add(match[1].toLowerCase());
+    }
+  }
+  return [...mirrors].sort();
+}
+
+function bodyFacts(body) {
+  const tokens = parser.parse(body ?? "", {});
+  return { headings: headings(tokens), relationshipMirrors: relationshipMirrors(tokens) };
+}
+
 const chunks = [];
 for await (const chunk of process.stdin) {
   chunks.push(chunk);
 }
 const bodies = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-process.stdout.write(JSON.stringify(bodies.map(headings)));
+process.stdout.write(JSON.stringify(bodies.map(bodyFacts)));

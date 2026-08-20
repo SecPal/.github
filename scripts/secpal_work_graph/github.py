@@ -26,7 +26,6 @@ from .model import (
     OPEN,
     PRIORITY_RANKS,
     Snapshot,
-    mirror_relationships,
     node_key,
     parse_node_key,
     unresolved_node,
@@ -316,6 +315,7 @@ def _fetch(
         # a different number means the answer does not belong to this lookup.
         raise GitHubError(f"{key} resolved to issue number {issue.get('number')}")
 
+    required_connections = tuple(required_connections)
     try:
         relationships = {
             connection: _references(
@@ -362,13 +362,14 @@ def _fetch(
         parent=_reference(issue.get("parent")),
         parent_observable=not response.errors_touching("parent"),
         children=relationships.get("subIssues", ()),
+        children_observable="subIssues" in required_connections,
         blocked_by=relationships.get("blockedBy", ()),
+        dependencies_observable="blockedBy" in required_connections,
         blocking_count=int((issue.get("blocking") or {}).get("totalCount") or 0),
         priority_labels=tuple(sorted(label for label in labels if label in PRIORITY_RANKS)),
         priority_labels_observable=priority_labels_observable,
         claims=claims,
         claims_observable=claims_observable,
-        mirror_relationships=mirror_relationships(issue.get("body")),
     )
     return Fetched(node.key, node, issue.get("body") or "")
 
@@ -384,6 +385,37 @@ def _required_connections(mode: str) -> tuple[str, ...]:
     if mode == DEPENDENCY:
         return ("blockedBy",)
     return ()
+
+
+def _needs_upgrade(node: Node, mode: str) -> bool:
+    required = _required_connections(mode)
+    return (
+        ("subIssues" in required and not node.children_observable)
+        or ("blockedBy" in required and not node.dependencies_observable)
+    )
+
+
+def _merge_node(existing: Node, upgraded: Node) -> Node:
+    """Increase known node facts without turning an earlier fact into absence."""
+    return replace(
+        upgraded,
+        parent=existing.parent if existing.parent_observable and not upgraded.parent_observable else upgraded.parent,
+        parent_observable=existing.parent_observable or upgraded.parent_observable,
+        children=upgraded.children if upgraded.children_observable else existing.children,
+        children_observable=existing.children_observable or upgraded.children_observable,
+        blocked_by=upgraded.blocked_by if upgraded.dependencies_observable else existing.blocked_by,
+        dependencies_observable=existing.dependencies_observable or upgraded.dependencies_observable,
+        priority_labels=(
+            upgraded.priority_labels
+            if upgraded.priority_labels_observable
+            else existing.priority_labels
+        ),
+        priority_labels_observable=(
+            existing.priority_labels_observable or upgraded.priority_labels_observable
+        ),
+        claims=upgraded.claims if upgraded.claims_observable else existing.claims,
+        claims_observable=existing.claims_observable or upgraded.claims_observable,
+    )
 
 
 def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot, str]:
@@ -411,9 +443,9 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
         if (key, mode) in expanded:
             continue
 
-        node = fetched.get(key)
-        if node is None:
-            if len(fetched) >= adapter.max_nodes:
+        cached = fetched.get(key)
+        if cached is None or (cached.resolved and _needs_upgrade(cached, mode)):
+            if cached is None and len(fetched) >= adapter.max_nodes:
                 raise GitHubError(
                     f"graph exceeds the configured budget of {adapter.max_nodes} issues; "
                     "narrow the scope root"
@@ -424,7 +456,8 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
                 canonical[requested] = key
             if (key, mode) in expanded:
                 continue
-            fetched[key] = node
+            fetched[key] = node if cached is None else _merge_node(cached, node)
+            node = fetched[key]
             if result.body is None:
                 expanded.add((key, mode))
                 if requested == scope_root:
@@ -433,9 +466,11 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
                     )
                 continue
             bodies[key] = result.body
-        elif not node.resolved:
+        elif not cached.resolved:
             expanded.add((key, mode))
             continue
+        else:
+            node = cached
 
         expanded.add((key, mode))
         if mode == SCOPE:
@@ -450,10 +485,20 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
             pending.extend((target, DEPENDENCY) for target in node.blocked_by)
 
     ordered_bodies = list(bodies)
-    detected = dict(zip(ordered_bodies, acceptance_criteria.detect([bodies[key] for key in ordered_bodies])))
+    structural = dict(
+        zip(ordered_bodies, acceptance_criteria.parse([bodies[key] for key in ordered_bodies]))
+    )
     snapshot = Snapshot(
         {
-            key: (replace(node, has_acceptance_criteria=detected[key]) if key in detected else node)
+            key: (
+                replace(
+                    node,
+                    has_acceptance_criteria=structural[key].has_acceptance_criteria,
+                    mirror_relationships=structural[key].relationship_mirrors,
+                )
+                if key in structural
+                else node
+            )
             for key, node in fetched.items()
         }
     )

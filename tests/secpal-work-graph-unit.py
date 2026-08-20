@@ -438,23 +438,19 @@ class MirrorTests(TestCase):
             resolution.findings,
         )
 
-    def test_mirror_detection_recognizes_bootstrap_lines_only(self):
-        body = "Parent: #1\n- Blocked by: #2\n**Order:** 3\nParenthetical: no\n"
-        self.assertEqual(model.mirror_relationships(body), ("blocked by", "order", "parent"))
-        self.assertEqual(model.mirror_relationships("no relationships here"), ())
-
-    def test_mirror_detection_ignores_code_examples(self):
-        body = "```markdown\nParent: #1\n```\n\n    Blocked by: #2\n"
-        self.assertEqual(model.mirror_relationships(body), ())
-
-    def test_mirror_detection_keeps_shorter_fences_inside_a_long_fence(self):
+    def test_mirror_detection_uses_top_level_markdown_structure(self):
         bodies = (
-            "````markdown\n```\nParent: #1\n````\n",
+            "Parent: #1\n**Order:** 3\n",
+            "> quoted context\nParent: #1\n",
+            "- list context\n  Parent: #1\n",
+            "```markdown\nParent: #1\n```\n\n    Blocked by: #2\n",
             "````markdown\n```not-a-close\nParent: #1\n````\n",
         )
-        for body in bodies:
-            with self.subTest(body=body):
-                self.assertEqual(model.mirror_relationships(body), ())
+        facts = acceptance_criteria.parse(bodies)
+        self.assertEqual(
+            [fact.relationship_mirrors for fact in facts],
+            [("order", "parent"), (), (), (), ()],
+        )
 
 
 class DoneTests(TestCase):
@@ -615,12 +611,14 @@ class AcceptanceCriteriaTests(TestCase):
         "trailing colon and case": "## acceptance criteria:\n\ntext\n",
         "upper case deep heading": "#### ACCEPTANCE CRITERIA\n\ntext\n",
         "emphasis inside heading": "## **Acceptance Criteria**\n\ntext\n",
+        "inline code inside heading": "## `Acceptance` Criteria\n\ntext\n",
         "fenced block as content": "## Acceptance Criteria\n\n```\ncode\n```\n",
         "heading after other sections": "# Goal\n\ntext\n\n## Acceptance Criteria\n\n- one\n",
     }
 
     REJECTED = {
         "fenced code": "```markdown\n## Acceptance Criteria\n\n- one\n```\n",
+        "image alt text": "## ![draft](x) Acceptance Criteria\n\n- one\n",
         "indented code": "    ## Acceptance Criteria\n\n    - one\n",
         "blockquote": "> ## Acceptance Criteria\n>\n> - one\n",
         "bold text": "**Acceptance Criteria**\n\n- one\n",
@@ -638,11 +636,14 @@ class AcceptanceCriteriaTests(TestCase):
         bodies = list(self.ACCEPTED.values()) + list(self.REJECTED.values())
         expected = [True] * len(self.ACCEPTED) + [False] * len(self.REJECTED)
         # One batch call also proves detection stays aligned with its input order.
-        self.assertEqual(dict(zip(labels, acceptance_criteria.detect(bodies))), dict(zip(labels, expected)))
+        self.assertEqual(
+            dict(zip(labels, [fact.has_acceptance_criteria for fact in acceptance_criteria.parse(bodies)])),
+            dict(zip(labels, expected)),
+        )
 
     def test_detection_failure_is_raised_rather_than_defaulted(self):
         with self.assertRaises(acceptance_criteria.MarkdownParserUnavailable):
-            acceptance_criteria.detect(["text"], node_executable="definitely-not-node")
+            acceptance_criteria.parse(["text"], node_executable="definitely-not-node")
 
     def test_detection_uses_bounded_parser_batches_in_input_order(self):
         calls: list[list[str]] = []
@@ -650,12 +651,20 @@ class AcceptanceCriteriaTests(TestCase):
         def parser_run(*args, **kwargs):
             bodies = json.loads(kwargs["input"])
             calls.append(bodies)
-            return subprocess.CompletedProcess(args, 0, json.dumps([[] for _ in bodies]), "")
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps([{"headings": [], "relationshipMirrors": []} for _ in bodies]),
+                "",
+            )
 
         with patch.object(acceptance_criteria, "DETECTION_BATCH_SIZE", 2, create=True), patch.object(
             acceptance_criteria.subprocess, "run", side_effect=parser_run
         ):
-            self.assertEqual(acceptance_criteria.detect(["one", "two", "three"]), [False, False, False])
+            self.assertEqual(
+                [fact.has_acceptance_criteria for fact in acceptance_criteria.parse(["one", "two", "three"])],
+                [False, False, False],
+            )
         self.assertEqual(calls, [["one", "two"], ["three"]])
 
 

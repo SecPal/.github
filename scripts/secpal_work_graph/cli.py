@@ -136,7 +136,7 @@ def _not_ready_leaves(resolution: resolver.Resolution) -> list[dict[str, Any]]:
     return [
         {"key": state.key, "reasons": list(state.reasons)}
         for state in resolution.resolved_states()
-        if state.leaf and state.open and not state.ready
+        if state.leaf and not state.ready
     ]
 
 

@@ -35,14 +35,6 @@ MAX_DEPENDENCIES_PER_TYPE = 50
 
 _REFERENCE = re.compile(r"^(?P<repository>[^/\s]+/[^/#\s]+)#(?P<number>\d+)$")
 
-# Bootstrap mirrors named by section 1. They are reported for migration and
-# never read as graph state, so a textual scan is the whole of their handling.
-_MIRROR_PATTERN = re.compile(
-    r"^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?(parent|order|blocked by|blocks|depends on)(?:\*\*|__)?[ \t]*:",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
 def node_key(repository: str, number: int) -> str:
     """Return the canonical repository-qualified identity of an issue."""
     return f"{repository}#{number}"
@@ -54,42 +46,6 @@ def parse_node_key(reference: str) -> tuple[str, int]:
     if match is None:
         raise ValueError(f"not a repository-qualified issue identity: {reference!r}")
     return match.group("repository"), int(match.group("number"))
-
-
-def mirror_relationships(body: str | None) -> tuple[str, ...]:
-    """Return the lowercased mirror relationship keywords present in a body."""
-    if not body:
-        return ()
-    return tuple(
-        sorted(
-            {
-                match.group(1).lower()
-                for match in _MIRROR_PATTERN.finditer("\n".join(_semantic_lines(body)))
-            }
-        )
-    )
-
-
-def _semantic_lines(body: str) -> Iterable[str]:
-    """Yield body lines excluding Markdown containers that are examples, not metadata."""
-    fence: tuple[str, int] | None = None
-    for line in body.splitlines():
-        if fence is None:
-            opening = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
-            if opening:
-                marker = opening.group(1)
-                fence = marker[0], len(marker)
-                continue
-        else:
-            closing = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$", line)
-            if closing:
-                marker = closing.group(1)
-                if marker[0] == fence[0] and len(marker) >= fence[1]:
-                    fence = None
-            continue
-        if line.startswith(("    ", "\t", ">")):
-            continue
-        yield line
 
 
 @dataclass(frozen=True, order=True)
@@ -123,7 +79,14 @@ class Node:
     # collapsed into `parent is None`.
     parent_observable: bool = True
     children: tuple[str, ...] = ()
+    # False when this invocation has not yet read native sub-issues for this
+    # node. A later scope traversal upgrades the one canonical node instead of
+    # treating this unknown input as an empty child list.
+    children_observable: bool = True
     blocked_by: tuple[str, ...] = ()
+    # False when this invocation has not yet read native dependencies for this
+    # node. Dependency and scope traversal upgrade this fact monotonically.
+    dependencies_observable: bool = True
     blocking_count: int = 0
     priority_labels: tuple[str, ...] = ()
     # False when the priority labels could not be read. Section 1.2 keeps them
