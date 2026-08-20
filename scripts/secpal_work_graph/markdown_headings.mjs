@@ -96,7 +96,11 @@ function hasStatusChecklist(tokens) {
       listDepth += 1;
     } else if (token.type === "list_item_close") {
       listDepth -= 1;
-    } else if (listDepth > 0 && token.type === "inline" && /\[[ xX]\]/.test(token.content)) {
+    } else if (
+      listDepth > 0 &&
+      token.type === "inline" &&
+      /^\[[ xX]\](?:[ \t]+|$)/.test(token.content)
+    ) {
       return true;
     }
   }

@@ -141,10 +141,120 @@ class AuditClassificationTests(TestCase):
             self.assertEqual(audit_cli.main(["--repo", REPO]), 3)
         self.assertEqual(__import__("json").loads(output.getvalue())["repositories"][0]["status"], "unavailable")
 
+    def test_cli_deduplicates_findings_from_overlapping_candidates(self):
+        rows = [
+            {
+                "number": 1,
+                "title": "Root",
+                "body": "",
+                "repository": {"nameWithOwner": REPO},
+                "parent": None,
+                "subIssues": {"totalCount": 1},
+                "labels": {"nodes": []},
+                "closedByPullRequestsReferences": {"totalCount": 0, "nodes": []},
+            },
+            {
+                "number": 2,
+                "title": "Child",
+                "body": "Blocked by: #9",
+                "repository": {"nameWithOwner": REPO},
+                "parent": {"number": 1, "repository": {"nameWithOwner": REPO}},
+                "subIssues": {"totalCount": 0},
+                "labels": {"nodes": []},
+                "closedByPullRequestsReferences": {"totalCount": 0, "nodes": []},
+            },
+        ]
+
+        class DiscoveryAdapter:
+            def __init__(self, **_kwargs):
+                pass
+
+            def query(self, _document, _variables):
+                return audit_cli.github.GraphQLResponse(
+                    {"repository": {"issues": {"nodes": rows, "pageInfo": {"hasNextPage": False}}}}, ()
+                )
+
+        snapshot = build_snapshot(
+            [
+                Node(REPO, 1, children=(key(2),)),
+                leaf(2, parent=key(1), mirror_relationships=("blocked by",)),
+            ]
+        )
+        facts = [
+            acceptance_criteria.StructuralBody(False, ()),
+            acceptance_criteria.StructuralBody(False, ("blocked by",)),
+        ]
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter", DiscoveryAdapter),
+            patch.object(audit_cli.github, "load_snapshot", side_effect=lambda _adapter, root: (snapshot, root)),
+            patch.object(audit_cli, "parse", return_value=facts),
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main(["--repo", REPO]), 0)
+        document = __import__("json").loads(output.getvalue())
+        kinds = [item["kind"] for item in document["repositories"][0]["findings"]]
+        self.assertEqual(kinds.count("body_relationship_mirror"), 1)
+        self.assertEqual(kinds.count("prose_only_blocker"), 1)
+        self.assertEqual(document["summary"]["migration_debt"], 2)
+
+    def test_cli_uses_canonical_repository_identity_from_discovery(self):
+        requested_repository = "secpal/.github"
+        rows = [
+            {
+                "number": 1,
+                "title": "Root",
+                "body": "",
+                "repository": {"nameWithOwner": REPO},
+                "parent": None,
+                "subIssues": {"totalCount": 1},
+                "labels": {"nodes": []},
+                "closedByPullRequestsReferences": {"totalCount": 0, "nodes": []},
+            }
+        ]
+
+        class DiscoveryAdapter:
+            def __init__(self, **_kwargs):
+                pass
+
+            def query(self, _document, _variables):
+                return audit_cli.github.GraphQLResponse(
+                    {"repository": {"issues": {"nodes": rows, "pageInfo": {"hasNextPage": False}}}}, ()
+                )
+
+        snapshot = build_snapshot(
+            [
+                Node(REPO, 1, children=(key(2),)),
+                Node(REPO, 2, parent=key(1), has_acceptance_criteria=False),
+            ]
+        )
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter", DiscoveryAdapter),
+            patch.object(audit_cli.github, "load_snapshot", return_value=(snapshot, key(1))),
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main(["--repo", requested_repository]), 0)
+        result = __import__("json").loads(output.getvalue())["repositories"][0]
+        self.assertEqual(result["repository"], REPO)
+        self.assertIn("structurally_incomplete_delivery_leaf", {item["kind"] for item in result["findings"]})
+
     def test_markdown_task_lists_are_structural_migration_evidence(self):
         checklist, code_example = acceptance_criteria.parse(["- [ ] first item\n- [x] second item", "```md\n- [ ] example\n```"])
         self.assertTrue(checklist.has_status_checklist)
         self.assertFalse(code_example.has_status_checklist)
+
+    def test_checkbox_like_list_prose_is_not_a_task_list(self):
+        link, inline_code, prose = acceptance_criteria.parse(
+            [
+                "- See [x](https://example.com)",
+                "- The literal marker is `[x]`",
+                "- A later marker [ ] is explanatory prose",
+            ]
+        )
+        self.assertFalse(link.has_status_checklist)
+        self.assertFalse(inline_code.has_status_checklist)
+        self.assertFalse(prose.has_status_checklist)
 
 
 if __name__ == "__main__":
