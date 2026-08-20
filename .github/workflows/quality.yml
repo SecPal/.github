@@ -101,6 +101,9 @@ jobs:
       - name: Run fake-GitHub adapter and command tests
         run: python3 -m unittest tests/secpal-work-graph-adapter.py
 
+      - name: Run advisory audit tests
+        run: python3 -m unittest tests/secpal-work-graph-audit.py
+
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest

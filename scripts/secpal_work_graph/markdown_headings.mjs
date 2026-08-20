@@ -89,9 +89,33 @@ function relationshipMirrors(tokens) {
   return [...mirrors].sort();
 }
 
+function hasStatusChecklist(tokens) {
+  let listDepth = 0;
+  for (const token of tokens) {
+    if (token.type === "list_item_open") {
+      listDepth += 1;
+    } else if (token.type === "list_item_close") {
+      listDepth -= 1;
+    } else if (
+      listDepth > 0 &&
+      token.type === "inline" &&
+      /^\[[ xX]\](?:[ \t]+|$)/.test(token.content)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function bodyFacts(body) {
   const tokens = parser.parse(body ?? "", {});
-  return { headings: headings(tokens), relationshipMirrors: relationshipMirrors(tokens) };
+  return {
+    headings: headings(tokens),
+    relationshipMirrors: relationshipMirrors(tokens),
+    // A task list is migration evidence only.  The audit never derives issue
+    // state or relationships from it.
+    hasStatusChecklist: hasStatusChecklist(tokens),
+  };
 }
 
 const chunks = [];

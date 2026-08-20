@@ -338,15 +338,14 @@ def _fetch(
         labels, priority_labels_observable = set(), False
 
     try:
-        claims = _claims(
-            _paginate(
-                adapter,
-                "closedByPullRequestsReferences",
-                issue,
-                variables,
-                response.errors_touching("closedByPullRequestsReferences"),
-            )
+        claim_entries = _paginate(
+            adapter,
+            "closedByPullRequestsReferences",
+            issue,
+            variables,
+            response.errors_touching("closedByPullRequestsReferences"),
         )
+        claims = _claims(claim_entries)
         claims_observable = True
     except ConnectionUnreadable:
         claims, claims_observable = (), False
