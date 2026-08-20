@@ -97,6 +97,40 @@ See [Finite SecPal PR review workflow](../docs/secpal-pr-review-workflow.md) for
 explicit invocation, state limits, classification, guarded action ordering,
 registry decisions, recovery, and post-merge rollout prerequisites.
 
+## Work Graph
+
+### `secpal-work-graph.py`
+
+Read-only resolution of the GitHub-native SecPal work graph. Semantics:
+[docs/work-graph-contract.md](../docs/work-graph-contract.md) — the tool derives
+its results from that contract and defines none of its own.
+
+```bash
+scripts/secpal-work-graph.py show          SecPal/.github#665
+scripts/secpal-work-graph.py validate      SecPal/.github#665
+scripts/secpal-work-graph.py ready         SecPal/.github#665
+scripts/secpal-work-graph.py next          SecPal/.github#665 --executor <login>
+scripts/secpal-work-graph.py validate-issue SecPal/.github#669
+```
+
+A scope root or issue is given as `owner/repo#number`, as an issue URL, or as a
+bare number together with `--repo owner/repo`. Output is deterministic JSON by
+default; `--format text` renders the same resolved model for humans.
+
+Options: `--gh` (path to the `gh` executable), `--timeout` (per-request seconds),
+`--max-nodes` (issues read per invocation). `next` resolves its executor identity
+from `--executor`, and otherwise from the authenticated `gh` identity.
+
+Exit codes: `0` success, `1` structural findings reported (`validate`), issue not
+`READY` (`validate-issue`), or `NEXT` inputs not fully observable (`next`), `2`
+invalid input, `3` GitHub or parser failure. Both canonical `NEXT` no-selection
+results are ordinary answers and exit `0`.
+
+Requirements: an authenticated `gh` CLI, Python 3, and `npm ci` so the
+`markdown-it` parser used for structural acceptance-criteria detection is
+present. The tool reads through `gh api graphql` only, performs no mutation, and
+persists no state.
+
 ## Validation Scripts
 
 ### `check-domains.sh`

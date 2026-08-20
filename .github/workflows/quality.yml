@@ -77,6 +77,30 @@ jobs:
       - name: Run fake-GitHub and temporary-HOME integration tests
         run: bash tests/secpal-pr-review-skill-integration.sh
 
+  work-graph-resolver:
+    name: Work-Graph Resolver
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+
+      # markdown-it provides the standards-compliant Markdown parsing the
+      # structural acceptance-criteria check depends on.
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run pure resolver and acceptance-criteria tests
+        run: python3 -m unittest tests/secpal-work-graph-unit.py
+
+      - name: Run fake-GitHub adapter and command tests
+        run: python3 -m unittest tests/secpal-work-graph-adapter.py
+
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest
