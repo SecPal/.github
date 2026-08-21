@@ -75,6 +75,63 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Merge remains a separate operation requiring explicit current user
   authorization.
 
+## Advisory work-graph selection
+
+Before the first implementation side effect, apply this procedure only when the
+session says it is running inside Polyscope and the current workspace has a
+structured issue assignment:
+
+1. Read the configured Polyscope database in read-only mode. Match the resolved
+   current workspace path to the active `worktrees.path` record, join its
+   `repositories.name`, and require both `issue_number` and `issue_url`. That
+   repository and issue are the explicitly selected work. Never infer selection
+   from a branch name, free-form task prose, or a guessed issue number. If there
+   is no structured issue assignment, state that canonical advisory selection is
+   unavailable, do not invent one, and preserve the existing behavior.
+2. Locate `scripts/secpal-work-graph.py` through the registered
+   `SecPal/.github` repository path and use its `secpal-work-graph/v1` JSON
+   output. The semantics remain solely in `docs/work-graph-contract.md`; do not
+   derive graph state independently. Run `validate-issue` for the requested
+   issue, then `show` to inspect its native ancestor chain. Use the outermost
+   resolved native ancestor as the containing epic scope, or the requested issue
+   itself for a standalone root leaf. If ancestry is incomplete or malformed,
+   preserve the resolver's fail-closed result and do not guess a scope, `ready`,
+   or `next`.
+3. For a resolved scope, run `ready` and `next`. Let `next` use its authenticated
+   GitHub executor default unless the session provides a different current
+   authenticated executor, in which case pass that identity with `--executor`.
+   Visibly report the requested issue and its exact resolver state or reasons,
+   the scope, the `ready` set, canonical `next`, and whether selection is
+   aligned.
+
+Interpret the resolver output only as an advisory selection result:
+
+- If the requested issue is canonical `next`, report that it is aligned and
+  continue normally.
+- If the requested issue is `ready` but another leaf is `next`, report the
+  advisory mismatch, the requested issue, full `ready` set, and canonical
+  `next`. As advisory rollout behavior, continue the explicitly selected issue;
+  do not silently switch work.
+- If the requested issue is blocked, surface its blocker and exact reason, plus
+  the `ready` set and `next` where resolvable. Do not describe it as `ready`.
+- If it is a non-leaf, surface that status and the descendant `ready` set and
+  `next`; do not present the epic as a delivery leaf.
+- If it is structurally incomplete, surface the exact resolver reason and do
+  not invent `ready`. If resolution is malformed, inaccessible, or incomplete,
+  surface the fail-closed result and do not guess `ready` or `next`.
+
+Structured assignment remains the explicitly selected work during this
+advisory rollout behavior. A mismatch, blocked issue, or non-leaf does not by
+itself cause a hard work-graph refusal: continue the selected issue after the
+visible advisory, subject to every independent security, sandbox, scope, and
+execution-mode restriction. Hard enforcement belongs to #675.
+
+Keep `ready` siblings parallel: `next` is ranking for one executor, not graph
+topology, blocking, or a dependency. Do not add dependencies, do not reorder
+siblings, and do not otherwise mutate the graph. Body-only pseudo-relationships
+are never execution inputs, including `Parent:`, `Order:`, `Blocked by:`, and
+Markdown child lists.
+
 ## Work-graph semantics
 
 - Node types, native hierarchy and dependency meaning, sibling order, `READY`,
