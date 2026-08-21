@@ -106,12 +106,18 @@ structured issue assignment:
    remain solely in `docs/work-graph-contract.md`; do not derive them
    independently.
 3. Run `validate-issue` for the requested issue, then `show` to inspect its
-   resolver-provided native ancestor chain. Use the nearest containing native
-   epic or sub-epic as the advisory scope appropriate to the assigned leaf. For
+   resolver-provided node role and native ancestor chain; do not guess or infer
+   the node role from an issue title, prose, or body mirror. If the requested
+   issue is a non-leaf, use the requested issue itself as scope. This includes
+   an epic or sub-epic; for a root epic, scope is the requested issue itself.
+   For a non-leaf, `ready` and `next` describe its descendant delivery leaves.
+   If the requested issue is a leaf with a containing native epic or sub-epic,
+   use the nearest containing native epic or sub-epic as its advisory scope. For
    example, for `#664` → `#667` → `#672`, use scope `#667`; do not automatically
-   climb to `#664`. Use the requested issue itself for a standalone root leaf.
-   If native ancestry is incomplete or malformed, surface the resolver's
-   fail-closed result and do not guess a scope, `ready`, or `next`.
+   climb to `#664`. For a standalone root leaf, scope is the requested issue
+   itself. If the resolver cannot establish the node role or required native
+   containment completely and consistently, surface its fail-closed result and
+   do not guess a scope, `ready`, or `next`.
 4. For a resolved scope, run `ready` and `next`. Let `next` use its authenticated
    GitHub executor default unless the session provides a different current
    authenticated executor, in which case pass that identity with `--executor`.

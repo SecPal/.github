@@ -75,6 +75,19 @@ class AdvisoryWorkGraphInstructionsTest(unittest.TestCase):
         )
         self.assert_absent(r"outermost resolved native ancestor")
 
+    def test_scope_distinguishes_requested_leaves_from_non_leaves(self) -> None:
+        self.assert_semantics(
+            r"requested issue is a non.leaf.*scope.*requested issue",
+            r"root epic.*scope.*requested",
+            r"non.leaf.*descendant.*ready.*next",
+            r"requested issue is a leaf.*nearest containing native (?:epic|sub.epic)",
+            r"standalone root leaf.*scope.*requested",
+            r"do not (?:guess|infer).*node role",
+        )
+        self.assert_absent(
+            r"requested issue is a non.leaf.{0,120}(?:nearest containing|scope (?:is|=) (?:its )?parent)"
+        )
+
     def test_structured_assignment_must_be_unique_and_internally_consistent(self) -> None:
         self.assert_semantics(
             r"exactly one active.*worktrees\.path|worktrees\.path.*exactly one active",
