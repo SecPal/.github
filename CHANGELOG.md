@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-21 - Centralize The Single-Maintainer Review Baseline
+
+**Changed:**
+
+- extended the required-check synchronization tool with a separate, explicit
+  operation that applies the zero-approval baseline across the same managed
+  repository set without changing required checks or unrelated review settings
+
 ## 2026-08-19 - Implement Read-Only SecPal Work-Graph Resolution
 
 **Added:**

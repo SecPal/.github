@@ -150,7 +150,8 @@ Required status checks are repo-specific. Do not rely on the stale one-size-fits
 `["CodeQL"]` example for application repositories.
 
 Use the sync script in this repository to keep the live branch-protection payloads
-aligned with the meaningful CI gates per repository:
+aligned with the meaningful CI gates per repository. These commands update only
+required status checks:
 
 ```bash
 # Inspect one payload before applying it
@@ -162,6 +163,22 @@ bash scripts/sync-required-checks.sh --repo api --apply
 # Apply the full managed SecPal repository baseline
 bash scripts/sync-required-checks.sh --apply
 ```
+
+Synchronize the separate single-maintainer review baseline explicitly:
+
+```bash
+# Inspect the approval-count-only payload before applying it
+bash scripts/sync-required-checks.sh --repo api --print-review-payload | jq
+
+# Apply one repository's approval-count baseline
+bash scripts/sync-required-checks.sh --repo api --apply-review-baseline
+
+# Apply the approval-count baseline to every managed repository
+bash scripts/sync-required-checks.sh --apply-review-baseline
+```
+
+The review-baseline operation updates only `required_approving_review_count` and
+does not change required checks or other pull-request review settings.
 
 **Note:**
 

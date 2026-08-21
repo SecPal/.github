@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+REQUIRED_APPROVING_REVIEW_COUNT=0
+
 REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
 {
   ".github": [
@@ -125,13 +127,17 @@ usage() {
   cat <<'EOF'
 Usage:
   bash scripts/sync-required-checks.sh --repo <name> --print-payload
+  bash scripts/sync-required-checks.sh --repo <name> --print-review-payload
   bash scripts/sync-required-checks.sh [--repo <name>] --apply
+  bash scripts/sync-required-checks.sh [--repo <name>] --apply-review-baseline
 
 Options:
-  --repo <name>      Restrict output or apply mode to a single repository.
-  --print-payload    Print the GitHub API JSON payload for one repository.
-  --apply            Apply the configured required-check payload via gh api.
-  -h, --help         Show this help text.
+  --repo <name>            Restrict output or apply mode to a single repository.
+  --print-payload          Print the required-check payload for one repository.
+  --print-review-payload   Print the review-baseline payload for one repository.
+  --apply                  Apply required checks via gh api.
+  --apply-review-baseline  Apply the approval-count baseline via gh api.
+  -h, --help               Show this help text.
 EOF
 }
 
@@ -159,6 +165,16 @@ build_payload() {
     --arg repo "$repo" \
     --argjson config "$REQUIRED_CONTEXTS_JSON" \
     '{strict: true, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
+}
+
+build_review_payload() {
+  local repo="$1"
+
+  ensure_known_repository "$repo"
+
+  jq -n \
+    --argjson count "$REQUIRED_APPROVING_REVIEW_COUNT" \
+    '{required_approving_review_count: $count}'
 }
 
 require_command() {
@@ -196,8 +212,42 @@ apply_repository() {
   echo "Synced required checks for SecPal/$repo"
 }
 
+apply_review_repository() {
+  local repo="$1"
+
+  ensure_known_repository "$repo"
+
+  (
+    payload_file="$(mktemp "${TMPDIR:-/tmp}/sync-review-baseline.${repo//[^A-Za-z0-9]/_}.json.XXXXXX")"
+    trap 'rm -f "$payload_file"' EXIT
+
+    build_review_payload "$repo" > "$payload_file"
+
+    if ! gh api "repos/SecPal/$repo/branches/main/protection/required_pull_request_reviews" \
+      -X PATCH \
+      --input "$payload_file" >/dev/null; then
+      echo "Failed to update required_pull_request_reviews for SecPal/$repo." >&2
+      exit 1
+    fi
+  )
+
+  echo "Synced review baseline for SecPal/$repo"
+}
+
 repo=""
 mode=""
+
+set_mode() {
+  local requested_mode="$1"
+
+  if [[ -n "$mode" ]]; then
+    echo "Multiple operation modes are not allowed: --$mode and --$requested_mode" >&2
+    usage >&2
+    exit 2
+  fi
+
+  mode="$requested_mode"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -211,11 +261,19 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --print-payload)
-      mode="print-payload"
+      set_mode "print-payload"
+      shift
+      ;;
+    --print-review-payload)
+      set_mode "print-review-payload"
       shift
       ;;
     --apply)
-      mode="apply"
+      set_mode "apply"
+      shift
+      ;;
+    --apply-review-baseline)
+      set_mode "apply-review-baseline"
       shift
       ;;
     -h|--help)
@@ -231,7 +289,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$mode" ]]; then
-  echo "Select either --print-payload or --apply" >&2
+  echo "Select a print or apply mode" >&2
   usage >&2
   exit 2
 fi
@@ -249,13 +307,32 @@ if [[ "$mode" == "print-payload" ]]; then
   exit 0
 fi
 
+if [[ "$mode" == "print-review-payload" ]]; then
+  if [[ -z "$repo" ]]; then
+    echo "--print-review-payload requires --repo <name>" >&2
+    usage >&2
+    exit 2
+  fi
+
+  build_review_payload "$repo"
+  exit 0
+fi
+
 require_command gh
 
 if [[ -n "$repo" ]]; then
-  apply_repository "$repo"
+  if [[ "$mode" == "apply" ]]; then
+    apply_repository "$repo"
+  else
+    apply_review_repository "$repo"
+  fi
   exit 0
 fi
 
 while IFS= read -r configured_repo; do
-  apply_repository "$configured_repo"
+  if [[ "$mode" == "apply" ]]; then
+    apply_repository "$configured_repo"
+  else
+    apply_review_repository "$configured_repo"
+  fi
 done < <(known_repositories)
