@@ -203,7 +203,10 @@ FollowUpIdentity = follow_up.FollowUpIdentity
 LiveFollowUpState = follow_up.LiveFollowUpState
 
 
-def _read_authenticated_follow_up(identity: FollowUpIdentity) -> LiveFollowUpState:
+def _read_authenticated_follow_up(
+    identity: FollowUpIdentity,
+    budget: InvocationBudget,
+) -> LiveFollowUpState:
     try:
         executable = evidence.resolve_trusted_executable("gh")
     except evidence.CommandPolicyError as exc:
@@ -213,6 +216,8 @@ def _read_authenticated_follow_up(identity: FollowUpIdentity) -> LiveFollowUpSta
             identity,
             gh_executable=executable,
             environment=evidence.command_environment("gh"),
+            query_consumer=_consume_api_call,
+            query_context=budget,
         )
     except follow_up.FollowUpError as exc:
         raise ResolutionError(str(exc)) from exc
@@ -938,10 +943,17 @@ def verify_local_fix_commit(
 
 def verify_live_follow_up(
     identity: FollowUpIdentity,
+    budget: InvocationBudget | None = None,
     *,
-    state_reader: Callable[[FollowUpIdentity], LiveFollowUpState] = _read_authenticated_follow_up,
+    state_reader: Callable[[FollowUpIdentity], LiveFollowUpState] | None = None,
 ) -> LiveFollowUpState:
+    if state_reader is None:
+        if not isinstance(budget, InvocationBudget):
+            raise ResolutionError("shared invocation budget is required")
     try:
+        if state_reader is None:
+            state = _read_authenticated_follow_up(identity, budget)
+            return follow_up.verify_live_follow_up(identity, state=state)
         return follow_up.verify_live_follow_up(identity, state_reader=state_reader)
     except follow_up.FollowUpError as exc:
         raise ResolutionError(str(exc)) from exc
@@ -1374,7 +1386,7 @@ def resolve_threads(
     validation_evidence_digest: str | None = None,
     eligibility_evidence_digest: str | None = None,
     eligibility_evidence: EligibilityEvidence | None = None,
-    follow_up_verifier: Callable[[FollowUpIdentity], Any] = verify_live_follow_up,
+    follow_up_verifier: Callable[[FollowUpIdentity, InvocationBudget], Any] = verify_live_follow_up,
     runner: Callable[[Sequence[str]], dict[str, Any]] = _run_gh,
 ) -> dict[str, Any]:
     validate_request(repository, number, expected_head, thread_ids, apply)
@@ -1467,8 +1479,45 @@ def resolve_threads(
                 "registered review comment limit cannot cover all target rechecks"
             )
         for index, thread_id in enumerate(thread_ids):
-            phase = "recheck"
+            phase = "follow-up" if thread_id in tracked else "recheck"
             try:
+                if (
+                    not initial_targets[thread_id].thread.is_resolved
+                    and thread_id in tracked
+                ):
+                    follow_up_verifier(tracked[thread_id], budget)
+                phase = "recheck"
+                required_recheck_pages = initial_targets[thread_id].api_pages * 2
+                required_recheck_comments = (
+                    len(initial_targets[thread_id].thread.comments) * 2
+                )
+                required_mutations = (
+                    0 if initial_targets[thread_id].thread.is_resolved else 1
+                )
+                if (
+                    budget.maximum_api_calls - budget.api_calls
+                    < required_recheck_pages + required_mutations
+                ):
+                    raise ResolutionError(
+                        "registered API call limit cannot cover the final target "
+                        "recheck and write"
+                    )
+                if (
+                    budget.maximum_threads - budget.threads
+                    < required_recheck_pages
+                ):
+                    raise ResolutionError(
+                        "registered review thread limit cannot cover the final "
+                        "target recheck"
+                    )
+                if (
+                    budget.maximum_comments - budget.comments
+                    < required_recheck_comments
+                ):
+                    raise ResolutionError(
+                        "registered review comment limit cannot cover the final "
+                        "target recheck"
+                    )
                 current = read_stable_target_thread(
                     repository,
                     number,
@@ -1489,9 +1538,6 @@ def resolve_threads(
                 if initial_targets[thread_id].thread.is_resolved:
                     already_resolved.append(thread_id)
                     continue
-                if thread_id in tracked:
-                    phase = "follow-up"
-                    follow_up_verifier(tracked[thread_id])
                 phase = "mutation"
                 data = _graphql(
                     RESOLVE_MUTATION,

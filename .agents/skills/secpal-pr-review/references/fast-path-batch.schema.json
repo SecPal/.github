@@ -121,6 +121,7 @@
             "DUPLICATE_OF_CANONICAL",
             "OBSOLETE_ON_CURRENT_HEAD",
             "SUPERSEDED_BY_CANONICAL",
+            "OUT_OF_SCOPE",
             "TRACKED_AS_FOLLOW_UP",
             "REJECTED_SECURITY_WEAKENING"
           ]
@@ -165,7 +166,12 @@
           "if": {
             "properties": { "disposition": { "const": "TRACKED_AS_FOLLOW_UP" } }
           },
-          "then": { "properties": { "follow_up": { "$ref": "#/$defs/follow_up" } } },
+          "then": {
+            "properties": {
+              "classification": { "const": "OUTSIDE_PR_SCOPE" },
+              "follow_up": { "$ref": "#/$defs/follow_up" }
+            }
+          },
           "else": { "properties": { "follow_up": { "type": "null" } } }
         }
       ]

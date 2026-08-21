@@ -36,6 +36,25 @@ class LiveFollowUpState:
     open: bool
     structurally_complete: bool
     blocked: bool
+    malformed: bool
+    graph_complete: bool
+
+
+@dataclass
+class _BudgetedGitHubReadAdapter:
+    """Charge each canonical adapter query to the caller's shared authority."""
+
+    delegate: Any
+    query_consumer: Callable[[Any], None]
+    query_context: Any
+
+    @property
+    def max_nodes(self) -> int:
+        return self.delegate.max_nodes
+
+    def query(self, document: str, variables: Mapping[str, Any]) -> Any:
+        self.query_consumer(self.query_context)
+        return self.delegate.query(document, variables)
 
 
 def parse_follow_up(value: Any) -> FollowUpIdentity:
@@ -71,6 +90,9 @@ def read_live_follow_up(
     *,
     gh_executable: str = "gh",
     environment: Mapping[str, str] | None = None,
+    adapter: Any | None = None,
+    query_consumer: Callable[[Any], None] | None = None,
+    query_context: Any = None,
 ) -> LiveFollowUpState:
     """Read the exact issue through the canonical work-graph implementation."""
 
@@ -81,11 +103,21 @@ def read_live_follow_up(
         raise FollowUpError("canonical work-graph implementation is unavailable") from exc
     try:
         requested = f"{identity.repository}#{identity.issue_number}"
+        canonical_adapter = adapter or github.GitHubReadAdapter(
+            gh_executable=gh_executable,
+            environment=environment,
+        )
+        graph_adapter = (
+            canonical_adapter
+            if query_consumer is None
+            else _BudgetedGitHubReadAdapter(
+                canonical_adapter,
+                query_consumer,
+                query_context,
+            )
+        )
         snapshot, canonical = github.load_snapshot(
-            github.GitHubReadAdapter(
-                gh_executable=gh_executable,
-                environment=environment,
-            ),
+            graph_adapter,
             requested,
         )
         resolution = resolver.resolve(snapshot, canonical)
@@ -106,26 +138,36 @@ def read_live_follow_up(
         open=state.open,
         structurally_complete=node.has_acceptance_criteria,
         blocked=state.blocked,
+        malformed=state.malformed,
+        graph_complete=resolution.complete,
     )
 
 
 def verify_live_follow_up(
     identity: FollowUpIdentity,
     *,
+    state: LiveFollowUpState | None = None,
     state_reader: Callable[[FollowUpIdentity], LiveFollowUpState] = read_live_follow_up,
 ) -> LiveFollowUpState:
     """Fail closed unless the authenticated issue remains open and complete."""
 
     try:
-        state = state_reader(identity)
+        observed_state = state if state is not None else state_reader(identity)
     except FollowUpError:
         raise
     except Exception as exc:
         raise FollowUpError("follow-up issue is missing or inaccessible") from exc
-    if not isinstance(state, LiveFollowUpState) or state.identity != identity:
+    if (
+        not isinstance(observed_state, LiveFollowUpState)
+        or observed_state.identity != identity
+    ):
         raise FollowUpError("follow-up live identity does not match authenticated evidence")
-    if not state.open:
+    if not observed_state.open:
         raise FollowUpError("follow-up issue is closed")
-    if not state.structurally_complete:
+    if not observed_state.structurally_complete:
         raise FollowUpError("follow-up issue is structurally incomplete")
-    return state
+    if observed_state.malformed:
+        raise FollowUpError("follow-up canonical graph state is malformed")
+    if not observed_state.graph_complete:
+        raise FollowUpError("follow-up canonical graph state is incomplete")
+    return observed_state

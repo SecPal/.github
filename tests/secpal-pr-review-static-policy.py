@@ -725,6 +725,10 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_read_authenticated_follow_up",
     ),
     DynamicImportCall(
+        ("_read_authenticated_follow_up",),
+        "_consume_api_call",
+    ),
+    DynamicImportCall(
         ("resolve_threads",),
         "verify_live_follow_up",
     ),

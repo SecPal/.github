@@ -12,10 +12,12 @@ import io
 import json
 import sys
 import tempfile
-from types import SimpleNamespace
-from unittest import TestCase, main, mock
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest import TestCase, main, mock
+
+import jsonschema
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -919,6 +921,40 @@ class ContractTests(TestCase):
         untracked["follow_up"] = None
         actions._validate_finding_semantics([untracked])
         self.assertNotIn("OUT_OF_SCOPE", actions.RESOLVABLE_DISPOSITIONS)
+
+    def test_mutation_plan_schema_isolates_tracked_follow_up_classification(self) -> None:
+        follow_up = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+        tracked = plan()
+        tracked["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up=follow_up,
+        )
+        schema = json.loads(actions.PLAN_SCHEMA_PATH.read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        validator.validate(tracked)
+
+        untracked = copy.deepcopy(tracked)
+        untracked["findings"][0].update(
+            disposition="OUT_OF_SCOPE",
+            follow_up=None,
+        )
+        validator.validate(untracked)
+
+        classifications = schema["$defs"]["classification"]["enum"]
+        for classification in classifications:
+            if classification == "OUTSIDE_PR_SCOPE":
+                continue
+            incompatible = copy.deepcopy(tracked)
+            incompatible["findings"][0]["classification"] = classification
+            with self.subTest(classification=classification), self.assertRaises(
+                jsonschema.ValidationError
+            ):
+                validator.validate(incompatible)
 
     def test_duplicate_and_superseded_canonical_references_must_be_acyclic(self) -> None:
         for classification, disposition in (
@@ -5298,6 +5334,44 @@ class FastPathTests(TestCase):
             set(schema["$defs"]["source"]["properties"]["kind"]["enum"]),
             fast_path.SOURCE_KINDS,
         )
+
+    def test_fast_batch_schema_isolates_tracked_follow_up_classification(self) -> None:
+        follow_up = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+        tracked = fast_request(fast_feedback(1), 1).to_dict()
+        tracked["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            test_evidence_digest=None,
+            commit_sha=None,
+            follow_up=follow_up,
+        )
+        schema = json.loads(actions.FAST_BATCH_SCHEMA_PATH.read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        validator.validate(tracked)
+
+        untracked = copy.deepcopy(tracked)
+        untracked["findings"][0].update(
+            disposition="OUT_OF_SCOPE",
+            follow_up=None,
+        )
+        validator.validate(untracked)
+
+        classifications = schema["$defs"]["finding"]["properties"][
+            "classification"
+        ]["enum"]
+        for classification in classifications:
+            if classification == "OUTSIDE_PR_SCOPE":
+                continue
+            incompatible = copy.deepcopy(tracked)
+            incompatible["findings"][0]["classification"] = classification
+            with self.subTest(classification=classification), self.assertRaises(
+                jsonschema.ValidationError
+            ):
+                validator.validate(incompatible)
 
     def test_actions_uses_the_canonical_fast_path_module(self) -> None:
         self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
