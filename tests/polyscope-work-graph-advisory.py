@@ -38,6 +38,11 @@ class AdvisoryWorkGraphInstructionsTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertRegex(self.section, pattern)
 
+    def assert_absent(self, *patterns: str) -> None:
+        for pattern in patterns:
+            with self.subTest(pattern=pattern):
+                self.assertNotRegex(self.section, pattern)
+
     def test_activation_uses_only_the_structured_current_workspace_assignment(self) -> None:
         self.assert_semantics(
             r"polyscope.*session",
@@ -62,56 +67,50 @@ class AdvisoryWorkGraphInstructionsTest(unittest.TestCase):
             r"`ready`",
             r"`next`",
             r"native ancestor",
+            r"nearest containing native (?:epic|sub.epic)",
+            r"#664.*#667.*#672.*scope.*#667",
             r"standalone.*(?:itself|requested issue)",
             r"incomplete|malformed",
             r"do not (?:guess|invent).*(?:scope|ready|next)",
         )
+        self.assert_absent(r"outermost resolved native ancestor")
+
+    def test_structured_assignment_must_be_unique_and_internally_consistent(self) -> None:
+        self.assert_semantics(
+            r"exactly one active.*worktrees\.path|worktrees\.path.*exactly one active",
+            r"zero.*(?:multiple|more than one).*(?:unavailable|malformed)",
+            r"do not (?:select|guess).*(?:row|record|identity)",
+            r"parse.*issue_url",
+            r"issue_url.*repository.*issue number",
+            r"repositories\.name.*issue_number",
+            r"same.*repository.*(?:number|issue)|match.*repository.*(?:number|issue)",
+            r"(?:disagree|mismatch|inconsistent).*(?:malformed|unavailable)",
+        )
+
+    def test_resolver_exit_status_preserves_reported_results_and_real_failures(self) -> None:
+        self.assert_semantics(
+            r"capture.*stdout.*exit status|capture.*exit status.*stdout",
+            r"(?:exit|status).*0.*1.*secpal-work-graph/v1.*(?:consume|surface)",
+            r"(?:exit|status).*1.*(?:reported|meaningful).*(?:not|never).*command failure",
+            r"(?:exit|status).*2.*3.*(?:unavailable|fail)",
+            r"(?:missing|invalid).*json.*(?:unavailable|fail)",
+            r"schema.*secpal-work-graph/v1.*(?:unavailable|fail)",
+            r"do not invent.*graph state",
+        )
 
     def test_resolved_cases_have_the_required_advisory_outcomes(self) -> None:
-        # These are representative, already-resolved envelopes. The test checks
-        # the instruction-layer response and deliberately derives no graph state.
-        cases = {
-            "aligned": {
-                "resolved": {"ready": True, "leaf": True},
-                "ready": ["SecPal/example#10"],
-                "next": "SecPal/example#10",
-                "patterns": (r"aligned.*continue",),
-            },
-            "ready_not_next": {
-                "resolved": {"ready": True, "leaf": True},
-                "ready": ["SecPal/example#10", "SecPal/example#11"],
-                "next": "SecPal/example#11",
-                "patterns": (r"advisory mismatch", r"continue.*explicitly selected"),
-            },
-            "blocked": {
-                "resolved": {"ready": False, "blocked": True, "reasons": ["unsatisfied_dependency"]},
-                "ready": ["SecPal/example#11"],
-                "next": "SecPal/example#11",
-                "patterns": (r"blocked.*(?:blocker|reason)", r"do not.*ready"),
-            },
-            "non_leaf": {
-                "resolved": {"ready": False, "leaf": False, "children": ["SecPal/example#11"]},
-                "ready": ["SecPal/example#11"],
-                "next": "SecPal/example#11",
-                "patterns": (r"non.leaf.*descendant.*ready.*next",),
-            },
-            "structurally_incomplete": {
-                "resolved": {"ready": False, "reasons": ["missing_acceptance_criteria"]},
-                "ready": [],
-                "next": None,
-                "patterns": (r"structurally incomplete.*exact.*reason", r"do not invent.*ready"),
-            },
-            "malformed": {
-                "complete": False,
-                "status": "incomplete_inputs",
-                "next": None,
-                "patterns": (r"fail.closed", r"do not (?:guess|invent).*(?:ready|next)"),
-            },
-        }
-
-        for name, fixture in cases.items():
-            with self.subTest(case=name, fixture=fixture):
-                self.assert_semantics(*fixture["patterns"])
+        self.assert_semantics(
+            r"aligned.*continue",
+            r"advisory mismatch",
+            r"continue.*explicitly selected",
+            r"blocked.*(?:blocker|reason)",
+            r"do not.*ready",
+            r"non.leaf.*descendant.*ready.*next",
+            r"structurally incomplete.*exact.*reason",
+            r"do not invent.*ready",
+            r"fail.closed",
+            r"do not (?:guess|invent).*(?:ready|next)",
+        )
 
     def test_parallelism_override_and_mutation_boundaries_are_explicit(self) -> None:
         self.assert_semantics(

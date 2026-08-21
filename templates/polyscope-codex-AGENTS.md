@@ -81,23 +81,38 @@ Before the first implementation side effect, apply this procedure only when the
 session says it is running inside Polyscope and the current workspace has a
 structured issue assignment:
 
-1. Read the configured Polyscope database in read-only mode. Match the resolved
-   current workspace path to the active `worktrees.path` record, join its
-   `repositories.name`, and require both `issue_number` and `issue_url`. That
-   repository and issue are the explicitly selected work. Never infer selection
-   from a branch name, free-form task prose, or a guessed issue number. If there
-   is no structured issue assignment, state that canonical advisory selection is
-   unavailable, do not invent one, and preserve the existing behavior.
+1. Read the configured Polyscope database in read-only mode and resolve the
+   current workspace path canonically. Require exactly one active
+   `worktrees.path` record whose path resolves to that same canonical path, join
+   its `repositories.name`, and require both `issue_number` and `issue_url`. If
+   zero or more than one active record matches, report that the structured
+   assignment is unavailable or malformed, do not select or guess a row,
+   record, or identity, and preserve the existing behavior. Treat either case as
+   no structured issue assignment available. For the unique record, parse
+   `issue_url`; its repository and issue number must match
+   `repositories.name` and `issue_number`. If they disagree, report an
+   inconsistent, malformed structured assignment and do not choose either
+   identity. Only a consistent repository and issue are explicitly selected
+   work. Never infer selection from a branch name, free-form task prose, issue
+   body, or guessed issue number.
 2. Locate `scripts/secpal-work-graph.py` through the registered
-   `SecPal/.github` repository path and use its `secpal-work-graph/v1` JSON
-   output. The semantics remain solely in `docs/work-graph-contract.md`; do not
-   derive graph state independently. Run `validate-issue` for the requested
-   issue, then `show` to inspect its native ancestor chain. Use the outermost
-   resolved native ancestor as the containing epic scope, or the requested issue
-   itself for a standalone root leaf. If ancestry is incomplete or malformed,
-   preserve the resolver's fail-closed result and do not guess a scope, `ready`,
-   or `next`.
-3. For a resolved scope, run `ready` and `next`. Let `next` use its authenticated
+   `SecPal/.github` repository path. For every resolver invocation, capture
+   stdout and the exit status. When the status is 0 or 1 and stdout parses as a
+   valid JSON envelope whose schema is `secpal-work-graph/v1`, consume and
+   surface that result. Status 1 is a meaningful reported result, not a generic
+   command failure. Status 2 or 3, missing or invalid JSON output, or a schema
+   other than `secpal-work-graph/v1` means the resolver invocation is unavailable
+   or failed; report that condition and do not invent graph state. The semantics
+   remain solely in `docs/work-graph-contract.md`; do not derive them
+   independently.
+3. Run `validate-issue` for the requested issue, then `show` to inspect its
+   resolver-provided native ancestor chain. Use the nearest containing native
+   epic or sub-epic as the advisory scope appropriate to the assigned leaf. For
+   example, for `#664` → `#667` → `#672`, use scope `#667`; do not automatically
+   climb to `#664`. Use the requested issue itself for a standalone root leaf.
+   If native ancestry is incomplete or malformed, surface the resolver's
+   fail-closed result and do not guess a scope, `ready`, or `next`.
+4. For a resolved scope, run `ready` and `next`. Let `next` use its authenticated
    GitHub executor default unless the session provides a different current
    authenticated executor, in which case pass that identity with `--executor`.
    Visibly report the requested issue and its exact resolver state or reasons,
