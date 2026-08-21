@@ -257,6 +257,40 @@ fi
 EOF
 chmod +x "$fake_bin/gh"
 
+assert_mode_conflict() {
+  local label="$1"
+  shift
+  local call_log="$TMP_DIR/$label-gh.log"
+  local output status
+
+  set +e
+  output="$(GH_CALL_LOG="$call_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" "$@" 2>&1)"
+  status=$?
+  set -e
+
+  if [[ $status -ne 2 ]]; then
+    echo "Expected conflicting modes '$*' to exit with status 2, got $status" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+
+  if [[ "$output" != *"Multiple operation modes"* ]]; then
+    echo "Expected conflicting modes '$*' to report multiple operation modes" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+
+  if [[ -e "$call_log" ]]; then
+    echo "Conflicting modes '$*' must fail before invoking gh" >&2
+    cat "$call_log" >&2
+    exit 1
+  fi
+}
+
+assert_mode_conflict conflicting-live --apply --apply-review-baseline
+assert_mode_conflict conflicting-print --repo api --print-payload --print-review-payload
+assert_mode_conflict repeated-mode --apply --apply
+
 unknown_review_apply_log="$TMP_DIR/unknown-review-apply.log"
 set +e
 unknown_review_apply_output="$(GH_CALL_LOG="$unknown_review_apply_log" PATH="$fake_bin" \

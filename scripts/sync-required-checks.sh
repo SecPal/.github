@@ -237,6 +237,18 @@ apply_review_repository() {
 repo=""
 mode=""
 
+set_mode() {
+  local requested_mode="$1"
+
+  if [[ -n "$mode" ]]; then
+    echo "Multiple operation modes are not allowed: --$mode and --$requested_mode" >&2
+    usage >&2
+    exit 2
+  fi
+
+  mode="$requested_mode"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -249,19 +261,19 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --print-payload)
-      mode="print-payload"
+      set_mode "print-payload"
       shift
       ;;
     --print-review-payload)
-      mode="print-review-payload"
+      set_mode "print-review-payload"
       shift
       ;;
     --apply)
-      mode="apply"
+      set_mode "apply"
       shift
       ;;
     --apply-review-baseline)
-      mode="apply-review-baseline"
+      set_mode "apply-review-baseline"
       shift
       ;;
     -h|--help)
