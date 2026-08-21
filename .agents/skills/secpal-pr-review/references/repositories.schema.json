@@ -46,7 +46,11 @@
           ]
         },
         "allowed_github_operations": {
-          "const": ["READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"]
+          "const": [
+            "READ_NAMED_REVIEW_THREAD",
+            "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+            "RESOLVE_NAMED_REVIEW_THREAD"
+          ]
         },
         "prohibited_hosted_reads": {
           "const": [

@@ -20,7 +20,7 @@
     "operations"
   ],
   "properties": {
-    "schema_version": { "const": "1.2" },
+    "schema_version": { "const": "1.3" },
     "batch_id": { "$ref": "#/$defs/identity" },
     "repository": {
       "type": "string",
@@ -81,7 +81,8 @@
         "evidence_digest",
         "test_evidence_digest",
         "commit_sha",
-        "canonical_finding_id"
+        "canonical_finding_id",
+        "follow_up"
       ],
       "properties": {
         "finding_id": { "$ref": "#/$defs/identity" },
@@ -107,6 +108,7 @@
             "OUTDATED_AND_OBSOLETE",
             "ALREADY_FIXED_ON_SNAPSHOT_HEAD",
             "SUPERSEDED",
+            "OUTSIDE_PR_SCOPE",
             "SECURITY_WEAKENING_SUGGESTION"
           ]
         },
@@ -119,6 +121,7 @@
             "DUPLICATE_OF_CANONICAL",
             "OBSOLETE_ON_CURRENT_HEAD",
             "SUPERSEDED_BY_CANONICAL",
+            "TRACKED_AS_FOLLOW_UP",
             "REJECTED_SECURITY_WEAKENING"
           ]
         },
@@ -131,6 +134,9 @@
         },
         "canonical_finding_id": {
           "anyOf": [{ "$ref": "#/$defs/identity" }, { "type": "null" }]
+        },
+        "follow_up": {
+          "anyOf": [{ "$ref": "#/$defs/follow_up" }, { "type": "null" }]
         }
       },
       "allOf": [
@@ -154,8 +160,31 @@
               "commit_sha": { "type": "null" }
             }
           }
+        },
+        {
+          "if": {
+            "properties": { "disposition": { "const": "TRACKED_AS_FOLLOW_UP" } }
+          },
+          "then": { "properties": { "follow_up": { "$ref": "#/$defs/follow_up" } } },
+          "else": { "properties": { "follow_up": { "type": "null" } } }
         }
       ]
+    },
+    "follow_up": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "issue_number", "issue_url"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "issue_number": { "type": "integer", "minimum": 1 },
+        "issue_url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$"
+        }
+      }
     },
     "source": {
       "type": "object",

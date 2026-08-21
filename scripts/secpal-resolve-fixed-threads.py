@@ -36,6 +36,7 @@ REGISTRY_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
 )
+FOLLOW_UP_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/follow_up.py"
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -96,6 +97,7 @@ FIXED_THREAD_RESOLUTION_CONTRACT = {
     ],
     "allowed_github_operations": [
         "READ_NAMED_REVIEW_THREAD",
+        "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
         "RESOLVE_NAMED_REVIEW_THREAD",
     ],
     "prohibited_hosted_reads": [
@@ -133,6 +135,7 @@ ELIGIBLE_DISPOSITIONS = {
     "SECURITY_WEAKENING_SUGGESTION": frozenset(
         {"REJECTED_SECURITY_WEAKENING"}
     ),
+    "OUTSIDE_PR_SCOPE": frozenset({"TRACKED_AS_FOLLOW_UP"}),
 }
 
 
@@ -168,6 +171,51 @@ def _load_evidence_helper() -> Any:
 
 
 evidence = _load_evidence_helper()
+
+
+def _load_follow_up_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review.follow_up")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != FOLLOW_UP_HELPER.resolve()
+        ):
+            raise RuntimeError("Canonical follow-up module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review.follow_up", FOLLOW_UP_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+follow_up = _load_follow_up_helper()
+FollowUpIdentity = follow_up.FollowUpIdentity
+LiveFollowUpState = follow_up.LiveFollowUpState
+
+
+def _read_authenticated_follow_up(identity: FollowUpIdentity) -> LiveFollowUpState:
+    try:
+        executable = evidence.resolve_trusted_executable("gh")
+    except evidence.CommandPolicyError as exc:
+        raise ResolutionError("trusted GitHub CLI is unavailable") from exc
+    try:
+        return follow_up.read_live_follow_up(
+            identity,
+            gh_executable=executable,
+            environment=evidence.command_environment("gh"),
+        )
+    except follow_up.FollowUpError as exc:
+        raise ResolutionError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -208,6 +256,12 @@ class ValidationEvidence:
     validated_tree_sha: str
     validation_receipt_digest: str
     eligibility_evidence_digest: str
+
+
+@dataclass(frozen=True)
+class EligibilityEvidence:
+    evidence_digest: str
+    canonical_payload: bytes
 
 
 @dataclass(frozen=True)
@@ -557,14 +611,17 @@ def _body_digest(body: str) -> str:
 
 
 def _digest_json(value: Any) -> str:
-    encoded = json.dumps(
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
         value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8") + b"\n"
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _reject_nonfinite_json_constant(value: str) -> Any:
@@ -879,6 +936,56 @@ def verify_local_fix_commit(
         raise ResolutionError("fix commit local signature is not verified")
 
 
+def verify_live_follow_up(
+    identity: FollowUpIdentity,
+    *,
+    state_reader: Callable[[FollowUpIdentity], LiveFollowUpState] = _read_authenticated_follow_up,
+) -> LiveFollowUpState:
+    try:
+        return follow_up.verify_live_follow_up(identity, state_reader=state_reader)
+    except follow_up.FollowUpError as exc:
+        raise ResolutionError(str(exc)) from exc
+
+
+def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _tracked_follow_ups_from_payload(
+    canonical_payload: bytes,
+) -> dict[str, FollowUpIdentity]:
+    try:
+        payload = json.loads(
+            canonical_payload,
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ResolutionError("eligibility evidence payload is malformed") from exc
+    threads = payload.get("eligible_threads") if isinstance(payload, dict) else None
+    if not isinstance(threads, list):
+        raise ResolutionError("eligibility evidence payload is malformed")
+    tracked: dict[str, FollowUpIdentity] = {}
+    for item in threads:
+        if not isinstance(item, dict):
+            raise ResolutionError("eligibility evidence payload is malformed")
+        if item.get("disposition") != "TRACKED_AS_FOLLOW_UP":
+            continue
+        thread_id = item.get("thread_id")
+        if not isinstance(thread_id, str):
+            raise ResolutionError("eligibility evidence payload is malformed")
+        try:
+            tracked[thread_id] = follow_up.parse_follow_up(item.get("follow_up"))
+        except follow_up.FollowUpError as exc:
+            raise ResolutionError(str(exc)) from exc
+    return tracked
+
+
 def load_eligibility_evidence(
     path: Path,
     repository: str,
@@ -888,11 +995,12 @@ def load_eligibility_evidence(
     thread_ids: tuple[str, ...],
     *,
     authenticated_evidence_digest: str,
-) -> str:
+) -> EligibilityEvidence:
     try:
         payload = json.loads(
             path.read_text(encoding="utf-8"),
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
         )
     except (OSError, ValueError) as exc:
         raise ResolutionError(
@@ -917,7 +1025,7 @@ def load_eligibility_evidence(
         raise ResolutionError("eligibility evidence is not authenticated")
     threads = payload.get("eligible_threads")
     if (
-        payload.get("schema_version") != "1.0"
+        payload.get("schema_version") != "1.1"
         or payload.get("repository") != repository
         or payload.get("pull_request_number") != number
         or isinstance(payload.get("pull_request_number"), bool)
@@ -927,6 +1035,7 @@ def load_eligibility_evidence(
     ):
         raise ResolutionError("eligibility evidence binding is invalid or stale")
     observed_thread_ids: list[str] = []
+    tracked_follow_ups: dict[str, FollowUpIdentity] = {}
     for item in threads:
         if not isinstance(item, dict) or set(item) != {
             "thread_id",
@@ -934,6 +1043,7 @@ def load_eligibility_evidence(
             "disposition",
             "finding_ids",
             "evidence_digest",
+            "follow_up",
         }:
             raise ResolutionError("eligibility evidence thread is malformed")
         thread_id = item.get("thread_id")
@@ -959,12 +1069,26 @@ def load_eligibility_evidence(
             or not DIGEST.fullmatch(item["evidence_digest"])
         ):
             raise ResolutionError("eligibility evidence thread is ineligible")
+        if disposition == "TRACKED_AS_FOLLOW_UP":
+            try:
+                tracked_follow_ups[thread_id] = follow_up.parse_follow_up(
+                    item.get("follow_up")
+                )
+            except follow_up.FollowUpError as exc:
+                raise ResolutionError(str(exc)) from exc
+        elif item.get("follow_up") is not None:
+            raise ResolutionError(
+                "only tracked out-of-scope eligibility may carry follow-up identity"
+            )
         observed_thread_ids.append(thread_id)
     if tuple(observed_thread_ids) != thread_ids:
         raise ResolutionError(
             "eligibility evidence must cover requested threads exactly"
         )
-    return observed_evidence_digest
+    return EligibilityEvidence(
+        observed_evidence_digest,
+        _canonical_json_bytes(payload),
+    )
 
 
 def read_target_thread(
@@ -1249,6 +1373,8 @@ def resolve_threads(
     reviewed_state_digest: str | None = None,
     validation_evidence_digest: str | None = None,
     eligibility_evidence_digest: str | None = None,
+    eligibility_evidence: EligibilityEvidence | None = None,
+    follow_up_verifier: Callable[[FollowUpIdentity], Any] = verify_live_follow_up,
     runner: Callable[[Sequence[str]], dict[str, Any]] = _run_gh,
 ) -> dict[str, Any]:
     validate_request(repository, number, expected_head, thread_ids, apply)
@@ -1268,6 +1394,20 @@ def resolve_threads(
     ):
         raise ResolutionError("eligibility evidence digest is required")
     reviewed_targets = validate_expected_targets(thread_ids, expected_targets)
+    tracked: dict[str, FollowUpIdentity] = {}
+    if eligibility_evidence is not None:
+        if (
+            not isinstance(eligibility_evidence, EligibilityEvidence)
+            or eligibility_evidence.evidence_digest != eligibility_evidence_digest
+            or hashlib.sha256(eligibility_evidence.canonical_payload).hexdigest()
+            != eligibility_evidence_digest
+        ):
+            raise ResolutionError("tracked follow-up evidence is not authenticated")
+        tracked = _tracked_follow_ups_from_payload(
+            eligibility_evidence.canonical_payload
+        )
+        if any(thread_id not in thread_ids for thread_id in tracked):
+            raise ResolutionError("tracked follow-up bindings are malformed")
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
         limits.maximum_api_calls,
@@ -1349,6 +1489,9 @@ def resolve_threads(
                 if initial_targets[thread_id].thread.is_resolved:
                     already_resolved.append(thread_id)
                     continue
+                if thread_id in tracked:
+                    phase = "follow-up"
+                    follow_up_verifier(tracked[thread_id])
                 phase = "mutation"
                 data = _graphql(
                     RESOLVE_MUTATION,
@@ -1478,7 +1621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             reviewed,
             validation,
         )
-        eligibility_evidence_digest = load_eligibility_evidence(
+        eligibility = load_eligibility_evidence(
             Path(arguments.eligibility_evidence),
             arguments.repo,
             arguments.pr,
@@ -1498,7 +1641,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_targets=reviewed.targets,
             reviewed_state_digest=reviewed.state_digest,
             validation_evidence_digest=validation.evidence_digest,
-            eligibility_evidence_digest=eligibility_evidence_digest,
+            eligibility_evidence_digest=eligibility.evidence_digest,
+            eligibility_evidence=eligibility,
         )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

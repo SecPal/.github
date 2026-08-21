@@ -16,6 +16,7 @@ PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan
 FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
 FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
 SIMPLE_RESOLVER="$REPO_ROOT/scripts/secpal-resolve-fixed-threads.py"
+FOLLOW_UP="$REPO_ROOT/scripts/secpal_pr_review/follow_up.py"
 STATIC_POLICY="$REPO_ROOT/tests/secpal-pr-review-static-policy.py"
 POLYSCOPE_TEMPLATE="$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
 WORKFLOW_DOC="$REPO_ROOT/docs/secpal-pr-review-workflow.md"
@@ -652,7 +653,8 @@ python3 \
   "$EVIDENCE" \
   "$ACTIONS" \
   "$FAST_PATH" \
-  "$SIMPLE_RESOLVER"
+  "$SIMPLE_RESOLVER" \
+  "$FOLLOW_UP"
 
 grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \
   || fail 'authority policy negative fixture was not detected'
@@ -696,7 +698,8 @@ jq -e '
       "thread_ids"
     ],
     "allowed_github_operations": [
-      "READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"
+      "READ_NAMED_REVIEW_THREAD", "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+      "RESOLVE_NAMED_REVIEW_THREAD"
     ],
     "prohibited_hosted_reads": [
       "GITHUB_ACTIONS", "CODEQL", "CHECK_SUITES", "COMMIT_STATUSES",

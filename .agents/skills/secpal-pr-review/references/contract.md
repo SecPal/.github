@@ -280,19 +280,20 @@ bindings, policy, and transitions and uses no natural-language keyword classifie
 
 ## Reaction, reply, and resolution policy
 
-| Classification                             | Reaction                           | Reply                                                                    | Resolution                                       |
-| ------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ |
-| Valid, relevant, helpful                   | 👍                                 | None                                                                     | After verified correction or proven existing fix |
-| Technically false or materially misleading | 👎                                 | Only when invalidity is non-obvious and silence would materially mislead | After evidence is preserved                      |
-| Informational                              | None                               | None                                                                     | Only when no material finding remains            |
-| Duplicate                                  | None                               | None                                                                     | After canonical finding is safely disposed       |
-| Outdated but valid                         | None                               | None                                                                     | After current-head correction proof              |
-| Outdated and obsolete                      | None                               | None                                                                     | After current-head obsolescence proof            |
-| Ambiguous                                  | None                               | User-facing session report only; no speculative PR reply                 | No                                               |
-| Already fixed                              | None                               | No redundant status reply                                                | After proof                                      |
-| Superseded                                 | None                               | None                                                                     | After successor is safely disposed               |
-| Cross-repository/out of scope              | None                               | Only when a material misunderstanding requires evidence                  | Normally no                                      |
-| Security-weakening suggestion              | 👎 only when materially misleading | Evidence reply only when needed                                          | After evidence is retained                       |
+| Classification                             | Reaction                           | Reply                                                                    | Resolution                                                                           |
+| ------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| Valid, relevant, helpful                   | 👍                                 | None                                                                     | After verified correction or proven existing fix                                     |
+| Technically false or materially misleading | 👎                                 | Only when invalidity is non-obvious and silence would materially mislead | After evidence is preserved                                                          |
+| Informational                              | None                               | None                                                                     | Only when no material finding remains                                                |
+| Duplicate                                  | None                               | None                                                                     | After canonical finding is safely disposed                                           |
+| Outdated but valid                         | None                               | None                                                                     | After current-head correction proof                                                  |
+| Outdated and obsolete                      | None                               | None                                                                     | After current-head obsolescence proof                                                |
+| Ambiguous                                  | None                               | User-facing session report only; no speculative PR reply                 | No                                                                                   |
+| Already fixed                              | None                               | No redundant status reply                                                | After proof                                                                          |
+| Superseded                                 | None                               | None                                                                     | After successor is safely disposed                                                   |
+| Cross-repository                           | None                               | Only when a material misunderstanding requires evidence                  | No                                                                                   |
+| Outside current PR scope                   | None                               | Only when a material misunderstanding requires evidence                  | No for `OUT_OF_SCOPE`; after authenticated tracking proof for `TRACKED_AS_FOLLOW_UP` |
+| Security-weakening suggestion              | 👎 only when materially misleading | Evidence reply only when needed                                          | After evidence is retained                                                           |
 
 Before a reaction, read the complete bounded target-reaction set, treat the exact
 intended writer reaction as already applied, and block every other delta from
@@ -307,6 +308,26 @@ an exact already-applied write consumes no additional reservation. Before
 resolution, also re-read the target thread and refuse a resolved or changed
 target. Default remediation uses the simple fixed-thread resolver, which reads
 only each named target initially and immediately before its write.
+
+`OUTSIDE_PR_SCOPE` remains the technical classification. `OUT_OF_SCOPE` means
+only that the finding is outside the current PR and is never resolution-eligible.
+The distinct `TRACKED_AS_FOLLOW_UP` disposition is permitted only for a material
+`OUTSIDE_PR_SCOPE` finding whose review judgment establishes that the current PR
+does not implement it and one canonical follow-up owns it. That disposition
+binds exactly `repository`, positive `issue_number`, and the matching canonical
+`https://github.com/owner/repo/issues/number` URL into the finding and eligibility
+digests. Immediately before resolution, the guarded resolver uses the canonical
+read-only work-graph implementation to prove the same issue is accessible, open,
+and structurally complete. A blocked follow-up remains valid tracking; it need
+not be `READY`, started, or complete. Missing, inaccessible, closed, malformed,
+mismatched, or structurally incomplete evidence fails closed. Resolution records
+safe disposition into that issue and never claims the follow-up was fixed,
+implemented, verified, or completed.
+The legacy mutation plan and fast-path batch schemas carry the same identity so
+they cannot drop or reinterpret it, but they do not consume the signed
+eligibility manifest and therefore cannot perform this new mutation. Tracked
+follow-up resolution is routed through the simple resolver, which authenticates
+that manifest through the receipt, signed commit trailer, and attestation.
 
 ## Stable feedback, readiness, attestation, and batch contract
 
@@ -350,7 +371,8 @@ repository, PR, expected head, reviewed base branch/SHA, actor, reviewed digests
 classified findings, and a unique ordered set of eligible `THREAD_RESOLUTION`
 operations. Each finding binds typed stable-feedback source identities/digests,
 an optional unresolved thread, optional compound-source sub-item identity, classification,
-classification-compatible disposition, and evidence digest. Fixed findings
+classification-compatible disposition, evidence digest, and a follow-up identity
+that is non-null only for `TRACKED_AS_FOLLOW_UP`. Fixed findings
 also bind the signed validation-receipt digest as test evidence and a PR-commit
 digest. Operations name their threaded findings instead of trusting a
 free-standing disposition. Every top-level review/comment and its reactions,
