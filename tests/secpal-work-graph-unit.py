@@ -373,6 +373,7 @@ class DependencyTests(TestCase):
             resolver.FINDING_DEPENDENCY_CYCLE,
             {finding.code for finding in resolution.findings},
         )
+        self.assertTrue(resolution.structurally_malformed)
 
     def test_depending_on_a_cycle_fails_closed_without_participating_in_it(self):
         # Section 4.1 makes only a participant `BLOCKED`; section 3.5 still keeps
@@ -402,6 +403,7 @@ class DependencyTests(TestCase):
             model.Finding(resolver.FINDING_DEPENDENCY_CYCLE, key(2), f"{key(2)}, {key(3)}"),
             resolution.findings,
         )
+        self.assertTrue(resolution.structurally_malformed)
 
     def test_dependencies_are_never_inherited_through_containment(self):
         snapshot = build_snapshot(

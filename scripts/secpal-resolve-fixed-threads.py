@@ -995,6 +995,12 @@ def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any
 
 def _tracked_follow_ups_from_payload(
     canonical_payload: bytes,
+    *,
+    repository: str,
+    number: int,
+    reviewed_state_digest: str,
+    thread_ids: tuple[str, ...],
+    reviewed_head_sha: str | None = None,
 ) -> dict[str, FollowUpIdentity]:
     try:
         payload = json.loads(
@@ -1004,22 +1010,91 @@ def _tracked_follow_ups_from_payload(
         )
     except (TypeError, ValueError) as exc:
         raise ResolutionError("eligibility evidence payload is malformed") from exc
-    threads = payload.get("eligible_threads") if isinstance(payload, dict) else None
-    if not isinstance(threads, list):
-        raise ResolutionError("eligibility evidence payload is malformed")
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "reviewed_head_sha",
+        "reviewed_state_digest",
+        "eligible_threads",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ResolutionError("eligibility evidence is unavailable or malformed")
+    schema_version = payload.get("schema_version")
+    threads = payload.get("eligible_threads")
+    observed_head = payload.get("reviewed_head_sha")
+    if (
+        schema_version not in ("1.0", "1.1")
+        or payload.get("repository") != repository
+        or payload.get("pull_request_number") != number
+        or isinstance(payload.get("pull_request_number"), bool)
+        or not isinstance(observed_head, str)
+        or not OID.fullmatch(observed_head)
+        or (
+            reviewed_head_sha is not None
+            and observed_head != reviewed_head_sha.lower()
+        )
+        or payload.get("reviewed_state_digest") != reviewed_state_digest
+        or not isinstance(threads, list)
+    ):
+        raise ResolutionError("eligibility evidence binding is invalid or stale")
     tracked: dict[str, FollowUpIdentity] = {}
+    observed_thread_ids: list[str] = []
     for item in threads:
-        if not isinstance(item, dict):
-            raise ResolutionError("eligibility evidence payload is malformed")
-        if item.get("disposition") != "TRACKED_AS_FOLLOW_UP":
-            continue
+        expected_thread_keys = {
+            "thread_id",
+            "classification",
+            "disposition",
+            "finding_ids",
+            "evidence_digest",
+        }
+        if schema_version == "1.1":
+            expected_thread_keys.add("follow_up")
+        if not isinstance(item, dict) or set(item) != expected_thread_keys:
+            raise ResolutionError("eligibility evidence thread is malformed")
         thread_id = item.get("thread_id")
-        if not isinstance(thread_id, str):
-            raise ResolutionError("eligibility evidence payload is malformed")
-        try:
-            tracked[thread_id] = follow_up.parse_follow_up(item.get("follow_up"))
-        except follow_up.FollowUpError as exc:
-            raise ResolutionError(str(exc)) from exc
+        classification = item.get("classification")
+        disposition = item.get("disposition")
+        finding_ids = item.get("finding_ids")
+        if (
+            not isinstance(thread_id, str)
+            or not THREAD_ID.fullmatch(thread_id)
+            or not isinstance(classification, str)
+            or disposition not in ELIGIBLE_DISPOSITIONS.get(
+                classification,
+                frozenset(),
+            )
+            or (
+                schema_version == "1.0"
+                and disposition == "TRACKED_AS_FOLLOW_UP"
+            )
+            or not isinstance(finding_ids, list)
+            or not finding_ids
+            or any(
+                not isinstance(finding_id, str) or not finding_id
+                for finding_id in finding_ids
+            )
+            or len(finding_ids) != len(set(finding_ids))
+            or not isinstance(item.get("evidence_digest"), str)
+            or not DIGEST.fullmatch(item["evidence_digest"])
+        ):
+            raise ResolutionError("eligibility evidence thread is ineligible")
+        if disposition == "TRACKED_AS_FOLLOW_UP":
+            try:
+                tracked[thread_id] = follow_up.parse_follow_up(
+                    item.get("follow_up")
+                )
+            except follow_up.FollowUpError as exc:
+                raise ResolutionError(str(exc)) from exc
+        elif schema_version == "1.1" and item.get("follow_up") is not None:
+            raise ResolutionError(
+                "only tracked out-of-scope eligibility may carry follow-up identity"
+            )
+        observed_thread_ids.append(thread_id)
+    if tuple(observed_thread_ids) != thread_ids:
+        raise ResolutionError(
+            "eligibility evidence must cover requested threads exactly"
+        )
     return tracked
 
 
@@ -1043,16 +1118,6 @@ def load_eligibility_evidence(
         raise ResolutionError(
             "eligibility evidence is unavailable or malformed"
         ) from exc
-    expected_keys = {
-        "schema_version",
-        "repository",
-        "pull_request_number",
-        "reviewed_head_sha",
-        "reviewed_state_digest",
-        "eligible_threads",
-    }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
-        raise ResolutionError("eligibility evidence is unavailable or malformed")
     observed_evidence_digest = _digest_json(payload)
     if (
         not isinstance(authenticated_evidence_digest, str)
@@ -1060,71 +1125,18 @@ def load_eligibility_evidence(
         or observed_evidence_digest != authenticated_evidence_digest
     ):
         raise ResolutionError("eligibility evidence is not authenticated")
-    threads = payload.get("eligible_threads")
-    if (
-        payload.get("schema_version") != "1.1"
-        or payload.get("repository") != repository
-        or payload.get("pull_request_number") != number
-        or isinstance(payload.get("pull_request_number"), bool)
-        or payload.get("reviewed_head_sha") != reviewed_head_sha.lower()
-        or payload.get("reviewed_state_digest") != reviewed_state_digest
-        or not isinstance(threads, list)
-    ):
-        raise ResolutionError("eligibility evidence binding is invalid or stale")
-    observed_thread_ids: list[str] = []
-    tracked_follow_ups: dict[str, FollowUpIdentity] = {}
-    for item in threads:
-        if not isinstance(item, dict) or set(item) != {
-            "thread_id",
-            "classification",
-            "disposition",
-            "finding_ids",
-            "evidence_digest",
-            "follow_up",
-        }:
-            raise ResolutionError("eligibility evidence thread is malformed")
-        thread_id = item.get("thread_id")
-        classification = item.get("classification")
-        disposition = item.get("disposition")
-        finding_ids = item.get("finding_ids")
-        if (
-            not isinstance(thread_id, str)
-            or not THREAD_ID.fullmatch(thread_id)
-            or not isinstance(classification, str)
-            or disposition not in ELIGIBLE_DISPOSITIONS.get(
-                classification,
-                frozenset(),
-            )
-            or not isinstance(finding_ids, list)
-            or not finding_ids
-            or any(
-                not isinstance(finding_id, str) or not finding_id
-                for finding_id in finding_ids
-            )
-            or len(finding_ids) != len(set(finding_ids))
-            or not isinstance(item.get("evidence_digest"), str)
-            or not DIGEST.fullmatch(item["evidence_digest"])
-        ):
-            raise ResolutionError("eligibility evidence thread is ineligible")
-        if disposition == "TRACKED_AS_FOLLOW_UP":
-            try:
-                tracked_follow_ups[thread_id] = follow_up.parse_follow_up(
-                    item.get("follow_up")
-                )
-            except follow_up.FollowUpError as exc:
-                raise ResolutionError(str(exc)) from exc
-        elif item.get("follow_up") is not None:
-            raise ResolutionError(
-                "only tracked out-of-scope eligibility may carry follow-up identity"
-            )
-        observed_thread_ids.append(thread_id)
-    if tuple(observed_thread_ids) != thread_ids:
-        raise ResolutionError(
-            "eligibility evidence must cover requested threads exactly"
-        )
+    canonical_payload = _canonical_json_bytes(payload)
+    _tracked_follow_ups_from_payload(
+        canonical_payload,
+        repository=repository,
+        number=number,
+        reviewed_head_sha=reviewed_head_sha,
+        reviewed_state_digest=reviewed_state_digest,
+        thread_ids=thread_ids,
+    )
     return EligibilityEvidence(
         observed_evidence_digest,
-        _canonical_json_bytes(payload),
+        canonical_payload,
     )
 
 
@@ -1432,19 +1444,26 @@ def resolve_threads(
         raise ResolutionError("eligibility evidence digest is required")
     reviewed_targets = validate_expected_targets(thread_ids, expected_targets)
     tracked: dict[str, FollowUpIdentity] = {}
+    if apply and eligibility_evidence is None:
+        raise ResolutionError(
+            "authenticated canonical eligibility evidence is required for apply"
+        )
     if eligibility_evidence is not None:
         if (
             not isinstance(eligibility_evidence, EligibilityEvidence)
             or eligibility_evidence.evidence_digest != eligibility_evidence_digest
+            or not isinstance(eligibility_evidence.canonical_payload, bytes)
             or hashlib.sha256(eligibility_evidence.canonical_payload).hexdigest()
             != eligibility_evidence_digest
         ):
             raise ResolutionError("tracked follow-up evidence is not authenticated")
         tracked = _tracked_follow_ups_from_payload(
-            eligibility_evidence.canonical_payload
+            eligibility_evidence.canonical_payload,
+            repository=repository,
+            number=number,
+            reviewed_state_digest=reviewed_state_digest,
+            thread_ids=thread_ids,
         )
-        if any(thread_id not in thread_ids for thread_id in tracked):
-            raise ResolutionError("tracked follow-up bindings are malformed")
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
         limits.maximum_api_calls,
@@ -1512,36 +1531,42 @@ def resolve_threads(
                 ):
                     follow_up_verifier(tracked[thread_id], budget)
                 phase = "recheck"
-                required_recheck_pages = initial_targets[thread_id].api_pages * 2
-                required_recheck_comments = (
-                    len(initial_targets[thread_id].thread.comments) * 2
+                remaining_thread_ids = thread_ids[index:]
+                required_recheck_pages = sum(
+                    initial_targets[remaining_thread_id].api_pages * 2
+                    for remaining_thread_id in remaining_thread_ids
                 )
-                required_mutations = (
-                    0 if initial_targets[thread_id].thread.is_resolved else 1
+                required_recheck_comments = sum(
+                    len(initial_targets[remaining_thread_id].thread.comments) * 2
+                    for remaining_thread_id in remaining_thread_ids
+                )
+                required_mutations = sum(
+                    not initial_targets[remaining_thread_id].thread.is_resolved
+                    for remaining_thread_id in remaining_thread_ids
                 )
                 if (
                     budget.maximum_api_calls - budget.api_calls
                     < required_recheck_pages + required_mutations
                 ):
                     raise ResolutionError(
-                        "registered API call limit cannot cover the final target "
-                        "recheck and write"
+                        "registered API call limit cannot cover the remaining "
+                        "target rechecks and writes"
                     )
                 if (
                     budget.maximum_threads - budget.threads
                     < required_recheck_pages
                 ):
                     raise ResolutionError(
-                        "registered review thread limit cannot cover the final "
-                        "target recheck"
+                        "registered review thread limit cannot cover the remaining "
+                        "target rechecks"
                     )
                 if (
                     budget.maximum_comments - budget.comments
                     < required_recheck_comments
                 ):
                     raise ResolutionError(
-                        "registered review comment limit cannot cover the final "
-                        "target recheck"
+                        "registered review comment limit cannot cover the remaining "
+                        "target rechecks"
                     )
                 current = read_stable_target_thread(
                     repository,

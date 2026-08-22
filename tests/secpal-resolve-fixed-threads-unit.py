@@ -274,6 +274,33 @@ def resolve_threads(
             )
             for thread_id in immutable_thread_ids
         }
+    eligibility_evidence = None
+    eligibility_evidence_digest = "e" * 64
+    if apply:
+        payload = {
+            "schema_version": "1.1",
+            "repository": repository,
+            "pull_request_number": number,
+            "reviewed_head_sha": expected_head,
+            "reviewed_state_digest": "c" * 64,
+            "eligible_threads": [
+                {
+                    "thread_id": thread_id,
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": [f"finding-{index}"],
+                    "evidence_digest": f"{index:x}" * 64,
+                    "follow_up": None,
+                }
+                for index, thread_id in enumerate(immutable_thread_ids, start=1)
+            ],
+        }
+        canonical_payload = MODULE._canonical_json_bytes(payload)
+        eligibility_evidence_digest = hashlib.sha256(canonical_payload).hexdigest()
+        eligibility_evidence = MODULE.EligibilityEvidence(
+            eligibility_evidence_digest,
+            canonical_payload,
+        )
     return MODULE.resolve_threads(
         repository,
         number,
@@ -283,7 +310,8 @@ def resolve_threads(
         expected_targets=expected_targets,
         reviewed_state_digest="c" * 64,
         validation_evidence_digest="d" * 64,
-        eligibility_evidence_digest="e" * 64,
+        eligibility_evidence_digest=eligibility_evidence_digest,
+        eligibility_evidence=eligibility_evidence,
         runner=runner,
     )
 
@@ -439,6 +467,85 @@ def eligibility_payload(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_apply_requires_canonical_eligibility_before_github_access(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "eligibility evidence",
+        ):
+            MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (thread_id,),
+                apply=True,
+                expected_targets={thread_id: expected_thread_state(thread_id)},
+                reviewed_state_digest="c" * 64,
+                validation_evidence_digest="d" * 64,
+                eligibility_evidence_digest="e" * 64,
+                eligibility_evidence=None,
+                follow_up_verifier=verifier,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+        verifier.assert_not_called()
+
+    def test_apply_refuses_mismatched_or_malformed_canonical_eligibility(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = eligibility_payload(
+            reviewed_state_payload(thread_id, []),
+            (thread_id,),
+        )
+        canonical_payload = MODULE._canonical_json_bytes(payload)
+        cases = {
+            "digest mismatch": MODULE.EligibilityEvidence(
+                "f" * 64,
+                canonical_payload,
+            ),
+            "malformed payload": MODULE.EligibilityEvidence(
+                hashlib.sha256(b"{}").hexdigest(),
+                b"{}",
+            ),
+        }
+        for label, eligibility in cases.items():
+            fake = FakeGh([])
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "authenticated|eligibility evidence",
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    (thread_id,),
+                    apply=True,
+                    expected_targets={
+                        thread_id: expected_thread_state(thread_id)
+                    },
+                    reviewed_state_digest=payload["reviewed_state_digest"],
+                    validation_evidence_digest="d" * 64,
+                    eligibility_evidence_digest=eligibility.evidence_digest,
+                    eligibility_evidence=eligibility,
+                    runner=fake,
+                )
+            self.assertEqual(fake.calls, [])
+
     def test_preflight_rejects_insufficient_thread_budget_before_first_write(
         self,
     ) -> None:
@@ -1047,7 +1154,7 @@ class ResolveFixedThreadsTests(TestCase):
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest="c" * 64,
+            reviewed_state_digest=manifest["reviewed_state_digest"],
             validation_evidence_digest="d" * 64,
             eligibility_evidence_digest=eligibility.evidence_digest,
             eligibility_evidence=eligibility,
@@ -1073,7 +1180,7 @@ class ResolveFixedThreadsTests(TestCase):
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest="c" * 64,
+            reviewed_state_digest=manifest["reviewed_state_digest"],
             validation_evidence_digest="d" * 64,
             eligibility_evidence_digest=eligibility.evidence_digest,
             eligibility_evidence=eligibility,
@@ -1138,7 +1245,7 @@ class ResolveFixedThreadsTests(TestCase):
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest="c" * 64,
+            reviewed_state_digest=manifest["reviewed_state_digest"],
             validation_evidence_digest="d" * 64,
             eligibility_evidence_digest=eligibility.evidence_digest,
             eligibility_evidence=eligibility,
@@ -1216,6 +1323,168 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["already_resolved"], [thread_id])
         self.assertEqual(result["resolved"], [])
         self.assertEqual(len(fake.calls), 3)
+
+    def test_follow_up_budget_loss_reserves_the_entire_unattempted_suffix(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        canonical_manifest = MODULE._canonical_json_bytes(manifest)
+        eligibility = MODULE.EligibilityEvidence(
+            hashlib.sha256(canonical_manifest).hexdigest(),
+            canonical_manifest,
+        )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+
+        def consume_follow_up_capacity(_identity: Any, budget: Any) -> None:
+            for _ in range(3):
+                MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(10, 100, 100),
+        ):
+            result = MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                reviewed_state_digest=manifest["reviewed_state_digest"],
+                validation_evidence_digest="d" * 64,
+                eligibility_evidence_digest=eligibility.evidence_digest,
+                eligibility_evidence=eligibility,
+                follow_up_verifier=consume_follow_up_capacity,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["unattempted"], [second])
+        self.assertFalse(
+            any(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            )
+        )
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_follow_up_suffix_reservation_covers_thread_and_comment_limits(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        canonical_manifest = MODULE._canonical_json_bytes(manifest)
+        eligibility = MODULE.EligibilityEvidence(
+            hashlib.sha256(canonical_manifest).hexdigest(),
+            canonical_manifest,
+        )
+        cases = {
+            "thread": (
+                MODULE.RepositoryLimits(20, 6, 100),
+                [],
+                MODULE._consume_thread,
+            ),
+            "comment": (
+                MODULE.RepositoryLimits(20, 100, 6),
+                [("PRRC_root", "review body", None)],
+                MODULE._consume_comment,
+            ),
+        }
+        for label, (limits, comments, consume) in cases.items():
+            fake = FakeGh(
+                [
+                    target_response(first, comments=comments),
+                    target_response(second, comments=comments),
+                    target_response(first, comments=comments),
+                    target_response(first, comments=comments),
+                    resolve_response(first),
+                ]
+            )
+
+            def consume_follow_up_capacity(
+                _identity: Any,
+                budget: Any,
+                consume: Any = consume,
+            ) -> None:
+                consume(budget)
+
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    MODULE,
+                    "load_repository_limits",
+                    return_value=limits,
+                ),
+            ):
+                result = MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    (first, second),
+                    apply=True,
+                    expected_targets={
+                        first: expected_thread_state(first, comments),
+                        second: expected_thread_state(second, comments),
+                    },
+                    reviewed_state_digest=manifest["reviewed_state_digest"],
+                    validation_evidence_digest="d" * 64,
+                    eligibility_evidence_digest=eligibility.evidence_digest,
+                    eligibility_evidence=eligibility,
+                    follow_up_verifier=consume_follow_up_capacity,
+                    runner=fake,
+                )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["resolved"], [])
+            self.assertEqual(result["unattempted"], [second])
+            self.assertFalse(
+                any(
+                    f"query={MODULE.RESOLVE_MUTATION}" in call
+                    for call in fake.calls
+                )
+            )
+            self.assertEqual(len(fake.calls), 2)
 
     def test_initially_resolved_target_is_rechecked_before_success(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -1751,6 +2020,105 @@ class ResolveFixedThreadsTests(TestCase):
             MODULE._digest_json(manifest),
         )
 
+    def test_authenticated_v1_0_legacy_eligibility_remains_readable(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(reviewed, (thread_id,))
+        manifest["schema_version"] = "1.0"
+        del manifest["eligible_threads"][0]["follow_up"]
+        original_digest = MODULE._digest_json(manifest)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            evidence = MODULE.load_eligibility_evidence(
+                path,
+                "SecPal/api",
+                123,
+                reviewed["head_sha"],
+                reviewed["state_digest"],
+                (thread_id,),
+                authenticated_evidence_digest=original_digest,
+            )
+
+        self.assertEqual(evidence.evidence_digest, original_digest)
+        self.assertEqual(
+            hashlib.sha256(evidence.canonical_payload).hexdigest(),
+            original_digest,
+        )
+
+    def test_authenticated_v1_0_legacy_apply_uses_no_follow_up_reader(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(reviewed, (thread_id,))
+        manifest["schema_version"] = "1.0"
+        del manifest["eligible_threads"][0]["follow_up"]
+        canonical_payload = MODULE._canonical_json_bytes(manifest)
+        evidence = MODULE.EligibilityEvidence(
+            hashlib.sha256(canonical_payload).hexdigest(),
+            canonical_payload,
+        )
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        result = MODULE.resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (thread_id,),
+            apply=True,
+            expected_targets={thread_id: expected_thread_state(thread_id)},
+            reviewed_state_digest=reviewed["state_digest"],
+            validation_evidence_digest="d" * 64,
+            eligibility_evidence_digest=evidence.evidence_digest,
+            eligibility_evidence=evidence,
+            follow_up_verifier=verifier,
+            runner=fake,
+        )
+
+        self.assertEqual(result["resolved"], [thread_id])
+        verifier.assert_not_called()
+
+    def test_v1_0_eligibility_refuses_tracked_and_follow_up_shapes(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = reviewed_state_payload(thread_id, [])
+        base = eligibility_payload(reviewed, (thread_id,))
+        base["schema_version"] = "1.0"
+        cases = {
+            "tracked disposition": {
+                **base["eligible_threads"][0],
+                "classification": "OUTSIDE_PR_SCOPE",
+                "disposition": "TRACKED_AS_FOLLOW_UP",
+            },
+            "follow-up field": base["eligible_threads"][0],
+        }
+        del cases["tracked disposition"]["follow_up"]
+        for label, item in cases.items():
+            manifest = {**base, "eligible_threads": [item]}
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "eligibility.json"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "eligibility evidence thread",
+                ):
+                    MODULE.load_eligibility_evidence(
+                        path,
+                        "SecPal/api",
+                        123,
+                        reviewed["head_sha"],
+                        reviewed["state_digest"],
+                        (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(manifest),
+                    )
+
     def test_ineligible_or_unlisted_thread_blocks_before_github(self) -> None:
         thread_id = "PRRT_exampleOne"
         payload = reviewed_state_payload(thread_id, [])
@@ -1814,7 +2182,14 @@ class ResolveFixedThreadsTests(TestCase):
             )
         self.assertEqual(evidence.evidence_digest, MODULE._digest_json(manifest))
         self.assertEqual(
-            MODULE._tracked_follow_ups_from_payload(evidence.canonical_payload)[
+            MODULE._tracked_follow_ups_from_payload(
+                evidence.canonical_payload,
+                repository="SecPal/api",
+                number=123,
+                reviewed_head_sha=payload["head_sha"],
+                reviewed_state_digest=payload["state_digest"],
+                thread_ids=(thread_id,),
+            )[
                 thread_id
             ].issue_number,
             123,
@@ -2221,12 +2596,23 @@ class ResolveFixedThreadsTests(TestCase):
                 *(node(number, state="CLOSED", state_reason="completed") for number in dependency_numbers),
             ]
         )
+        dependency_cycle = work_graph_model.build_snapshot(
+            [
+                node(
+                    123,
+                    url=identity.issue_url,
+                    blocked_by=("SecPal/api#124",),
+                ),
+                node(124, blocked_by=(root,)),
+            ]
+        )
 
         for label, snapshot in (
             ("multiple parents", multiple_parents),
             ("sub-issue limit", sub_issue_limit),
             ("nesting limit", nesting_limit),
             ("dependency limit", dependency_limit),
+            ("dependency cycle", dependency_cycle),
         ):
             with (
                 self.subTest(label=label),
@@ -2369,7 +2755,7 @@ class ResolveFixedThreadsTests(TestCase):
                         expected_targets={
                             thread_id: expected_thread_state(thread_id)
                         },
-                        reviewed_state_digest="c" * 64,
+                        reviewed_state_digest=manifest["reviewed_state_digest"],
                         validation_evidence_digest="d" * 64,
                         eligibility_evidence_digest=eligibility.evidence_digest,
                         eligibility_evidence=eligibility,

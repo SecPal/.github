@@ -155,6 +155,13 @@ final attestation authenticate. The resolver recalculates that digest and
 rejects any post-validation classification, disposition, finding, or evidence
 change before its first GitHub read.
 
+New manifests use schema version 1.1. The resolver also reads already-authenticated
+version 1.0 manifests for the legacy resolution-eligible dispositions. It
+authenticates the original version 1.0 canonical payload before normalizing the
+missing `follow_up` value internally. Version 1.0 never accepts a `follow_up`
+field or `TRACKED_AS_FOLLOW_UP`; tracked follow-up resolution requires version
+1.1 and its exact non-null identity.
+
 ```json
 {
   "schema_version": "1.1",

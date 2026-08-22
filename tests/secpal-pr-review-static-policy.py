@@ -761,7 +761,6 @@ RESOLVER_LOOP_SITES = {
         ("_validate_manual_gate_evidence",),
         "enumerate(registered_gates)",
     ),
-    LoopSite("for", ("load_eligibility_evidence",), "threads"),
     LoopSite("for", ("_tracked_follow_ups_from_payload",), "threads"),
     LoopSite("for", ("_reject_duplicate_json_object",), "pairs"),
     LoopSite(
@@ -812,7 +811,7 @@ RESOLVER_LOOP_SITES = {
     ),
     LoopSite(
         "comprehension",
-        ("load_eligibility_evidence",),
+        ("_tracked_follow_ups_from_payload",),
         "finding_ids",
     ),
     LoopSite("comprehension", ("resolve_threads",), "thread_ids"),
@@ -820,6 +819,7 @@ RESOLVER_LOOP_SITES = {
     LoopSite("comprehension", ("resolve_threads",), "pending"),
     LoopSite("comprehension", ("resolve_threads",), "tracked"),
     LoopSite("comprehension", ("resolve_threads",), "tracked.values()"),
+    LoopSite("comprehension", ("resolve_threads",), "remaining_thread_ids"),
 }
 
 

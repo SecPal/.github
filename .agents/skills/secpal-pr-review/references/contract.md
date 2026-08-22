@@ -81,6 +81,11 @@ authenticate the canonical eligibility-manifest digest. It also requires the
 eligibility manifest to cover the requested threads exactly and bind their allowed
 classifications/dispositions, finding IDs, evidence digests, reviewed head, and
 reviewed-state digest.
+New evidence uses schema version 1.1. Immutable authenticated version 1.0
+evidence remains readable only for the legacy resolution-eligible dispositions
+and is authenticated in its original canonical form before internal
+normalization. Version 1.0 cannot carry `follow_up` or authorize
+`TRACKED_AS_FOLLOW_UP`; those semantics require version 1.1.
 It then reads every named target
 completely, and requires its comment
 identities, body digests, reply relationships, and resolution state to match the
