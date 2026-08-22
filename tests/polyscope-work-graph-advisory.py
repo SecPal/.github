@@ -19,13 +19,23 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.instructions = TEMPLATE.read_text(encoding="utf-8")
-        match = re.search(
-            r"^## Canonical Work-Graph Advisory\n(?P<body>.*?)(?=^## |\Z)",
-            cls.instructions,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        cls.advisory = match.group("body") if match else ""
+        cls.advisory = cls._advisory_section(cls.instructions)
         cls.units = cls._semantic_units(cls.advisory)
+
+    @staticmethod
+    def _advisory_section(instructions: str) -> str:
+        matches = tuple(
+            re.finditer(
+                r"^## Canonical Work-Graph Advisory\n(?P<body>.*?)(?=^## |\Z)",
+                instructions,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+        )
+        if len(matches) != 1:
+            raise AssertionError(
+                f"expected exactly one Canonical Work-Graph Advisory section, found {len(matches)}"
+            )
+        return matches[0].group("body")
 
     @staticmethod
     def _semantic_units(section: str) -> tuple[str, ...]:
@@ -60,8 +70,13 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         )
         self.assertRegex(resolver_unit, r"(?i)machine-readable|JSON")
 
+    def test_duplicate_advisory_sections_are_rejected(self) -> None:
+        duplicate = self.instructions + "\n## Canonical Work-Graph Advisory\n\n- conflicting guidance\n"
+        with self.assertRaisesRegex(AssertionError, "exactly one"):
+            self._advisory_section(duplicate)
+
     def test_next_uses_the_resolver_default_authenticated_identity(self) -> None:
-        next_unit = self.unit_with("next <scope>", "canonical NEXT")
+        next_unit = self.unit_with("next <owner/repo#scope-number>", "canonical NEXT")
         self.assertNotIn(
             "--executor",
             next_unit,
@@ -70,14 +85,19 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         self.assertRegex(next_unit, r"(?i)resolver.*authenticated GitHub (viewer )?identity")
 
     def test_scope_and_state_come_from_canonical_native_graph_output(self) -> None:
+        requested_reference = "<owner/repo#requested-number>"
+        scope_reference = "<owner/repo#scope-number>"
         scope_unit = self.unit_with(
-            "show <requested issue>",
-            "ready <scope>",
-            "next <scope>",
-            "validate-issue <requested issue>",
+            f"show {requested_reference}",
+            f"show {scope_reference}",
+            f"ready {scope_reference}",
+            f"next {scope_reference}",
+            f"validate-issue {requested_reference}",
         )
         for term in ("native", "ancestors", "scope root", "incomplete graph input", "do not guess"):
             self.assertIn(term, scope_unit)
+        self.assertRegex(scope_unit, r"(?i)bare issue numbers require an explicit `--repo`")
+        self.assertIn("must not be used", scope_unit)
 
         mirror_unit = self.unit_with("body-only relationship mirror", "not authoritative")
         for term in ("hierarchy", "dependencies", "sibling order", "scope selection"):

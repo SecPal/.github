@@ -84,17 +84,22 @@ Apply these rules only when the session says it is running inside Polyscope.
   `python3 scripts/secpal-work-graph.py`. Its JSON output is the
   machine-readable graph state under the canonical contract.
 - Under `docs/work-graph-contract.md`, the canonical work graph is
-  authoritative: start from `show <requested issue>` to inspect native
-  observable ancestors. Use the explicitly declared owning scope only when
-  that output confirms it as an ancestor, then use `show <scope>`,
-  `ready <scope>`, and `next <scope>` to report the canonical scope root, READY
-  leaves, and canonical NEXT defined by the contract. Under the contract, the
-  default NEXT invocation lets the canonical resolver obtain the authenticated
-  GitHub viewer identity for executor and claim filtering. Under the contract,
-  use `validate-issue <requested issue>` for the requested issue's derived state
-  and structural findings. If native inputs cannot determine the declared
-  scope, or any resolver output is incomplete, report incomplete graph input as
-  required by the contract; do not guess from issue prose.
+  authoritative: start from `show <owner/repo#requested-number>` to inspect
+  native observable ancestors. Use the explicitly declared owning scope only
+  when that output confirms it as an ancestor, then use
+  `show <owner/repo#scope-number>`, `ready <owner/repo#scope-number>`, and
+  `next <owner/repo#scope-number>` to report the canonical scope root, READY
+  leaves, and canonical NEXT defined by the contract. Under the contract,
+  repository-qualified identities name each node's actual repository and may
+  span repositories. Under the contract, bare issue numbers require an explicit
+  `--repo` and must not be used in this managed command guidance. Under the
+  contract, the default NEXT invocation lets the canonical resolver obtain the
+  authenticated GitHub viewer identity for executor and claim filtering. Under
+  the contract, use
+  `validate-issue <owner/repo#requested-number>` for the requested issue's
+  derived state and structural findings. If native inputs cannot determine the
+  declared scope, or any resolver output is incomplete, report incomplete graph
+  input as required by the contract; do not guess from issue prose.
 - Under `docs/work-graph-contract.md`, canonical work-graph semantics are
   authoritative: clearly surface whether the requested issue is READY,
   blocked, non-leaf, structurally incomplete, or malformed, and whether it
