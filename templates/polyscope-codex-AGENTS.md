@@ -75,6 +75,50 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Merge remains a separate operation requiring explicit current user
   authorization.
 
+## Canonical Work-Graph Advisory
+
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative: before beginning explicitly issue-assigned work within a
+  declared SecPal epic or sub-epic, consult the read-only canonical resolver
+  from the owning `SecPal/.github` checkout:
+  `python3 scripts/secpal-work-graph.py`. Its JSON output is the
+  machine-readable graph state under the canonical contract.
+- Under `docs/work-graph-contract.md`, the canonical work graph is
+  authoritative: start from `show <owner/repo#requested-number>` to inspect
+  native observable ancestors. Use the explicitly declared owning scope only
+  when that output confirms it as an ancestor, then use
+  `show <owner/repo#scope-number>`, `ready <owner/repo#scope-number>`, and
+  `next <owner/repo#scope-number>` to report the canonical scope root, READY
+  leaves, and canonical NEXT defined by the contract. Under the contract,
+  repository-qualified identities name each node's actual repository and may
+  span repositories. Under the contract, bare issue numbers require an explicit
+  `--repo` and must not be used in this managed command guidance. Under the
+  contract, the default NEXT invocation lets the canonical resolver obtain the
+  authenticated GitHub viewer identity for executor and claim filtering. Under
+  the contract, use
+  `validate-issue <owner/repo#requested-number>` for the requested issue's
+  derived state and structural findings. If native inputs cannot determine the
+  declared scope, or any resolver output is incomplete, report incomplete graph
+  input as required by the contract; do not guess from issue prose.
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative: clearly surface whether the requested issue is READY,
+  blocked, non-leaf, structurally incomplete, or malformed, and whether it
+  differs from canonical NEXT. A body-only relationship mirror is not authoritative
+  under the contract and must never govern hierarchy,
+  dependencies, sibling order, or scope selection.
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative and advisory, not a hard block: when the user explicitly
+  selects a requested issue different from NEXT, report the requested state and
+  canonical selection. The explicit user selection is an advisory override
+  under the contract; continue with the requested issue. Under the contract, give the
+  same prominent reporting for a blocked, non-leaf, malformed, or incomplete
+  explicit selection; never call it READY unless the resolver does.
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative: READY siblings remain parallel and NEXT selects one candidate
+  for one executor. Under the contract, do not mutate the graph or create dependencies
+  between siblings, or silently substitute another issue for
+  the explicit user selection.
+
 ## Work-graph semantics
 
 - Node types, native hierarchy and dependency meaning, sibling order, `READY`,
