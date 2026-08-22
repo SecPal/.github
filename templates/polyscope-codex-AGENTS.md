@@ -51,35 +51,6 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Validate `gh auth status` only in a network-capable Autopilot or Work context
   before treating a GitHub failure as an authentication problem.
 
-## Canonical Work-Graph Advisory
-
-- Before beginning explicitly issue-assigned work within a declared SecPal
-  epic or sub-epic, consult the read-only canonical resolver from the owning
-  `SecPal/.github` checkout: `python3 scripts/secpal-work-graph.py`. Its JSON
-  output is the machine-readable graph state; its semantics remain exclusively
-  owned by `docs/work-graph-contract.md`.
-- Start from `show <requested issue>` to inspect native observable ancestors.
-  Use the explicitly declared owning scope only when that output confirms it as
-  an ancestor, then use `show <scope>`, `ready <scope>`, and
-  `next <scope> --executor <current executor>` to report the canonical scope
-  root, READY leaves, and canonical NEXT. Use `validate-issue <requested issue>`
-  for the requested issue's derived state and structural findings. If native
-  inputs cannot determine the declared scope, or any resolver output is
-  incomplete, report incomplete graph input; do not guess from issue prose.
-- Clearly surface whether the requested issue is READY, blocked, non-leaf,
-  structurally incomplete, or malformed, and whether it differs from canonical
-  NEXT. A body-only relationship mirror is not authoritative for hierarchy,
-  dependencies, sibling order, or scope selection.
-- This is advisory, not a hard block: when the user explicitly selects a
-  requested issue different from NEXT, report the requested state and canonical
-  selection, say that the explicit user choice is an advisory override, and
-  continue with the requested issue. Do the same prominent reporting for a
-  blocked, non-leaf, malformed, or incomplete explicit selection; never call it
-  READY unless the resolver does.
-- READY siblings remain parallel. NEXT selects one candidate for one executor;
-  do not create or infer dependencies between siblings, mutate the graph, or
-  silently substitute another issue for the explicit user selection.
-
 ## Hosted CI isolation
 
 - Do not read, monitor, poll, wait for, summarize, or gate work on GitHub-hosted CI unless the user explicitly requests CI inspection, check status, merge readiness, or merge authorization in the current instruction.
@@ -103,6 +74,44 @@ Apply these rules only when the session says it is running inside Polyscope.
   PR reactions, or unrelated feedback.
 - Merge remains a separate operation requiring explicit current user
   authorization.
+
+## Canonical Work-Graph Advisory
+
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative: before beginning explicitly issue-assigned work within a
+  declared SecPal epic or sub-epic, consult the read-only canonical resolver
+  from the owning `SecPal/.github` checkout:
+  `python3 scripts/secpal-work-graph.py`. Its JSON output is the
+  machine-readable graph state under the canonical contract.
+- Under `docs/work-graph-contract.md`, the canonical work graph is
+  authoritative: start from `show <requested issue>` to inspect native
+  observable ancestors. Use the explicitly declared owning scope only when
+  that output confirms it as an ancestor, then use `show <scope>`,
+  `ready <scope>`, and `next <scope> --executor <current executor>` to report
+  the canonical scope root, READY leaves, and canonical NEXT defined by the
+  contract. Under the contract, use `validate-issue <requested issue>` for the
+  requested issue's derived state and structural findings. If native inputs
+  cannot determine the declared scope, or any resolver output is incomplete,
+  report incomplete graph input as required by the contract; do not guess from
+  issue prose.
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative: clearly surface whether the requested issue is READY,
+  blocked, non-leaf, structurally incomplete, or malformed, and whether it
+  differs from canonical NEXT. A body-only relationship mirror is not authoritative
+  under the contract and must never govern hierarchy,
+  dependencies, sibling order, or scope selection.
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative and advisory, not a hard block: when the user explicitly
+  selects a requested issue different from NEXT, report the requested state and
+  canonical selection. The explicit user selection is an advisory override
+  under the contract; continue with the requested issue. Under the contract, give the
+  same prominent reporting for a blocked, non-leaf, malformed, or incomplete
+  explicit selection; never call it READY unless the resolver does.
+- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
+  authoritative: READY siblings remain parallel and NEXT selects one candidate
+  for one executor. Under the contract, do not mutate the graph or create dependencies
+  between siblings, or silently substitute another issue for
+  the explicit user selection.
 
 ## Work-graph semantics
 
