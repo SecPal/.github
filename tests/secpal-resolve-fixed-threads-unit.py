@@ -1487,11 +1487,6 @@ class ResolveFixedThreadsTests(TestCase):
             disposition="TRACKED_AS_FOLLOW_UP",
             follow_up=identity.to_dict(),
         )
-        canonical_manifest = MODULE._canonical_json_bytes(manifest)
-        eligibility = MODULE.EligibilityEvidence(
-            hashlib.sha256(canonical_manifest).hexdigest(),
-            canonical_manifest,
-        )
         fake = FakeGh(
             [
                 target_response(thread_id),
@@ -1557,11 +1552,6 @@ class ResolveFixedThreadsTests(TestCase):
             classification="OUTSIDE_PR_SCOPE",
             disposition="TRACKED_AS_FOLLOW_UP",
             follow_up=identity.to_dict(),
-        )
-        canonical_manifest = MODULE._canonical_json_bytes(manifest)
-        eligibility = MODULE.EligibilityEvidence(
-            hashlib.sha256(canonical_manifest).hexdigest(),
-            canonical_manifest,
         )
         drifted = False
         mutation_calls = 0
@@ -1688,11 +1678,6 @@ class ResolveFixedThreadsTests(TestCase):
                 "issue_url": "https://github.com/SecPal/api/issues/123",
             },
         )
-        canonical_manifest = MODULE._canonical_json_bytes(manifest)
-        eligibility = MODULE.EligibilityEvidence(
-            hashlib.sha256(canonical_manifest).hexdigest(),
-            canonical_manifest,
-        )
         fake = FakeGh(
             [
                 target_response(first),
@@ -1756,11 +1741,6 @@ class ResolveFixedThreadsTests(TestCase):
                 "issue_number": 123,
                 "issue_url": "https://github.com/SecPal/api/issues/123",
             },
-        )
-        canonical_manifest = MODULE._canonical_json_bytes(manifest)
-        eligibility = MODULE.EligibilityEvidence(
-            hashlib.sha256(canonical_manifest).hexdigest(),
-            canonical_manifest,
         )
         cases = {
             "thread": (
@@ -3012,12 +2992,6 @@ class ResolveFixedThreadsTests(TestCase):
             disposition="TRACKED_AS_FOLLOW_UP",
             follow_up=identity.to_dict(),
         )
-        canonical_manifest = MODULE._canonical_json_bytes(manifest)
-        eligibility = MODULE.EligibilityEvidence(
-            hashlib.sha256(canonical_manifest).hexdigest(),
-            canonical_manifest,
-        )
-
         cases = {
             "traversal": [
                 work_graph_issue_response(123, blocked_by=(124,)),
