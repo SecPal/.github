@@ -127,6 +127,8 @@ def read_live_follow_up(
         resolution = resolver.resolve(snapshot, canonical)
     except (github.GitHubError, MarkdownParserUnavailable, resolver.ScopeRootUnresolved) as exc:
         raise FollowUpError("follow-up issue is missing or inaccessible") from exc
+    except (TypeError, ValueError) as exc:
+        raise FollowUpError("follow-up issue could not be read safely") from exc
     node = snapshot.get(canonical)
     state = resolution.states.get(canonical)
     if node is None or state is None:

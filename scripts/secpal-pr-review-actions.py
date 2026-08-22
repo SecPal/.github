@@ -29,6 +29,10 @@ PLAN_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 )
+LEGACY_PLAN_SCHEMA_PATH = (
+    REPOSITORY_ROOT
+    / ".agents/skills/secpal-pr-review/references/mutation-plan-v1.0.schema.json"
+)
 REGISTRY_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
@@ -991,7 +995,14 @@ def validate_plan(
 ) -> dict[str, Any]:
     if not isinstance(plan, dict):
         raise PlanError("mutation plan must be a JSON object")
-    _validate_schema(plan, PLAN_SCHEMA_PATH, "mutation_plan", PlanError)
+    schema_version = plan.get("schema_version")
+    if schema_version == "1.0":
+        schema_path = LEGACY_PLAN_SCHEMA_PATH
+    elif schema_version == "1.1":
+        schema_path = PLAN_SCHEMA_PATH
+    else:
+        raise PlanError("unsupported mutation plan schema version")
+    _validate_schema(plan, schema_path, "mutation_plan", PlanError)
     try:
         evidence.validate_config(configuration)
         evidence.validate_snapshot(snapshot)

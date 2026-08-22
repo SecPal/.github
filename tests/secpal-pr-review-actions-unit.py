@@ -956,6 +956,80 @@ class ContractTests(TestCase):
             ):
                 validator.validate(incompatible)
 
+    def test_mutation_plan_v1_0_retains_recorded_session_state(self) -> None:
+        recorded_reaction = operation()
+        recorded_reaction["applied_mutation_identity"] = "REACTION_OWN"
+        legacy = plan(recorded_reaction)
+        legacy["schema_version"] = "1.0"
+        legacy["session"]["reaction_writes"] = 1
+        for item in legacy["findings"]:
+            item.pop("follow_up")
+
+        self.assertEqual(
+            actions.validate_plan(
+                legacy,
+                evidence_snapshot(),
+                repository_config(),
+            ),
+            legacy,
+        )
+
+    def test_mutation_plan_versions_reject_mixed_and_unknown_shapes(self) -> None:
+        legacy = plan()
+        legacy["schema_version"] = "1.0"
+        legacy["findings"][0].pop("follow_up")
+
+        legacy_with_follow_up = copy.deepcopy(legacy)
+        legacy_with_follow_up["findings"][0]["follow_up"] = None
+        with self.assertRaises(actions.PlanError):
+            actions.validate_plan(
+                legacy_with_follow_up,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        legacy_tracked = copy.deepcopy(legacy)
+        legacy_tracked["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+        )
+        with self.assertRaises(actions.PlanError):
+            actions.validate_plan(
+                legacy_tracked,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        current_without_follow_up = plan()
+        current_without_follow_up["findings"][0].pop("follow_up")
+        with self.assertRaises(actions.PlanError):
+            actions.validate_plan(
+                current_without_follow_up,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        unknown = plan()
+        unknown["schema_version"] = "2.0"
+        with self.assertRaisesRegex(
+            actions.PlanError,
+            "unsupported mutation plan schema version",
+        ):
+            actions.validate_plan(
+                unknown,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        self.assertEqual(
+            actions.validate_plan(
+                plan(),
+                evidence_snapshot(),
+                repository_config(),
+            )["schema_version"],
+            "1.1",
+        )
+
     def test_duplicate_and_superseded_canonical_references_must_be_acyclic(self) -> None:
         for classification, disposition in (
             ("DUPLICATE", "DUPLICATE_OF_CANONICAL"),

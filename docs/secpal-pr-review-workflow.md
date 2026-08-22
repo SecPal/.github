@@ -66,8 +66,14 @@ The workflow has six narrow parts:
    stable capture, validation attestation, batch resolution, and legacy actions;
 5. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
    verifier used only by explicitly selected forensic/audit snapshot mode; and
-6. the workflow-only repository registry, mutation-plan schema, and fast-path
-   batch schema under the skill's `references/` directory.
+6. the workflow-only repository registry, current mutation-plan schema, exact
+   legacy mutation-plan v1.0 schema, and fast-path batch schema under the
+   skill's `references/` directory.
+
+The action helper validates persisted mutation plans against their original
+versioned shape. Version 1.0 retains legacy findings without `follow_up` and
+cannot authorize `TRACKED_AS_FOLLOW_UP`; version 1.1 is required for tracked
+follow-up identity. Mixed and unknown versions fail closed.
 
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default

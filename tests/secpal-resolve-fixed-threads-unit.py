@@ -1724,6 +1724,294 @@ class ResolveFixedThreadsTests(TestCase):
         )
         self.assertEqual(len(fake.calls), 2)
 
+    def test_future_tracked_minimum_is_reserved_before_first_write(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+
+        def consume_minimum_follow_up_read(_identity: Any, budget: Any) -> None:
+            MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(9, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_minimum_follow_up_read,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["unattempted"], [second])
+        self.assertFalse(
+            any(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            )
+        )
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_future_tracked_minimum_counts_every_remaining_tracked_thread(
+        self,
+    ) -> None:
+        thread_ids = (
+            "PRRT_exampleOne",
+            "PRRT_exampleTwo",
+            "PRRT_exampleThree",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_ids[0], []), thread_ids
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh([target_response(item) for item in thread_ids])
+
+        def consume_minimum_follow_up_read(_identity: Any, budget: Any) -> None:
+            MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(13, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                thread_ids,
+                apply=True,
+                expected_targets={
+                    item: expected_thread_state(item) for item in thread_ids
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_minimum_follow_up_read,
+                runner=fake,
+            )
+
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["unattempted"], list(thread_ids[1:]))
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_future_tracked_minimum_ignores_non_tracked_suffix_items(self) -> None:
+        thread_ids = (
+            "PRRT_exampleOne",
+            "PRRT_exampleTwo",
+            "PRRT_exampleThree",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_ids[0], []), thread_ids
+        )
+        manifest["eligible_threads"][1].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        fake = FakeGh([target_response(item) for item in thread_ids])
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(12, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                thread_ids,
+                apply=True,
+                expected_targets={
+                    item: expected_thread_state(item) for item in thread_ids
+                },
+                eligibility_manifest=manifest,
+                runner=fake,
+            )
+
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["unattempted"], list(thread_ids[1:]))
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_future_tracked_minimum_allows_a_sufficient_batch(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []), (first, second)
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+                target_response(second),
+                resolve_response(second),
+            ]
+        )
+
+        def consume_minimum_follow_up_read(_identity: Any, budget: Any) -> None:
+            MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(10, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_minimum_follow_up_read,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["resolved"], [first, second])
+        self.assertEqual(len(fake.calls), 8)
+
+    def test_unknown_follow_up_growth_retains_structured_partial_failure(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []), (first, second)
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+        follow_up_reads = 0
+
+        def consume_variable_follow_up_reads(_identity: Any, budget: Any) -> None:
+            nonlocal follow_up_reads
+            count = 1 if follow_up_reads == 0 else 3
+            follow_up_reads += 1
+            for _ in range(count):
+                MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(11, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_variable_follow_up_reads,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(result["failed"][0]["thread_id"], second)
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["unattempted"], [])
+        self.assertEqual(len(fake.calls), 5)
+
     def test_follow_up_suffix_reservation_covers_thread_and_comment_limits(
         self,
     ) -> None:
@@ -3487,6 +3775,90 @@ class ResolveFixedThreadsTests(TestCase):
         )
         self.assertEqual(result["unattempted"], [third])
         self.assertEqual(result["status"], "failed")
+
+    def test_follow_up_operational_error_uses_structured_partial_failure(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        third = "PRRT_exampleThree"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second, third),
+        )
+        manifest["eligible_threads"][1].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(third),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE,
+                "_resolve_trusted_markdown_node",
+                return_value="/usr/bin/node",
+            ),
+            mock.patch.object(
+                work_graph_github,
+                "load_snapshot",
+                side_effect=TypeError("malformed canonical adapter response"),
+            ),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second, third),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                    third: expected_thread_state(third),
+                },
+                eligibility_manifest=manifest,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(
+            result["failed"],
+            [
+                {
+                    "thread_id": second,
+                    "phase": "follow-up",
+                    "write_result": "not_attempted",
+                    "error": "follow-up issue could not be read safely",
+                }
+            ],
+        )
+        self.assertEqual(result["unattempted"], [third])
+        self.assertEqual(
+            sum(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            ),
+            1,
+        )
 
     def test_main_emits_partial_report_and_returns_nonzero(self) -> None:
         report = {

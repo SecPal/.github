@@ -51,9 +51,10 @@ thread before any mutation cost. Already-resolved targets are treated
 idempotently and require no write, but receive the same two stable rechecks.
 Target comments are cursor-paginated as needed. A dry run performs only the
 initial read. The complete invocation shares the canonical repository
-registry's API-call, review-thread, and comment limits, and verifies before the
-first write that the remaining budgets cover every known target recheck and
-mutation.
+registry's API-call, review-thread, and comment limits. Before each write it
+verifies that the remaining budgets cover every known target recheck and
+mutation plus the unavoidable first API read for every later unresolved tracked
+follow-up. It does not guess the cost of variable future graph traversal.
 
 ## Safety boundary
 

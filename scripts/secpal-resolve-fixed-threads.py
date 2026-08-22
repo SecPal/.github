@@ -1596,13 +1596,21 @@ def resolve_threads(
                     not initial_targets[remaining_thread_id].thread.is_resolved
                     for remaining_thread_id in remaining_thread_ids
                 )
+                required_follow_up_reads = sum(
+                    remaining_thread_id != thread_id
+                    and not initial_targets[remaining_thread_id].thread.is_resolved
+                    and remaining_thread_id in tracked
+                    for remaining_thread_id in remaining_thread_ids
+                )
                 if (
                     budget.maximum_api_calls - budget.api_calls
-                    < required_recheck_pages + required_mutations
+                    < required_recheck_pages
+                    + required_mutations
+                    + required_follow_up_reads
                 ):
                     raise ResolutionError(
                         "registered API call limit cannot cover the remaining "
-                        "target rechecks and writes"
+                        "follow-up reads, target rechecks, and writes"
                     )
                 if (
                     budget.maximum_threads - budget.threads

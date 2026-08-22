@@ -105,9 +105,12 @@ target, reviewed-state mismatch, unstable projection, or externally changed
 target blocks the next write. Only repositories in the canonical production
 registry are accepted. The registry's API-call, review-thread, and comment
 limits bound the complete invocation, and the helper resolves `gh` through the
-accepted trusted executable and environment boundary. Before the first write,
-it verifies that the remaining budgets cover the minimum known cost of every
-stable target recheck and mutation.
+accepted trusted executable and environment boundary. Before each write, it
+verifies that the remaining budgets cover the minimum known cost of every
+stable target recheck and mutation plus the unavoidable first API read for
+every later unresolved tracked follow-up. Variable work-graph traversal growth
+remains bounded by the same shared budget and may still produce a structured
+partial failure when that growth was not knowable before an earlier write.
 
 Duplicate or malformed direct-call inputs fail before the first read. If a
 later target fails after an earlier resolution succeeded, the helper stops
@@ -409,6 +412,16 @@ GitHub verification metadata. Missing local GitHub GPG key material is
 Each commit is classified once per invocation.
 
 ## Forensic mutation-plan and action-helper contract
+
+The authoritative validator dispatches on the original mutation-plan schema
+version before semantic validation. Exact version 1.0 plans retain their
+historical shape and legacy dispositions without a `follow_up` field. Exact
+version 1.1 plans require the current `follow_up` shape and are the only plans
+that may represent `TRACKED_AS_FOLLOW_UP`. Unknown versions, mixed shapes,
+version 1.0 follow-up fields, and version 1.0 tracked dispositions fail closed.
+Persisted version 1.0 session counters, replies, reactions, resolutions, and
+returned mutation identities remain authoritative and are not rewritten before
+their original shape is validated.
 
 The schema-bound plan contains its version, repository, PR, immutable snapshot
 digest, expected head, creation state, cycle, finite session counters, stable
