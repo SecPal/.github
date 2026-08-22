@@ -158,6 +158,20 @@ findings block this invocation and never authorize sibling-repository edits.
 Every policy operation repeats the exact classification and evidence digest of
 its named logical finding.
 
+`OUTSIDE_PR_SCOPE + OUT_OF_SCOPE` remains non-resolution-eligible. A material
+finding may instead use `TRACKED_AS_FOLLOW_UP` only when review judgment proves
+the current PR does not implement it and binds one exact canonical GitHub issue
+identity (`repository`, positive `issue_number`, and matching canonical
+`issue_url`) into the authenticated eligibility evidence. Immediately before
+resolving that exact source thread, the resolver uses the canonical work-graph
+reader to prove the same follow-up remains accessible, open, and structurally
+complete. The follow-up may be blocked and need not be ready or started.
+Resolution means safely tracked outside this PR, not fixed or completed.
+The legacy mutation and readiness-batch schemas preserve the same identity but
+cannot resolve this disposition because they do not consume the signed
+eligibility manifest. The authenticated simple resolver is the only mutation
+path for `TRACKED_AS_FOLLOW_UP`.
+
 Green CI is evidence about checks, not proof that feedback is true or that the PR
 is ready. Likewise, outdated does not mean invalid and resolved does not mean
 fixed. The helper has no keyword classifier; technical truth is established from
@@ -255,8 +269,10 @@ per-thread eligibility manifest authenticated by the signed validation
 receipt. It then verifies the exact PR head and target identity without reading checks,
 rules, reactions, unrelated feedback, mergeability, or branch protection. It
 reads each target completely and requires its comments to match the
-reviewed-state identities and digests. Immediately before each
-mutation or successful already-resolved report, it requires two more equal
+reviewed-state identities and digests. Immediately before a tracked-follow-up
+mutation it also performs the authenticated, fail-closed live work-graph
+verification described above. Immediately before each mutation or successful
+already-resolved report, it requires two more equal
 complete target projections; every mutation response must confirm the exact
 resolved thread.
 

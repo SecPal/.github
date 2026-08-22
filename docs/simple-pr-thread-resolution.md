@@ -13,7 +13,8 @@ necessary, validated once, committed, and pushed.
 Thread resolution and merge readiness are different operations:
 
 - **Thread resolution** records that a specific review conversation has been
-  addressed on the current pull-request head.
+  safely dispositioned on the current pull-request head. For a tracked
+  out-of-scope finding, it does not claim implementation or completion.
 - **Merge readiness** evaluates required checks, signatures, branch protection,
   mergeability, complete validation evidence, and any broader release policy.
 
@@ -40,6 +41,10 @@ For each explicitly named review thread:
    successful already-resolved report;
 3. one GraphQL resolution mutation for each explicitly named thread that is
    still open after those reads.
+
+A `TRACKED_AS_FOLLOW_UP` target additionally receives one bounded canonical
+work-graph read immediately before its mutation. This read is limited to the
+exact follow-up identity authenticated by the signed eligibility digest.
 
 Every apply invocation therefore performs three complete target reads per
 thread before any mutation cost. Already-resolved targets are treated
@@ -73,6 +78,12 @@ The command verifies only the invariants required for this operation:
   allowed classification/disposition, finding IDs, and evidence digest, and
   the complete canonical manifest must match the digest authenticated by the
   signed validation receipt;
+- `OUTSIDE_PR_SCOPE + OUT_OF_SCOPE` is never eligible; the only out-of-scope
+  resolution path is `TRACKED_AS_FOLLOW_UP` with one exact authenticated
+  `repository`, positive `issue_number`, and matching canonical GitHub issue URL;
+- immediately before that resolution, the canonical read-only work-graph layer
+  proves the same follow-up remains accessible, open, and structurally complete;
+  a blocked follow-up is allowed and does not become a prerequisite;
 - every requested thread belongs to that PR;
 - every requested thread and its comment identities, body digests, reply
   relationships, and resolution state match the supplied reviewed-state
@@ -146,7 +157,7 @@ change before its first GitHub read.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "repository": "SecPal/api",
   "pull_request_number": 123,
   "reviewed_head_sha": "0123456789abcdef0123456789abcdef01234567",
@@ -157,7 +168,8 @@ change before its first GitHub read.
       "classification": "VALID_ACTIONABLE",
       "disposition": "CORRECTED_AND_VERIFIED",
       "finding_ids": ["finding-1"],
-      "evidence_digest": "FINDING_EVIDENCE_SHA256"
+      "evidence_digest": "FINDING_EVIDENCE_SHA256",
+      "follow_up": null
     }
   ]
 }

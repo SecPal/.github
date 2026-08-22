@@ -24,7 +24,8 @@ evidence in the final attestation for a new verified fix commit. A raw
 validation receipt for an unchanged head is not authenticated by that existing
 commit and cannot authorize resolution. Require the target repository root and
 an eligibility manifest that covers every requested thread exactly with an
-allowed classification/disposition, finding IDs, and evidence digest. Finalize
+allowed classification/disposition, finding IDs, evidence digest, and the exact
+canonical follow-up identity for every `TRACKED_AS_FOLLOW_UP` finding. Finalize
 the manifest before complete validation and bind its canonical digest into the
 signed validation receipt and final attestation for the fix commit. The command
 rejects a swapped state file, a non-matching local commit,
@@ -36,6 +37,10 @@ state. It then performs two complete stable target rechecks of the open PR,
 expected head, membership, resolved/outdated state, and canonical
 target-comment state immediately before each write or successful
 already-resolved report.
+Immediately before resolving `OUTSIDE_PR_SCOPE + TRACKED_AS_FOLLOW_UP`, require
+the canonical work-graph reader to prove that the authenticated exact follow-up
+is accessible, open, and structurally complete. It may be blocked; resolution
+means tracked disposition, not implementation or completion.
 
 Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 
@@ -139,7 +144,8 @@ The following state machine applies only to the full feedback-remediation path.
    defects before the complete validation.
 5. Finalize the eligibility manifest for every thread that may be resolved,
    binding its classifications, dispositions, finding IDs, evidence digests,
-   reviewed head, and reviewed-state digest. Stage the finished tree and run
+   any exact tracked-follow-up identities, reviewed head, and reviewed-state
+   digest. Stage the finished tree and run
    the registered unconditional focused commands plus every required local
    validation exactly once through `attest-validation`, supplying that manifest
    and explicit satisfied evidence for every registered manual gate. Preserve
