@@ -81,6 +81,12 @@ authenticate the canonical eligibility-manifest digest. It also requires the
 eligibility manifest to cover the requested threads exactly and bind their allowed
 classifications/dispositions, finding IDs, evidence digests, reviewed head, and
 reviewed-state digest.
+The CLI and supported programmatic mutation entry point consume those canonical
+artifacts and independently verify the same complete chain before any GitHub
+read. Caller-constructed evidence objects and caller-computed matching digests
+are not mutation authorization. Target-processing logic is reached only after
+the reviewed-state, attestation, signed-commit, receipt-trailer, and eligibility
+bindings have all been verified.
 New evidence uses schema version 1.1. Immutable authenticated version 1.0
 evidence remains readable only for the legacy resolution-eligible dispositions
 and is authenticated in its original canonical form before internal

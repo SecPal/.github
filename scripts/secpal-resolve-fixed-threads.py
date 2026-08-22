@@ -869,8 +869,9 @@ def verify_local_fix_commit(
     reviewed: ReviewedState,
     validation: ValidationEvidence,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = _run_git,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> None:
+    effective_runner = _run_git if runner is None else runner
     if (
         not isinstance(validation, ValidationEvidence)
         or validation.kind != "attestation"
@@ -890,16 +891,16 @@ def verify_local_fix_commit(
         raise ResolutionError("local repository root is unavailable") from exc
     if not root.is_dir():
         raise ResolutionError("local repository root is unavailable")
-    origin = runner(root, ("remote", "get-url", "origin")).stdout.strip()
+    origin = effective_runner(root, ("remote", "get-url", "origin")).stdout.strip()
     if _remote_repository(origin) != repository:
         raise ResolutionError("local origin repository identity mismatch")
-    local_head = runner(root, ("rev-parse", "HEAD")).stdout.strip().lower()
+    local_head = effective_runner(root, ("rev-parse", "HEAD")).stdout.strip().lower()
     if local_head != expected_head.lower():
         raise ResolutionError(
             f"local head mismatch: expected {expected_head.lower()}, "
             f"observed {local_head or 'missing'}"
         )
-    commit_tree = runner(
+    commit_tree = effective_runner(
         root,
         ("rev-parse", f"{expected_head.lower()}^{{tree}}"),
     ).stdout.strip().lower()
@@ -908,7 +909,7 @@ def verify_local_fix_commit(
         or commit_tree != validation.validated_tree_sha
     ):
         raise ResolutionError("validated tree does not match the fix commit tree")
-    ancestry = runner(
+    ancestry = effective_runner(
         root,
         ("rev-list", "--parents", "-n", "1", expected_head.lower()),
     ).stdout.split()
@@ -916,7 +917,7 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "validated fix commit parent does not match reviewed head"
         )
-    trailer_output = runner(
+    trailer_output = effective_runner(
         root,
         (
             "show",
@@ -935,12 +936,12 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
-    commit_object = runner(
+    commit_object = effective_runner(
         root,
         ("cat-file", "commit", expected_head.lower()),
         allow_failure=True,
     )
-    verified = runner(
+    verified = effective_runner(
         root,
         ("verify-commit", "--raw", expected_head.lower()),
         allow_failure=True,
@@ -1418,15 +1419,66 @@ def resolve_threads(
     thread_ids: tuple[str, ...],
     *,
     apply: bool,
-    expected_targets: dict[str, ExpectedThreadState] | None = None,
-    reviewed_state_digest: str | None = None,
-    validation_evidence_digest: str | None = None,
-    eligibility_evidence_digest: str | None = None,
-    eligibility_evidence: EligibilityEvidence | None = None,
-    follow_up_verifier: Callable[[FollowUpIdentity, InvocationBudget], Any] = verify_live_follow_up,
-    runner: Callable[[Sequence[str]], dict[str, Any]] = _run_gh,
+    repository_root: Path | str | None = None,
+    reviewed_state_path: Path | str | None = None,
+    expected_reviewed_state_digest: str | None = None,
+    validation_evidence_path: Path | str | None = None,
+    eligibility_evidence_path: Path | str | None = None,
+    **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
+    """Resolve threads only after proving the complete local evidence chain."""
     validate_request(repository, number, expected_head, thread_ids, apply)
+    if caller_constructed_authorization:
+        raise ResolutionError(
+            "authenticated mutation boundary rejects caller-constructed evidence"
+        )
+    if (
+        repository_root is None
+        or reviewed_state_path is None
+        or validation_evidence_path is None
+        or eligibility_evidence_path is None
+        or not isinstance(expected_reviewed_state_digest, str)
+        or not DIGEST.fullmatch(expected_reviewed_state_digest)
+    ):
+        raise ResolutionError(
+            "authenticated mutation boundary requires canonical evidence inputs"
+        )
+    reviewed = load_reviewed_state(
+        Path(reviewed_state_path),
+        repository,
+        number,
+        expected_reviewed_state_digest,
+        thread_ids,
+    )
+    validation = load_validation_evidence(
+        Path(validation_evidence_path),
+        repository,
+        expected_head,
+        reviewed,
+    )
+    verify_local_fix_commit(
+        Path(repository_root),
+        repository,
+        expected_head,
+        reviewed,
+        validation,
+    )
+    eligibility = load_eligibility_evidence(
+        Path(eligibility_evidence_path),
+        repository,
+        number,
+        reviewed.head_sha,
+        reviewed.state_digest,
+        thread_ids,
+        authenticated_evidence_digest=validation.eligibility_evidence_digest,
+    )
+    expected_targets = reviewed.targets
+    reviewed_state_digest = reviewed.state_digest
+    validation_evidence_digest = validation.evidence_digest
+    eligibility_evidence_digest = eligibility.evidence_digest
+    eligibility_evidence: EligibilityEvidence | None = eligibility
+    follow_up_verifier = verify_live_follow_up
+    runner = _run_gh
     if (
         not isinstance(reviewed_state_digest, str)
         or not DIGEST.fullmatch(reviewed_state_digest)
@@ -1697,48 +1749,19 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        reviewed = load_reviewed_state(
-            Path(arguments.reviewed_state),
-            arguments.repo,
-            arguments.pr,
-            arguments.expected_reviewed_state_digest,
-            arguments.thread_id,
-        )
-        validation = load_validation_evidence(
-            Path(arguments.validation_evidence),
-            arguments.repo,
-            arguments.expected_head,
-            reviewed,
-        )
-        verify_local_fix_commit(
-            Path(arguments.repo_root),
-            arguments.repo,
-            arguments.expected_head,
-            reviewed,
-            validation,
-        )
-        eligibility = load_eligibility_evidence(
-            Path(arguments.eligibility_evidence),
-            arguments.repo,
-            arguments.pr,
-            reviewed.head_sha,
-            reviewed.state_digest,
-            arguments.thread_id,
-            authenticated_evidence_digest=(
-                validation.eligibility_evidence_digest
-            ),
-        )
         result = resolve_threads(
             arguments.repo,
             arguments.pr,
             arguments.expected_head,
             arguments.thread_id,
             apply=arguments.apply,
-            expected_targets=reviewed.targets,
-            reviewed_state_digest=reviewed.state_digest,
-            validation_evidence_digest=validation.evidence_digest,
-            eligibility_evidence_digest=eligibility.evidence_digest,
-            eligibility_evidence=eligibility,
+            repository_root=arguments.repo_root,
+            reviewed_state_path=arguments.reviewed_state,
+            expected_reviewed_state_digest=(
+                arguments.expected_reviewed_state_digest
+            ),
+            validation_evidence_path=arguments.validation_evidence,
+            eligibility_evidence_path=arguments.eligibility_evidence,
         )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

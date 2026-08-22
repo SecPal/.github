@@ -257,12 +257,14 @@ def resolve_threads(
     repository: str,
     number: int,
     expected_head: str,
-    thread_ids: list[str],
+    thread_ids: Sequence[str],
     *,
     apply: bool,
     runner: Any = MODULE._run_gh,
     reviewed_comments: dict[str, list[tuple[str, str, str | None]]] | None = None,
     expected_targets: dict[str, Any] | None = None,
+    eligibility_manifest: dict[str, Any] | None = None,
+    follow_up_verifier: Any = MODULE.verify_live_follow_up,
 ) -> dict[str, Any]:
     immutable_thread_ids = tuple(thread_ids)
     if expected_targets is None:
@@ -274,15 +276,56 @@ def resolve_threads(
             )
             for thread_id in immutable_thread_ids
         }
-    eligibility_evidence = None
-    eligibility_evidence_digest = "e" * 64
-    if apply:
-        payload = {
+    reviewed_head = "b" * 40 if expected_head != "b" * 40 else "a" * 40
+    feedback = {
+        "pull_request_reactions": [],
+        "reviews": [],
+        "conversation_comments": [],
+        "threads": [
+            {
+                "node_id": thread_id,
+                "is_resolved": expected_targets[thread_id].is_resolved,
+                "is_outdated": expected_targets[thread_id].is_outdated,
+                "comments": [
+                    {
+                        "node_id": comment.comment_id,
+                        "body_digest": comment.body_digest,
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "USER_reviewer",
+                            "database_id": 7,
+                        },
+                        "reply_to_id": comment.reply_to_id,
+                        "reactions": [],
+                    }
+                    for comment in expected_targets[thread_id].comments
+                ],
+            }
+            for thread_id in immutable_thread_ids
+        ],
+    }
+    identity = {
+        "repository": repository,
+        "pull_request_number": number,
+        "head_sha": reviewed_head,
+        "base_ref": "main",
+        "base_sha": "9" * 40,
+        "pr_state": "OPEN",
+    }
+    reviewed = {
+        "schema_version": "1.0",
+        **identity,
+        **feedback,
+        "feedback_digest": MODULE._digest_json(feedback),
+        "state_digest": MODULE._digest_json({**identity, "feedback": feedback}),
+    }
+    if eligibility_manifest is None:
+        eligibility_manifest = {
             "schema_version": "1.1",
             "repository": repository,
             "pull_request_number": number,
-            "reviewed_head_sha": expected_head,
-            "reviewed_state_digest": "c" * 64,
+            "reviewed_head_sha": reviewed_head,
+            "reviewed_state_digest": reviewed["state_digest"],
             "eligible_threads": [
                 {
                     "thread_id": thread_id,
@@ -295,25 +338,59 @@ def resolve_threads(
                 for index, thread_id in enumerate(immutable_thread_ids, start=1)
             ],
         }
-        canonical_payload = MODULE._canonical_json_bytes(payload)
-        eligibility_evidence_digest = hashlib.sha256(canonical_payload).hexdigest()
-        eligibility_evidence = MODULE.EligibilityEvidence(
-            eligibility_evidence_digest,
-            canonical_payload,
-        )
-    return MODULE.resolve_threads(
-        repository,
-        number,
-        expected_head,
-        immutable_thread_ids,
-        apply=apply,
-        expected_targets=expected_targets,
-        reviewed_state_digest="c" * 64,
-        validation_evidence_digest="d" * 64,
-        eligibility_evidence_digest=eligibility_evidence_digest,
-        eligibility_evidence=eligibility_evidence,
-        runner=runner,
+    else:
+        eligibility_manifest = copy.deepcopy(eligibility_manifest)
+        eligibility_manifest["repository"] = repository
+        eligibility_manifest["pull_request_number"] = number
+        eligibility_manifest["reviewed_head_sha"] = reviewed_head
+        eligibility_manifest["reviewed_state_digest"] = reviewed[
+            "state_digest"
+        ]
+    eligibility_digest = MODULE._digest_json(eligibility_manifest)
+    attestation = validation_attestation_payload(
+        reviewed,
+        eligibility_digest,
+        expected_head=expected_head,
     )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        reviewed_path = root / "reviewed.json"
+        validation_path = root / "validation.json"
+        eligibility_path = root / "eligibility.json"
+        reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+        validation_path.write_text(json.dumps(attestation), encoding="utf-8")
+        eligibility_path.write_text(
+            json.dumps(eligibility_manifest),
+            encoding="utf-8",
+        )
+        git = FakeGit(
+            expected_head=expected_head,
+            reviewed_head=reviewed_head,
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=attestation["validation_receipt_digest"],
+            repository=repository,
+        )
+        with (
+            mock.patch.object(MODULE, "_run_git", git),
+            mock.patch.object(MODULE, "_run_gh", runner),
+            mock.patch.object(
+                MODULE,
+                "verify_live_follow_up",
+                follow_up_verifier,
+            ),
+        ):
+            return MODULE.resolve_threads(
+                repository,
+                number,
+                expected_head,
+                immutable_thread_ids,
+                apply=apply,
+                repository_root=root,
+                reviewed_state_path=reviewed_path,
+                expected_reviewed_state_digest=reviewed["state_digest"],
+                validation_evidence_path=validation_path,
+                eligibility_evidence_path=eligibility_path,
+            )
 
 
 def reviewed_state_payload(
@@ -369,6 +446,8 @@ def reviewed_state_payload(
 def validation_attestation_payload(
     reviewed: dict[str, Any],
     eligibility_evidence_digest: str = "e" * 64,
+    *,
+    expected_head: str = "c" * 40,
 ) -> dict[str, Any]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
@@ -398,7 +477,7 @@ def validation_attestation_payload(
     fields = {
         "schema_version": "1.0",
         "repository": reviewed["repository"],
-        "head_sha": "c" * 40,
+        "head_sha": expected_head,
         "registry_digest": MODULE._digest_json(binding),
         "command_set_digest": MODULE._digest_json(binding["validation"]),
         "successful_result": True,
@@ -466,7 +545,283 @@ def eligibility_payload(
     return fields
 
 
+def write_authenticated_resolution_inputs(
+    directory: str,
+    thread_ids: Sequence[str],
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], FakeGit]:
+    reviewed = reviewed_state_payload(thread_ids[0], [])
+    if len(thread_ids) > 1:
+        reviewed["threads"] = [
+            {
+                "node_id": thread_id,
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [],
+            }
+            for thread_id in thread_ids
+        ]
+        feedback = {
+            key: reviewed[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        reviewed["feedback_digest"] = MODULE._digest_json(feedback)
+        identity = {
+            key: reviewed[key]
+            for key in (
+                "repository",
+                "pull_request_number",
+                "head_sha",
+                "base_ref",
+                "base_sha",
+                "pr_state",
+            )
+        }
+        reviewed["state_digest"] = MODULE._digest_json(
+            {**identity, "feedback": feedback}
+        )
+    eligibility = manifest or eligibility_payload(reviewed, thread_ids)
+    eligibility_digest = MODULE._digest_json(eligibility)
+    attestation = validation_attestation_payload(
+        reviewed,
+        eligibility_digest,
+    )
+    root = Path(directory)
+    (root / "reviewed.json").write_text(
+        json.dumps(reviewed),
+        encoding="utf-8",
+    )
+    (root / "validation.json").write_text(
+        json.dumps(attestation),
+        encoding="utf-8",
+    )
+    (root / "eligibility.json").write_text(
+        json.dumps(eligibility),
+        encoding="utf-8",
+    )
+    git = FakeGit(
+        expected_head=attestation["head_sha"],
+        reviewed_head=reviewed["head_sha"],
+        tree=attestation["validated_tree_sha"],
+        receipt_digest=attestation["validation_receipt_digest"],
+    )
+    return reviewed, attestation, eligibility, git
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_programmatic_apply_refuses_caller_constructed_authorization(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        manifest = {
+            "schema_version": "1.1",
+            "repository": "SecPal/api",
+            "pull_request_number": 123,
+            "reviewed_head_sha": "b" * 40,
+            "reviewed_state_digest": "c" * 64,
+            "eligible_threads": [
+                {
+                    "thread_id": thread_id,
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["D1-forged-substitution"],
+                    "evidence_digest": "f" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        canonical_payload = MODULE._canonical_json_bytes(manifest)
+        eligibility_digest = hashlib.sha256(canonical_payload).hexdigest()
+        forged = MODULE.EligibilityEvidence(
+            eligibility_digest,
+            canonical_payload,
+        )
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        try:
+            result = MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (thread_id,),
+                apply=True,
+                expected_targets={thread_id: expected_thread_state(thread_id)},
+                reviewed_state_digest=manifest["reviewed_state_digest"],
+                validation_evidence_digest="d" * 64,
+                eligibility_evidence_digest=eligibility_digest,
+                eligibility_evidence=forged,
+                follow_up_verifier=verifier,
+                runner=fake,
+            )
+        except MODULE.ResolutionError as exc:
+            self.assertRegex(str(exc), "authenticated mutation boundary")
+        else:
+            self.fail(
+                "unsafe caller-constructed apply succeeded: "
+                f"github_calls={len(fake.calls)}, resolved={result['resolved']}"
+            )
+
+        self.assertEqual(fake.calls, [])
+        verifier.assert_not_called()
+
+    def test_authenticated_programmatic_apply_uses_the_cli_evidence_chain(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        with tempfile.TemporaryDirectory() as directory:
+            reviewed, attestation, _eligibility, git = (
+                write_authenticated_resolution_inputs(directory, (thread_id,))
+            )
+            fake = FakeGh(
+                [
+                    target_response(thread_id, head=attestation["head_sha"]),
+                    target_response(thread_id, head=attestation["head_sha"]),
+                    target_response(thread_id, head=attestation["head_sha"]),
+                    resolve_response(thread_id),
+                ]
+            )
+            verifier = mock.Mock()
+
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", fake),
+                mock.patch.object(MODULE, "verify_live_follow_up", verifier),
+            ):
+                result = MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    attestation["head_sha"],
+                    (thread_id,),
+                    apply=True,
+                    repository_root=directory,
+                    reviewed_state_path=Path(directory) / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=Path(directory) / "validation.json",
+                    eligibility_evidence_path=Path(directory) / "eligibility.json",
+                )
+
+        self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(len(fake.calls), 4)
+        self.assertGreaterEqual(len(git.calls), 7)
+        verifier.assert_not_called()
+
+    def test_authenticated_programmatic_apply_rejects_cross_bound_evidence(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        cases = (
+            "eligibility digest",
+            "eligibility reviewed head",
+            "attestation reviewed state",
+            "fix parent",
+            "receipt trailer",
+            "eligibility repository",
+            "eligibility pull request",
+            "eligibility thread set",
+            "tracked disposition substitution",
+        )
+        for label in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                reviewed, attestation, eligibility, git = (
+                    write_authenticated_resolution_inputs(directory, (thread_id,))
+                )
+                if label == "eligibility digest":
+                    eligibility["eligible_threads"][0]["evidence_digest"] = "9" * 64
+                elif label == "eligibility reviewed head":
+                    eligibility["reviewed_head_sha"] = "b" * 40
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                elif label == "attestation reviewed state":
+                    attestation["reviewed_state_digest"] = "9" * 64
+                elif label == "fix parent":
+                    git.reviewed_head = "b" * 40
+                elif label == "receipt trailer":
+                    git.receipt_digest = "9" * 64
+                elif label == "eligibility repository":
+                    eligibility["repository"] = "SecPal/contracts"
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                elif label == "eligibility pull request":
+                    eligibility["pull_request_number"] = 124
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                elif label == "eligibility thread set":
+                    eligibility["eligible_threads"][0]["thread_id"] = (
+                        "PRRT_exampleOther"
+                    )
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                else:
+                    trusted = copy.deepcopy(eligibility)
+                    trusted["eligible_threads"][0].update(
+                        classification="OUTSIDE_PR_SCOPE",
+                        disposition="TRACKED_AS_FOLLOW_UP",
+                        follow_up={
+                            "repository": "SecPal/api",
+                            "issue_number": 456,
+                            "issue_url": "https://github.com/SecPal/api/issues/456",
+                        },
+                    )
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(trusted),
+                    )
+                Path(directory, "eligibility.json").write_text(
+                    json.dumps(eligibility),
+                    encoding="utf-8",
+                )
+                Path(directory, "validation.json").write_text(
+                    json.dumps(attestation),
+                    encoding="utf-8",
+                )
+                if label != "receipt trailer":
+                    git.receipt_digest = attestation[
+                        "validation_receipt_digest"
+                    ]
+                fake = FakeGh([])
+
+                with (
+                    mock.patch.object(MODULE, "_run_git", git),
+                    mock.patch.object(MODULE, "_run_gh", fake),
+                    self.assertRaises(MODULE.ResolutionError),
+                ):
+                    MODULE.resolve_threads(
+                        "SecPal/api",
+                        123,
+                        attestation["head_sha"],
+                        (thread_id,),
+                        apply=True,
+                        repository_root=directory,
+                        reviewed_state_path=Path(directory) / "reviewed.json",
+                        expected_reviewed_state_digest=reviewed["state_digest"],
+                        validation_evidence_path=Path(directory) / "validation.json",
+                        eligibility_evidence_path=Path(directory) / "eligibility.json",
+                    )
+
+                self.assertEqual(fake.calls, [])
+
     def test_apply_requires_canonical_eligibility_before_github_access(self) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh(
@@ -481,7 +836,7 @@ class ResolveFixedThreadsTests(TestCase):
 
         with self.assertRaisesRegex(
             MODULE.ResolutionError,
-            "eligibility evidence",
+            "authenticated mutation boundary",
         ):
             MODULE.resolve_threads(
                 "SecPal/api",
@@ -1147,17 +1502,14 @@ class ResolveFixedThreadsTests(TestCase):
         )
         verifier = mock.Mock()
 
-        result = MODULE.resolve_threads(
+        result = resolve_threads(
             "SecPal/api",
             123,
             "a" * 40,
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest=manifest["reviewed_state_digest"],
-            validation_evidence_digest="d" * 64,
-            eligibility_evidence_digest=eligibility.evidence_digest,
-            eligibility_evidence=eligibility,
+            eligibility_manifest=manifest,
             follow_up_verifier=verifier,
             runner=fake,
         )
@@ -1173,17 +1525,14 @@ class ResolveFixedThreadsTests(TestCase):
                 target_response(thread_id),
             ]
         )
-        result = MODULE.resolve_threads(
+        result = resolve_threads(
             "SecPal/api",
             123,
             "a" * 40,
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest=manifest["reviewed_state_digest"],
-            validation_evidence_digest="d" * 64,
-            eligibility_evidence_digest=eligibility.evidence_digest,
-            eligibility_evidence=eligibility,
+            eligibility_manifest=manifest,
             follow_up_verifier=mock.Mock(
                 side_effect=MODULE.ResolutionError("follow-up issue is closed")
             ),
@@ -1238,17 +1587,14 @@ class ResolveFixedThreadsTests(TestCase):
             nonlocal drifted
             drifted = True
 
-        result = MODULE.resolve_threads(
+        result = resolve_threads(
             "SecPal/api",
             123,
             "a" * 40,
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest=manifest["reviewed_state_digest"],
-            validation_evidence_digest="d" * 64,
-            eligibility_evidence_digest=eligibility.evidence_digest,
-            eligibility_evidence=eligibility,
+            eligibility_manifest=manifest,
             follow_up_verifier=verifier,
             runner=runner,
         )
@@ -1366,7 +1712,7 @@ class ResolveFixedThreadsTests(TestCase):
             "load_repository_limits",
             return_value=MODULE.RepositoryLimits(10, 100, 100),
         ):
-            result = MODULE.resolve_threads(
+            result = resolve_threads(
                 "SecPal/api",
                 123,
                 "a" * 40,
@@ -1376,10 +1722,7 @@ class ResolveFixedThreadsTests(TestCase):
                     first: expected_thread_state(first),
                     second: expected_thread_state(second),
                 },
-                reviewed_state_digest=manifest["reviewed_state_digest"],
-                validation_evidence_digest="d" * 64,
-                eligibility_evidence_digest=eligibility.evidence_digest,
-                eligibility_evidence=eligibility,
+                eligibility_manifest=manifest,
                 follow_up_verifier=consume_follow_up_capacity,
                 runner=fake,
             )
@@ -1457,7 +1800,7 @@ class ResolveFixedThreadsTests(TestCase):
                     return_value=limits,
                 ),
             ):
-                result = MODULE.resolve_threads(
+                result = resolve_threads(
                     "SecPal/api",
                     123,
                     "a" * 40,
@@ -1467,10 +1810,7 @@ class ResolveFixedThreadsTests(TestCase):
                         first: expected_thread_state(first, comments),
                         second: expected_thread_state(second, comments),
                     },
-                    reviewed_state_digest=manifest["reviewed_state_digest"],
-                    validation_evidence_digest="d" * 64,
-                    eligibility_evidence_digest=eligibility.evidence_digest,
-                    eligibility_evidence=eligibility,
+                    eligibility_manifest=manifest,
                     follow_up_verifier=consume_follow_up_capacity,
                     runner=fake,
                 )
@@ -1536,7 +1876,7 @@ class ResolveFixedThreadsTests(TestCase):
 
         with self.assertRaisesRegex(
             MODULE.ResolutionError,
-            "validation evidence digest is required",
+            "authenticated mutation boundary",
         ):
             MODULE.resolve_threads(
                 "SecPal/api",
@@ -1560,7 +1900,7 @@ class ResolveFixedThreadsTests(TestCase):
 
         with self.assertRaisesRegex(
             MODULE.ResolutionError,
-            "reviewed target state must cover",
+            "authenticated mutation boundary",
         ):
             MODULE.resolve_threads(
                 "SecPal/api",
@@ -2053,11 +2393,6 @@ class ResolveFixedThreadsTests(TestCase):
         manifest = eligibility_payload(reviewed, (thread_id,))
         manifest["schema_version"] = "1.0"
         del manifest["eligible_threads"][0]["follow_up"]
-        canonical_payload = MODULE._canonical_json_bytes(manifest)
-        evidence = MODULE.EligibilityEvidence(
-            hashlib.sha256(canonical_payload).hexdigest(),
-            canonical_payload,
-        )
         fake = FakeGh(
             [
                 target_response(thread_id),
@@ -2068,17 +2403,14 @@ class ResolveFixedThreadsTests(TestCase):
         )
         verifier = mock.Mock()
 
-        result = MODULE.resolve_threads(
+        result = resolve_threads(
             "SecPal/api",
             123,
             "a" * 40,
             (thread_id,),
             apply=True,
             expected_targets={thread_id: expected_thread_state(thread_id)},
-            reviewed_state_digest=reviewed["state_digest"],
-            validation_evidence_digest="d" * 64,
-            eligibility_evidence_digest=evidence.evidence_digest,
-            eligibility_evidence=evidence,
+            eligibility_manifest=manifest,
             follow_up_verifier=verifier,
             runner=fake,
         )
@@ -2724,13 +3056,14 @@ class ResolveFixedThreadsTests(TestCase):
                         resolve_response(thread_id),
                     ]
                 )
+                live_verifier = MODULE.verify_live_follow_up
 
                 def verifier(
                     exact: Any,
                     budget: Any,
                     adapter: Any = adapter,
                 ) -> Any:
-                    return MODULE.verify_live_follow_up(
+                    return live_verifier(
                         exact,
                         budget=budget,
                         state_reader=lambda expected: MODULE.follow_up.read_live_follow_up(
@@ -2746,7 +3079,7 @@ class ResolveFixedThreadsTests(TestCase):
                     "load_repository_limits",
                     return_value=MODULE.RepositoryLimits(4, 100, 100),
                 ):
-                    result = MODULE.resolve_threads(
+                    result = resolve_threads(
                         "SecPal/api",
                         123,
                         "a" * 40,
@@ -2755,10 +3088,7 @@ class ResolveFixedThreadsTests(TestCase):
                         expected_targets={
                             thread_id: expected_thread_state(thread_id)
                         },
-                        reviewed_state_digest=manifest["reviewed_state_digest"],
-                        validation_evidence_digest="d" * 64,
-                        eligibility_evidence_digest=eligibility.evidence_digest,
-                        eligibility_evidence=eligibility,
+                        eligibility_manifest=manifest,
                         follow_up_verifier=verifier,
                         runner=target_runner,
                     )
@@ -2868,10 +3198,7 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 stderr = StringIO()
 
-                with (
-                    mock.patch("sys.stderr", stderr),
-                    mock.patch.object(MODULE, "resolve_threads") as resolver,
-                ):
+                with mock.patch("sys.stderr", stderr):
                     exit_code = MODULE.main(
                         [
                             "--repo",
@@ -2901,7 +3228,6 @@ class ResolveFixedThreadsTests(TestCase):
                     stderr.getvalue(),
                 )
                 self.assertNotIn("Traceback", stderr.getvalue())
-                resolver.assert_not_called()
 
     def test_reviewed_state_loader_rejects_tampered_feedback(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -3216,29 +3542,7 @@ class ResolveFixedThreadsTests(TestCase):
             },
         )
         with (
-            mock.patch.object(
-                MODULE,
-                "load_reviewed_state",
-                return_value=reviewed,
-            ),
-            mock.patch.object(
-                MODULE,
-                "load_validation_evidence",
-                return_value=MODULE.ValidationEvidence(
-                    kind="attestation",
-                    evidence_digest="d" * 64,
-                    validated_tree_sha="f" * 40,
-                    validation_receipt_digest="b" * 64,
-                    eligibility_evidence_digest="e" * 64,
-                ),
-            ),
-            mock.patch.object(MODULE, "verify_local_fix_commit") as verify_commit,
-            mock.patch.object(
-                MODULE,
-                "load_eligibility_evidence",
-                return_value=MODULE.EligibilityEvidence("e" * 64, b"{}"),
-            ),
-            mock.patch.object(MODULE, "resolve_threads", return_value=report),
+            mock.patch.object(MODULE, "resolve_threads", return_value=report) as resolver,
             redirect_stdout(output),
         ):
             returncode = MODULE.main(
@@ -3266,7 +3570,18 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(returncode, 1)
         self.assertEqual(json.loads(output.getvalue()), report)
-        verify_commit.assert_called_once()
+        resolver.assert_called_once_with(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            ("PRRT_exampleOne",),
+            apply=False,
+            repository_root=".",
+            reviewed_state_path="reviewed.json",
+            expected_reviewed_state_digest="c" * 64,
+            validation_evidence_path="attestation.json",
+            eligibility_evidence_path="eligibility.json",
+        )
 
     def test_run_gh_uses_trusted_absolute_executable_and_environment(self) -> None:
         completed = subprocess.CompletedProcess(

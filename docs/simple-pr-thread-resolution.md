@@ -59,6 +59,10 @@ mutation.
 
 The command verifies only the invariants required for this operation:
 
+- the CLI and supported programmatic entry point both consume the canonical
+  reviewed-state, validation-attestation, repository, and eligibility inputs;
+  caller-constructed evidence objects or self-computed matching digests cannot
+  authorize mutation;
 - repository and PR exist;
 - repository is an exact entry in the canonical production registry;
 - PR is open;
