@@ -384,6 +384,8 @@ if [ -f tests/polyscope-state-audit.sh ]; then
   }
 fi
 
+python3 -m unittest tests/polyscope-work-graph-advisory.py
+
 if [ -f tests/polyscope-clone-reaper.sh ]; then
   bash tests/polyscope-clone-reaper.sh || {
     echo "" >&2

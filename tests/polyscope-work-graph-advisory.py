@@ -135,6 +135,5 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         for unit in semantic_units:
             self.assertIn("docs/work-graph-contract.md", unit)
 
-
 if __name__ == "__main__":
     unittest.main()
