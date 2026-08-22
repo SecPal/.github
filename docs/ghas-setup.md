@@ -185,6 +185,12 @@ does not change required checks or other pull-request review settings.
 - `enforce_admins=true`: Non-negotiable - even admins must follow rules
 - `required_approving_review_count=0`: Single maintainer project, automated checks provide quality gates
 - Required status checks: Keep them aligned with the real lint, test, build, analysis, and governance gates each repository actually runs
+- Required signatures: Enable GitHub's native `required_signatures` protection
+  on every protected default branch. It is the primary commit-signature control;
+  do not add a duplicate signature workflow unless a repository's established
+  required-check baseline deliberately needs independent evidence. For example,
+  the `.github` repository retains `Validate Signed PR Commits`, while the
+  documentation-only private `operations` repository has no CI check to require.
 
 ### Copilot Review Ruleset
 

@@ -358,7 +358,8 @@ class AuditClassificationTests(TestCase):
         first = {"repository": "SecPal/z", "status": "clean", "findings": []}
         second = {"repository": "SecPal/a", "status": "clean", "findings": []}
         self.assertEqual(audit.document([first, second]), audit.document([second, first]))
-        self.assertEqual(len(audit.DEFAULT_REPOSITORIES), 9)
+        self.assertEqual(len(audit.DEFAULT_REPOSITORIES), 10)
+        self.assertIn("SecPal/operations", audit.DEFAULT_REPOSITORIES)
 
     def test_cli_returns_zero_for_a_clean_repository(self):
         class EmptyAdapter:

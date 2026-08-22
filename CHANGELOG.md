@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-22 - Register The Private Operations Repository In Governance Audits
+
+**Changed:**
+
+- added `SecPal/operations` to the managed required-check and zero-approval
+  synchronization registry with an intentionally empty check set: the bootstrap
+  repository has no workflow-backed checks, and native GitHub required-signature
+  protection remains its primary signature control
+- included `SecPal/operations` in the organization-wide canonical work-graph
+  audit inventory and documented the native-signature baseline alongside the
+  repository-specific required-check policy
+
+---
+
 ## 2026-08-21 - Centralize The Single-Maintainer Review Baseline
 
 **Changed:**
