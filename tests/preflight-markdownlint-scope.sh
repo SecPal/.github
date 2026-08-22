@@ -74,6 +74,23 @@ printf '%s\n' "validate-copilot-instructions" >> "$TEST_LOG"
 EOF
 chmod +x "$workspace/tests/validate-copilot-instructions.sh"
 
+cat >"$workspace/tests/polyscope-work-graph-advisory.py" <<'EOF'
+"""Fixture stand-in that proves preflight invokes its required test path."""
+
+import os
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+            log.write("polyscope-work-graph-advisory\n")
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+
 cat >"$workspace/README.md" <<'EOF'
 # Test Workspace
 EOF
@@ -175,8 +192,10 @@ if ! grep -Eq 'markdownlint.*(^|[[:space:]])README\.md($|[[:space:]])' "$log_fil
   exit 1
 fi
 
-if ! grep -Fxq 'validate-ai-instructions' "$test_log" || ! grep -Fxq 'validate-copilot-instructions' "$test_log"; then
-  echo "Expected preflight to execute both AI-instructions and legacy Copilot compatibility regression tests" >&2
+if ! grep -Fxq 'validate-ai-instructions' "$test_log" \
+  || ! grep -Fxq 'validate-copilot-instructions' "$test_log" \
+  || ! grep -Fxq 'polyscope-work-graph-advisory' "$test_log"; then
+  echo "Expected preflight to execute the selected fixture compatibility and advisory regression tests" >&2
   cat "$test_log" >&2
   exit 1
 fi

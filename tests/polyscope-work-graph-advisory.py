@@ -13,9 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "templates" / "polyscope-codex-AGENTS.md"
-QUALITY_WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
-PREFLIGHT = ROOT / "scripts" / "preflight.sh"
-ADVISORY_TEST_COMMAND = "python3 -m unittest tests/polyscope-work-graph-advisory.py"
 
 
 class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
@@ -137,24 +134,6 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         self.assertTrue(semantic_units)
         for unit in semantic_units:
             self.assertIn("docs/work-graph-contract.md", unit)
-
-    def test_required_quality_and_complete_preflight_run_this_contract(self) -> None:
-        quality = QUALITY_WORKFLOW.read_text(encoding="utf-8")
-        work_graph_job = re.search(
-            r"^  work-graph-resolver:\n(?P<body>.*?)(?=^  [a-z][\w-]+:|\Z)",
-            quality,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        self.assertIsNotNone(work_graph_job, "the Work-Graph Resolver job is missing")
-        self.assertIn(ADVISORY_TEST_COMMAND, work_graph_job.group("body"))
-
-        preflight = PREFLIGHT.read_text(encoding="utf-8")
-        self.assertRegex(
-            preflight,
-            rf"if \[ -f tests/polyscope-work-graph-advisory\.py \]; then\n"
-            rf"  {re.escape(ADVISORY_TEST_COMMAND)} \|\| \{{[\s\S]*?\n    exit 1\n  \}}\nfi",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

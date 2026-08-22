@@ -107,8 +107,23 @@ create_preflight_fixture() {
   local seed_renames="${3-false}"
 
   create_git_fixture "$repository" "$exclude_patterns" "$seed_renames"
-  mkdir -p "$repository/scripts" "$repository/bin"
+  mkdir -p "$repository/scripts" "$repository/bin" "$repository/tests"
   cp "$PREFLIGHT_SCRIPT" "$repository/scripts/preflight.sh"
+
+  cat >"$repository/tests/polyscope-work-graph-advisory.py" <<'EOF'
+"""Fixture stand-in for preflight's required advisory-test dependency."""
+
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
 
   cat >"$repository/bin/npx" <<'EOF'
 #!/usr/bin/env bash

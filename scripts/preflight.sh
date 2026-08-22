@@ -384,14 +384,7 @@ if [ -f tests/polyscope-state-audit.sh ]; then
   }
 fi
 
-if [ -f tests/polyscope-work-graph-advisory.py ]; then
-  python3 -m unittest tests/polyscope-work-graph-advisory.py || {
-    echo "" >&2
-    echo "❌ Polyscope work-graph advisory contract test failed!" >&2
-    echo "Restore the managed advisory contract and its required quality-validation wiring." >&2
-    exit 1
-  }
-fi
+python3 -m unittest tests/polyscope-work-graph-advisory.py
 
 if [ -f tests/polyscope-clone-reaper.sh ]; then
   bash tests/polyscope-clone-reaper.sh || {

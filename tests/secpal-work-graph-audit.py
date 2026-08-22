@@ -8,6 +8,7 @@ from __future__ import annotations
 import sys
 import importlib.util
 import io
+import re
 from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -25,6 +26,71 @@ assert SPEC and SPEC.loader
 SPEC.loader.exec_module(audit_cli)
 
 REPO = "SecPal/.github"
+QUALITY_WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
+PREFLIGHT = ROOT / "scripts" / "preflight.sh"
+ADVISORY_TEST_COMMAND = "python3 -m unittest tests/polyscope-work-graph-advisory.py"
+
+
+def work_graph_resolver_steps(workflow: str) -> tuple[str, ...]:
+    """Return the existing Work-Graph Resolver job's YAML step blocks."""
+    lines = workflow.splitlines()
+    job_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.fullmatch(r"(?P<indent> *)work-graph-resolver:", line)
+        ),
+        None,
+    )
+    if job_index is None:
+        raise AssertionError("the Work-Graph Resolver job is missing")
+
+    job_indent = len(lines[job_index]) - len(lines[job_index].lstrip())
+    job_lines: list[str] = []
+    for line in lines[job_index + 1 :]:
+        if re.fullmatch(rf"{' ' * job_indent}[A-Za-z][\w-]*:", line):
+            break
+        job_lines.append(line)
+
+    steps: list[list[str]] = []
+    step_indent: int | None = None
+    for line in job_lines:
+        match = re.match(r"^( *)(- name: .*)$", line)
+        if match:
+            step_indent = len(match.group(1))
+            steps.append([line])
+        elif steps and step_indent is not None and len(line) - len(line.lstrip()) > step_indent:
+            steps[-1].append(line)
+    return tuple("\n".join(step) for step in steps)
+
+
+def assert_executable_advisory_workflow_step(workflow: str) -> None:
+    for step in work_graph_resolver_steps(workflow):
+        if re.search(rf"^\s*run:\s*{re.escape(ADVISORY_TEST_COMMAND)}\s*$", step, re.MULTILINE):
+            if re.search(r"^\s*continue-on-error:\s*true\s*(?:#.*)?$", step, re.MULTILINE | re.IGNORECASE):
+                raise AssertionError("the advisory-test step must not continue on error")
+            return
+    raise AssertionError("the Work-Graph Resolver job must execute the advisory contract test")
+
+
+def assert_fail_closed_preflight_advisory_invocation(preflight: str) -> None:
+    if not re.search(r"^set -euo pipefail$", preflight, re.MULTILINE):
+        raise AssertionError("preflight must use fail-closed shell options")
+    if re.search(
+        r"^\s*if\s+\[\s+-f\s+tests/polyscope-work-graph-advisory\.py\s*\];\s*then\s*$",
+        preflight,
+        re.MULTILINE,
+    ):
+        raise AssertionError("preflight must not skip the advisory contract test when it is missing")
+    commands = re.findall(
+        rf"^\s*{re.escape(ADVISORY_TEST_COMMAND)}\s*$",
+        preflight,
+        re.MULTILINE,
+    )
+    if len(commands) != 1:
+        raise AssertionError("preflight must execute the advisory contract test exactly once")
+
+
 def key(number): return f"{REPO}#{number}"
 def leaf(number, **kwargs): return Node(REPO, number, has_acceptance_criteria=True, **kwargs)
 
@@ -589,6 +655,44 @@ class AuditClassificationTests(TestCase):
         self.assertFalse(link.has_status_checklist)
         self.assertFalse(inline_code.has_status_checklist)
         self.assertFalse(prose.has_status_checklist)
+
+
+class ValidationWiringTests(TestCase):
+    def test_required_quality_executes_the_advisory_contract_test(self):
+        assert_executable_advisory_workflow_step(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_comment_only_advisory_command_is_not_an_executable_workflow_step(self):
+        workflow = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+        commented = workflow.replace(
+            f"run: {ADVISORY_TEST_COMMAND}",
+            f"# {ADVISORY_TEST_COMMAND}",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "must execute"):
+            assert_executable_advisory_workflow_step(commented)
+
+    def test_continue_on_error_is_rejected_for_the_advisory_workflow_step(self):
+        workflow = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+        masked = workflow.replace(
+            f"run: {ADVISORY_TEST_COMMAND}",
+            f"run: {ADVISORY_TEST_COMMAND}\n        continue-on-error: true",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "must not continue"):
+            assert_executable_advisory_workflow_step(masked)
+
+    def test_preflight_executes_the_advisory_contract_test_fail_closed(self):
+        assert_fail_closed_preflight_advisory_invocation(PREFLIGHT.read_text(encoding="utf-8"))
+
+    def test_preflight_rejects_an_existence_guard_for_the_advisory_test(self):
+        guarded = (
+            "set -euo pipefail\n"
+            "if [ -f tests/polyscope-work-graph-advisory.py ]; then\n"
+            f"  {ADVISORY_TEST_COMMAND}\n"
+            "fi\n"
+        )
+        with self.assertRaisesRegex(AssertionError, "must not skip"):
+            assert_fail_closed_preflight_advisory_invocation(guarded)
 
 
 if __name__ == "__main__":
