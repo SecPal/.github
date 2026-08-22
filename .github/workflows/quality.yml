@@ -104,6 +104,9 @@ jobs:
       - name: Run advisory audit tests
         run: python3 -m unittest tests/secpal-work-graph-audit.py
 
+      - name: Run Polyscope advisory contract tests
+        run: python3 -m unittest tests/polyscope-work-graph-advisory.py
+
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest
