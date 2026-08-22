@@ -90,6 +90,8 @@ def read_live_follow_up(
     *,
     gh_executable: str = "gh",
     environment: Mapping[str, str] | None = None,
+    node_executable: str = "node",
+    parser_environment: Mapping[str, str] | None = None,
     adapter: Any | None = None,
     query_consumer: Callable[[Any], None] | None = None,
     query_context: Any = None,
@@ -119,6 +121,8 @@ def read_live_follow_up(
         snapshot, canonical = github.load_snapshot(
             graph_adapter,
             requested,
+            node_executable=node_executable,
+            parser_environment=parser_environment,
         )
         resolution = resolver.resolve(snapshot, canonical)
     except (github.GitHubError, MarkdownParserUnavailable, resolver.ScopeRootUnresolved) as exc:
@@ -138,7 +142,7 @@ def read_live_follow_up(
         open=state.open,
         structurally_complete=node.has_acceptance_criteria,
         blocked=state.blocked,
-        malformed=state.malformed,
+        malformed=state.malformed or resolution.structurally_malformed,
         graph_complete=resolution.complete,
     )
 

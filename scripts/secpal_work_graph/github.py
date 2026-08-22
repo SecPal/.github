@@ -417,7 +417,13 @@ def _merge_node(existing: Node, upgraded: Node) -> Node:
     )
 
 
-def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot, str]:
+def load_snapshot(
+    adapter: GitHubReadAdapter,
+    scope_root: str,
+    *,
+    node_executable: str = "node",
+    parser_environment: Mapping[str, str] | None = None,
+) -> tuple[Snapshot, str]:
     """Collect one immutable snapshot for ``scope_root``.
 
     Traversal reads exactly what the canonical predicates need: the scope root's
@@ -485,7 +491,14 @@ def load_snapshot(adapter: GitHubReadAdapter, scope_root: str) -> tuple[Snapshot
 
     ordered_bodies = list(bodies)
     structural = dict(
-        zip(ordered_bodies, acceptance_criteria.parse([bodies[key] for key in ordered_bodies]))
+        zip(
+            ordered_bodies,
+            acceptance_criteria.parse(
+                [bodies[key] for key in ordered_bodies],
+                node_executable=node_executable,
+                environment=parser_environment,
+            ),
+        )
     )
     snapshot = Snapshot(
         {

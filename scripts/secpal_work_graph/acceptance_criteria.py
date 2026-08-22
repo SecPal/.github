@@ -16,7 +16,7 @@ import string
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 CANONICAL_HEADING = "acceptance criteria"
 DECORATIVE_PREFIX = "✅"
@@ -58,6 +58,7 @@ def parse(
     bodies: Sequence[str | None],
     *,
     node_executable: str = "node",
+    environment: Mapping[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> list[StructuralBody]:
     """Parse structural body facts through the shared Markdown bridge."""
@@ -76,6 +77,7 @@ def parse(
                 check=False,
                 timeout=timeout,
                 cwd=str(_REPOSITORY_ROOT),
+                env=None if environment is None else dict(environment),
             )
         except (OSError, subprocess.SubprocessError) as error:
             raise MarkdownParserUnavailable(f"cannot run the Markdown parser: {error}") from error

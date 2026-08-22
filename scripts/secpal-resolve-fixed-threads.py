@@ -19,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 import operator
+import os
 import re
 import subprocess
 import sys
@@ -203,6 +204,26 @@ FollowUpIdentity = follow_up.FollowUpIdentity
 LiveFollowUpState = follow_up.LiveFollowUpState
 
 
+def _resolve_trusted_markdown_node() -> str:
+    """Resolve Node only for the maintained Markdown parser bridge."""
+
+    for directory in evidence.TRUSTED_COMMAND_DIRECTORIES:
+        candidate = directory / "node"
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    raise ResolutionError("trusted Markdown parser is unavailable")
+
+
+def _markdown_parser_environment() -> dict[str, str]:
+    """Return an explicit non-inheriting Markdown parser environment."""
+
+    return {"PATH": evidence.TRUSTED_COMMAND_PATH}
+
+
 def _read_authenticated_follow_up(
     identity: FollowUpIdentity,
     budget: InvocationBudget,
@@ -211,11 +232,15 @@ def _read_authenticated_follow_up(
         executable = evidence.resolve_trusted_executable("gh")
     except evidence.CommandPolicyError as exc:
         raise ResolutionError("trusted GitHub CLI is unavailable") from exc
+    node_executable = _resolve_trusted_markdown_node()
+    parser_environment = _markdown_parser_environment()
     try:
         return follow_up.read_live_follow_up(
             identity,
             gh_executable=executable,
             environment=evidence.command_environment("gh"),
+            node_executable=node_executable,
+            parser_environment=parser_environment,
             query_consumer=_consume_api_call,
             query_context=budget,
         )

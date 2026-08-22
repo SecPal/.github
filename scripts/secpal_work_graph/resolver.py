@@ -83,6 +83,22 @@ INCOMPLETE_FINDINGS = frozenset(
     }
 )
 
+# Canonical structural violations that make a resolved work-graph unsuitable
+# as authenticated follow-up ownership. Ordinary dependency blocking and
+# advisory body/claim findings deliberately remain outside this predicate.
+STRUCTURAL_MALFORMATION_FINDINGS = frozenset(
+    {
+        FINDING_CONTAINMENT_CYCLE,
+        FINDING_CONTAINMENT_INCONSISTENT,
+        FINDING_UNRESOLVED_ANCESTOR,
+        FINDING_MULTIPLE_PARENTS,
+        FINDING_SUB_ISSUE_LIMIT,
+        FINDING_NESTING_DEPTH,
+        FINDING_DEPENDENCY_LIMIT,
+        FINDING_DEPENDENCY_LIMIT_BLOCKING,
+    }
+)
+
 # Findings that leave the set of possible `READY` candidates, or their path
 # order, unknown. A leaf that merely fails closed on its own inputs is not one
 # of these: that is a complete answer about that leaf, and section 3.1 keeps it
@@ -179,6 +195,15 @@ class Resolution:
     @property
     def complete(self) -> bool:
         return not any(finding.code in INCOMPLETE_FINDINGS for finding in self.findings)
+
+    @property
+    def structurally_malformed(self) -> bool:
+        """Whether canonical native-graph structure violates hard constraints."""
+
+        return any(
+            finding.code in STRUCTURAL_MALFORMATION_FINDINGS
+            for finding in self.findings
+        )
 
     def resolved_states(self) -> tuple[NodeState, ...]:
         """Subtree states in traversal order, skipping nodes that stayed unresolved."""

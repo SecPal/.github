@@ -284,6 +284,7 @@ ALLOWED_IMPORTS = {
         "import importlib.util",
         "import json",
         "import operator",
+        "import os",
         "import re",
         "import subprocess",
         "import sys",
@@ -440,6 +441,8 @@ LOADED_MODULE_ATTRIBUTES = {
         "evidence": {
             "CommandPolicyError",
             "ContractError",
+            "TRUSTED_COMMAND_DIRECTORIES",
+            "TRUSTED_COMMAND_PATH",
             "_commit_signature_format",
             "command_environment",
             "interpret_local_signature",
@@ -648,7 +651,9 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_graphql",
     "_load_evidence_helper",
     "_load_follow_up_helper",
+    "_markdown_parser_environment",
     "_read_authenticated_follow_up",
+    "_resolve_trusted_markdown_node",
     "_load_repository_entry",
     "_expected_validation_attestation",
     "_expected_validation_receipt",
@@ -729,11 +734,24 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_consume_api_call",
     ),
     DynamicImportCall(
+        ("_read_authenticated_follow_up",),
+        "_markdown_parser_environment",
+    ),
+    DynamicImportCall(
+        ("_read_authenticated_follow_up",),
+        "_resolve_trusted_markdown_node",
+    ),
+    DynamicImportCall(
         ("resolve_threads",),
         "verify_live_follow_up",
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite(
+        "for",
+        ("_resolve_trusted_markdown_node",),
+        "evidence.TRUSTED_COMMAND_DIRECTORIES",
+    ),
     LoopSite("for", ("_graphql",), "variables.items()"),
     LoopSite("for", ("load_reviewed_state",), "threads"),
     LoopSite("for", ("load_reviewed_state",), "thread_ids"),

@@ -8,6 +8,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -1971,6 +1972,130 @@ class ResolveFixedThreadsTests(TestCase):
                     ),
                 )
 
+    def test_guarded_follow_up_binds_trusted_markdown_parser_context(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        state = MODULE.LiveFollowUpState(identity, True, True, False, False, True)
+        parser_environment = {"PATH": "/usr/bin:/bin"}
+        hostile_environment = {
+            "PATH": "/workspace-controlled/bin",
+            "NODE_OPTIONS": "--require=/workspace-controlled/preload.js",
+            "NODE_PATH": "/workspace-controlled/modules",
+        }
+
+        def resolve_executable(name: str) -> str:
+            self.assertEqual(name, "gh")
+            return "/usr/bin/gh"
+
+        with (
+            mock.patch.dict(os.environ, hostile_environment, clear=True),
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                side_effect=resolve_executable,
+            ),
+            mock.patch.object(
+                MODULE,
+                "_resolve_trusted_markdown_node",
+                return_value="/usr/bin/node",
+            ),
+            mock.patch.object(
+                MODULE,
+                "_markdown_parser_environment",
+                return_value=parser_environment,
+            ),
+            mock.patch.object(
+                MODULE.follow_up,
+                "read_live_follow_up",
+                return_value=state,
+            ) as reader,
+        ):
+            observed = MODULE._read_authenticated_follow_up(
+                identity,
+                MODULE.InvocationBudget(10, 100, 100),
+            )
+
+        self.assertEqual(observed, state)
+        self.assertEqual(reader.call_args.kwargs["node_executable"], "/usr/bin/node")
+        self.assertEqual(
+            reader.call_args.kwargs["parser_environment"],
+            parser_environment,
+        )
+        self.assertNotIn("NODE_OPTIONS", parser_environment)
+        self.assertNotIn("NODE_PATH", parser_environment)
+        self.assertNotEqual(parser_environment["PATH"], hostile_environment["PATH"])
+
+    def test_trusted_markdown_node_ignores_hostile_path_and_node_options(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as trusted_directory,
+            tempfile.TemporaryDirectory() as hostile_directory,
+        ):
+            trusted_node = Path(trusted_directory) / "node"
+            hostile_node = Path(hostile_directory) / "node"
+            for executable in (trusted_node, hostile_node):
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o700)
+            hostile_environment = {
+                "PATH": hostile_directory,
+                "NODE_OPTIONS": "--require=/workspace/preload.js",
+                "NODE_PATH": "/workspace/modules",
+                "NPM_CONFIG_NODE_OPTIONS": "--import=/workspace/import.mjs",
+            }
+            with (
+                mock.patch.object(
+                    MODULE.evidence,
+                    "TRUSTED_COMMAND_DIRECTORIES",
+                    (Path(trusted_directory),),
+                ),
+                mock.patch.object(
+                    MODULE.evidence,
+                    "TRUSTED_COMMAND_PATH",
+                    trusted_directory,
+                ),
+                mock.patch.dict(os.environ, hostile_environment, clear=True),
+            ):
+                resolved = MODULE._resolve_trusted_markdown_node()
+                environment = MODULE._markdown_parser_environment()
+
+        self.assertEqual(resolved, str(trusted_node.resolve()))
+        self.assertTrue(Path(resolved).is_absolute())
+        self.assertEqual(environment, {"PATH": trusted_directory})
+        self.assertNotIn("NODE_OPTIONS", environment)
+        self.assertNotIn("NODE_PATH", environment)
+        self.assertNotIn("NPM_CONFIG_NODE_OPTIONS", environment)
+
+    def test_guarded_follow_up_fails_when_trusted_node_is_unavailable(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE,
+                "_resolve_trusted_markdown_node",
+                side_effect=MODULE.ResolutionError(
+                    "trusted Markdown parser is unavailable"
+                ),
+            ),
+            mock.patch.object(MODULE.follow_up, "read_live_follow_up") as reader,
+            self.assertRaisesRegex(MODULE.ResolutionError, "trusted Markdown parser"),
+        ):
+            MODULE._read_authenticated_follow_up(
+                identity,
+                MODULE.InvocationBudget(10, 100, 100),
+            )
+        reader.assert_not_called()
+
     def test_live_follow_up_rejects_canonical_malformed_and_incomplete_graphs(self) -> None:
         identity = MODULE.FollowUpIdentity(
             repository="SecPal/api",
@@ -2022,6 +2147,135 @@ class ResolveFixedThreadsTests(TestCase):
                         exact
                     ),
                 )
+
+    def test_live_follow_up_rejects_canonical_structural_malformations(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+
+        def node(number: int, **overrides: Any) -> Any:
+            values = {
+                "repository": "SecPal/api",
+                "number": number,
+                "has_acceptance_criteria": True,
+            }
+            values.update(overrides)
+            return work_graph_model.Node(**values)
+
+        root = "SecPal/api#123"
+        shared = "SecPal/api#125"
+        multiple_parents = work_graph_model.build_snapshot(
+            [
+                node(123, url=identity.issue_url, children=("SecPal/api#124",)),
+                node(124, parent=root, children=(shared, shared)),
+                node(125, parent="SecPal/api#124"),
+            ]
+        )
+
+        sub_issue_children = tuple(
+            f"SecPal/api#{number}"
+            for number in range(
+                200,
+                200 + work_graph_model.MAX_SUB_ISSUES_PER_PARENT + 1,
+            )
+        )
+        sub_issue_limit = work_graph_model.build_snapshot(
+            [
+                node(123, url=identity.issue_url, children=sub_issue_children),
+                *(
+                    node(number, parent=root)
+                    for number in range(
+                        200,
+                        200 + work_graph_model.MAX_SUB_ISSUES_PER_PARENT + 1,
+                    )
+                ),
+            ]
+        )
+
+        depth = work_graph_model.MAX_NESTING_DEPTH + 1
+        nested_nodes = [node(123, url=identity.issue_url, children=("SecPal/api#300",))]
+        nested_nodes.extend(
+            node(
+                300 + offset,
+                parent=root if offset == 0 else f"SecPal/api#{299 + offset}",
+                children=(f"SecPal/api#{301 + offset}",) if offset < depth - 1 else (),
+            )
+            for offset in range(depth)
+        )
+        nesting_limit = work_graph_model.build_snapshot(nested_nodes)
+
+        dependency_numbers = range(
+            400,
+            400 + work_graph_model.MAX_DEPENDENCIES_PER_TYPE + 1,
+        )
+        dependency_limit = work_graph_model.build_snapshot(
+            [
+                node(
+                    123,
+                    url=identity.issue_url,
+                    blocked_by=tuple(f"SecPal/api#{number}" for number in dependency_numbers),
+                ),
+                *(node(number, state="CLOSED", state_reason="completed") for number in dependency_numbers),
+            ]
+        )
+
+        for label, snapshot in (
+            ("multiple parents", multiple_parents),
+            ("sub-issue limit", sub_issue_limit),
+            ("nesting limit", nesting_limit),
+            ("dependency limit", dependency_limit),
+        ):
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    work_graph_github,
+                    "load_snapshot",
+                    return_value=(snapshot, root),
+                ),
+                self.assertRaisesRegex(MODULE.ResolutionError, "malformed"),
+            ):
+                MODULE.verify_live_follow_up(
+                    identity,
+                    state_reader=lambda exact: MODULE.follow_up.read_live_follow_up(exact),
+                )
+
+    def test_live_follow_up_accepts_canonically_valid_blocked_issue(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        root = "SecPal/api#123"
+        snapshot = work_graph_model.build_snapshot(
+            [
+                work_graph_model.Node(
+                    repository="SecPal/api",
+                    number=123,
+                    url=identity.issue_url,
+                    blocked_by=("SecPal/api#124",),
+                    has_acceptance_criteria=True,
+                ),
+                work_graph_model.Node(
+                    repository="SecPal/api",
+                    number=124,
+                    has_acceptance_criteria=True,
+                ),
+            ]
+        )
+        with mock.patch.object(
+            work_graph_github,
+            "load_snapshot",
+            return_value=(snapshot, root),
+        ):
+            state = MODULE.verify_live_follow_up(
+                identity,
+                state_reader=lambda exact: MODULE.follow_up.read_live_follow_up(exact),
+            )
+        self.assertTrue(state.blocked)
+        self.assertFalse(state.malformed)
+        self.assertTrue(state.graph_complete)
 
     def test_follow_up_traversal_and_pagination_share_invocation_budget(self) -> None:
         thread_id = "PRRT_exampleOne"
