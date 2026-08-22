@@ -12,9 +12,37 @@ import json
 import os
 import re
 import tempfile
+import importlib.util
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
+
+
+FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
+
+
+def _load_follow_up_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review.follow_up")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if not isinstance(loaded_path, str) or Path(loaded_path).resolve() != FOLLOW_UP_HELPER:
+            raise RuntimeError("Canonical follow-up module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+follow_up = _load_follow_up_helper()
 
 
 OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -50,6 +78,7 @@ CLASSIFICATION_DISPOSITIONS = {
     "OUTDATED_AND_OBSOLETE": frozenset({"OBSOLETE_ON_CURRENT_HEAD"}),
     "ALREADY_FIXED_ON_SNAPSHOT_HEAD": frozenset({"PROVEN_EXISTING_FIX"}),
     "SUPERSEDED": frozenset({"SUPERSEDED_BY_CANONICAL"}),
+    "OUTSIDE_PR_SCOPE": frozenset({"TRACKED_AS_FOLLOW_UP"}),
     "SECURITY_WEAKENING_SUGGESTION": frozenset({"REJECTED_SECURITY_WEAKENING"}),
 }
 FIXED_DISPOSITIONS = frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"})
@@ -394,6 +423,7 @@ class BatchFinding:
     test_evidence_digest: str | None
     commit_sha: str | None
     canonical_finding_id: str | None
+    follow_up: Any | None
 
 
 @dataclass(frozen=True)
@@ -423,6 +453,7 @@ def _batch_finding_dict(item: BatchFinding) -> dict[str, Any]:
         "test_evidence_digest": item.test_evidence_digest,
         "commit_sha": item.commit_sha,
         "canonical_finding_id": item.canonical_finding_id,
+        "follow_up": item.follow_up.to_dict() if item.follow_up is not None else None,
     }
 
 
@@ -467,7 +498,7 @@ class BatchRequest:
         }
         if set(value) != expected_keys:
             raise SecurityBlocker("batch request contains unsupported capabilities or missing fields")
-        if value["schema_version"] != "1.2":
+        if value["schema_version"] != "1.3":
             raise SecurityBlocker("batch request schema version is unsupported")
         findings_value = value["findings"]
         if not isinstance(findings_value, list) or not findings_value:
@@ -485,6 +516,7 @@ class BatchRequest:
                 "test_evidence_digest",
                 "commit_sha",
                 "canonical_finding_id",
+                "follow_up",
             }
             if not isinstance(item, dict) or set(item) != expected_finding_keys:
                 raise SecurityBlocker("batch finding shape is invalid")
@@ -565,6 +597,16 @@ class BatchRequest:
                 canonical_finding_id = _require_string(
                     canonical_finding_id, "canonical finding identity"
                 )
+            follow_up_identity = None
+            if disposition == "TRACKED_AS_FOLLOW_UP":
+                try:
+                    follow_up_identity = follow_up.parse_follow_up(item["follow_up"])
+                except follow_up.FollowUpError as exc:
+                    raise SecurityBlocker(str(exc)) from exc
+            elif item["follow_up"] is not None:
+                raise SecurityBlocker(
+                    "only tracked out-of-scope findings may carry follow-up identity"
+                )
             findings.append(
                 BatchFinding(
                     finding_id=_require_string(item["finding_id"], "finding identity"),
@@ -579,6 +621,7 @@ class BatchRequest:
                     test_evidence_digest=test_evidence_digest,
                     commit_sha=commit_sha,
                     canonical_finding_id=canonical_finding_id,
+                    follow_up=follow_up_identity,
                 )
             )
         finding_ids = [item.finding_id for item in findings]
@@ -674,7 +717,7 @@ class BatchRequest:
         if not REPOSITORY.fullmatch(repository):
             raise SecurityBlocker("batch repository identity is invalid")
         return cls(
-            schema_version="1.2",
+            schema_version="1.3",
             batch_id=_require_string(value["batch_id"], "batch identity"),
             repository=repository,
             pull_request_number=pull_request_number,
@@ -1355,6 +1398,13 @@ def execute_resolution_batch(
     if request.expected_base_ref != default_branch:
         raise SecurityBlocker("reviewed pull request does not target the registered default branch")
     _verify_classified_findings(request, reviewed_state, registry)
+    if any(
+        finding.disposition == "TRACKED_AS_FOLLOW_UP"
+        for finding in request.findings
+    ):
+        raise SecurityBlocker(
+            "tracked follow-up resolution requires the authenticated simple resolver"
+        )
     check_policy = registry.get("check_policy") if isinstance(registry, dict) else None
     readiness = _read_with_one_retry(lambda: gateway.read_preflight(request))
     _verify_readiness(request, readiness, registry)

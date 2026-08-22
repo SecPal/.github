@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,7 @@ from typing import Any, Sequence
 from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts/secpal-resolve-fixed-threads.py"
 SPEC = importlib.util.spec_from_file_location("secpal_resolve_fixed_threads", SCRIPT)
 if SPEC is None or SPEC.loader is None:
@@ -24,6 +27,10 @@ if SPEC is None or SPEC.loader is None:
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+from secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
+from secpal_work_graph import github as work_graph_github  # noqa: E402
+from secpal_work_graph import model as work_graph_model  # noqa: E402
 
 
 class FakeGh:
@@ -151,6 +158,78 @@ def target_response(
     }
 
 
+def work_graph_issue_response(
+    number: int,
+    *,
+    blocked_by: tuple[int, ...] = (),
+    labels_have_next_page: bool = False,
+) -> Any:
+    def references(numbers: tuple[int, ...]) -> list[dict[str, Any]]:
+        return [
+            {"number": item, "repository": {"nameWithOwner": "SecPal/api"}}
+            for item in numbers
+        ]
+
+    issue = {
+        "number": number,
+        "title": f"Issue {number}",
+        "url": f"https://github.com/SecPal/api/issues/{number}",
+        "state": "OPEN",
+        "stateReason": None,
+        "body": "## Acceptance Criteria\n\n- [ ] Tracked responsibility",
+        "repository": {"nameWithOwner": "SecPal/api"},
+        "parent": None,
+        "labels": {
+            "nodes": [],
+            "pageInfo": {
+                "hasNextPage": labels_have_next_page,
+                "endCursor": "labels-next" if labels_have_next_page else None,
+            },
+        },
+        "subIssues": {
+            "nodes": [],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        },
+        "blockedBy": {
+            "nodes": references(blocked_by),
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        },
+        "blocking": {"totalCount": 0},
+        "closedByPullRequestsReferences": {
+            "nodes": [],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        },
+    }
+    return work_graph_github.GraphQLResponse(
+        {"repository": {"issue": issue}},
+        (),
+    )
+
+
+def work_graph_page_response(
+    connection: str,
+    *,
+    has_next_page: bool,
+    end_cursor: str | None,
+) -> Any:
+    return work_graph_github.GraphQLResponse(
+        {
+            "repository": {
+                "issue": {
+                    connection: {
+                        "nodes": [],
+                        "pageInfo": {
+                            "hasNextPage": has_next_page,
+                            "endCursor": end_cursor,
+                        },
+                    }
+                }
+            }
+        },
+        (),
+    )
+
+
 def expected_thread_state(
     thread_id: str,
     comments: list[tuple[str, str, str | None]] | None = None,
@@ -178,12 +257,14 @@ def resolve_threads(
     repository: str,
     number: int,
     expected_head: str,
-    thread_ids: list[str],
+    thread_ids: Sequence[str],
     *,
     apply: bool,
     runner: Any = MODULE._run_gh,
     reviewed_comments: dict[str, list[tuple[str, str, str | None]]] | None = None,
     expected_targets: dict[str, Any] | None = None,
+    eligibility_manifest: dict[str, Any] | None = None,
+    follow_up_verifier: Any = MODULE.verify_live_follow_up,
 ) -> dict[str, Any]:
     immutable_thread_ids = tuple(thread_ids)
     if expected_targets is None:
@@ -195,18 +276,121 @@ def resolve_threads(
             )
             for thread_id in immutable_thread_ids
         }
-    return MODULE.resolve_threads(
-        repository,
-        number,
-        expected_head,
-        immutable_thread_ids,
-        apply=apply,
-        expected_targets=expected_targets,
-        reviewed_state_digest="c" * 64,
-        validation_evidence_digest="d" * 64,
-        eligibility_evidence_digest="e" * 64,
-        runner=runner,
+    reviewed_head = "b" * 40 if expected_head != "b" * 40 else "a" * 40
+    feedback = {
+        "pull_request_reactions": [],
+        "reviews": [],
+        "conversation_comments": [],
+        "threads": [
+            {
+                "node_id": thread_id,
+                "is_resolved": expected_targets[thread_id].is_resolved,
+                "is_outdated": expected_targets[thread_id].is_outdated,
+                "comments": [
+                    {
+                        "node_id": comment.comment_id,
+                        "body_digest": comment.body_digest,
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "USER_reviewer",
+                            "database_id": 7,
+                        },
+                        "reply_to_id": comment.reply_to_id,
+                        "reactions": [],
+                    }
+                    for comment in expected_targets[thread_id].comments
+                ],
+            }
+            for thread_id in immutable_thread_ids
+        ],
+    }
+    identity = {
+        "repository": repository,
+        "pull_request_number": number,
+        "head_sha": reviewed_head,
+        "base_ref": "main",
+        "base_sha": "9" * 40,
+        "pr_state": "OPEN",
+    }
+    reviewed = {
+        "schema_version": "1.0",
+        **identity,
+        **feedback,
+        "feedback_digest": MODULE._digest_json(feedback),
+        "state_digest": MODULE._digest_json({**identity, "feedback": feedback}),
+    }
+    if eligibility_manifest is None:
+        eligibility_manifest = {
+            "schema_version": "1.1",
+            "repository": repository,
+            "pull_request_number": number,
+            "reviewed_head_sha": reviewed_head,
+            "reviewed_state_digest": reviewed["state_digest"],
+            "eligible_threads": [
+                {
+                    "thread_id": thread_id,
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": [f"finding-{index}"],
+                    "evidence_digest": f"{index:x}" * 64,
+                    "follow_up": None,
+                }
+                for index, thread_id in enumerate(immutable_thread_ids, start=1)
+            ],
+        }
+    else:
+        eligibility_manifest = copy.deepcopy(eligibility_manifest)
+        eligibility_manifest["repository"] = repository
+        eligibility_manifest["pull_request_number"] = number
+        eligibility_manifest["reviewed_head_sha"] = reviewed_head
+        eligibility_manifest["reviewed_state_digest"] = reviewed[
+            "state_digest"
+        ]
+    eligibility_digest = MODULE._digest_json(eligibility_manifest)
+    attestation = validation_attestation_payload(
+        reviewed,
+        eligibility_digest,
+        expected_head=expected_head,
     )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        reviewed_path = root / "reviewed.json"
+        validation_path = root / "validation.json"
+        eligibility_path = root / "eligibility.json"
+        reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+        validation_path.write_text(json.dumps(attestation), encoding="utf-8")
+        eligibility_path.write_text(
+            json.dumps(eligibility_manifest),
+            encoding="utf-8",
+        )
+        git = FakeGit(
+            expected_head=expected_head,
+            reviewed_head=reviewed_head,
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=attestation["validation_receipt_digest"],
+            repository=repository,
+        )
+        with (
+            mock.patch.object(MODULE, "_run_git", git),
+            mock.patch.object(MODULE, "_run_gh", runner),
+            mock.patch.object(
+                MODULE,
+                "verify_live_follow_up",
+                follow_up_verifier,
+            ),
+        ):
+            return MODULE.resolve_threads(
+                repository,
+                number,
+                expected_head,
+                immutable_thread_ids,
+                apply=apply,
+                repository_root=root,
+                reviewed_state_path=reviewed_path,
+                expected_reviewed_state_digest=reviewed["state_digest"],
+                validation_evidence_path=validation_path,
+                eligibility_evidence_path=eligibility_path,
+            )
 
 
 def reviewed_state_payload(
@@ -262,6 +446,8 @@ def reviewed_state_payload(
 def validation_attestation_payload(
     reviewed: dict[str, Any],
     eligibility_evidence_digest: str = "e" * 64,
+    *,
+    expected_head: str = "c" * 40,
 ) -> dict[str, Any]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
@@ -291,7 +477,7 @@ def validation_attestation_payload(
     fields = {
         "schema_version": "1.0",
         "repository": reviewed["repository"],
-        "head_sha": "c" * 40,
+        "head_sha": expected_head,
         "registry_digest": MODULE._digest_json(binding),
         "command_set_digest": MODULE._digest_json(binding["validation"]),
         "successful_result": True,
@@ -339,7 +525,7 @@ def eligibility_payload(
     thread_ids: Sequence[str],
 ) -> dict[str, Any]:
     fields = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "repository": reviewed["repository"],
         "pull_request_number": reviewed["pull_request_number"],
         "reviewed_head_sha": reviewed["head_sha"],
@@ -351,6 +537,7 @@ def eligibility_payload(
                 "disposition": "CORRECTED_AND_VERIFIED",
                 "finding_ids": [f"finding-{index}"],
                 "evidence_digest": f"{index:x}" * 64,
+                "follow_up": None,
             }
             for index, thread_id in enumerate(thread_ids, start=1)
         ],
@@ -358,7 +545,362 @@ def eligibility_payload(
     return fields
 
 
+def write_authenticated_resolution_inputs(
+    directory: str,
+    thread_ids: Sequence[str],
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], FakeGit]:
+    reviewed = reviewed_state_payload(thread_ids[0], [])
+    if len(thread_ids) > 1:
+        reviewed["threads"] = [
+            {
+                "node_id": thread_id,
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [],
+            }
+            for thread_id in thread_ids
+        ]
+        feedback = {
+            key: reviewed[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        reviewed["feedback_digest"] = MODULE._digest_json(feedback)
+        identity = {
+            key: reviewed[key]
+            for key in (
+                "repository",
+                "pull_request_number",
+                "head_sha",
+                "base_ref",
+                "base_sha",
+                "pr_state",
+            )
+        }
+        reviewed["state_digest"] = MODULE._digest_json(
+            {**identity, "feedback": feedback}
+        )
+    eligibility = manifest or eligibility_payload(reviewed, thread_ids)
+    eligibility_digest = MODULE._digest_json(eligibility)
+    attestation = validation_attestation_payload(
+        reviewed,
+        eligibility_digest,
+    )
+    root = Path(directory)
+    (root / "reviewed.json").write_text(
+        json.dumps(reviewed),
+        encoding="utf-8",
+    )
+    (root / "validation.json").write_text(
+        json.dumps(attestation),
+        encoding="utf-8",
+    )
+    (root / "eligibility.json").write_text(
+        json.dumps(eligibility),
+        encoding="utf-8",
+    )
+    git = FakeGit(
+        expected_head=attestation["head_sha"],
+        reviewed_head=reviewed["head_sha"],
+        tree=attestation["validated_tree_sha"],
+        receipt_digest=attestation["validation_receipt_digest"],
+    )
+    return reviewed, attestation, eligibility, git
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_programmatic_apply_refuses_caller_constructed_authorization(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        manifest = {
+            "schema_version": "1.1",
+            "repository": "SecPal/api",
+            "pull_request_number": 123,
+            "reviewed_head_sha": "b" * 40,
+            "reviewed_state_digest": "c" * 64,
+            "eligible_threads": [
+                {
+                    "thread_id": thread_id,
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["D1-forged-substitution"],
+                    "evidence_digest": "f" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        canonical_payload = MODULE._canonical_json_bytes(manifest)
+        eligibility_digest = hashlib.sha256(canonical_payload).hexdigest()
+        forged = MODULE.EligibilityEvidence(
+            eligibility_digest,
+            canonical_payload,
+        )
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        try:
+            result = MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (thread_id,),
+                apply=True,
+                expected_targets={thread_id: expected_thread_state(thread_id)},
+                reviewed_state_digest=manifest["reviewed_state_digest"],
+                validation_evidence_digest="d" * 64,
+                eligibility_evidence_digest=eligibility_digest,
+                eligibility_evidence=forged,
+                follow_up_verifier=verifier,
+                runner=fake,
+            )
+        except MODULE.ResolutionError as exc:
+            self.assertRegex(str(exc), "authenticated mutation boundary")
+        else:
+            self.fail(
+                "unsafe caller-constructed apply succeeded: "
+                f"github_calls={len(fake.calls)}, resolved={result['resolved']}"
+            )
+
+        self.assertEqual(fake.calls, [])
+        verifier.assert_not_called()
+
+    def test_authenticated_programmatic_apply_uses_the_cli_evidence_chain(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        with tempfile.TemporaryDirectory() as directory:
+            reviewed, attestation, _eligibility, git = (
+                write_authenticated_resolution_inputs(directory, (thread_id,))
+            )
+            fake = FakeGh(
+                [
+                    target_response(thread_id, head=attestation["head_sha"]),
+                    target_response(thread_id, head=attestation["head_sha"]),
+                    target_response(thread_id, head=attestation["head_sha"]),
+                    resolve_response(thread_id),
+                ]
+            )
+            verifier = mock.Mock()
+
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", fake),
+                mock.patch.object(MODULE, "verify_live_follow_up", verifier),
+            ):
+                result = MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    attestation["head_sha"],
+                    (thread_id,),
+                    apply=True,
+                    repository_root=directory,
+                    reviewed_state_path=Path(directory) / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=Path(directory) / "validation.json",
+                    eligibility_evidence_path=Path(directory) / "eligibility.json",
+                )
+
+        self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(len(fake.calls), 4)
+        self.assertGreaterEqual(len(git.calls), 7)
+        verifier.assert_not_called()
+
+    def test_authenticated_programmatic_apply_rejects_cross_bound_evidence(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        cases = (
+            "eligibility digest",
+            "eligibility reviewed head",
+            "attestation reviewed state",
+            "fix parent",
+            "receipt trailer",
+            "eligibility repository",
+            "eligibility pull request",
+            "eligibility thread set",
+            "tracked disposition substitution",
+        )
+        for label in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                reviewed, attestation, eligibility, git = (
+                    write_authenticated_resolution_inputs(directory, (thread_id,))
+                )
+                if label == "eligibility digest":
+                    eligibility["eligible_threads"][0]["evidence_digest"] = "9" * 64
+                elif label == "eligibility reviewed head":
+                    eligibility["reviewed_head_sha"] = "b" * 40
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                elif label == "attestation reviewed state":
+                    attestation["reviewed_state_digest"] = "9" * 64
+                elif label == "fix parent":
+                    git.reviewed_head = "b" * 40
+                elif label == "receipt trailer":
+                    git.receipt_digest = "9" * 64
+                elif label == "eligibility repository":
+                    eligibility["repository"] = "SecPal/contracts"
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                elif label == "eligibility pull request":
+                    eligibility["pull_request_number"] = 124
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                elif label == "eligibility thread set":
+                    eligibility["eligible_threads"][0]["thread_id"] = (
+                        "PRRT_exampleOther"
+                    )
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(eligibility),
+                    )
+                else:
+                    trusted = copy.deepcopy(eligibility)
+                    trusted["eligible_threads"][0].update(
+                        classification="OUTSIDE_PR_SCOPE",
+                        disposition="TRACKED_AS_FOLLOW_UP",
+                        follow_up={
+                            "repository": "SecPal/api",
+                            "issue_number": 456,
+                            "issue_url": "https://github.com/SecPal/api/issues/456",
+                        },
+                    )
+                    attestation = validation_attestation_payload(
+                        reviewed,
+                        MODULE._digest_json(trusted),
+                    )
+                Path(directory, "eligibility.json").write_text(
+                    json.dumps(eligibility),
+                    encoding="utf-8",
+                )
+                Path(directory, "validation.json").write_text(
+                    json.dumps(attestation),
+                    encoding="utf-8",
+                )
+                if label != "receipt trailer":
+                    git.receipt_digest = attestation[
+                        "validation_receipt_digest"
+                    ]
+                fake = FakeGh([])
+
+                with (
+                    mock.patch.object(MODULE, "_run_git", git),
+                    mock.patch.object(MODULE, "_run_gh", fake),
+                    self.assertRaises(MODULE.ResolutionError),
+                ):
+                    MODULE.resolve_threads(
+                        "SecPal/api",
+                        123,
+                        attestation["head_sha"],
+                        (thread_id,),
+                        apply=True,
+                        repository_root=directory,
+                        reviewed_state_path=Path(directory) / "reviewed.json",
+                        expected_reviewed_state_digest=reviewed["state_digest"],
+                        validation_evidence_path=Path(directory) / "validation.json",
+                        eligibility_evidence_path=Path(directory) / "eligibility.json",
+                    )
+
+                self.assertEqual(fake.calls, [])
+
+    def test_apply_requires_canonical_eligibility_before_github_access(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "authenticated mutation boundary",
+        ):
+            MODULE.resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (thread_id,),
+                apply=True,
+                expected_targets={thread_id: expected_thread_state(thread_id)},
+                reviewed_state_digest="c" * 64,
+                validation_evidence_digest="d" * 64,
+                eligibility_evidence_digest="e" * 64,
+                eligibility_evidence=None,
+                follow_up_verifier=verifier,
+                runner=fake,
+            )
+
+        self.assertEqual(fake.calls, [])
+        verifier.assert_not_called()
+
+    def test_apply_refuses_mismatched_or_malformed_canonical_eligibility(
+        self,
+    ) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = eligibility_payload(
+            reviewed_state_payload(thread_id, []),
+            (thread_id,),
+        )
+        canonical_payload = MODULE._canonical_json_bytes(payload)
+        cases = {
+            "digest mismatch": MODULE.EligibilityEvidence(
+                "f" * 64,
+                canonical_payload,
+            ),
+            "malformed payload": MODULE.EligibilityEvidence(
+                hashlib.sha256(b"{}").hexdigest(),
+                b"{}",
+            ),
+        }
+        for label, eligibility in cases.items():
+            fake = FakeGh([])
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "authenticated|eligibility evidence",
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    (thread_id,),
+                    apply=True,
+                    expected_targets={
+                        thread_id: expected_thread_state(thread_id)
+                    },
+                    reviewed_state_digest=payload["reviewed_state_digest"],
+                    validation_evidence_digest="d" * 64,
+                    eligibility_evidence_digest=eligibility.evidence_digest,
+                    eligibility_evidence=eligibility,
+                    runner=fake,
+                )
+            self.assertEqual(fake.calls, [])
+
     def test_preflight_rejects_insufficient_thread_budget_before_first_write(
         self,
     ) -> None:
@@ -845,7 +1387,11 @@ class ResolveFixedThreadsTests(TestCase):
         )
         self.assertEqual(
             registry["fixed_thread_resolution"]["allowed_github_operations"],
-            ["READ_NAMED_REVIEW_THREAD", "RESOLVE_NAMED_REVIEW_THREAD"],
+            [
+                "READ_NAMED_REVIEW_THREAD",
+                "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+                "RESOLVE_NAMED_REVIEW_THREAD",
+            ],
         )
         self.assertIn(
             "MERGE_READINESS",
@@ -925,6 +1471,128 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [first, second])
         self.assertEqual(len(fake.calls), 8)
 
+    def test_tracked_follow_up_is_verified_before_final_target_recheck(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_id, []),
+            (thread_id,),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up=identity.to_dict(),
+        )
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (thread_id,),
+            apply=True,
+            expected_targets={thread_id: expected_thread_state(thread_id)},
+            eligibility_manifest=manifest,
+            follow_up_verifier=verifier,
+            runner=fake,
+        )
+
+        self.assertEqual(result["resolved"], [thread_id])
+        verifier.assert_called_once_with(identity, mock.ANY)
+        self.assertEqual(len(fake.calls), 4)
+
+        refused = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+            ]
+        )
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (thread_id,),
+            apply=True,
+            expected_targets={thread_id: expected_thread_state(thread_id)},
+            eligibility_manifest=manifest,
+            follow_up_verifier=mock.Mock(
+                side_effect=MODULE.ResolutionError("follow-up issue is closed")
+            ),
+            runner=refused,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed"][0]["phase"], "follow-up")
+        self.assertEqual(len(refused.calls), 1)
+
+    def test_tracked_follow_up_rechecks_target_after_verification(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_id, []),
+            (thread_id,),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up=identity.to_dict(),
+        )
+        drifted = False
+        mutation_calls = 0
+
+        def runner(arguments: Sequence[str]) -> dict[str, Any]:
+            nonlocal mutation_calls
+            query = next(
+                argument.removeprefix("query=")
+                for argument in arguments
+                if argument.startswith("query=")
+            )
+            if query == MODULE.TARGET_QUERY:
+                return target_response(
+                    thread_id,
+                    head="b" * 40 if drifted else "a" * 40,
+                )
+            if query == MODULE.RESOLVE_MUTATION:
+                mutation_calls += 1
+                return resolve_response(thread_id)
+            raise AssertionError("unexpected GraphQL document")
+
+        def verifier(_identity: Any, *_args: Any) -> None:
+            nonlocal drifted
+            drifted = True
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (thread_id,),
+            apply=True,
+            expected_targets={thread_id: expected_thread_state(thread_id)},
+            eligibility_manifest=manifest,
+            follow_up_verifier=verifier,
+            runner=runner,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(mutation_calls, 0)
+
     def test_resolution_succeeds_for_every_hosted_check_condition_without_reading_it(
         self,
     ) -> None:
@@ -992,6 +1660,440 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [])
         self.assertEqual(len(fake.calls), 3)
 
+    def test_follow_up_budget_loss_reserves_the_entire_unattempted_suffix(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+
+        def consume_follow_up_capacity(_identity: Any, budget: Any) -> None:
+            for _ in range(3):
+                MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(10, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_follow_up_capacity,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["unattempted"], [second])
+        self.assertFalse(
+            any(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            )
+        )
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_future_tracked_minimum_is_reserved_before_first_write(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+
+        def consume_minimum_follow_up_read(_identity: Any, budget: Any) -> None:
+            MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(9, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_minimum_follow_up_read,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["unattempted"], [second])
+        self.assertFalse(
+            any(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            )
+        )
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_future_tracked_minimum_counts_every_remaining_tracked_thread(
+        self,
+    ) -> None:
+        thread_ids = (
+            "PRRT_exampleOne",
+            "PRRT_exampleTwo",
+            "PRRT_exampleThree",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_ids[0], []), thread_ids
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh([target_response(item) for item in thread_ids])
+
+        def consume_minimum_follow_up_read(_identity: Any, budget: Any) -> None:
+            MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(13, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                thread_ids,
+                apply=True,
+                expected_targets={
+                    item: expected_thread_state(item) for item in thread_ids
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_minimum_follow_up_read,
+                runner=fake,
+            )
+
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["unattempted"], list(thread_ids[1:]))
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_future_tracked_minimum_ignores_non_tracked_suffix_items(self) -> None:
+        thread_ids = (
+            "PRRT_exampleOne",
+            "PRRT_exampleTwo",
+            "PRRT_exampleThree",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_ids[0], []), thread_ids
+        )
+        manifest["eligible_threads"][1].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        fake = FakeGh([target_response(item) for item in thread_ids])
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(12, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                thread_ids,
+                apply=True,
+                expected_targets={
+                    item: expected_thread_state(item) for item in thread_ids
+                },
+                eligibility_manifest=manifest,
+                runner=fake,
+            )
+
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(result["unattempted"], list(thread_ids[1:]))
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_future_tracked_minimum_allows_a_sufficient_batch(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []), (first, second)
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+                target_response(second),
+                resolve_response(second),
+            ]
+        )
+
+        def consume_minimum_follow_up_read(_identity: Any, budget: Any) -> None:
+            MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(10, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_minimum_follow_up_read,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["resolved"], [first, second])
+        self.assertEqual(len(fake.calls), 8)
+
+    def test_unknown_follow_up_growth_retains_structured_partial_failure(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []), (first, second)
+        )
+        for issue_number, item in enumerate(
+            manifest["eligible_threads"], start=123
+        ):
+            item.update(
+                classification="OUTSIDE_PR_SCOPE",
+                disposition="TRACKED_AS_FOLLOW_UP",
+                follow_up={
+                    "repository": "SecPal/api",
+                    "issue_number": issue_number,
+                    "issue_url": (
+                        f"https://github.com/SecPal/api/issues/{issue_number}"
+                    ),
+                },
+            )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+        follow_up_reads = 0
+
+        def consume_variable_follow_up_reads(_identity: Any, budget: Any) -> None:
+            nonlocal follow_up_reads
+            count = 1 if follow_up_reads == 0 else 3
+            follow_up_reads += 1
+            for _ in range(count):
+                MODULE._consume_api_call(budget)
+
+        with mock.patch.object(
+            MODULE,
+            "load_repository_limits",
+            return_value=MODULE.RepositoryLimits(11, 100, 100),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                },
+                eligibility_manifest=manifest,
+                follow_up_verifier=consume_variable_follow_up_reads,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(result["failed"][0]["thread_id"], second)
+        self.assertEqual(result["failed"][0]["phase"], "recheck")
+        self.assertEqual(result["unattempted"], [])
+        self.assertEqual(len(fake.calls), 5)
+
+    def test_follow_up_suffix_reservation_covers_thread_and_comment_limits(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        cases = {
+            "thread": (
+                MODULE.RepositoryLimits(20, 6, 100),
+                [],
+                MODULE._consume_thread,
+            ),
+            "comment": (
+                MODULE.RepositoryLimits(20, 100, 6),
+                [("PRRC_root", "review body", None)],
+                MODULE._consume_comment,
+            ),
+        }
+        for label, (limits, comments, consume) in cases.items():
+            fake = FakeGh(
+                [
+                    target_response(first, comments=comments),
+                    target_response(second, comments=comments),
+                    target_response(first, comments=comments),
+                    target_response(first, comments=comments),
+                    resolve_response(first),
+                ]
+            )
+
+            def consume_follow_up_capacity(
+                _identity: Any,
+                budget: Any,
+                consume: Any = consume,
+            ) -> None:
+                consume(budget)
+
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    MODULE,
+                    "load_repository_limits",
+                    return_value=limits,
+                ),
+            ):
+                result = resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    (first, second),
+                    apply=True,
+                    expected_targets={
+                        first: expected_thread_state(first, comments),
+                        second: expected_thread_state(second, comments),
+                    },
+                    eligibility_manifest=manifest,
+                    follow_up_verifier=consume_follow_up_capacity,
+                    runner=fake,
+                )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["resolved"], [])
+            self.assertEqual(result["unattempted"], [second])
+            self.assertFalse(
+                any(
+                    f"query={MODULE.RESOLVE_MUTATION}" in call
+                    for call in fake.calls
+                )
+            )
+            self.assertEqual(len(fake.calls), 2)
+
     def test_initially_resolved_target_is_rechecked_before_success(self) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh(
@@ -1042,7 +2144,7 @@ class ResolveFixedThreadsTests(TestCase):
 
         with self.assertRaisesRegex(
             MODULE.ResolutionError,
-            "validation evidence digest is required",
+            "authenticated mutation boundary",
         ):
             MODULE.resolve_threads(
                 "SecPal/api",
@@ -1066,7 +2168,7 @@ class ResolveFixedThreadsTests(TestCase):
 
         with self.assertRaisesRegex(
             MODULE.ResolutionError,
-            "reviewed target state must cover",
+            "authenticated mutation boundary",
         ):
             MODULE.resolve_threads(
                 "SecPal/api",
@@ -1521,7 +2623,101 @@ class ResolveFixedThreadsTests(TestCase):
                 authenticated_evidence_digest=MODULE._digest_json(manifest),
             )
 
-        self.assertEqual(evidence_digest, MODULE._digest_json(manifest))
+        self.assertEqual(
+            evidence_digest.evidence_digest,
+            MODULE._digest_json(manifest),
+        )
+
+    def test_authenticated_v1_0_legacy_eligibility_remains_readable(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(reviewed, (thread_id,))
+        manifest["schema_version"] = "1.0"
+        del manifest["eligible_threads"][0]["follow_up"]
+        original_digest = MODULE._digest_json(manifest)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            evidence = MODULE.load_eligibility_evidence(
+                path,
+                "SecPal/api",
+                123,
+                reviewed["head_sha"],
+                reviewed["state_digest"],
+                (thread_id,),
+                authenticated_evidence_digest=original_digest,
+            )
+
+        self.assertEqual(evidence.evidence_digest, original_digest)
+        self.assertEqual(
+            hashlib.sha256(evidence.canonical_payload).hexdigest(),
+            original_digest,
+        )
+
+    def test_authenticated_v1_0_legacy_apply_uses_no_follow_up_reader(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(reviewed, (thread_id,))
+        manifest["schema_version"] = "1.0"
+        del manifest["eligible_threads"][0]["follow_up"]
+        fake = FakeGh(
+            [
+                target_response(thread_id),
+                target_response(thread_id),
+                target_response(thread_id),
+                resolve_response(thread_id),
+            ]
+        )
+        verifier = mock.Mock()
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (thread_id,),
+            apply=True,
+            expected_targets={thread_id: expected_thread_state(thread_id)},
+            eligibility_manifest=manifest,
+            follow_up_verifier=verifier,
+            runner=fake,
+        )
+
+        self.assertEqual(result["resolved"], [thread_id])
+        verifier.assert_not_called()
+
+    def test_v1_0_eligibility_refuses_tracked_and_follow_up_shapes(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = reviewed_state_payload(thread_id, [])
+        base = eligibility_payload(reviewed, (thread_id,))
+        base["schema_version"] = "1.0"
+        cases = {
+            "tracked disposition": {
+                **base["eligible_threads"][0],
+                "classification": "OUTSIDE_PR_SCOPE",
+                "disposition": "TRACKED_AS_FOLLOW_UP",
+            },
+            "follow-up field": base["eligible_threads"][0],
+        }
+        del cases["tracked disposition"]["follow_up"]
+        for label, item in cases.items():
+            manifest = {**base, "eligible_threads": [item]}
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "eligibility.json"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "eligibility evidence thread",
+                ):
+                    MODULE.load_eligibility_evidence(
+                        path,
+                        "SecPal/api",
+                        123,
+                        reviewed["head_sha"],
+                        reviewed["state_digest"],
+                        (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(manifest),
+                    )
 
     def test_ineligible_or_unlisted_thread_blocks_before_github(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -1557,6 +2753,641 @@ class ResolveFixedThreadsTests(TestCase):
                             changed
                         ),
                     )
+
+    def test_tracked_follow_up_eligibility_is_exact_and_authenticated(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        manifest = eligibility_payload(payload, (thread_id,))
+        manifest["schema_version"] = "1.1"
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            evidence = MODULE.load_eligibility_evidence(
+                path,
+                "SecPal/api",
+                123,
+                payload["head_sha"],
+                payload["state_digest"],
+                (thread_id,),
+                authenticated_evidence_digest=MODULE._digest_json(manifest),
+            )
+        self.assertEqual(evidence.evidence_digest, MODULE._digest_json(manifest))
+        self.assertEqual(
+            MODULE._tracked_follow_ups_from_payload(
+                evidence.canonical_payload,
+                repository="SecPal/api",
+                number=123,
+                reviewed_head_sha=payload["head_sha"],
+                reviewed_state_digest=payload["state_digest"],
+                thread_ids=(thread_id,),
+            )[
+                thread_id
+            ].issue_number,
+            123,
+        )
+
+        changed = copy.deepcopy(manifest)
+        changed["eligible_threads"][0]["follow_up"] = {
+            "repository": "SecPal/api",
+            "issue_number": 124,
+            "issue_url": "https://github.com/SecPal/api/issues/124",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError, "not authenticated"
+            ):
+                MODULE.load_eligibility_evidence(
+                    path,
+                    "SecPal/api",
+                    123,
+                    payload["head_sha"],
+                    payload["state_digest"],
+                    (thread_id,),
+                    authenticated_evidence_digest=MODULE._digest_json(manifest),
+                )
+
+    def test_tracked_follow_up_identity_fails_closed_when_malformed(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        payload = reviewed_state_payload(thread_id, [])
+        base = eligibility_payload(payload, (thread_id,))
+        base["schema_version"] = "1.1"
+        base["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+        )
+        cases = {
+            "missing": None,
+            "malformed repository": {
+                "repository": "SecPal",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+            "non-positive number": {
+                "repository": "SecPal/api",
+                "issue_number": 0,
+                "issue_url": "https://github.com/SecPal/api/issues/0",
+            },
+            "pull URL": {
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/pull/123",
+            },
+            "wrong owner": {
+                "repository": "SecPal/frontend",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+            "wrong number": {
+                "repository": "SecPal/api",
+                "issue_number": 124,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        }
+        for label, follow_up in cases.items():
+            manifest = copy.deepcopy(base)
+            if follow_up is not None:
+                manifest["eligible_threads"][0]["follow_up"] = follow_up
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "eligibility.json"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(MODULE.ResolutionError, "follow-up"):
+                    MODULE.load_eligibility_evidence(
+                        path,
+                        "SecPal/api",
+                        123,
+                        payload["head_sha"],
+                        payload["state_digest"],
+                        (thread_id,),
+                        authenticated_evidence_digest=MODULE._digest_json(manifest),
+                    )
+
+        duplicate = copy.deepcopy(base)
+        duplicate["eligible_threads"][0]["follow_up"] = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+        serialized = json.dumps(duplicate).replace(
+            '"issue_number": 123',
+            '"issue_number": 122, "issue_number": 123',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(serialized, encoding="utf-8")
+            with self.assertRaisesRegex(MODULE.ResolutionError, "malformed"):
+                MODULE.load_eligibility_evidence(
+                    path,
+                    "SecPal/api",
+                    123,
+                    payload["head_sha"],
+                    payload["state_digest"],
+                    (thread_id,),
+                    authenticated_evidence_digest=MODULE._digest_json(duplicate),
+                )
+
+    def test_live_follow_up_requires_open_structurally_complete_exact_issue(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        failures = {
+            "missing": MODULE.ResolutionError("follow-up is inaccessible"),
+            "closed": MODULE.LiveFollowUpState(
+                identity, False, True, False, False, True
+            ),
+            "structurally incomplete": MODULE.LiveFollowUpState(
+                identity, True, False, False, False, True
+            ),
+            "identity mismatch": MODULE.LiveFollowUpState(
+                MODULE.FollowUpIdentity(
+                    repository="SecPal/frontend",
+                    issue_number=123,
+                    issue_url="https://github.com/SecPal/frontend/issues/123",
+                ),
+                True,
+                True,
+                False,
+                False,
+                True,
+            ),
+        }
+        for label, result in failures.items():
+            def reader(_identity: Any, result: Any = result) -> Any:
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+            with self.subTest(label=label), self.assertRaisesRegex(
+                MODULE.ResolutionError, "follow-up"
+            ):
+                MODULE.verify_live_follow_up(identity, state_reader=reader)
+
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                MODULE.verify_live_follow_up(
+                    identity,
+                    state_reader=lambda _identity, blocked=blocked: MODULE.LiveFollowUpState(
+                        identity,
+                        True,
+                        True,
+                        blocked,
+                        False,
+                        True,
+                    ),
+                )
+
+    def test_guarded_follow_up_binds_trusted_markdown_parser_context(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        state = MODULE.LiveFollowUpState(identity, True, True, False, False, True)
+        parser_environment = {"PATH": "/usr/bin:/bin"}
+        hostile_environment = {
+            "PATH": "/workspace-controlled/bin",
+            "NODE_OPTIONS": "--require=/workspace-controlled/preload.js",
+            "NODE_PATH": "/workspace-controlled/modules",
+        }
+
+        def resolve_executable(name: str) -> str:
+            self.assertEqual(name, "gh")
+            return "/usr/bin/gh"
+
+        with (
+            mock.patch.dict(os.environ, hostile_environment, clear=True),
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                side_effect=resolve_executable,
+            ),
+            mock.patch.object(
+                MODULE,
+                "_resolve_trusted_markdown_node",
+                return_value="/usr/bin/node",
+            ),
+            mock.patch.object(
+                MODULE,
+                "_markdown_parser_environment",
+                return_value=parser_environment,
+            ),
+            mock.patch.object(
+                MODULE.follow_up,
+                "read_live_follow_up",
+                return_value=state,
+            ) as reader,
+        ):
+            observed = MODULE._read_authenticated_follow_up(
+                identity,
+                MODULE.InvocationBudget(10, 100, 100),
+            )
+
+        self.assertEqual(observed, state)
+        self.assertEqual(reader.call_args.kwargs["node_executable"], "/usr/bin/node")
+        self.assertEqual(
+            reader.call_args.kwargs["parser_environment"],
+            parser_environment,
+        )
+        self.assertNotIn("NODE_OPTIONS", parser_environment)
+        self.assertNotIn("NODE_PATH", parser_environment)
+        self.assertNotEqual(parser_environment["PATH"], hostile_environment["PATH"])
+
+    def test_trusted_markdown_node_ignores_hostile_path_and_node_options(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as trusted_directory,
+            tempfile.TemporaryDirectory() as hostile_directory,
+        ):
+            trusted_node = Path(trusted_directory) / "node"
+            hostile_node = Path(hostile_directory) / "node"
+            for executable in (trusted_node, hostile_node):
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o700)
+            hostile_environment = {
+                "PATH": hostile_directory,
+                "NODE_OPTIONS": "--require=/workspace/preload.js",
+                "NODE_PATH": "/workspace/modules",
+                "NPM_CONFIG_NODE_OPTIONS": "--import=/workspace/import.mjs",
+            }
+            with (
+                mock.patch.object(
+                    MODULE.evidence,
+                    "TRUSTED_COMMAND_DIRECTORIES",
+                    (Path(trusted_directory),),
+                ),
+                mock.patch.object(
+                    MODULE.evidence,
+                    "TRUSTED_COMMAND_PATH",
+                    trusted_directory,
+                ),
+                mock.patch.dict(os.environ, hostile_environment, clear=True),
+            ):
+                resolved = MODULE._resolve_trusted_markdown_node()
+                environment = MODULE._markdown_parser_environment()
+
+        self.assertEqual(resolved, str(trusted_node.resolve()))
+        self.assertTrue(Path(resolved).is_absolute())
+        self.assertEqual(environment, {"PATH": trusted_directory})
+        self.assertNotIn("NODE_OPTIONS", environment)
+        self.assertNotIn("NODE_PATH", environment)
+        self.assertNotIn("NPM_CONFIG_NODE_OPTIONS", environment)
+
+    def test_guarded_follow_up_fails_when_trusted_node_is_unavailable(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE,
+                "_resolve_trusted_markdown_node",
+                side_effect=MODULE.ResolutionError(
+                    "trusted Markdown parser is unavailable"
+                ),
+            ),
+            mock.patch.object(MODULE.follow_up, "read_live_follow_up") as reader,
+            self.assertRaisesRegex(MODULE.ResolutionError, "trusted Markdown parser"),
+        ):
+            MODULE._read_authenticated_follow_up(
+                identity,
+                MODULE.InvocationBudget(10, 100, 100),
+            )
+        reader.assert_not_called()
+
+    def test_live_follow_up_rejects_canonical_malformed_and_incomplete_graphs(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        key = "SecPal/api#123"
+        malformed = work_graph_model.build_snapshot(
+            [
+                work_graph_model.Node(
+                    repository="SecPal/api",
+                    number=123,
+                    url=identity.issue_url,
+                    parent=key,
+                    has_acceptance_criteria=True,
+                )
+            ]
+        )
+        incomplete = work_graph_model.build_snapshot(
+            [
+                work_graph_model.Node(
+                    repository="SecPal/api",
+                    number=123,
+                    url=identity.issue_url,
+                    children=("SecPal/api#124",),
+                    has_acceptance_criteria=True,
+                )
+            ]
+        )
+        for label, snapshot in (
+            ("malformed", malformed),
+            ("incomplete", incomplete),
+        ):
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    work_graph_github,
+                    "load_snapshot",
+                    return_value=(snapshot, key),
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "malformed|incomplete",
+                ),
+            ):
+                MODULE.verify_live_follow_up(
+                    identity,
+                    state_reader=lambda exact: MODULE.follow_up.read_live_follow_up(
+                        exact
+                    ),
+                )
+
+    def test_live_follow_up_rejects_canonical_structural_malformations(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+
+        def node(number: int, **overrides: Any) -> Any:
+            values = {
+                "repository": "SecPal/api",
+                "number": number,
+                "has_acceptance_criteria": True,
+            }
+            values.update(overrides)
+            return work_graph_model.Node(**values)
+
+        root = "SecPal/api#123"
+        shared = "SecPal/api#125"
+        multiple_parents = work_graph_model.build_snapshot(
+            [
+                node(123, url=identity.issue_url, children=("SecPal/api#124",)),
+                node(124, parent=root, children=(shared, shared)),
+                node(125, parent="SecPal/api#124"),
+            ]
+        )
+
+        sub_issue_children = tuple(
+            f"SecPal/api#{number}"
+            for number in range(
+                200,
+                200 + work_graph_model.MAX_SUB_ISSUES_PER_PARENT + 1,
+            )
+        )
+        sub_issue_limit = work_graph_model.build_snapshot(
+            [
+                node(123, url=identity.issue_url, children=sub_issue_children),
+                *(
+                    node(number, parent=root)
+                    for number in range(
+                        200,
+                        200 + work_graph_model.MAX_SUB_ISSUES_PER_PARENT + 1,
+                    )
+                ),
+            ]
+        )
+
+        depth = work_graph_model.MAX_NESTING_DEPTH + 1
+        nested_nodes = [node(123, url=identity.issue_url, children=("SecPal/api#300",))]
+        nested_nodes.extend(
+            node(
+                300 + offset,
+                parent=root if offset == 0 else f"SecPal/api#{299 + offset}",
+                children=(f"SecPal/api#{301 + offset}",) if offset < depth - 1 else (),
+            )
+            for offset in range(depth)
+        )
+        nesting_limit = work_graph_model.build_snapshot(nested_nodes)
+
+        dependency_numbers = range(
+            400,
+            400 + work_graph_model.MAX_DEPENDENCIES_PER_TYPE + 1,
+        )
+        dependency_limit = work_graph_model.build_snapshot(
+            [
+                node(
+                    123,
+                    url=identity.issue_url,
+                    blocked_by=tuple(f"SecPal/api#{number}" for number in dependency_numbers),
+                ),
+                *(node(number, state="CLOSED", state_reason="completed") for number in dependency_numbers),
+            ]
+        )
+        dependency_cycle = work_graph_model.build_snapshot(
+            [
+                node(
+                    123,
+                    url=identity.issue_url,
+                    blocked_by=("SecPal/api#124",),
+                ),
+                node(124, blocked_by=(root,)),
+            ]
+        )
+
+        for label, snapshot in (
+            ("multiple parents", multiple_parents),
+            ("sub-issue limit", sub_issue_limit),
+            ("nesting limit", nesting_limit),
+            ("dependency limit", dependency_limit),
+            ("dependency cycle", dependency_cycle),
+        ):
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    work_graph_github,
+                    "load_snapshot",
+                    return_value=(snapshot, root),
+                ),
+                self.assertRaisesRegex(MODULE.ResolutionError, "malformed"),
+            ):
+                MODULE.verify_live_follow_up(
+                    identity,
+                    state_reader=lambda exact: MODULE.follow_up.read_live_follow_up(exact),
+                )
+
+    def test_live_follow_up_accepts_canonically_valid_blocked_issue(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        root = "SecPal/api#123"
+        snapshot = work_graph_model.build_snapshot(
+            [
+                work_graph_model.Node(
+                    repository="SecPal/api",
+                    number=123,
+                    url=identity.issue_url,
+                    blocked_by=("SecPal/api#124",),
+                    has_acceptance_criteria=True,
+                ),
+                work_graph_model.Node(
+                    repository="SecPal/api",
+                    number=124,
+                    has_acceptance_criteria=True,
+                ),
+            ]
+        )
+        with mock.patch.object(
+            work_graph_github,
+            "load_snapshot",
+            return_value=(snapshot, root),
+        ):
+            state = MODULE.verify_live_follow_up(
+                identity,
+                state_reader=lambda exact: MODULE.follow_up.read_live_follow_up(exact),
+            )
+        self.assertTrue(state.blocked)
+        self.assertFalse(state.malformed)
+        self.assertTrue(state.graph_complete)
+
+    def test_follow_up_traversal_and_pagination_share_invocation_budget(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_id, []),
+            (thread_id,),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up=identity.to_dict(),
+        )
+        cases = {
+            "traversal": [
+                work_graph_issue_response(123, blocked_by=(124,)),
+                work_graph_issue_response(124, blocked_by=(125,)),
+                work_graph_issue_response(125, blocked_by=(126,)),
+                work_graph_issue_response(126),
+            ],
+            "pagination": [
+                work_graph_issue_response(123, labels_have_next_page=True),
+                work_graph_page_response(
+                    "labels",
+                    has_next_page=True,
+                    end_cursor="labels-next-2",
+                ),
+                work_graph_page_response(
+                    "labels",
+                    has_next_page=True,
+                    end_cursor="labels-next-3",
+                ),
+                work_graph_page_response(
+                    "labels",
+                    has_next_page=False,
+                    end_cursor=None,
+                ),
+            ],
+        }
+        for label, responses in cases.items():
+            with self.subTest(label=label):
+                adapter = work_graph_github.GitHubReadAdapter(max_nodes=10)
+                adapter.query = mock.Mock(side_effect=responses)
+                target_runner = FakeGh(
+                    [
+                        target_response(thread_id),
+                        target_response(thread_id),
+                        target_response(thread_id),
+                        resolve_response(thread_id),
+                    ]
+                )
+                live_verifier = MODULE.verify_live_follow_up
+
+                def verifier(
+                    exact: Any,
+                    budget: Any,
+                    adapter: Any = adapter,
+                ) -> Any:
+                    return live_verifier(
+                        exact,
+                        budget=budget,
+                        state_reader=lambda expected: MODULE.follow_up.read_live_follow_up(
+                            expected,
+                            adapter=adapter,
+                            query_consumer=MODULE._consume_api_call,
+                            query_context=budget,
+                        ),
+                    )
+
+                with mock.patch.object(
+                    MODULE,
+                    "load_repository_limits",
+                    return_value=MODULE.RepositoryLimits(4, 100, 100),
+                ):
+                    result = resolve_threads(
+                        "SecPal/api",
+                        123,
+                        "a" * 40,
+                        (thread_id,),
+                        apply=True,
+                        expected_targets={
+                            thread_id: expected_thread_state(thread_id)
+                        },
+                        eligibility_manifest=manifest,
+                        follow_up_verifier=verifier,
+                        runner=target_runner,
+                    )
+
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["failed"][0]["phase"], "follow-up")
+                self.assertEqual(result["resolved"], [])
+                self.assertEqual(len(target_runner.calls), 1)
+
+    def test_valid_follow_up_query_consumes_shared_invocation_budget(self) -> None:
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        adapter = work_graph_github.GitHubReadAdapter(max_nodes=10)
+        adapter.query = mock.Mock(return_value=work_graph_issue_response(123))
+        budget = MODULE.InvocationBudget(10, 100, 100)
+
+        with mock.patch.object(
+            work_graph_acceptance_criteria,
+            "parse",
+            return_value=[work_graph_acceptance_criteria.StructuralBody(True, ())],
+        ):
+            state = MODULE.follow_up.read_live_follow_up(
+                identity,
+                adapter=adapter,
+                query_consumer=MODULE._consume_api_call,
+                query_context=budget,
+            )
+
+        self.assertEqual(budget.api_calls, 1)
+        self.assertTrue(state.open)
+        self.assertTrue(state.structurally_complete)
+        self.assertFalse(state.malformed)
+        self.assertTrue(state.graph_complete)
+        MODULE.verify_live_follow_up(identity, state_reader=lambda _exact: state)
 
     def test_eligibility_manifest_rejects_rehashed_binding_drift(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -1629,10 +3460,7 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 stderr = StringIO()
 
-                with (
-                    mock.patch("sys.stderr", stderr),
-                    mock.patch.object(MODULE, "resolve_threads") as resolver,
-                ):
+                with mock.patch("sys.stderr", stderr):
                     exit_code = MODULE.main(
                         [
                             "--repo",
@@ -1662,7 +3490,6 @@ class ResolveFixedThreadsTests(TestCase):
                     stderr.getvalue(),
                 )
                 self.assertNotIn("Traceback", stderr.getvalue())
-                resolver.assert_not_called()
 
     def test_reviewed_state_loader_rejects_tampered_feedback(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -1949,6 +3776,90 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["unattempted"], [third])
         self.assertEqual(result["status"], "failed")
 
+    def test_follow_up_operational_error_uses_structured_partial_failure(
+        self,
+    ) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        third = "PRRT_exampleThree"
+        manifest = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second, third),
+        )
+        manifest["eligible_threads"][1].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        fake = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(third),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+            ]
+        )
+
+        with (
+            mock.patch.object(
+                MODULE.evidence,
+                "resolve_trusted_executable",
+                return_value="/usr/bin/gh",
+            ),
+            mock.patch.object(
+                MODULE,
+                "_resolve_trusted_markdown_node",
+                return_value="/usr/bin/node",
+            ),
+            mock.patch.object(
+                work_graph_github,
+                "load_snapshot",
+                side_effect=TypeError("malformed canonical adapter response"),
+            ),
+        ):
+            result = resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                (first, second, third),
+                apply=True,
+                expected_targets={
+                    first: expected_thread_state(first),
+                    second: expected_thread_state(second),
+                    third: expected_thread_state(third),
+                },
+                eligibility_manifest=manifest,
+                runner=fake,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["resolved"], [first])
+        self.assertEqual(
+            result["failed"],
+            [
+                {
+                    "thread_id": second,
+                    "phase": "follow-up",
+                    "write_result": "not_attempted",
+                    "error": "follow-up issue could not be read safely",
+                }
+            ],
+        )
+        self.assertEqual(result["unattempted"], [third])
+        self.assertEqual(
+            sum(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            ),
+            1,
+        )
+
     def test_main_emits_partial_report_and_returns_nonzero(self) -> None:
         report = {
             "repository": "SecPal/api",
@@ -1977,29 +3888,7 @@ class ResolveFixedThreadsTests(TestCase):
             },
         )
         with (
-            mock.patch.object(
-                MODULE,
-                "load_reviewed_state",
-                return_value=reviewed,
-            ),
-            mock.patch.object(
-                MODULE,
-                "load_validation_evidence",
-                return_value=MODULE.ValidationEvidence(
-                    kind="attestation",
-                    evidence_digest="d" * 64,
-                    validated_tree_sha="f" * 40,
-                    validation_receipt_digest="b" * 64,
-                    eligibility_evidence_digest="e" * 64,
-                ),
-            ),
-            mock.patch.object(MODULE, "verify_local_fix_commit") as verify_commit,
-            mock.patch.object(
-                MODULE,
-                "load_eligibility_evidence",
-                return_value="e" * 64,
-            ),
-            mock.patch.object(MODULE, "resolve_threads", return_value=report),
+            mock.patch.object(MODULE, "resolve_threads", return_value=report) as resolver,
             redirect_stdout(output),
         ):
             returncode = MODULE.main(
@@ -2027,7 +3916,18 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(returncode, 1)
         self.assertEqual(json.loads(output.getvalue()), report)
-        verify_commit.assert_called_once()
+        resolver.assert_called_once_with(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            ("PRRT_exampleOne",),
+            apply=False,
+            repository_root=".",
+            reviewed_state_path="reviewed.json",
+            expected_reviewed_state_digest="c" * 64,
+            validation_evidence_path="attestation.json",
+            eligibility_evidence_path="eligibility.json",
+        )
 
     def test_run_gh_uses_trusted_absolute_executable_and_environment(self) -> None:
         completed = subprocess.CompletedProcess(

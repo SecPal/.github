@@ -168,6 +168,7 @@ EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
     "fast_path.py": (),
+    "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
 }
 
@@ -207,6 +208,7 @@ ALLOWED_IMPORT_ROOTS = {
     "pathlib",
     "pwd",
     "re",
+    "secpal_work_graph",
     "site",
     "stat",
     "subprocess",
@@ -257,13 +259,23 @@ ALLOWED_IMPORTS = {
         "from __future__ import annotations",
         "import copy",
         "import hashlib",
+        "import importlib.util",
         "import json",
         "import os",
         "import re",
+        "import sys",
         "import tempfile",
         "from dataclasses import dataclass, field",
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
+    },
+    "follow_up.py": {
+        "from __future__ import annotations",
+        "import re",
+        "from dataclasses import dataclass",
+        "from typing import Any, Callable, Mapping",
+        "from secpal_work_graph import github, resolver",
+        "from secpal_work_graph.acceptance_criteria import MarkdownParserUnavailable",
     },
     "secpal-resolve-fixed-threads.py": {
         "from __future__ import annotations",
@@ -272,6 +284,7 @@ ALLOWED_IMPORTS = {
         "import importlib.util",
         "import json",
         "import operator",
+        "import os",
         "import re",
         "import subprocess",
         "import sys",
@@ -351,7 +364,13 @@ DIRECT_MODULE_ATTRIBUTES = {
         "tempfile": {"TemporaryDirectory"},
     },
     "fast_path.py": {
+        "importlib": {"util"},
+        "sys": {"modules"},
         "tempfile": {"mkstemp"},
+    },
+    "follow_up.py": {
+        "github": {"GitHubError", "GitHubReadAdapter", "load_snapshot"},
+        "resolver": {"ScopeRootUnresolved", "resolve"},
     },
     "secpal-resolve-fixed-threads.py": {
         "importlib": {"util"},
@@ -403,20 +422,41 @@ LOADED_MODULE_ATTRIBUTES = {
             "create_validation_receipt",
             "digest_json",
             "execute_resolution_batch",
+            "follow_up",
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
+        },
+        "follow_up": {
+            "FollowUpError",
+            "parse_follow_up",
+        },
+    },
+    "fast_path.py": {
+        "follow_up": {
+            "FollowUpError",
+            "parse_follow_up",
         },
     },
     "secpal-resolve-fixed-threads.py": {
         "evidence": {
             "CommandPolicyError",
             "ContractError",
+            "TRUSTED_COMMAND_DIRECTORIES",
+            "TRUSTED_COMMAND_PATH",
             "_commit_signature_format",
             "command_environment",
             "interpret_local_signature",
             "redact_diagnostic",
             "resolve_trusted_executable",
             "validate_against_authoritative_schema",
+        },
+        "follow_up": {
+            "FollowUpError",
+            "FollowUpIdentity",
+            "LiveFollowUpState",
+            "parse_follow_up",
+            "read_live_follow_up",
+            "verify_live_follow_up",
         },
     },
 }
@@ -463,6 +503,34 @@ DYNAMIC_IMPORT_CALLS = {
             ("_load_evidence_helper",),
             "spec.loader.exec_module(module)",
         ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review.follow_up', FOLLOW_UP_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+    },
+    "fast_path.py": {
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review.follow_up', FOLLOW_UP_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "spec.loader.exec_module(module)",
+        ),
     },
 }
 SAFE_GETATTR_CALLS = {
@@ -483,6 +551,16 @@ SAFE_GETATTR_CALLS = {
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
             ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+    },
+    "fast_path.py": {
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
         ),
     },
@@ -515,6 +593,24 @@ SAFE_SYS_MODULES_CALLS = {
             ("_load_evidence_helper",),
             "sys.modules.pop(spec.name, None)",
         ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "sys.modules.get('secpal_pr_review.follow_up')",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+    },
+    "fast_path.py": {
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "sys.modules.get('secpal_pr_review.follow_up')",
+        ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
     },
 }
 SAFE_SYS_MODULES_STORES = {
@@ -533,23 +629,40 @@ SAFE_SYS_MODULES_STORES = {
             ("_load_evidence_helper",),
             "sys.modules[spec.name]",
         ),
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "sys.modules[spec.name]",
+        ),
+    },
+    "fast_path.py": {
+        DynamicImportCall(
+            ("_load_follow_up_helper",),
+            "sys.modules[spec.name]",
+        ),
     },
 }
 RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_body_digest",
+    "_canonical_json_bytes",
     "_consume_api_call",
     "_consume_comment",
     "_consume_thread",
     "_digest_json",
     "_graphql",
     "_load_evidence_helper",
+    "_load_follow_up_helper",
+    "_markdown_parser_environment",
+    "_read_authenticated_follow_up",
+    "_resolve_trusted_markdown_node",
     "_load_repository_entry",
     "_expected_validation_attestation",
     "_expected_validation_receipt",
     "_reject_nonfinite_json_constant",
+    "_reject_duplicate_json_object",
     "_remote_repository",
     "_run_gh",
     "_run_git",
+    "_tracked_follow_ups_from_payload",
     "_validate_manual_gate_evidence",
     "_validation_registry_binding",
     "load_repository_limits",
@@ -565,9 +678,11 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "validate_expected_targets",
     "validate_request",
     "verify_local_fix_commit",
+    "verify_live_follow_up",
 }
 RESOLVER_CLASS_SHAPES = {
     "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "EligibilityEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
     "InvocationBudget": ClassShape((), (), ("dataclass",)),
     "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ReviewedState": ClassShape((), (), ("dataclass(frozen=True)",)),
@@ -591,6 +706,18 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
+        ("load_eligibility_evidence",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
+        ("_tracked_follow_ups_from_payload",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("_tracked_follow_ups_from_payload",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("verify_local_fix_commit",),
         "_run_git",
     ),
@@ -598,8 +725,33 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         ("resolve_threads",),
         "_run_gh",
     ),
+    DynamicImportCall(
+        ("verify_live_follow_up",),
+        "_read_authenticated_follow_up",
+    ),
+    DynamicImportCall(
+        ("_read_authenticated_follow_up",),
+        "_consume_api_call",
+    ),
+    DynamicImportCall(
+        ("_read_authenticated_follow_up",),
+        "_markdown_parser_environment",
+    ),
+    DynamicImportCall(
+        ("_read_authenticated_follow_up",),
+        "_resolve_trusted_markdown_node",
+    ),
+    DynamicImportCall(
+        ("resolve_threads",),
+        "verify_live_follow_up",
+    ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite(
+        "for",
+        ("_resolve_trusted_markdown_node",),
+        "evidence.TRUSTED_COMMAND_DIRECTORIES",
+    ),
     LoopSite("for", ("_graphql",), "variables.items()"),
     LoopSite("for", ("load_reviewed_state",), "threads"),
     LoopSite("for", ("load_reviewed_state",), "thread_ids"),
@@ -609,7 +761,8 @@ RESOLVER_LOOP_SITES = {
         ("_validate_manual_gate_evidence",),
         "enumerate(registered_gates)",
     ),
-    LoopSite("for", ("load_eligibility_evidence",), "threads"),
+    LoopSite("for", ("_tracked_follow_ups_from_payload",), "threads"),
+    LoopSite("for", ("_reject_duplicate_json_object",), "pairs"),
     LoopSite(
         "for",
         ("read_target_thread",),
@@ -658,12 +811,15 @@ RESOLVER_LOOP_SITES = {
     ),
     LoopSite(
         "comprehension",
-        ("load_eligibility_evidence",),
+        ("_tracked_follow_ups_from_payload",),
         "finding_ids",
     ),
     LoopSite("comprehension", ("resolve_threads",), "thread_ids"),
     LoopSite("comprehension", ("validate_request",), "thread_ids"),
     LoopSite("comprehension", ("resolve_threads",), "pending"),
+    LoopSite("comprehension", ("resolve_threads",), "tracked"),
+    LoopSite("comprehension", ("resolve_threads",), "tracked.values()"),
+    LoopSite("comprehension", ("resolve_threads",), "remaining_thread_ids"),
 }
 
 
@@ -1523,10 +1679,10 @@ def self_test() -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 5:
+    if len(argv) != 6:
         raise SystemExit(
             "usage: secpal-pr-review-static-policy.py "
-            "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER"
+            "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER FOLLOW_UP"
         )
     self_test()
     findings: list[str] = []

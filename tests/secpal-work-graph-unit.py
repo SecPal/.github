@@ -285,6 +285,24 @@ class NextCandidateUniverseTests(TestCase):
             model.Finding(resolver.FINDING_MULTIPLE_PARENTS, key(9), f"{key(2)}, {key(3)}"),
             resolution.findings,
         )
+        self.assertTrue(resolution.structurally_malformed)
+
+    def test_a_duplicate_native_child_claim_is_structurally_malformed_but_complete(self):
+        snapshot = build_snapshot(
+            [
+                epic(1, (key(2),)),
+                epic(2, (key(9), key(9)), parent=key(1)),
+                leaf(9, parent=key(2)),
+            ]
+        )
+        resolution = resolver.resolve(snapshot, key(1))
+        self.assertIn(
+            model.Finding(resolver.FINDING_MULTIPLE_PARENTS, key(9), f"{key(2)}, {key(2)}"),
+            resolution.findings,
+        )
+        self.assertFalse(resolution.states[key(1)].malformed)
+        self.assertTrue(resolution.complete)
+        self.assertTrue(resolution.structurally_malformed)
 
 
 class DependencyTests(TestCase):
@@ -355,6 +373,7 @@ class DependencyTests(TestCase):
             resolver.FINDING_DEPENDENCY_CYCLE,
             {finding.code for finding in resolution.findings},
         )
+        self.assertTrue(resolution.structurally_malformed)
 
     def test_depending_on_a_cycle_fails_closed_without_participating_in_it(self):
         # Section 4.1 makes only a participant `BLOCKED`; section 3.5 still keeps
@@ -384,6 +403,7 @@ class DependencyTests(TestCase):
             model.Finding(resolver.FINDING_DEPENDENCY_CYCLE, key(2), f"{key(2)}, {key(3)}"),
             resolution.findings,
         )
+        self.assertTrue(resolution.structurally_malformed)
 
     def test_dependencies_are_never_inherited_through_containment(self):
         snapshot = build_snapshot(
@@ -412,6 +432,8 @@ class NativeLimitTests(TestCase):
         self.assertIn(resolver.FINDING_SUB_ISSUE_LIMIT, codes)
         self.assertIn(resolver.FINDING_DEPENDENCY_LIMIT, codes)
         self.assertIn(resolver.FINDING_DEPENDENCY_LIMIT_BLOCKING, codes)
+        self.assertTrue(resolution.structurally_malformed)
+        self.assertTrue(resolution.complete)
 
     def test_nesting_beyond_the_native_depth_is_reported(self):
         depth = model.MAX_NESTING_DEPTH + 1
@@ -423,6 +445,8 @@ class NativeLimitTests(TestCase):
             model.Finding(resolver.FINDING_NESTING_DEPTH, key(depth), str(depth)),
             resolution.findings,
         )
+        self.assertTrue(resolution.structurally_malformed)
+        self.assertTrue(resolution.complete)
         self.assertTrue(resolution.states[key(depth)].ready)
 
 
@@ -644,6 +668,36 @@ class AcceptanceCriteriaTests(TestCase):
     def test_detection_failure_is_raised_rather_than_defaulted(self):
         with self.assertRaises(acceptance_criteria.MarkdownParserUnavailable):
             acceptance_criteria.parse(["text"], node_executable="definitely-not-node")
+
+    def test_detection_uses_explicit_executable_and_sanitized_environment(self):
+        parser_environment = {"PATH": "/usr/bin:/bin"}
+        completed = subprocess.CompletedProcess(
+            ["/usr/bin/node"],
+            0,
+            json.dumps(
+                [
+                    {
+                        "headings": [],
+                        "relationshipMirrors": [],
+                        "hasStatusChecklist": False,
+                    }
+                ]
+            ),
+            "",
+        )
+        with patch.object(
+            acceptance_criteria.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            acceptance_criteria.parse(
+                ["text"],
+                node_executable="/usr/bin/node",
+                environment=parser_environment,
+            )
+        self.assertEqual(run.call_args.args[0][0], "/usr/bin/node")
+        self.assertEqual(run.call_args.kwargs["env"], parser_environment)
+        self.assertNotIn("NODE_OPTIONS", run.call_args.kwargs["env"])
 
     def test_detection_uses_bounded_parser_batches_in_input_order(self):
         calls: list[list[str]] = []

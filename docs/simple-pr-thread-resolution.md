@@ -13,7 +13,8 @@ necessary, validated once, committed, and pushed.
 Thread resolution and merge readiness are different operations:
 
 - **Thread resolution** records that a specific review conversation has been
-  addressed on the current pull-request head.
+  safely dispositioned on the current pull-request head. For a tracked
+  out-of-scope finding, it does not claim implementation or completion.
 - **Merge readiness** evaluates required checks, signatures, branch protection,
   mergeability, complete validation evidence, and any broader release policy.
 
@@ -41,19 +42,28 @@ For each explicitly named review thread:
 3. one GraphQL resolution mutation for each explicitly named thread that is
    still open after those reads.
 
+A `TRACKED_AS_FOLLOW_UP` target additionally receives one bounded canonical
+work-graph read immediately before its mutation. This read is limited to the
+exact follow-up identity authenticated by the signed eligibility digest.
+
 Every apply invocation therefore performs three complete target reads per
 thread before any mutation cost. Already-resolved targets are treated
 idempotently and require no write, but receive the same two stable rechecks.
 Target comments are cursor-paginated as needed. A dry run performs only the
 initial read. The complete invocation shares the canonical repository
-registry's API-call, review-thread, and comment limits, and verifies before the
-first write that the remaining budgets cover every known target recheck and
-mutation.
+registry's API-call, review-thread, and comment limits. Before each write it
+verifies that the remaining budgets cover every known target recheck and
+mutation plus the unavoidable first API read for every later unresolved tracked
+follow-up. It does not guess the cost of variable future graph traversal.
 
 ## Safety boundary
 
 The command verifies only the invariants required for this operation:
 
+- the CLI and supported programmatic entry point both consume the canonical
+  reviewed-state, validation-attestation, repository, and eligibility inputs;
+  caller-constructed evidence objects or self-computed matching digests cannot
+  authorize mutation;
 - repository and PR exist;
 - repository is an exact entry in the canonical production registry;
 - PR is open;
@@ -73,6 +83,12 @@ The command verifies only the invariants required for this operation:
   allowed classification/disposition, finding IDs, and evidence digest, and
   the complete canonical manifest must match the digest authenticated by the
   signed validation receipt;
+- `OUTSIDE_PR_SCOPE + OUT_OF_SCOPE` is never eligible; the only out-of-scope
+  resolution path is `TRACKED_AS_FOLLOW_UP` with one exact authenticated
+  `repository`, positive `issue_number`, and matching canonical GitHub issue URL;
+- immediately before that resolution, the canonical read-only work-graph layer
+  proves the same follow-up remains accessible, open, and structurally complete;
+  a blocked follow-up is allowed and does not become a prerequisite;
 - every requested thread belongs to that PR;
 - every requested thread and its comment identities, body digests, reply
   relationships, and resolution state match the supplied reviewed-state
@@ -144,9 +160,16 @@ final attestation authenticate. The resolver recalculates that digest and
 rejects any post-validation classification, disposition, finding, or evidence
 change before its first GitHub read.
 
+New manifests use schema version 1.1. The resolver also reads already-authenticated
+version 1.0 manifests for the legacy resolution-eligible dispositions. It
+authenticates the original version 1.0 canonical payload before normalizing the
+missing `follow_up` value internally. Version 1.0 never accepts a `follow_up`
+field or `TRACKED_AS_FOLLOW_UP`; tracked follow-up resolution requires version
+1.1 and its exact non-null identity.
+
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "repository": "SecPal/api",
   "pull_request_number": 123,
   "reviewed_head_sha": "0123456789abcdef0123456789abcdef01234567",
@@ -157,7 +180,8 @@ change before its first GitHub read.
       "classification": "VALID_ACTIONABLE",
       "disposition": "CORRECTED_AND_VERIFIED",
       "finding_ids": ["finding-1"],
-      "evidence_digest": "FINDING_EVIDENCE_SHA256"
+      "evidence_digest": "FINDING_EVIDENCE_SHA256",
+      "follow_up": null
     }
   ]
 }

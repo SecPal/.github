@@ -12,10 +12,12 @@ import io
 import json
 import sys
 import tempfile
-from types import SimpleNamespace
-from unittest import TestCase, main, mock
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest import TestCase, main, mock
+
+import jsonschema
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -138,6 +140,7 @@ def finding(
         "evidence_digest": digest(finding_id),
         "test_evidence": ["tests pass"],
         "commit_sha": p21.HEAD,
+        "follow_up": None,
     }
 
 
@@ -220,7 +223,7 @@ def plan(*operations: dict[str, Any], current_state: str = "APPLY_JUSTIFIED_REAC
         for gate in registered["manual_gates"]
     ]
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "repository": "SecPal/.github",
         "pull_request_number": 1,
         "snapshot_digest": snapshot["snapshot_digest"],
@@ -844,6 +847,188 @@ class ContractTests(TestCase):
         value["findings"] = [finding(classification="DUPLICATE", disposition="DUPLICATE_OF_CANONICAL")]
         with self.assertRaisesRegex(actions.PlanError, "canonical"):
             actions.validate_plan(value, evidence_snapshot(), repository_config())
+
+    def test_tracked_out_of_scope_finding_requires_exact_follow_up_identity(self) -> None:
+        tracked = finding(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+        )
+        tracked["follow_up"] = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+
+        self.assertIn(
+            "finding-001",
+            actions._validate_finding_semantics([tracked]),
+        )
+
+        malformed = {
+            "missing": None,
+            "repository": {
+                "repository": "SecPal",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+            "number": {
+                "repository": "SecPal/api",
+                "issue_number": 0,
+                "issue_url": "https://github.com/SecPal/api/issues/0",
+            },
+            "non-issue URL": {
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/pull/123",
+            },
+            "repository mismatch": {
+                "repository": "SecPal/frontend",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+            "number mismatch": {
+                "repository": "SecPal/api",
+                "issue_number": 124,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        }
+        for label, follow_up in malformed.items():
+            candidate = copy.deepcopy(tracked)
+            candidate["follow_up"] = follow_up
+            with self.subTest(label=label), self.assertRaisesRegex(
+                actions.PlanError, "follow-up"
+            ):
+                actions._validate_finding_semantics([candidate])
+
+    def test_tracked_follow_up_is_isolated_to_outside_scope(self) -> None:
+        follow_up = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+        incompatible = finding(
+            classification="INFORMATIONAL",
+            disposition="TRACKED_AS_FOLLOW_UP",
+        )
+        incompatible["follow_up"] = follow_up
+        with self.assertRaisesRegex(actions.PlanError, "disposition"):
+            actions._validate_finding_semantics([incompatible])
+
+        untracked = finding(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="OUT_OF_SCOPE",
+        )
+        untracked["follow_up"] = None
+        actions._validate_finding_semantics([untracked])
+        self.assertNotIn("OUT_OF_SCOPE", actions.RESOLVABLE_DISPOSITIONS)
+
+    def test_mutation_plan_schema_isolates_tracked_follow_up_classification(self) -> None:
+        follow_up = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+        tracked = plan()
+        tracked["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up=follow_up,
+        )
+        schema = json.loads(actions.PLAN_SCHEMA_PATH.read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        validator.validate(tracked)
+
+        untracked = copy.deepcopy(tracked)
+        untracked["findings"][0].update(
+            disposition="OUT_OF_SCOPE",
+            follow_up=None,
+        )
+        validator.validate(untracked)
+
+        classifications = schema["$defs"]["classification"]["enum"]
+        for classification in classifications:
+            if classification == "OUTSIDE_PR_SCOPE":
+                continue
+            incompatible = copy.deepcopy(tracked)
+            incompatible["findings"][0]["classification"] = classification
+            with self.subTest(classification=classification), self.assertRaises(
+                jsonschema.ValidationError
+            ):
+                validator.validate(incompatible)
+
+    def test_mutation_plan_v1_0_retains_recorded_session_state(self) -> None:
+        recorded_reaction = operation()
+        recorded_reaction["applied_mutation_identity"] = "REACTION_OWN"
+        legacy = plan(recorded_reaction)
+        legacy["schema_version"] = "1.0"
+        legacy["session"]["reaction_writes"] = 1
+        for item in legacy["findings"]:
+            item.pop("follow_up")
+
+        self.assertEqual(
+            actions.validate_plan(
+                legacy,
+                evidence_snapshot(),
+                repository_config(),
+            ),
+            legacy,
+        )
+
+    def test_mutation_plan_versions_reject_mixed_and_unknown_shapes(self) -> None:
+        legacy = plan()
+        legacy["schema_version"] = "1.0"
+        legacy["findings"][0].pop("follow_up")
+
+        legacy_with_follow_up = copy.deepcopy(legacy)
+        legacy_with_follow_up["findings"][0]["follow_up"] = None
+        with self.assertRaises(actions.PlanError):
+            actions.validate_plan(
+                legacy_with_follow_up,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        legacy_tracked = copy.deepcopy(legacy)
+        legacy_tracked["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+        )
+        with self.assertRaises(actions.PlanError):
+            actions.validate_plan(
+                legacy_tracked,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        current_without_follow_up = plan()
+        current_without_follow_up["findings"][0].pop("follow_up")
+        with self.assertRaises(actions.PlanError):
+            actions.validate_plan(
+                current_without_follow_up,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        unknown = plan()
+        unknown["schema_version"] = "2.0"
+        with self.assertRaisesRegex(
+            actions.PlanError,
+            "unsupported mutation plan schema version",
+        ):
+            actions.validate_plan(
+                unknown,
+                evidence_snapshot(),
+                repository_config(),
+            )
+
+        self.assertEqual(
+            actions.validate_plan(
+                plan(),
+                evidence_snapshot(),
+                repository_config(),
+            )["schema_version"],
+            "1.1",
+        )
 
     def test_duplicate_and_superseded_canonical_references_must_be_acyclic(self) -> None:
         for classification, disposition in (
@@ -4496,6 +4681,7 @@ def fast_request(
                 "test_evidence_digest": receipt_digest if fixed else None,
                 "commit_sha": p21.HEAD if fixed else None,
                 "canonical_finding_id": None,
+                "follow_up": None,
             }
         )
         if thread_id is not None:
@@ -4603,7 +4789,7 @@ def fast_request(
 
     return fast_path.BatchRequest.from_dict(
         {
-            "schema_version": "1.2",
+            "schema_version": "1.3",
             "batch_id": "batch-001",
             "repository": "SecPal/.github",
             "pull_request_number": 1,
@@ -4815,6 +5001,66 @@ class FastPathTests(TestCase):
         )
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "incompatible"):
             fast_path.BatchRequest.from_dict(payload)
+
+    def test_fast_batch_binds_tracked_follow_up_into_authorization(self) -> None:
+        payload = fast_request(fast_feedback(1), 1).to_dict()
+        payload["schema_version"] = "1.3"
+        for item in payload["findings"]:
+            item["follow_up"] = None
+        payload["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            test_evidence_digest=None,
+            commit_sha=None,
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        request = fast_path.BatchRequest.from_dict(payload)
+
+        changed = copy.deepcopy(payload)
+        changed["findings"][0]["follow_up"] = {
+            "repository": "SecPal/api",
+            "issue_number": 124,
+            "issue_url": "https://github.com/SecPal/api/issues/124",
+        }
+        changed_request = fast_path.BatchRequest.from_dict(changed)
+
+        self.assertNotEqual(
+            request.authorization_digest,
+            changed_request.authorization_digest,
+        )
+
+    def test_fast_batch_requires_authenticated_simple_resolver_for_tracked_follow_up(self) -> None:
+        reviewed = fast_feedback(1)
+        payload = fast_request(reviewed, 1).to_dict()
+        payload["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            test_evidence_digest=None,
+            commit_sha=None,
+            follow_up={
+                "repository": "SecPal/api",
+                "issue_number": 123,
+                "issue_url": "https://github.com/SecPal/api/issues/123",
+            },
+        )
+        request = fast_path.BatchRequest.from_dict(payload)
+        gateway = FakeFastGateway(reviewed)
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "authenticated simple resolver",
+        ):
+            fast_path.execute_resolution_batch(
+                request,
+                fast_attestation(reviewed),
+                reviewed,
+                fast_registry(),
+                gateway,
+            )
+        self.assertEqual(gateway.calls, [])
 
     def test_batch_requires_finding_coverage_for_every_unresolved_thread(self) -> None:
         reviewed = fast_feedback()
@@ -5140,10 +5386,14 @@ class FastPathTests(TestCase):
     def test_fast_policy_tables_match_the_legacy_resolution_invariants(self) -> None:
         self.assertEqual(fast_path.MERGE_STATE_POLICY, p21.review.MERGE_STATE_POLICY)
         self.assertEqual(
-            set(fast_path.CLASSIFICATION_DISPOSITIONS),
+            set(fast_path.CLASSIFICATION_DISPOSITIONS) - {"OUTSIDE_PR_SCOPE"},
             actions.RESOLVABLE_CLASSIFICATIONS,
         )
         for classification, dispositions in fast_path.CLASSIFICATION_DISPOSITIONS.items():
+            if classification == "OUTSIDE_PR_SCOPE":
+                self.assertEqual(dispositions, {"TRACKED_AS_FOLLOW_UP"})
+                self.assertFalse(dispositions & actions.RESOLVABLE_DISPOSITIONS)
+                continue
             self.assertEqual(
                 dispositions,
                 actions.DISPOSITION_POLICY[classification]
@@ -5152,12 +5402,50 @@ class FastPathTests(TestCase):
 
     def test_fast_batch_schema_matches_runtime_security_policy(self) -> None:
         schema = json.loads(actions.FAST_BATCH_SCHEMA_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(schema["properties"]["schema_version"]["const"], "1.2")
+        self.assertEqual(schema["properties"]["schema_version"]["const"], "1.3")
         self.assertNotIn("prior_results", schema["properties"])
         self.assertEqual(
             set(schema["$defs"]["source"]["properties"]["kind"]["enum"]),
             fast_path.SOURCE_KINDS,
         )
+
+    def test_fast_batch_schema_isolates_tracked_follow_up_classification(self) -> None:
+        follow_up = {
+            "repository": "SecPal/api",
+            "issue_number": 123,
+            "issue_url": "https://github.com/SecPal/api/issues/123",
+        }
+        tracked = fast_request(fast_feedback(1), 1).to_dict()
+        tracked["findings"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            test_evidence_digest=None,
+            commit_sha=None,
+            follow_up=follow_up,
+        )
+        schema = json.loads(actions.FAST_BATCH_SCHEMA_PATH.read_text(encoding="utf-8"))
+        validator = jsonschema.Draft202012Validator(schema)
+        validator.validate(tracked)
+
+        untracked = copy.deepcopy(tracked)
+        untracked["findings"][0].update(
+            disposition="OUT_OF_SCOPE",
+            follow_up=None,
+        )
+        validator.validate(untracked)
+
+        classifications = schema["$defs"]["finding"]["properties"][
+            "classification"
+        ]["enum"]
+        for classification in classifications:
+            if classification == "OUTSIDE_PR_SCOPE":
+                continue
+            incompatible = copy.deepcopy(tracked)
+            incompatible["findings"][0]["classification"] = classification
+            with self.subTest(classification=classification), self.assertRaises(
+                jsonschema.ValidationError
+            ):
+                validator.validate(incompatible)
 
     def test_actions_uses_the_canonical_fast_path_module(self) -> None:
         self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
@@ -5399,7 +5687,7 @@ class FastPathTests(TestCase):
         payload["threads"][0]["node_id"] = "PRRT_exampleOne"
         reviewed = fast_path.StableFeedbackState.from_payload(payload)
         manifest = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "repository": "SecPal/.github",
             "pull_request_number": 1,
             "reviewed_head_sha": reviewed.head_sha,
@@ -5411,6 +5699,7 @@ class FastPathTests(TestCase):
                     "disposition": "CORRECTED_AND_VERIFIED",
                     "finding_ids": ["finding-1"],
                     "evidence_digest": "a" * 64,
+                    "follow_up": None,
                 }
             ],
         }

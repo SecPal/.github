@@ -19,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 import operator
+import os
 import re
 import subprocess
 import sys
@@ -36,6 +37,7 @@ REGISTRY_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
 )
+FOLLOW_UP_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/follow_up.py"
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -96,6 +98,7 @@ FIXED_THREAD_RESOLUTION_CONTRACT = {
     ],
     "allowed_github_operations": [
         "READ_NAMED_REVIEW_THREAD",
+        "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
         "RESOLVE_NAMED_REVIEW_THREAD",
     ],
     "prohibited_hosted_reads": [
@@ -133,6 +136,7 @@ ELIGIBLE_DISPOSITIONS = {
     "SECURITY_WEAKENING_SUGGESTION": frozenset(
         {"REJECTED_SECURITY_WEAKENING"}
     ),
+    "OUTSIDE_PR_SCOPE": frozenset({"TRACKED_AS_FOLLOW_UP"}),
 }
 
 
@@ -168,6 +172,80 @@ def _load_evidence_helper() -> Any:
 
 
 evidence = _load_evidence_helper()
+
+
+def _load_follow_up_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review.follow_up")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != FOLLOW_UP_HELPER.resolve()
+        ):
+            raise RuntimeError("Canonical follow-up module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review.follow_up", FOLLOW_UP_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+follow_up = _load_follow_up_helper()
+FollowUpIdentity = follow_up.FollowUpIdentity
+LiveFollowUpState = follow_up.LiveFollowUpState
+
+
+def _resolve_trusted_markdown_node() -> str:
+    """Resolve Node only for the maintained Markdown parser bridge."""
+
+    for directory in evidence.TRUSTED_COMMAND_DIRECTORIES:
+        candidate = directory / "node"
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    raise ResolutionError("trusted Markdown parser is unavailable")
+
+
+def _markdown_parser_environment() -> dict[str, str]:
+    """Return an explicit non-inheriting Markdown parser environment."""
+
+    return {"PATH": evidence.TRUSTED_COMMAND_PATH}
+
+
+def _read_authenticated_follow_up(
+    identity: FollowUpIdentity,
+    budget: InvocationBudget,
+) -> LiveFollowUpState:
+    try:
+        executable = evidence.resolve_trusted_executable("gh")
+    except evidence.CommandPolicyError as exc:
+        raise ResolutionError("trusted GitHub CLI is unavailable") from exc
+    node_executable = _resolve_trusted_markdown_node()
+    parser_environment = _markdown_parser_environment()
+    try:
+        return follow_up.read_live_follow_up(
+            identity,
+            gh_executable=executable,
+            environment=evidence.command_environment("gh"),
+            node_executable=node_executable,
+            parser_environment=parser_environment,
+            query_consumer=_consume_api_call,
+            query_context=budget,
+        )
+    except follow_up.FollowUpError as exc:
+        raise ResolutionError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -208,6 +286,12 @@ class ValidationEvidence:
     validated_tree_sha: str
     validation_receipt_digest: str
     eligibility_evidence_digest: str
+
+
+@dataclass(frozen=True)
+class EligibilityEvidence:
+    evidence_digest: str
+    canonical_payload: bytes
 
 
 @dataclass(frozen=True)
@@ -557,14 +641,17 @@ def _body_digest(body: str) -> str:
 
 
 def _digest_json(value: Any) -> str:
-    encoded = json.dumps(
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
         value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8") + b"\n"
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _reject_nonfinite_json_constant(value: str) -> Any:
@@ -782,8 +869,9 @@ def verify_local_fix_commit(
     reviewed: ReviewedState,
     validation: ValidationEvidence,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = _run_git,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> None:
+    effective_runner = _run_git if runner is None else runner
     if (
         not isinstance(validation, ValidationEvidence)
         or validation.kind != "attestation"
@@ -803,16 +891,16 @@ def verify_local_fix_commit(
         raise ResolutionError("local repository root is unavailable") from exc
     if not root.is_dir():
         raise ResolutionError("local repository root is unavailable")
-    origin = runner(root, ("remote", "get-url", "origin")).stdout.strip()
+    origin = effective_runner(root, ("remote", "get-url", "origin")).stdout.strip()
     if _remote_repository(origin) != repository:
         raise ResolutionError("local origin repository identity mismatch")
-    local_head = runner(root, ("rev-parse", "HEAD")).stdout.strip().lower()
+    local_head = effective_runner(root, ("rev-parse", "HEAD")).stdout.strip().lower()
     if local_head != expected_head.lower():
         raise ResolutionError(
             f"local head mismatch: expected {expected_head.lower()}, "
             f"observed {local_head or 'missing'}"
         )
-    commit_tree = runner(
+    commit_tree = effective_runner(
         root,
         ("rev-parse", f"{expected_head.lower()}^{{tree}}"),
     ).stdout.strip().lower()
@@ -821,7 +909,7 @@ def verify_local_fix_commit(
         or commit_tree != validation.validated_tree_sha
     ):
         raise ResolutionError("validated tree does not match the fix commit tree")
-    ancestry = runner(
+    ancestry = effective_runner(
         root,
         ("rev-list", "--parents", "-n", "1", expected_head.lower()),
     ).stdout.split()
@@ -829,7 +917,7 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "validated fix commit parent does not match reviewed head"
         )
-    trailer_output = runner(
+    trailer_output = effective_runner(
         root,
         (
             "show",
@@ -848,12 +936,12 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
-    commit_object = runner(
+    commit_object = effective_runner(
         root,
         ("cat-file", "commit", expected_head.lower()),
         allow_failure=True,
     )
-    verified = runner(
+    verified = effective_runner(
         root,
         ("verify-commit", "--raw", expected_head.lower()),
         allow_failure=True,
@@ -879,25 +967,50 @@ def verify_local_fix_commit(
         raise ResolutionError("fix commit local signature is not verified")
 
 
-def load_eligibility_evidence(
-    path: Path,
+def verify_live_follow_up(
+    identity: FollowUpIdentity,
+    budget: InvocationBudget | None = None,
+    *,
+    state_reader: Callable[[FollowUpIdentity], LiveFollowUpState] | None = None,
+) -> LiveFollowUpState:
+    if state_reader is None:
+        if not isinstance(budget, InvocationBudget):
+            raise ResolutionError("shared invocation budget is required")
+    try:
+        if state_reader is None:
+            state = _read_authenticated_follow_up(identity, budget)
+            return follow_up.verify_live_follow_up(identity, state=state)
+        return follow_up.verify_live_follow_up(identity, state_reader=state_reader)
+    except follow_up.FollowUpError as exc:
+        raise ResolutionError(str(exc)) from exc
+
+
+def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _tracked_follow_ups_from_payload(
+    canonical_payload: bytes,
+    *,
     repository: str,
     number: int,
-    reviewed_head_sha: str,
     reviewed_state_digest: str,
     thread_ids: tuple[str, ...],
-    *,
-    authenticated_evidence_digest: str,
-) -> str:
+    reviewed_head_sha: str | None = None,
+) -> dict[str, FollowUpIdentity]:
     try:
         payload = json.loads(
-            path.read_text(encoding="utf-8"),
+            canonical_payload,
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
         )
-    except (OSError, ValueError) as exc:
-        raise ResolutionError(
-            "eligibility evidence is unavailable or malformed"
-        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise ResolutionError("eligibility evidence payload is malformed") from exc
     expected_keys = {
         "schema_version",
         "repository",
@@ -908,33 +1021,37 @@ def load_eligibility_evidence(
     }
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise ResolutionError("eligibility evidence is unavailable or malformed")
-    observed_evidence_digest = _digest_json(payload)
-    if (
-        not isinstance(authenticated_evidence_digest, str)
-        or not DIGEST.fullmatch(authenticated_evidence_digest)
-        or observed_evidence_digest != authenticated_evidence_digest
-    ):
-        raise ResolutionError("eligibility evidence is not authenticated")
+    schema_version = payload.get("schema_version")
     threads = payload.get("eligible_threads")
+    observed_head = payload.get("reviewed_head_sha")
     if (
-        payload.get("schema_version") != "1.0"
+        schema_version not in ("1.0", "1.1")
         or payload.get("repository") != repository
         or payload.get("pull_request_number") != number
         or isinstance(payload.get("pull_request_number"), bool)
-        or payload.get("reviewed_head_sha") != reviewed_head_sha.lower()
+        or not isinstance(observed_head, str)
+        or not OID.fullmatch(observed_head)
+        or (
+            reviewed_head_sha is not None
+            and observed_head != reviewed_head_sha.lower()
+        )
         or payload.get("reviewed_state_digest") != reviewed_state_digest
         or not isinstance(threads, list)
     ):
         raise ResolutionError("eligibility evidence binding is invalid or stale")
+    tracked: dict[str, FollowUpIdentity] = {}
     observed_thread_ids: list[str] = []
     for item in threads:
-        if not isinstance(item, dict) or set(item) != {
+        expected_thread_keys = {
             "thread_id",
             "classification",
             "disposition",
             "finding_ids",
             "evidence_digest",
-        }:
+        }
+        if schema_version == "1.1":
+            expected_thread_keys.add("follow_up")
+        if not isinstance(item, dict) or set(item) != expected_thread_keys:
             raise ResolutionError("eligibility evidence thread is malformed")
         thread_id = item.get("thread_id")
         classification = item.get("classification")
@@ -948,6 +1065,10 @@ def load_eligibility_evidence(
                 classification,
                 frozenset(),
             )
+            or (
+                schema_version == "1.0"
+                and disposition == "TRACKED_AS_FOLLOW_UP"
+            )
             or not isinstance(finding_ids, list)
             or not finding_ids
             or any(
@@ -959,12 +1080,65 @@ def load_eligibility_evidence(
             or not DIGEST.fullmatch(item["evidence_digest"])
         ):
             raise ResolutionError("eligibility evidence thread is ineligible")
+        if disposition == "TRACKED_AS_FOLLOW_UP":
+            try:
+                tracked[thread_id] = follow_up.parse_follow_up(
+                    item.get("follow_up")
+                )
+            except follow_up.FollowUpError as exc:
+                raise ResolutionError(str(exc)) from exc
+        elif schema_version == "1.1" and item.get("follow_up") is not None:
+            raise ResolutionError(
+                "only tracked out-of-scope eligibility may carry follow-up identity"
+            )
         observed_thread_ids.append(thread_id)
     if tuple(observed_thread_ids) != thread_ids:
         raise ResolutionError(
             "eligibility evidence must cover requested threads exactly"
         )
-    return observed_evidence_digest
+    return tracked
+
+
+def load_eligibility_evidence(
+    path: Path,
+    repository: str,
+    number: int,
+    reviewed_head_sha: str,
+    reviewed_state_digest: str,
+    thread_ids: tuple[str, ...],
+    *,
+    authenticated_evidence_digest: str,
+) -> EligibilityEvidence:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+    except (OSError, ValueError) as exc:
+        raise ResolutionError(
+            "eligibility evidence is unavailable or malformed"
+        ) from exc
+    observed_evidence_digest = _digest_json(payload)
+    if (
+        not isinstance(authenticated_evidence_digest, str)
+        or not DIGEST.fullmatch(authenticated_evidence_digest)
+        or observed_evidence_digest != authenticated_evidence_digest
+    ):
+        raise ResolutionError("eligibility evidence is not authenticated")
+    canonical_payload = _canonical_json_bytes(payload)
+    _tracked_follow_ups_from_payload(
+        canonical_payload,
+        repository=repository,
+        number=number,
+        reviewed_head_sha=reviewed_head_sha,
+        reviewed_state_digest=reviewed_state_digest,
+        thread_ids=thread_ids,
+    )
+    return EligibilityEvidence(
+        observed_evidence_digest,
+        canonical_payload,
+    )
 
 
 def read_target_thread(
@@ -1245,13 +1419,66 @@ def resolve_threads(
     thread_ids: tuple[str, ...],
     *,
     apply: bool,
-    expected_targets: dict[str, ExpectedThreadState] | None = None,
-    reviewed_state_digest: str | None = None,
-    validation_evidence_digest: str | None = None,
-    eligibility_evidence_digest: str | None = None,
-    runner: Callable[[Sequence[str]], dict[str, Any]] = _run_gh,
+    repository_root: Path | str | None = None,
+    reviewed_state_path: Path | str | None = None,
+    expected_reviewed_state_digest: str | None = None,
+    validation_evidence_path: Path | str | None = None,
+    eligibility_evidence_path: Path | str | None = None,
+    **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
+    """Resolve threads only after proving the complete local evidence chain."""
     validate_request(repository, number, expected_head, thread_ids, apply)
+    if caller_constructed_authorization:
+        raise ResolutionError(
+            "authenticated mutation boundary rejects caller-constructed evidence"
+        )
+    if (
+        repository_root is None
+        or reviewed_state_path is None
+        or validation_evidence_path is None
+        or eligibility_evidence_path is None
+        or not isinstance(expected_reviewed_state_digest, str)
+        or not DIGEST.fullmatch(expected_reviewed_state_digest)
+    ):
+        raise ResolutionError(
+            "authenticated mutation boundary requires canonical evidence inputs"
+        )
+    reviewed = load_reviewed_state(
+        Path(reviewed_state_path),
+        repository,
+        number,
+        expected_reviewed_state_digest,
+        thread_ids,
+    )
+    validation = load_validation_evidence(
+        Path(validation_evidence_path),
+        repository,
+        expected_head,
+        reviewed,
+    )
+    verify_local_fix_commit(
+        Path(repository_root),
+        repository,
+        expected_head,
+        reviewed,
+        validation,
+    )
+    eligibility = load_eligibility_evidence(
+        Path(eligibility_evidence_path),
+        repository,
+        number,
+        reviewed.head_sha,
+        reviewed.state_digest,
+        thread_ids,
+        authenticated_evidence_digest=validation.eligibility_evidence_digest,
+    )
+    expected_targets = reviewed.targets
+    reviewed_state_digest = reviewed.state_digest
+    validation_evidence_digest = validation.evidence_digest
+    eligibility_evidence_digest = eligibility.evidence_digest
+    eligibility_evidence: EligibilityEvidence | None = eligibility
+    follow_up_verifier = verify_live_follow_up
+    runner = _run_gh
     if (
         not isinstance(reviewed_state_digest, str)
         or not DIGEST.fullmatch(reviewed_state_digest)
@@ -1268,6 +1495,27 @@ def resolve_threads(
     ):
         raise ResolutionError("eligibility evidence digest is required")
     reviewed_targets = validate_expected_targets(thread_ids, expected_targets)
+    tracked: dict[str, FollowUpIdentity] = {}
+    if apply and eligibility_evidence is None:
+        raise ResolutionError(
+            "authenticated canonical eligibility evidence is required for apply"
+        )
+    if eligibility_evidence is not None:
+        if (
+            not isinstance(eligibility_evidence, EligibilityEvidence)
+            or eligibility_evidence.evidence_digest != eligibility_evidence_digest
+            or not isinstance(eligibility_evidence.canonical_payload, bytes)
+            or hashlib.sha256(eligibility_evidence.canonical_payload).hexdigest()
+            != eligibility_evidence_digest
+        ):
+            raise ResolutionError("tracked follow-up evidence is not authenticated")
+        tracked = _tracked_follow_ups_from_payload(
+            eligibility_evidence.canonical_payload,
+            repository=repository,
+            number=number,
+            reviewed_state_digest=reviewed_state_digest,
+            thread_ids=thread_ids,
+        )
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
         limits.maximum_api_calls,
@@ -1327,8 +1575,59 @@ def resolve_threads(
                 "registered review comment limit cannot cover all target rechecks"
             )
         for index, thread_id in enumerate(thread_ids):
-            phase = "recheck"
+            phase = "follow-up" if thread_id in tracked else "recheck"
             try:
+                if (
+                    not initial_targets[thread_id].thread.is_resolved
+                    and thread_id in tracked
+                ):
+                    follow_up_verifier(tracked[thread_id], budget)
+                phase = "recheck"
+                remaining_thread_ids = thread_ids[index:]
+                required_recheck_pages = sum(
+                    initial_targets[remaining_thread_id].api_pages * 2
+                    for remaining_thread_id in remaining_thread_ids
+                )
+                required_recheck_comments = sum(
+                    len(initial_targets[remaining_thread_id].thread.comments) * 2
+                    for remaining_thread_id in remaining_thread_ids
+                )
+                required_mutations = sum(
+                    not initial_targets[remaining_thread_id].thread.is_resolved
+                    for remaining_thread_id in remaining_thread_ids
+                )
+                required_follow_up_reads = sum(
+                    remaining_thread_id != thread_id
+                    and not initial_targets[remaining_thread_id].thread.is_resolved
+                    and remaining_thread_id in tracked
+                    for remaining_thread_id in remaining_thread_ids
+                )
+                if (
+                    budget.maximum_api_calls - budget.api_calls
+                    < required_recheck_pages
+                    + required_mutations
+                    + required_follow_up_reads
+                ):
+                    raise ResolutionError(
+                        "registered API call limit cannot cover the remaining "
+                        "follow-up reads, target rechecks, and writes"
+                    )
+                if (
+                    budget.maximum_threads - budget.threads
+                    < required_recheck_pages
+                ):
+                    raise ResolutionError(
+                        "registered review thread limit cannot cover the remaining "
+                        "target rechecks"
+                    )
+                if (
+                    budget.maximum_comments - budget.comments
+                    < required_recheck_comments
+                ):
+                    raise ResolutionError(
+                        "registered review comment limit cannot cover the remaining "
+                        "target rechecks"
+                    )
                 current = read_stable_target_thread(
                     repository,
                     number,
@@ -1458,47 +1757,19 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        reviewed = load_reviewed_state(
-            Path(arguments.reviewed_state),
-            arguments.repo,
-            arguments.pr,
-            arguments.expected_reviewed_state_digest,
-            arguments.thread_id,
-        )
-        validation = load_validation_evidence(
-            Path(arguments.validation_evidence),
-            arguments.repo,
-            arguments.expected_head,
-            reviewed,
-        )
-        verify_local_fix_commit(
-            Path(arguments.repo_root),
-            arguments.repo,
-            arguments.expected_head,
-            reviewed,
-            validation,
-        )
-        eligibility_evidence_digest = load_eligibility_evidence(
-            Path(arguments.eligibility_evidence),
-            arguments.repo,
-            arguments.pr,
-            reviewed.head_sha,
-            reviewed.state_digest,
-            arguments.thread_id,
-            authenticated_evidence_digest=(
-                validation.eligibility_evidence_digest
-            ),
-        )
         result = resolve_threads(
             arguments.repo,
             arguments.pr,
             arguments.expected_head,
             arguments.thread_id,
             apply=arguments.apply,
-            expected_targets=reviewed.targets,
-            reviewed_state_digest=reviewed.state_digest,
-            validation_evidence_digest=validation.evidence_digest,
-            eligibility_evidence_digest=eligibility_evidence_digest,
+            repository_root=arguments.repo_root,
+            reviewed_state_path=arguments.reviewed_state,
+            expected_reviewed_state_digest=(
+                arguments.expected_reviewed_state_digest
+            ),
+            validation_evidence_path=arguments.validation_evidence,
+            eligibility_evidence_path=arguments.eligibility_evidence,
         )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

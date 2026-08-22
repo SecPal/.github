@@ -54,6 +54,7 @@ finding = {
     "evidence_digest": "1" * 64,
     "test_evidence": ["focused fixture"],
     "commit_sha": p21.HEAD,
+    "follow_up": None,
 }
 operation = {
     "operation_id": "reaction-001",
@@ -106,7 +107,7 @@ session = {
     "merge_ready_evidence": False,
 }
 plan = {
-    "schema_version": "1.0",
+    "schema_version": "1.1",
     "repository": "SecPal/.github",
     "pull_request_number": 1,
     "snapshot_digest": snapshot["snapshot_digest"],

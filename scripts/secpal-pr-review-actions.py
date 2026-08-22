@@ -29,6 +29,10 @@ PLAN_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 )
+LEGACY_PLAN_SCHEMA_PATH = (
+    REPOSITORY_ROOT
+    / ".agents/skills/secpal-pr-review/references/mutation-plan-v1.0.schema.json"
+)
 REGISTRY_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
@@ -86,6 +90,7 @@ def _load_fast_path_helper() -> Any:
 
 
 fast_path = _load_fast_path_helper()
+follow_up = fast_path.follow_up
 
 
 def _playwright_browsers_path(account_home: Path) -> Path:
@@ -254,7 +259,7 @@ DISPOSITION_POLICY = {
     "OUTDATED_AND_OBSOLETE": {"OBSOLETE_ON_CURRENT_HEAD"},
     "ALREADY_FIXED_ON_SNAPSHOT_HEAD": {"PROVEN_EXISTING_FIX"},
     "SUPERSEDED": {"SUPERSEDED_BY_CANONICAL"},
-    "OUTSIDE_PR_SCOPE": {"OUT_OF_SCOPE"},
+    "OUTSIDE_PR_SCOPE": {"OUT_OF_SCOPE", "TRACKED_AS_FOLLOW_UP"},
     "CROSS_REPOSITORY": {"CROSS_REPOSITORY_BLOCKER"},
     "CONFLICTING_REVIEWERS": {"PENDING", "USER_DECISION_REQUIRED"},
     "SECURITY_WEAKENING_SUGGESTION": {"REJECTED_SECURITY_WEAKENING"},
@@ -359,10 +364,22 @@ def _target_belongs_to_pull_request(url: Any, repository: str, number: int) -> b
     )
 
 
+def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
 def _read_json_value(path: str, label: str) -> Any:
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            Path(path).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+    except (OSError, ValueError) as exc:
         raise PlanError(f"Cannot load {label}: {evidence.redact_diagnostic(str(exc))}") from exc
     return value
 
@@ -502,6 +519,15 @@ def _validate_finding_semantics(findings: list[dict[str, Any]]) -> dict[str, dic
             raise PlanError(f"unsupported classification: {item['classification']}")
         if item["disposition"] not in DISPOSITION_POLICY[item["classification"]]:
             raise PlanError("logical finding disposition is invalid for its classification")
+        if item["disposition"] == "TRACKED_AS_FOLLOW_UP":
+            try:
+                follow_up.parse_follow_up(item.get("follow_up"))
+            except follow_up.FollowUpError as exc:
+                raise PlanError(str(exc)) from exc
+        elif item.get("follow_up") is not None:
+            raise PlanError(
+                "only tracked out-of-scope findings may carry follow-up identity"
+            )
     if any(
         len(subitems) > 1 and any(subitem is None for subitem in subitems)
         for subitems in source_subitems.values()
@@ -969,7 +995,14 @@ def validate_plan(
 ) -> dict[str, Any]:
     if not isinstance(plan, dict):
         raise PlanError("mutation plan must be a JSON object")
-    _validate_schema(plan, PLAN_SCHEMA_PATH, "mutation_plan", PlanError)
+    schema_version = plan.get("schema_version")
+    if schema_version == "1.0":
+        schema_path = LEGACY_PLAN_SCHEMA_PATH
+    elif schema_version == "1.1":
+        schema_path = PLAN_SCHEMA_PATH
+    else:
+        raise PlanError("unsupported mutation plan schema version")
+    _validate_schema(plan, schema_path, "mutation_plan", PlanError)
     try:
         evidence.validate_config(configuration)
         evidence.validate_snapshot(snapshot)
@@ -4328,7 +4361,7 @@ def _resolution_eligibility_digest(
     if (
         not isinstance(payload, dict)
         or set(payload) != expected_keys
-        or payload.get("schema_version") != "1.0"
+        or payload.get("schema_version") != "1.1"
         or payload.get("repository") != repository
         or payload.get("pull_request_number") != reviewed.pull_request_number
         or isinstance(payload.get("pull_request_number"), bool)
@@ -4353,6 +4386,7 @@ def _resolution_eligibility_digest(
             "disposition",
             "finding_ids",
             "evidence_digest",
+            "follow_up",
         }:
             raise fast_path.SecurityBlocker(
                 "resolution eligibility evidence thread is malformed"
@@ -4386,6 +4420,15 @@ def _resolution_eligibility_digest(
         ):
             raise fast_path.SecurityBlocker(
                 "resolution eligibility evidence thread is ineligible"
+            )
+        if disposition == "TRACKED_AS_FOLLOW_UP":
+            try:
+                follow_up.parse_follow_up(item.get("follow_up"))
+            except follow_up.FollowUpError as exc:
+                raise fast_path.SecurityBlocker(str(exc)) from exc
+        elif item.get("follow_up") is not None:
+            raise fast_path.SecurityBlocker(
+                "only tracked out-of-scope eligibility may carry follow-up identity"
             )
         observed_thread_ids.append(thread_id)
     if len(observed_thread_ids) != len(set(observed_thread_ids)):

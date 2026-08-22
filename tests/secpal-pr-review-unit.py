@@ -2240,6 +2240,13 @@ class SecurityAndOutputTests(unittest.TestCase):
                 review.CommandRunner().run(["git", "rev-parse", "HEAD"], allow_failure=True)
             self.assertFalse(marker.exists())
 
+    def test_generic_command_runner_does_not_gain_node_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(review.CommandPolicyError):
+                review.CommandRunner({"node": fake_executable(directory, "node")})
+        with self.assertRaises(review.CommandPolicyError):
+            review.validate_external_command(["node", "maintained-script.mjs"])
+
     def test_command_runner_bounds_execution_and_closes_stdin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             expired = review.subprocess.TimeoutExpired(["git", "rev-parse", "HEAD"], 1)
