@@ -52,22 +52,42 @@ def work_graph_resolver_steps(workflow: str) -> tuple[str, ...]:
             break
         job_lines.append(line)
 
+    steps_index = next(
+        (
+            index
+            for index, line in enumerate(job_lines)
+            if re.fullmatch(rf"{' ' * (job_indent + 2)}steps:", line)
+        ),
+        None,
+    )
+    if steps_index is None:
+        raise AssertionError("the Work-Graph Resolver job has no steps")
+
+    step_indent = job_indent + 4
     steps: list[list[str]] = []
-    step_indent: int | None = None
-    for line in job_lines:
-        match = re.match(r"^( *)(- name: .*)$", line)
-        if match:
-            step_indent = len(match.group(1))
+    for line in job_lines[steps_index + 1 :]:
+        if re.match(rf"^{' ' * step_indent}-\s+[A-Za-z][\w-]*:", line):
             steps.append([line])
-        elif steps and step_indent is not None and len(line) - len(line.lstrip()) > step_indent:
+        elif steps and len(line) - len(line.lstrip()) > step_indent:
             steps[-1].append(line)
     return tuple("\n".join(step) for step in steps)
 
 
 def assert_executable_advisory_workflow_step(workflow: str) -> None:
     for step in work_graph_resolver_steps(workflow):
-        if re.search(rf"^\s*run:\s*{re.escape(ADVISORY_TEST_COMMAND)}\s*$", step, re.MULTILINE):
-            if re.search(r"^\s*continue-on-error:\s*true\s*(?:#.*)?$", step, re.MULTILINE | re.IGNORECASE):
+        first_line = step.splitlines()[0]
+        step_indent = len(first_line) - len(first_line.lstrip())
+        run_pattern = (
+            rf"^(?:{' ' * step_indent}-\s*run:|{' ' * (step_indent + 2)}run:)"
+            rf"\s*{re.escape(ADVISORY_TEST_COMMAND)}\s*$"
+        )
+        if re.search(run_pattern, step, re.MULTILINE):
+            continue_on_error_values = re.findall(
+                rf"^{' ' * (step_indent + 2)}continue-on-error:\s*([^#\n]*)(?:#.*)?$",
+                step,
+                re.MULTILINE,
+            )
+            if any(value.strip() != "false" for value in continue_on_error_values):
                 raise AssertionError("the advisory-test step must not continue on error")
             return
     raise AssertionError("the Work-Graph Resolver job must execute the advisory contract test")
@@ -658,6 +678,19 @@ class AuditClassificationTests(TestCase):
 
 
 class ValidationWiringTests(TestCase):
+    @staticmethod
+    def workflow_with_steps(*steps: str) -> str:
+        return "\n".join(
+            [
+                "jobs:",
+                "  work-graph-resolver:",
+                "    steps:",
+                *steps,
+                "  another-job:",
+                "    steps: []",
+            ]
+        )
+
     def test_required_quality_executes_the_advisory_contract_test(self):
         assert_executable_advisory_workflow_step(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
 
@@ -680,6 +713,57 @@ class ValidationWiringTests(TestCase):
         )
         with self.assertRaisesRegex(AssertionError, "must not continue"):
             assert_executable_advisory_workflow_step(masked)
+
+    def test_continue_on_error_accepts_only_literal_false(self):
+        step = f"      - run: {ADVISORY_TEST_COMMAND}"
+        for value in (None, "false"):
+            workflow = self.workflow_with_steps(
+                step if value is None else f"{step}\n        continue-on-error: {value}"
+            )
+            assert_executable_advisory_workflow_step(workflow)
+
+        for value in ("true", "${{ true }}", "${{ false }}", "${{ inputs.value }}"):
+            workflow = self.workflow_with_steps(f"{step}\n        continue-on-error: {value}")
+            with self.assertRaisesRegex(AssertionError, "must not continue"):
+                assert_executable_advisory_workflow_step(workflow)
+
+    def test_unnamed_workflow_steps_are_supported_without_confusing_step_boundaries(self):
+        workflow = self.workflow_with_steps(
+            "      - uses: actions/checkout@v4",
+            f"      - run: {ADVISORY_TEST_COMMAND}",
+        )
+        assert_executable_advisory_workflow_step(workflow)
+
+    def test_unnamed_workflow_step_comment_and_other_job_do_not_satisfy_wiring(self):
+        workflow = "\n".join(
+            [
+                "jobs:",
+                "  work-graph-resolver:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                f"      # {ADVISORY_TEST_COMMAND}",
+                "  another-job:",
+                "    steps:",
+                f"      - run: {ADVISORY_TEST_COMMAND}",
+            ]
+        )
+        with self.assertRaisesRegex(AssertionError, "must execute"):
+            assert_executable_advisory_workflow_step(workflow)
+
+    def test_masking_on_an_unnamed_advisory_step_is_rejected(self):
+        workflow = self.workflow_with_steps(
+            "      - uses: actions/checkout@v4",
+            f"      - run: {ADVISORY_TEST_COMMAND}\n        continue-on-error: true",
+        )
+        with self.assertRaisesRegex(AssertionError, "must not continue"):
+            assert_executable_advisory_workflow_step(workflow)
+
+    def test_block_scalar_content_is_not_an_executable_workflow_step(self):
+        workflow = self.workflow_with_steps(
+            f"      - name: Echo example\n        run: |\n          echo 'run: {ADVISORY_TEST_COMMAND}'"
+        )
+        with self.assertRaisesRegex(AssertionError, "must execute"):
+            assert_executable_advisory_workflow_step(workflow)
 
     def test_preflight_executes_the_advisory_contract_test_fail_closed(self):
         assert_fail_closed_preflight_advisory_invocation(PREFLIGHT.read_text(encoding="utf-8"))
