@@ -85,6 +85,14 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
+- [ADR-023: Public Self-Hosting vs Private Managed Operations Boundary](20260824-public-self-hosting-private-managed-operations-adr023.md) - 2026-08-24
+- [ADR-022: Deployment Topology Evolution and High Availability](20260824-deployment-topology-high-availability-adr022.md) - 2026-08-24
+- [ADR-021: OCI Supply-Chain and Vulnerability Evidence Architecture](20260824-oci-supply-chain-vulnerability-evidence-adr021.md) - 2026-08-24
+- [ADR-020: Production State, Recovery, and Cryptographic Authority Separation](20260824-production-state-recovery-authority-separation-adr020.md) - 2026-08-24
+- [ADR-019: Production Edge and Layered Security](20260824-production-edge-layered-security-adr019.md) - 2026-08-24
+- [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24
+- [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24
+- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; refines ADR-013
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20
 - [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13
@@ -93,13 +101,13 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13
 - [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
-- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15
+- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; refined by ADR-016
 
 ### Proposed
 
-- [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27
-- [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27
-- [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27
+- [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27; revalidation required before acceptance
+- [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27; revalidation required before acceptance
+- [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27; revalidation required before acceptance
 
 ### Superseded
 
@@ -124,6 +132,10 @@ Write an ADR when making decisions about:
 - **Security:** Authentication mechanisms, encryption strategies
 - **Legal:** Licensing, CLA requirements, data retention
 - **Process:** CI/CD strategy, branching model, release process
+
+When historical body text differs from current architecture, the explicit
+status, supersession, refinement, and revalidation notices in the individual
+ADR control. Proposed ADRs are not implementation authority.
 
 ## When NOT to Write an ADR
 

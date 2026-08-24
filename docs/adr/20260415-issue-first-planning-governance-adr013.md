@@ -9,6 +9,8 @@ SPDX-License-Identifier: CC0-1.0
 
 **Accepted** (Issue #354)
 
+**Refined by:** [ADR-016](20260824-native-work-graph-engineering-governance-adr016.md)
+
 ## Date
 
 2026-04-15
@@ -31,6 +33,11 @@ This left contributors without a single canonical planning process and made it t
 ## Decision
 
 SecPal adopts an issue-first planning model.
+
+ADR-013 owns issue-first planning and the Project-board-as-mirror policy.
+ADR-016 owns native hierarchy, dependencies, sibling order, node roles,
+`READY`/`ACTIVE`/`NEXT`, execution claims, closure semantics, and all other
+work-graph behavior.
 
 - GitHub Issues are the canonical source of truth for active planning and deferred follow-up work.
 - Milestones group roadmap and release intent.

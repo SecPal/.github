@@ -116,6 +116,12 @@ Two further consequences make this list usable instead of merely ordered:
 - A node whose scope contradicts an accepted ADR is mis-specified. Change the ADR
   or change the node; do not deliver the contradiction and do not silently prefer
   the newer text.
+- An Accepted ADR remains binding until superseded by an explicit
+  architecture-level decision. A deliberate architecture rebaseline MAY make an
+  older ADR stale before its file is mechanically reconciled; that temporary
+  mismatch is governance/documentation drift and MUST be reconciled. An ordinary
+  issue, PR, implementation convenience, newer timestamp, or repository-local
+  wording is not architecture-level authority and MUST NOT supersede an ADR.
 
 A repository baseline MAY add stricter, non-contradictory local rules. It MUST
 NOT redefine node types, edge semantics, `READY`, `NEXT`, the epic threshold, or

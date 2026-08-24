@@ -21,13 +21,13 @@
 #      claim the script only scans tracked files (it greps the working
 #      tree, untracked files included) so contributors do not develop the
 #      wrong mental model.
-#   4. CHANGELOG.md does not contain a literal unapproved secpal.* host
-#      such as secpal.xyz, even when describing the regression fixture;
+#   4. CHANGELOG.md does not contain a literal unapproved namespace host,
+#      even when describing the regression fixture;
 #      such hosts only ever live inside the test's own temporary workspace
 #      so the prose cannot accidentally trip the gate after a reword.
-#   5. Behaviour matches the documented scope: guardguide.de references in
-#      a workspace pass cleanly, while an unapproved secpal.* host still
-#      fails the gate.
+#   5. Behaviour matches the documented classification: existing public and
+#      development hosts plus the exact private database service identity pass;
+#      an unapproved secpal.* host and another internal identity fail.
 #   6. The gate skips the gitignored agent scratch directory `.context/` so
 #      Polyscope-managed workspaces can stash PR body drafts and other
 #      throwaway notes that quote forbidden hosts verbatim without tripping
@@ -48,6 +48,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/check-domains.sh"
 README="$REPO_ROOT/scripts/README.md"
 CHANGELOG="$REPO_ROOT/CHANGELOG.md"
+domain_namespace="sec""pal"
+bad_public_domain="${domain_namespace}.xyz"
+bad_internal_domain="cache.${domain_namespace}.internal"
+bad_development_suffix="${domain_namespace}.dev.example"
+bad_direct_development="foo.${domain_namespace}.dev"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -134,8 +139,8 @@ fi
 # in its prose. The regression fixture lives in the test's own temporary
 # workspace so the changelog entry cannot accidentally trip the gate after
 # a reword (PR #488 review thread on CHANGELOG.md:21).
-if grep -Fq 'secpal.xyz' "$CHANGELOG"; then
-  echo "CHANGELOG.md must not contain literal unapproved secpal.* hosts (e.g. secpal.xyz); keep such fixtures inside tests/check-domains.sh" >&2
+if grep -Fq "$bad_public_domain" "$CHANGELOG"; then
+  echo "CHANGELOG.md must not contain literal unapproved secpal.* hosts; keep fixtures runtime-constructed" >&2
   exit 1
 fi
 
@@ -143,6 +148,7 @@ fi
 workspace=""
 ctx_workspace=""
 tracked_workspace=""
+historical_workspace=""
 cleanup() {
   # Guard each path so the trap stays a no-op when an earlier assertion
   # exits before a workspace was created. `rm -rf ""` would otherwise
@@ -150,6 +156,7 @@ cleanup() {
   [ -n "${workspace:-}" ] && [ -d "$workspace" ] && rm -rf "$workspace"
   [ -n "${ctx_workspace:-}" ] && [ -d "$ctx_workspace" ] && rm -rf "$ctx_workspace"
   [ -n "${tracked_workspace:-}" ] && [ -d "$tracked_workspace" ] && rm -rf "$tracked_workspace"
+  [ -n "${historical_workspace:-}" ] && [ -d "$historical_workspace" ] && rm -rf "$historical_workspace"
   return 0
 }
 trap cleanup EXIT
@@ -168,9 +175,14 @@ Marketing redirect: https://www.guardguide.de
 Approved SecPal hosts used in examples:
 - https://secpal.app
 - https://apk.secpal.app
+- https://secpal.dev
 - https://api.secpal.dev
 - https://app.secpal.dev
+- https://preview.secpal.dev
 - https://feature-branch.preview.secpal.dev
+
+Approved private service identity:
+- db.secpal.internal
 EOF
 
 set +e
@@ -183,7 +195,7 @@ set -e
 
 if [ "$_rc" -ne 0 ] || ! grep -Fq 'Domain Policy Check PASSED' "$workspace/output.txt"; then
   cat "$workspace/output.txt"
-  echo "check-domains.sh should pass when only guardguide.de + approved secpal.* hosts are present" >&2
+  echo "check-domains.sh should pass for approved public, development, and exact private service identities" >&2
   exit 1
 fi
 
@@ -193,15 +205,177 @@ if grep -F 'guardguide' "$workspace/output.txt" | grep -qiEv 'out of scope|gover
   exit 1
 fi
 
+# The policy classifies every matched secpal.* token, rather than treating an
+# approved substring or another token on the same line as a blanket allowance.
+# Keep the cases together so the precise public, preview, and private boundaries
+# remain obvious when the allowlist changes.
+domain_policy_regression_failures=0
+assert_domain_policy_case() {
+  local label="$1"
+  local expected="$2"
+  local expected_token="$3"
+  shift 3
+
+  printf '%s\n' "$@" >"$workspace/domain-policy-case.md"
+
+  set +e
+  (
+    cd "$workspace"
+    bash scripts/check-domains.sh >output.txt 2>&1
+  )
+  local case_exit_code=$?
+  set -e
+
+  if [ "$expected" = "reject" ] && [ "$case_exit_code" -eq 0 ]; then
+    cat "$workspace/output.txt"
+    echo "check-domains.sh must reject $label" >&2
+    domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+  elif [ "$expected" = "accept" ] && [ "$case_exit_code" -ne 0 ]; then
+    cat "$workspace/output.txt"
+    echo "check-domains.sh must accept $label" >&2
+    domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+  fi
+
+  if [ "$expected" = "reject" ] && ! grep -Fq "$expected_token" "$workspace/output.txt"; then
+    cat "$workspace/output.txt"
+    echo "check-domains.sh must surface $expected_token for $label" >&2
+    domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+  fi
+}
+
+assert_domain_policy_case \
+  "secpal.dev with an appended suffix" \
+  reject \
+  "$bad_development_suffix" \
+  "Bad: https://$bad_development_suffix"
+assert_domain_policy_case \
+  "an unapproved direct secpal.dev subdomain" \
+  reject \
+  "$bad_direct_development" \
+  "Bad: https://$bad_direct_development"
+assert_domain_policy_case \
+  "an unapproved internal identity" \
+  reject \
+  "$bad_internal_domain" \
+  "Bad: $bad_internal_domain"
+assert_domain_policy_case \
+  "a mixed allowed and forbidden internal-identity line" \
+  reject \
+  "$bad_internal_domain" \
+  "Mixed: db.secpal.internal $bad_internal_domain"
+
+rm "$workspace/domain-policy-case.md"
+
+if [ "$domain_policy_regression_failures" -ne 0 ]; then
+  exit 1
+fi
+
+# Historical evidence is intentionally path-bound. These two files preserve
+# retired planning and superseded-ADR context; every other Markdown path stays
+# subject to the active namespace policy.
+historical_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-historical.XXXXXX")"
+mkdir -p "$historical_workspace/scripts" "$historical_workspace/docs/adr"
+cp "$SCRIPT" "$historical_workspace/scripts/check-domains.sh"
+
+historical_employee="employees.""secpal"".dev"
+historical_tenant="tenant1.""secpal"".dev"
+historical_wildcard="*.""secpal"".dev"
+
+printf 'Historical planning evidence: %s\n' "$historical_employee" \
+  >"$historical_workspace/docs/feature-requirements.md"
+printf 'Historical alternatives: %s and %s\n' "$historical_tenant" "$historical_wildcard" \
+  >"$historical_workspace/docs/adr/20251219-user-based-tenant-resolution.md"
+
+historical_regression_failures=0
+assert_historical_policy_case() {
+  local label="$1"
+  local expected="$2"
+  local expected_token="$3"
+
+  set +e
+  (
+    cd "$historical_workspace"
+    bash scripts/check-domains.sh >output.txt 2>&1
+  )
+  local case_exit_code=$?
+  set -e
+
+  if [ "$expected" = "accept" ] && [ "$case_exit_code" -ne 0 ]; then
+    cat "$historical_workspace/output.txt"
+    echo "check-domains.sh must treat $label as historical evidence only" >&2
+    historical_regression_failures=$((historical_regression_failures + 1))
+  elif [ "$expected" = "reject" ] && [ "$case_exit_code" -eq 0 ]; then
+    cat "$historical_workspace/output.txt"
+    echo "check-domains.sh must reject $label as active namespace usage" >&2
+    historical_regression_failures=$((historical_regression_failures + 1))
+  fi
+
+  if [ "$expected" = "reject" ] && ! grep -Fq "$expected_token" "$historical_workspace/output.txt"; then
+    cat "$historical_workspace/output.txt"
+    echo "check-domains.sh must surface $expected_token for $label" >&2
+    historical_regression_failures=$((historical_regression_failures + 1))
+  fi
+}
+
+assert_historical_policy_case "the two exact historical paths" accept "$historical_employee"
+
+printf 'Current content: %s\n' "$historical_employee" >"$historical_workspace/current.md"
+assert_historical_policy_case "an ordinary current Markdown file" reject "$historical_employee"
+rm "$historical_workspace/current.md"
+
+printf 'Current ADR: %s\n' "$historical_tenant" >"$historical_workspace/docs/adr/invented.md"
+assert_historical_policy_case "an invented ADR path" reject "$historical_tenant"
+rm "$historical_workspace/docs/adr/invented.md"
+
+printf 'Current documentation: %s\n' "$historical_wildcard" >"$historical_workspace/docs/invented.md"
+assert_historical_policy_case "an invented documentation path" reject "$historical_wildcard"
+rm "$historical_workspace/docs/invented.md"
+
+if [ "$historical_regression_failures" -ne 0 ]; then
+  exit 1
+fi
+
+# An exact private service identity is not a wildcard approval for the
+# internal namespace. Verify a different internal-looking value fails.
+cat >"$workspace/internal-regression.md" <<EOF
+# Internal identity regression fixture
+
+This fixture uses an unapproved private-looking service identity:
+
+Bad: $bad_internal_domain
+EOF
+
+set +e
+(
+  cd "$workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+internal_exit_code=$?
+set -e
+
+if [ "$internal_exit_code" -eq 0 ]; then
+  cat "$workspace/output.txt"
+  echo "check-domains.sh must reject unapproved internal identities" >&2
+  exit 1
+fi
+
+if ! grep -Fq "$bad_internal_domain" "$workspace/output.txt"; then
+  cat "$workspace/output.txt"
+  echo "check-domains.sh must surface the unapproved internal identity" >&2
+  exit 1
+fi
+
+rm "$workspace/internal-regression.md"
+
 # Now confirm an unapproved secpal.* host still fails the gate so the scope
 # limit is not a free pass for actual namespace violations.
-cat >"$workspace/regression.md" <<'EOF'
+cat >"$workspace/regression.md" <<EOF
 # Regression fixture
 
-This file intentionally references an unapproved secpal.xyz host so the
+This file intentionally references an unapproved namespace host so the
 gate has something to fail on.
 
-Bad: https://secpal.xyz
+Bad: https://$bad_public_domain
 EOF
 
 set +e
@@ -218,9 +392,9 @@ if [ "$exit_code" -eq 0 ]; then
   exit 1
 fi
 
-if ! grep -Fq 'secpal.xyz' "$workspace/output.txt"; then
+if ! grep -Fq "$bad_public_domain" "$workspace/output.txt"; then
   cat "$workspace/output.txt"
-  echo "check-domains.sh must surface the unapproved secpal.xyz host in its output" >&2
+  echo "check-domains.sh must surface the unapproved public fixture host in its output" >&2
   exit 1
 fi
 
@@ -233,11 +407,13 @@ ctx_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-context.XXXXXX")"
 mkdir -p "$ctx_workspace/scripts" "$ctx_workspace/.context"
 cp "$SCRIPT" "$ctx_workspace/scripts/check-domains.sh"
 
-cat >"$ctx_workspace/.context/notes.md" <<'EOF'
+cat >"$ctx_workspace/.context/notes.md" <<EOF
 # Agent scratch notes
 
-PR body draft mentioning the unapproved secpal.xyz fixture host so the
+PR body draft mentioning the unapproved public fixture host so the
 gate has a reason to fail if .context/ is not excluded.
+
+Bad: $bad_public_domain
 EOF
 
 set +e
@@ -270,12 +446,14 @@ rm -rf "$ctx_workspace/.context"
 # Negative case: the same string in a tracked-equivalent location at the
 # workspace root must still fail the gate so the exclusion cannot be
 # mistaken for a blanket free pass.
-cat >"$ctx_workspace/regression.md" <<'EOF'
+cat >"$ctx_workspace/regression.md" <<EOF
 # Regression fixture
 
-Tracked-equivalent content still references the unapproved secpal.xyz
+Tracked-equivalent content still references the unapproved public fixture
 host so the gate must still fail when the violation lives outside
 .context/.
+
+Bad: $bad_public_domain
 EOF
 
 set +e
@@ -308,12 +486,14 @@ tracked_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-tracked.XXXXXX")"
 mkdir -p "$tracked_workspace/scripts" "$tracked_workspace/.context"
 cp "$SCRIPT" "$tracked_workspace/scripts/check-domains.sh"
 
-cat >"$tracked_workspace/.context/forced.md" <<'EOF'
+cat >"$tracked_workspace/.context/forced.md" <<EOF
 # Force-added agent scratch fixture
 
-This file references the unapproved secpal.xyz host. It is force-added
+This file references the unapproved public fixture host. It is force-added
 into the workspace's git index so the gate must fail even though
-`--exclude-dir=".context"` would otherwise skip it.
+the configured .context exclusion would otherwise skip it.
+
+Bad: $bad_public_domain
 EOF
 
 (

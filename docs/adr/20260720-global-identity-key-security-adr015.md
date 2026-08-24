@@ -13,6 +13,13 @@ SPDX-License-Identifier: CC0-1.0
 
 **Related:** [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
+**Operational recovery relationship:** [ADR-020](20260824-production-state-recovery-authority-separation-adr020.md)
+
+**Authority invariant:** Global Identity Root / KEK is distinct from the
+Tenant/Deployment Root KEK, `APP_KEY`, PostgreSQL transport PKI authority,
+backup encryption/repository authority, and public TLS/ACME authority. Shared
+recovery mechanics never merge these authorities.
+
 ## Relationship to ADR-014
 
 [ADR-014](20260720-tenant-identity-access-model-adr014.md) is accepted and is the binding architectural baseline. It establishes a global user identity, tenant memberships, and a Global Identity Key boundary distinct from tenant data. This ADR only specifies the security design inside that boundary. It neither weakens nor reopens ADR-014.

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-24 - Reconcile Internal Database Service Domain Policy
+
+**Changed:**
+
+- updated the organization-wide domain-policy guard to distinguish the approved
+  private database service identity `db.secpal.internal` from public and
+  development hosts while retaining fail-closed rejection for other unknown
+  `secpal.*` variants
+
+---
+
 ## 2026-08-21 - Centralize The Single-Maintainer Review Baseline
 
 **Changed:**
