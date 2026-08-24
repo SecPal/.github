@@ -7,7 +7,7 @@
 #   secpal\.[A-Za-z0-9.-]+). Non-secpal SecPal-owned hosts (e.g.
 #   guardguide.de) are intentionally out of scope here and are governed by
 #   their owning repository's policy guard.
-# ZERO TOLERANCE for unapproved secpal.* hosts or deprecated .app web hosts.
+# ZERO TOLERANCE for unapproved secpal.* values or deprecated .app web hosts.
 
 set -euo pipefail
 
@@ -22,14 +22,14 @@ echo -e "${BLUE}=== Domain Policy Check ===${NC}"
 echo "Scope: enforces the secpal.* namespace split only (match regex: secpal\\.[A-Za-z0-9.-]+)."
 echo "Out of scope: non-secpal SecPal-owned hosts such as guardguide.de are governed by"
 echo "their own repository policy guards and are intentionally not inspected here."
-echo "Allowed: secpal.app, apk.secpal.app, secpal.dev"
-echo "Active web hosts: api.secpal.dev, app.secpal.dev"
-echo "Android artifact host: apk.secpal.app"
-echo "Human-facing Android landing page: secpal.app/android"
-echo "Identifier-only: app.secpal (Android application ID)"
+echo "Public hosts: secpal.app, apk.secpal.app"
+echo "Development/preview hosts: secpal.dev (including approved subdomains)"
+echo "Private internal service identities: db.secpal.internal (exact only)"
+echo "Identifier-only values: app.secpal (Android application ID)"
 echo "Deprecated web hosts: api.secpal.app"
 echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io,"
-echo "  secpal.example, app.secpal.app, and any other unapproved secpal.* host."
+echo "  secpal.example, app.secpal.app, every other secpal.internal name, and any"
+echo "  other unapproved secpal.* value."
 echo ""
 
 # Defense in depth: `--exclude-dir=".context"` (below) is git-tracking
@@ -88,12 +88,13 @@ matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     grep -v -- '- "secpal\.' | \
     grep -v -- '^[[:space:]]*- \[' || true)
 
-# Allowlist approach: flag any secpal.* domain not matching an approved pattern.
-# Approved: secpal.app, apk.secpal.app, secpal.dev, api.secpal.dev, app.secpal.dev.
+# Allowlist approach: flag any secpal.* value not matching an approved class.
+# Public/external: secpal.app and apk.secpal.app. Development/preview: secpal.dev
+# and its approved subdomains. Private internal: db.secpal.internal exactly.
 # api.secpal.app is temporarily tolerated (deprecated web host, flagged separately).
-# This catches unknown domains (e.g. secpal.xyz) that a denylist-only check would miss.
+# This catches unknown values that a denylist-only check would miss.
 violations=$(printf '%s\n' "$matches" | \
-    grep -Ev '(^|[^A-Za-z0-9.-])secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])apk\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])(\*\.|\.)?([A-Za-z0-9-]+\.)*secpal\.dev(\.[A-Za-z0-9_-]+)*($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])api\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)' | \
+    grep -Ev '(^|[^A-Za-z0-9.-])secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])apk\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])(\*\.|\.)?([A-Za-z0-9-]+\.)*secpal\.dev(\.[A-Za-z0-9_-]+)*($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])db\.secpal\.internal($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)|(^|[^A-Za-z0-9.-])api\.secpal\.app($|[^A-Za-z0-9._-]|\.[^A-Za-z0-9_-]|\.$)' | \
     grep -E 'secpal\.' || true)
 
 deprecated_web_hosts=$(printf '%s\n' "$matches" | \
@@ -131,7 +132,7 @@ deprecated_web_hosts=$(printf '%s\n' "$matches" | \
 
 if [[ -z "$violations" && -z "$deprecated_web_hosts" ]]; then
     echo -e "${GREEN}✅ Domain Policy Check PASSED${NC}"
-    echo "All domain usage matches the approved SecPal split"
+    echo "All secpal.* usage matches the approved SecPal classifications"
     exit 0
 else
     echo -e "${RED}❌ Domain Policy Check FAILED${NC}"
@@ -147,15 +148,12 @@ else
         echo ""
     fi
     echo -e "${YELLOW}Policy (scope: secpal.* namespace split only):${NC}"
-    echo "  - secpal.app: public homepage and real email addresses"
-    echo "  - apk.secpal.app: canonical Android artifact/download host"
-    echo "  - api.secpal.dev: live API host"
-    echo "  - app.secpal.dev: live PWA/frontend host"
-    echo "  - secpal.dev: development, staging, testing, examples"
-    echo "  - app.secpal: Android application identifier only"
-    echo "  - secpal.app/android: human-facing Android landing page"
-    echo "  - DEPRECATED as web hosts: api.secpal.app"
-    echo "  - FORBIDDEN secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io, secpal.example, app.secpal.app"
+    echo "  - Public hosts: secpal.app (homepage/real email), apk.secpal.app (Android downloads)"
+    echo "  - Development/preview hosts: api.secpal.dev, app.secpal.dev, secpal.dev subdomains"
+    echo "  - Private internal service identity: db.secpal.internal (exact only; not a public host)"
+    echo "  - Identifier-only value: app.secpal (Android application ID)"
+    echo "  - Deprecated web host: api.secpal.app"
+    echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
     echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."
     echo ""
     echo "Fix these violations before committing."

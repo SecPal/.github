@@ -7,6 +7,10 @@ SPDX-License-Identifier: CC0-1.0 -->
 **Date:** 2026-08-24
 **Decision authority:** SecPal architecture rebaseline (August 2026)
 
+**Decision provenance:** This ADR records architecture decisions deliberately
+adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record
+date, not an assertion that this PR first made those decisions.
+
 ## Context
 
 The production runtime requires one auditable host and containment baseline.

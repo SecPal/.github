@@ -27,10 +27,14 @@ SPDX-License-Identifier: CC0-1.0
 `users.tenant_id`, `OrganizationalUnit` authorization, inheritance blocking, or
 the prior RBAC model are non-normative history superseded by ADR-014. Likewise,
 OpenTimestamp code and library references are implementation illustrations, not
-a frozen dependency or timestamping choice. The accepted core still requires
+a frozen dependency or timestamping choice. The historical Decision section's
+named OpenTimestamp mechanism is non-normative historical design and
+implementation context, not the only accepted timestamping mechanism. The
+accepted core still requires
 comprehensive coverage, retention-driven lifecycle, privacy-conscious retained
 evidence, tamper-evident external/forensic verification, and ADR-014-defined
-authorization/scoping.
+authorization/scoping. A future explicit ADR may choose or replace the external
+timestamping mechanism; this ADR does not make that future choice.
 
 ## Context
 

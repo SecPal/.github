@@ -7,6 +7,10 @@ SPDX-License-Identifier: CC0-1.0 -->
 **Date:** 2026-08-24
 **Decision authority:** SecPal architecture rebaseline (August 2026)
 
+**Decision provenance:** This ADR records architecture decisions deliberately
+adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record
+date, not an assertion that this PR first made those decisions.
+
 ## Context
 
 Self-hosting, host replacement, and permanent HA have materially different guarantees.
@@ -17,6 +21,12 @@ The topology vocabulary is `single`, temporary `replacement`, and permanent `ha`
 
 HA is distinct from backup. Patroni is the preferred PostgreSQL HA coordinator subject to qualification, with a real quorum DCS (etcd is a candidate), no two-node quorum fiction, exactly one writable primary/fencing semantics, a stable private/node-local write endpoint, and shared durable object storage for authoritative private files. Barman remains an independent recovery chain. RPO/RTO and synchronous-replication choices must be measured and explicit.
 
+## Consequences
+
+Normal self-hosting remains feasible without HA machinery, while replacement
+and permanent HA have explicit, separately measurable contracts. A topology
+cannot claim resilience merely from replication or shared storage.
+
 ## Non-goals and relationships
 
-HA is not mandatory for normal single-node deployments, and no unreleased PostgreSQL major is pre-accepted. See [#695](https://github.com/SecPal/.github/issues/695), ADR-017, ADR-019, and ADR-020.
+HA is not mandatory for normal single-node deployments, and no unreleased PostgreSQL major is pre-accepted. Kubernetes is not introduced solely to obtain SecPal HA; adding it later requires a separate explicit architecture decision and must not become a hidden normal-self-hosting requirement. See [#695](https://github.com/SecPal/.github/issues/695), ADR-017, ADR-019, and ADR-020.

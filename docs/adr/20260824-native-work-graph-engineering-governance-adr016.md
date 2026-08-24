@@ -7,6 +7,10 @@ SPDX-License-Identifier: CC0-1.0 -->
 **Date:** 2026-08-24
 **Decision authority:** SecPal architecture rebaseline (August 2026)
 
+**Decision provenance:** This ADR records architecture decisions deliberately
+adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record
+date, not an assertion that this PR first made those decisions.
+
 ## Context
 
 Issue-first planning needs one durable, GitHub-native model rather than competing body and board mirrors.
@@ -25,7 +29,10 @@ GitHub-native parent/sub-issue relations are authoritative containment; native d
 
 ## Consequences
 
-Work can be selected and audited consistently across repositories; graph mirrors cannot silently alter delivery state.
+Work can be selected and audited consistently across repositories; graph
+mirrors cannot silently alter delivery state. Work that needs a different graph
+semantic must use an explicit architecture decision, rather than a leaf issue
+or implementation convenience.
 
 ## Relationships
 

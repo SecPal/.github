@@ -135,14 +135,22 @@ persists no state.
 
 ### `check-domains.sh`
 
-Enforces the SecPal `secpal.*` namespace split. The script greps text files
+Enforces the SecPal `secpal.*` namespace by classification. The script greps text files
 in the working tree (via `grep -r --include=...`, so untracked files matching
 the include patterns are inspected too) for any `secpal.<something>`
 substring and flags entries that fall outside the approved set
-(`secpal.app`, `apk.secpal.app`, `secpal.dev`,
-`api.secpal.dev`, `app.secpal.dev`, plus arbitrary `*.preview.secpal.dev`
-previews). It also surfaces `api.secpal.app`, the deprecated `.app` web
-host, so callers cannot reintroduce it as an active host.
+of public/external hosts (`secpal.app`, `apk.secpal.app`), development/preview
+hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, plus arbitrary
+`*.preview.secpal.dev` previews), and the exact private internal logical
+database service identity `db.secpal.internal`. It also surfaces
+`api.secpal.app`, the deprecated `.app` web host, so callers cannot reintroduce
+it as an active host.
+
+`db.secpal.internal` is an approved logical PostgreSQL connection/TLS service
+identity, not a public web host or DNS-routing commitment. This exact allowance
+does **not** approve arbitrary `*.secpal[.]internal` names; all other
+`secpal[.]internal` identities remain fail-closed unless a separate explicit
+architecture decision adds one.
 
 **Scope (intentional limit):**
 

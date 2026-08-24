@@ -25,9 +25,9 @@
 #      such as secpal.xyz, even when describing the regression fixture;
 #      such hosts only ever live inside the test's own temporary workspace
 #      so the prose cannot accidentally trip the gate after a reword.
-#   5. Behaviour matches the documented scope: guardguide.de references in
-#      a workspace pass cleanly, while an unapproved secpal.* host still
-#      fails the gate.
+#   5. Behaviour matches the documented classification: existing public and
+#      development hosts plus the exact private database service identity pass;
+#      an unapproved secpal.* host and another secpal.internal identity fail.
 #   6. The gate skips the gitignored agent scratch directory `.context/` so
 #      Polyscope-managed workspaces can stash PR body drafts and other
 #      throwaway notes that quote forbidden hosts verbatim without tripping
@@ -171,6 +171,9 @@ Approved SecPal hosts used in examples:
 - https://api.secpal.dev
 - https://app.secpal.dev
 - https://feature-branch.preview.secpal.dev
+
+Approved private service identity:
+- db.secpal.internal
 EOF
 
 set +e
@@ -183,7 +186,7 @@ set -e
 
 if [ "$_rc" -ne 0 ] || ! grep -Fq 'Domain Policy Check PASSED' "$workspace/output.txt"; then
   cat "$workspace/output.txt"
-  echo "check-domains.sh should pass when only guardguide.de + approved secpal.* hosts are present" >&2
+  echo "check-domains.sh should pass for approved public, development, and exact private service identities" >&2
   exit 1
 fi
 
@@ -192,6 +195,38 @@ if grep -F 'guardguide' "$workspace/output.txt" | grep -qiEv 'out of scope|gover
   echo "check-domains.sh must not flag guardguide.de as a violation" >&2
   exit 1
 fi
+
+# An exact private service identity is not a wildcard approval for the
+# secpal.internal namespace. Verify a different internal-looking value fails.
+cat >"$workspace/internal-regression.md" <<'EOF'
+# Internal identity regression fixture
+
+This fixture uses an unapproved private-looking service identity:
+
+Bad: cache.secpal.internal
+EOF
+
+set +e
+(
+  cd "$workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+internal_exit_code=$?
+set -e
+
+if [ "$internal_exit_code" -eq 0 ]; then
+  cat "$workspace/output.txt"
+  echo "check-domains.sh must reject unapproved secpal.internal identities" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'cache.secpal.internal' "$workspace/output.txt"; then
+  cat "$workspace/output.txt"
+  echo "check-domains.sh must surface the unapproved internal identity" >&2
+  exit 1
+fi
+
+rm "$workspace/internal-regression.md"
 
 # Now confirm an unapproved secpal.* host still fails the gate so the scope
 # limit is not a free pass for actual namespace violations.

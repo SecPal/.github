@@ -7,6 +7,10 @@ SPDX-License-Identifier: CC0-1.0 -->
 **Date:** 2026-08-24
 **Decision authority:** SecPal architecture rebaseline (August 2026)
 
+**Decision provenance:** This ADR records architecture decisions deliberately
+adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record
+date, not an assertion that this PR first made those decisions.
+
 ## Context
 
 Public self-hosting must remain secure and recoverable without depending on managed-provider knowledge.
@@ -19,8 +23,8 @@ Neither public nor private Git may hold secrets, credentials, private keys, cust
 
 ## Consequences and boundaries
 
-Managed operations may add provider-specific capability without becoming a hidden dependency for public deployment. This ADR does not publish managed-provider details or relax any authority boundary.
+Managed operations may add provider-specific capability without becoming a hidden dependency for public deployment. This ADR defines the architecture ownership boundary; it does not claim that `SecPal/operations` is currently an executable, privileged production operations control plane. Under [#705](https://github.com/SecPal/.github/issues/705), that repository is currently information/architecture collection. Before it gains executable or privileged production automation or live control-plane responsibility, a separate governance/security-hardening contract must be accepted. This ADR does not bypass that requirement.
 
 ## Relationships
 
-Codifies [#695](https://github.com/SecPal/.github/issues/695); see ADR-020 and ADR-022.
+Codifies [#695](https://github.com/SecPal/.github/issues/695); see [#705](https://github.com/SecPal/.github/issues/705), ADR-020, and ADR-022.
