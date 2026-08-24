@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0 -->
 
 **Status:** Accepted
 **Date:** 2026-08-24
-**Decision authority:** SecPal architecture rebaseline (August 2026)
+**Decision authority:** SecPal maintainers
 
 **Decision provenance:** This ADR records architecture decisions deliberately
 adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record

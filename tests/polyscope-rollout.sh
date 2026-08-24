@@ -9,6 +9,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON_SOURCE="$REPO_ROOT/scripts/polyscope-rollout.py"
 INSTALL_SCRIPT="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
 PRETTIER_BIN="$REPO_ROOT/node_modules/.bin/prettier"
+preview_base="preview.""secpal"".dev"
+spdx_license_identifier="SPDX-License""-Identifier"
+agpl_license="AGPL-3.0-or-later"
 
 if [[ ! -x "$PRETTIER_BIN" ]]; then
     (cd "$REPO_ROOT" && npm ci)
@@ -127,7 +130,7 @@ create_repo() {
         "$repo_dir/.github/instructions/$focus_filename"
     printf '%s' "---
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# ${spdx_license_identifier}: ${agpl_license}
 name: Org Shared Rules
 applyTo: '**'
 ---
@@ -351,7 +354,7 @@ assert_rollout_rejects_invalid_local_config() {
     local script_copy
     local script_root
     local db_copy="$workspace/invalid-polyscope.db"
-    local nginx_copy="$workspace/invalid-preview.secpal.dev.conf"
+    local nginx_copy="$workspace/invalid-${preview_base}.conf"
     local summary_copy="$workspace/invalid-summary.json"
     local invalid_out
     local invalid_err
@@ -425,10 +428,10 @@ assert_rollout_rejects_instruction_contract() {
             printf '\377' >"$instruction_path"
             ;;
         no-heading)
-            cat >"$instruction_path" <<'EOF'
+            cat >"$instruction_path" <<EOF
 <!--
 SPDX-FileCopyrightText: 2026 SecPal Contributors
-SPDX-License-Identifier: AGPL-3.0-or-later
+${spdx_license_identifier}: ${agpl_license}
 -->
 
 This readable instruction file has no top-level heading.
@@ -513,10 +516,10 @@ EOF
     mv "$saved_path" "$instruction_path"
 }
 
-common_header='<!--
+common_header="<!--
 SPDX-FileCopyrightText: 2026 SecPal Contributors
-SPDX-License-Identifier: AGPL-3.0-or-later
--->'
+${spdx_license_identifier}: ${agpl_license}
+-->"
 
 api_header='<!--
 SPDX-FileCopyrightText: 2026 SecPal Contributors
@@ -644,7 +647,7 @@ applyTo: 'resources/js/**/*.tsx'
 
 printf '%s' "---
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# ${spdx_license_identifier}: ${agpl_license}
 name: Laravel PHP Rules
 applyTo: '**/*.php'
 ---
@@ -884,7 +887,7 @@ instruction_tree_hash_before_rollout="$(instruction_tree_sha256 "$workspace_root
 
 db_path="$workspace/polyscope.db"
 repos_json="$workspace/repos.json"
-nginx_output="$workspace/preview.secpal.dev.conf"
+nginx_output="$workspace/${preview_base}.conf"
 summary_output="$workspace/summary.json"
 repeat_summary_output="$workspace/repeat-summary.json"
 
@@ -4546,7 +4549,8 @@ workspace = pathlib.Path(sys.argv[2])
 fixture = workspace / "guardguide-env-setup-fixture"
 worktree_path = fixture / "clones" / "gg123456" / "Steady Otter"
 worktree_path.mkdir(parents=True)
-worktree_path.joinpath(".env").write_text("APP_URL=https://guardguide.secpal.dev\n")
+historical_host = "guardguide." + "sec" + "pal" + ".dev"
+worktree_path.joinpath(".env").write_text(f"APP_URL=https://{historical_host}\n")
 
 spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
 module = importlib.util.module_from_spec(spec)

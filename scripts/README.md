@@ -137,11 +137,11 @@ persists no state.
 
 Enforces the SecPal `secpal.*` namespace by classification. The script greps text files
 in the working tree (via `grep -r --include=...`, so untracked files matching
-the include patterns are inspected too) for any `secpal.<something>`
-substring and flags entries that fall outside the approved set
+the include patterns are inspected too), extracts each matching hostname-like
+token independently, and flags tokens that fall outside the approved set
 of public/external hosts (`secpal.app`, `apk.secpal.app`), development/preview
-hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, plus arbitrary
-`*.preview.secpal.dev` previews), and the exact private internal logical
+hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, the
+`preview.secpal.dev` base, plus arbitrary `*.preview.secpal.dev` previews), and the exact private internal logical
 database service identity `db.secpal.internal`. It also surfaces
 `api.secpal.app`, the deprecated `.app` web host, so callers cannot reintroduce
 it as an active host.
@@ -151,6 +151,19 @@ identity, not a public web host or DNS-routing commitment. This exact allowance
 does **not** approve arbitrary `*.secpal[.]internal` names; all other
 `secpal[.]internal` identities remain fail-closed unless a separate explicit
 architecture decision adds one.
+
+**Active namespace policy versus historical evidence:**
+
+- Every `secpal.*` token on an active/current policy surface is classified
+  independently and fail-closed. An approved token on the same source line
+  cannot mask a forbidden token.
+- The validator's small exact-path historical-evidence registry permits only
+  proven archived/superseded records to quote historical identifiers. It is not
+  a wildcard path rule, a documentation/ADR exemption, or domain approval;
+  placing the same identifier in an ordinary current file still fails.
+- Regression fixtures that need forbidden values construct their final token at
+  runtime. This keeps the tracked test source subject to the active scanner
+  while ensuring temporary fixtures exercise the real complete value.
 
 **Scope (intentional limit):**
 
