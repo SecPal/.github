@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/.github/docs/schemas/openvex-0.2.0.schema.json",
+  "title": "OpenVEX 0.2.0 document (strict SecPal local profile)",
+  "description": "A closed local validation profile implementing the OpenVEX 0.2.0 document, statement, vulnerability, product, and component structures.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["@context", "@id", "author", "timestamp", "version", "statements"],
+  "properties": {
+    "@context": { "const": "https://openvex.dev/ns/v0.2.0" },
+    "@id": { "type": "string", "format": "iri" },
+    "author": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "last_updated": { "type": "string", "format": "date-time" },
+    "version": { "type": "integer", "minimum": 1 },
+    "tooling": { "type": "string", "minLength": 1 },
+    "statements": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/statement" }
+    }
+  },
+  "$defs": {
+    "identifiers": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "minProperties": 1,
+      "propertyNames": { "enum": ["purl", "cpe22", "cpe23"] }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "md5": { "type": "string" },
+        "sha1": { "type": "string" },
+        "sha-256": { "type": "string" },
+        "sha-384": { "type": "string" },
+        "sha-512": { "type": "string" },
+        "sha3-224": { "type": "string" },
+        "sha3-256": { "type": "string" },
+        "sha3-384": { "type": "string" },
+        "sha3-512": { "type": "string" },
+        "blake2s-256": { "type": "string" },
+        "blake2b-256": { "type": "string" },
+        "blake2b-512": { "type": "string" }
+      }
+    },
+    "subcomponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "@id": { "type": "string", "format": "iri" },
+        "identifiers": { "$ref": "#/$defs/identifiers" },
+        "hashes": { "$ref": "#/$defs/hashes" }
+      },
+      "anyOf": [{ "required": ["@id"] }, { "required": ["identifiers"] }]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "@id": { "type": "string", "format": "iri" },
+        "identifiers": { "$ref": "#/$defs/identifiers" },
+        "hashes": { "$ref": "#/$defs/hashes" },
+        "subcomponents": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/subcomponent" }
+        }
+      },
+      "anyOf": [{ "required": ["@id"] }, { "required": ["identifiers"] }]
+    },
+    "vulnerability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "@id": { "type": "string", "format": "iri" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "aliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vulnerability", "products", "status"],
+      "properties": {
+        "@id": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "vulnerability": { "$ref": "#/$defs/vulnerability" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "last_updated": { "type": "string", "format": "date-time" },
+        "products": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/component" }
+        },
+        "status": {
+          "enum": ["not_affected", "affected", "fixed", "under_investigation"]
+        },
+        "supplier": { "type": "string" },
+        "status_notes": { "type": "string" },
+        "justification": {
+          "enum": [
+            "component_not_present",
+            "vulnerable_code_not_present",
+            "vulnerable_code_not_in_execute_path",
+            "vulnerable_code_cannot_be_controlled_by_adversary",
+            "inline_mitigations_already_exist"
+          ]
+        },
+        "impact_statement": { "type": "string", "minLength": 1 },
+        "action_statement": { "type": "string", "minLength": 1 },
+        "action_statement_timestamp": { "type": "string", "format": "date-time" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "not_affected" } } },
+          "then": {
+            "anyOf": [{ "required": ["justification"] }, { "required": ["impact_statement"] }]
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "affected" } } },
+          "then": { "required": ["action_statement"] }
+        }
+      ]
+    }
+  }
+}
