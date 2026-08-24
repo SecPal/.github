@@ -81,6 +81,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "AI Instructions / Validate AI Instructions",
     "Node Tests / Run Tests"
   ],
+  "operations": [],
   "contracts": [
     "REUSE Compliance / Check REUSE Compliance",
     "Prettier Formatting / Check Code Formatting",

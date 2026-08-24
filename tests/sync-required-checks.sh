@@ -133,11 +133,24 @@ contracts_payload="$(bash "$SYNC_SCRIPT" --repo contracts --print-payload)"
 assert_payload_has_context "$contracts_payload" "OpenAPI Lint / Validate OpenAPI Specification"
 assert_payload_has_context "$contracts_payload" "AI Instructions / Validate AI Instructions"
 
+operations_payload="$(bash "$SYNC_SCRIPT" --repo operations --print-payload)"
+assert_payload_contexts_equal "$operations_payload" '[]'
+
+# GitHub-native required-signature protection is the signature control for the
+# private documentation/operations repository. It has no repository workflow
+# yet, so a signature status-check context would be both redundant and
+# permanently unsatisfied.
+if jq -e '.checks | any(.context == "Validate Signed PR Commits")' >/dev/null <<<"$operations_payload"; then
+  echo "operations must not require the redundant Validate Signed PR Commits status check" >&2
+  echo "$operations_payload" >&2
+  exit 1
+fi
+
 # The bare 'CodeQL' context is only emitted by .github (its CodeQL Applicability
 # Guardrail workflow names its job exactly 'CodeQL'). For every other repo the
 # CodeQL workflow names a different job (e.g. 'Analyze with CodeQL' / 'Analyze
 # Code'), so requiring bare 'CodeQL' there would block PRs forever.
-for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload" "$secpal_app_payload" "$guardguide_de_payload" "$frontend_payload" "$contracts_payload"; do
+for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload" "$secpal_app_payload" "$guardguide_de_payload" "$frontend_payload" "$contracts_payload" "$operations_payload"; do
   if jq -e '.checks | any(.context == "CodeQL")' >/dev/null <<<"$non_github_payload"; then
     echo "Only the '.github' manifest entry may require the bare 'CodeQL' context; other repos must require their actual CodeQL job context (e.g. 'Analyze with CodeQL (<language>)' or 'Analyze Code (<language>)')." >&2
     echo "$non_github_payload" >&2
