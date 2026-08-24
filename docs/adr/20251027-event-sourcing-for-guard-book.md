@@ -11,6 +11,14 @@ SPDX-License-Identifier: CC0-1.0
 
 **Deciders:** @kevalyq
 
+> **Current-architecture revalidation notice (2026-08-24):** This remains a
+> Proposed, non-binding Guard Book proposal. Its examples are historical design
+> context, not implementation authority. In particular, they do not establish
+> PostgreSQL 18 requirements or claim that PostgreSQL 17/18 supplies SQL system-
+> versioned temporal tables. Before acceptance, a new Guard Book architecture
+> decision must re-evaluate persistence, immutability, integrity, and projection
+> strategy against the current baseline.
+
 ## Context
 
 SecPal requires a **digital guard book** ("Wachbuch") for security service operations. Legal requirements demand:

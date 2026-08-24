@@ -11,6 +11,13 @@ SPDX-License-Identifier: CC0-1.0
 
 **Deciders:** @kevalyq
 
+> **Current-architecture revalidation notice (2026-08-24):** This remains a
+> Proposed, non-binding response to the offline-connectivity problem. PWA-first
+> sequencing, “native apps later if needed”, IndexedDB/Dexie/Workbox examples,
+> and conflict details such as LWW are historical examples rather than current
+> architecture. SecPal now has web/PWA and native-shell client surfaces; that is
+> current evidence only, not acceptance of an offline synchronization design.
+
 ## Context
 
 Security guards work in environments with **unreliable or no internet connectivity:**

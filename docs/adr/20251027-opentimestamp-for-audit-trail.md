@@ -11,6 +11,14 @@ SPDX-License-Identifier: CC0-1.0
 
 **Deciders:** @kevalyq
 
+> **Current-architecture revalidation notice (2026-08-24):** This remains a
+> Proposed, non-binding discussion. Its PHP libraries, code, and workflow are
+> historical examples, not the current runtime contract. The still-valid audit
+> and tamper-evidence requirements are governed by the non-superseded portions
+> of ADR-010 and current implementation contracts. This record does not choose a
+> timestamping mechanism; a future architecture decision may evaluate
+> OpenTimestamps or alternatives.
+
 ## Context
 
 SecPal requires **legally provable timestamps** for guard book entries to ensure:

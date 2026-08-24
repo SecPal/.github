@@ -23,6 +23,15 @@ SPDX-License-Identifier: CC0-1.0
 
 **Supersession notice:** Retention-driven audit logging, tamper-evident integrity, retention controls, and comprehensive audit coverage remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces User-based Tenant resolution, Organizational Unit log scoping, inheritance blocking, and ADR-007/ADR-008/ADR-009-based access dependencies with active TenantMembership context and effective permission, scope, and validity authorization. The historical content below is retained for context.
 
+**Historical-example notice (2026-08-24):** Any examples below using
+`users.tenant_id`, `OrganizationalUnit` authorization, inheritance blocking, or
+the prior RBAC model are non-normative history superseded by ADR-014. Likewise,
+OpenTimestamp code and library references are implementation illustrations, not
+a frozen dependency or timestamping choice. The accepted core still requires
+comprehensive coverage, retention-driven lifecycle, privacy-conscious retained
+evidence, tamper-evident external/forensic verification, and ADR-014-defined
+authorization/scoping.
+
 ## Context
 
 ### The Problem: Comprehensive Audit Trail for GDPR & Legal Compliance
