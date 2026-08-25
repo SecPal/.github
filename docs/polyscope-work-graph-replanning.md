@@ -46,6 +46,13 @@ The accepted risks are `P1`, `P2`, `P3`, `INFORMATIONAL`, `SECURITY`,
 authentication, integrity, or fail-open findings must remain technically
 blocking. They cannot use the non-blocking follow-up path.
 
+Classification selects placement and the bounded operation; it does not derive
+either blocking fact. A pre-freeze in-contract P3 or informational finding
+therefore stays in the current delivery contract even when it is not technically
+blocking. Likewise, an intentional rollout prerequisite or a contract-count
+promotion may require a graph operation without becoming a technical blocker.
+Mechanical conversation blocking alone never creates a native dependency.
+
 The operation is determined by the explicit classification:
 
 | Classification          | Required operation         |

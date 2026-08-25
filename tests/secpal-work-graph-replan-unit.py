@@ -87,6 +87,51 @@ class ClassificationTests(TestCase):
         self.assertFalse(result.technically_blocking)
         self.assertTrue(result.mechanically_blocking)
 
+    def test_pre_freeze_in_contract_defect_stays_in_current_contract_without_a_technical_blocker(self):
+        for risk, mechanical in (("P3", True), ("INFORMATIONAL", False)):
+            with self.subTest(risk=risk, mechanically_blocking=mechanical):
+                result = replanning.validate_request(
+                    {
+                        "current_issue": key(2),
+                        "finding": finding(
+                            "IN_CONTRACT_DEFECT",
+                            technically_blocking=False,
+                            mechanically_blocking=mechanical,
+                            risk=[risk],
+                        ),
+                        "operation": {"kind": "KEEP_IN_CURRENT_CONTRACT"},
+                    }
+                )
+                self.assertEqual(result.action, "KEEP_IN_CURRENT_CONTRACT")
+                self.assertFalse(result.technically_blocking)
+                self.assertEqual(result.mechanically_blocking, mechanical)
+
+    def test_rollout_prerequisite_does_not_become_a_technical_blocker(self):
+        result = replanning.classify(
+            finding(
+                "MISSING_PREREQUISITE",
+                technically_blocking=False,
+                mechanically_blocking=True,
+                risk=["P3"],
+            )
+        )
+        self.assertEqual(result.action, "INSERT_PREREQUISITE")
+        self.assertFalse(result.technically_blocking)
+        self.assertTrue(result.mechanically_blocking)
+
+    def test_promotion_requirement_does_not_become_a_technical_blocker(self):
+        result = replanning.classify(
+            finding(
+                "PROMOTE_TO_SUB_EPIC",
+                technically_blocking=False,
+                mechanically_blocking=True,
+                risk=["INFORMATIONAL"],
+            )
+        )
+        self.assertEqual(result.action, "PROMOTE_TO_SUB_EPIC")
+        self.assertFalse(result.technically_blocking)
+        self.assertTrue(result.mechanically_blocking)
+
     def test_high_risk_findings_cannot_use_non_blocking_follow_up(self):
         for risk in ("P1", "P2", "SECURITY", "AUTHENTICATION", "INTEGRITY", "FAIL_OPEN"):
             with self.subTest(risk=risk), self.assertRaises(replanning.PlanError):

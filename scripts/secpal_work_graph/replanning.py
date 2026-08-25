@@ -142,10 +142,6 @@ def classify(value: Mapping[str, Any]) -> Classification:
             "P1/P2 and security, authentication, integrity, or fail-open findings "
             "must remain technically blocking"
         )
-    if name == "MISSING_PREREQUISITE" and not technical:
-        raise PlanError("a missing prerequisite must remain technically blocking")
-    if name == "PROMOTE_TO_SUB_EPIC" and not technical:
-        raise PlanError("promotion must block expansion of the current delivery contract")
     if name == "NON_BLOCKING_FOLLOWUP":
         if timing != "AFTER_FREEZE":
             raise PlanError("non-blocking follow-up is only valid after the evidence freeze")
@@ -158,8 +154,6 @@ def classify(value: Mapping[str, Any]) -> Classification:
             )
     if name == "IN_CONTRACT_DEFECT" and timing != "BEFORE_FREEZE":
         raise PlanError("an in-contract defect classification is the pre-freeze correction path")
-    if name == "IN_CONTRACT_DEFECT" and not technical:
-        raise PlanError("an in-contract defect must block the current delivery contract until fixed")
     if name in {"NEW_RESPONSIBILITY", "INVALID_FINDING"} and technical:
         raise PlanError(f"{name} cannot be a technical blocker of the current contract")
 
@@ -282,7 +276,6 @@ def build_plan(snapshot: Snapshot, request: Mapping[str, Any], *, actor: str) ->
 
     if classification.action in {"KEEP_IN_CURRENT_CONTRACT", "REJECT_WITH_EVIDENCE"}:
         _exact_operation(operation, {"kind"})
-        pass
     elif classification.action in {"CREATE_OWNED_SIBLING", "CREATE_OWNED_FOLLOWUP"}:
         owner_node = snapshot.get(owner) if owner else None
         if owner is None:
