@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "templates" / "polyscope-codex-AGENTS.md"
+CONTRACT = ROOT / "docs" / "work-graph-contract.md"
 QUALITY = ROOT / ".github" / "workflows" / "quality.yml"
 PREFLIGHT = ROOT / "scripts" / "preflight.sh"
 COMMANDS = (
@@ -34,6 +35,7 @@ class PolyscopeReplanningContractTest(unittest.TestCase):
         if len(matches) != 1:
             raise AssertionError(f"expected one replanning section, found {len(matches)}")
         cls.section = matches[0].group("body")
+        cls.contract = CONTRACT.read_text(encoding="utf-8")
 
     def test_graph_mutation_precedes_scope_expansion(self):
         self.assertRegex(self.section, r"before\s+implementation scope expands")
@@ -43,7 +45,7 @@ class PolyscopeReplanningContractTest(unittest.TestCase):
         self.assertRegex(self.section, r"exact\s+authenticated actor")
         self.assertRegex(self.section, r"(?i)stale|drift")
 
-    def test_all_authoritative_classifications_are_named(self):
+    def test_classification_semantics_have_one_authoritative_home(self):
         for classification in (
             "IN_CONTRACT_DEFECT",
             "MISSING_PREREQUISITE",
@@ -52,20 +54,20 @@ class PolyscopeReplanningContractTest(unittest.TestCase):
             "NON_BLOCKING_FOLLOWUP",
             "INVALID_FINDING",
         ):
-            self.assertIn(f"`{classification}`", self.section)
-
-    def test_blocking_facts_and_high_risk_boundary_remain_explicit(self):
-        self.assertIn("technically_blocking", self.section)
-        self.assertIn("mechanically_blocking", self.section)
+            self.assertIn(f"`{classification}`", self.contract)
+            self.assertNotIn(classification, self.section)
+        self.assertIn("docs/work-graph-contract.md", self.section)
+        self.assertRegex(self.contract, r"single\s+(?:authoritative|organization-wide) definition")
+        self.assertNotIn("technically_blocking", self.section)
+        self.assertNotIn("mechanically_blocking", self.section)
+        self.assertIn("`technically_blocking`", self.contract)
+        self.assertIn("`mechanically_blocking`", self.contract)
         for risk in ("P1", "P2", "security", "authentication", "integrity", "fail-open"):
-            self.assertIn(risk, self.section)
-        self.assertIn("cannot use `NON_BLOCKING_FOLLOWUP`", self.section)
+            self.assertIn(risk, self.contract)
 
-    def test_current_contract_and_downstream_lifecycle_boundaries_are_preserved(self):
-        self.assertRegex(self.section, r"IN_CONTRACT_DEFECT[^.]*current (?:leaf|delivery contract)")
-        self.assertIn("#692", self.section)
-        self.assertRegex(self.section, r"(?i)lifecycle[^.]*#692")
-        self.assertRegex(self.section, r"(?i)owning epic|owning sub-epic")
+    def test_managed_instructions_only_carry_the_operational_protocol(self):
+        self.assertRegex(self.section, r"before\s+implementation scope expands")
+        self.assertNotRegex(self.section, r"(?i)P1|P2|security|authentication|integrity|fail-open")
 
     def test_required_validation_runs_both_replanning_suites_fail_closed(self):
         workflow = QUALITY.read_text(encoding="utf-8")

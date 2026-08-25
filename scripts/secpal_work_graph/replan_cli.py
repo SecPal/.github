@@ -40,6 +40,16 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="Required acknowledgement that native GitHub relationships will change",
     )
+    recover = subcommands.add_parser(
+        "recover", help="Resume an exact known partial operation without recreating issues"
+    )
+    recover.add_argument("plan", help="Original exact plan JSON path")
+    recover.add_argument(
+        "--apply",
+        action="store_true",
+        required=True,
+        help="Required acknowledgement that remaining native relationships will change",
+    )
     return parser
 
 
@@ -132,6 +142,96 @@ def _error(code: str, message: str) -> dict[str, Any]:
     }
 
 
+def _failure_evidence(arguments, writer, recovery) -> tuple[dict[str, Any] | None, bool]:
+    if arguments.command not in {"apply", "recover"}:
+        return None, False
+    report: dict[str, Any] = {}
+    prior_write_possible = False
+    if recovery is not None and recovery.path.exists():
+        try:
+            recovery_document = json.loads(recovery.path.read_text(encoding="utf-8"))
+            if not isinstance(recovery_document, dict):
+                raise ValueError
+            report["recovery"] = recovery_document
+            prior_write_possible = bool(recovery_document.get("next_step")) or recovery_document.get(
+                "outcome"
+            ) in {
+                "KNOWN_WRITES",
+                "UNKNOWN_MUTATION_OUTCOME",
+                "COMPLETE",
+            }
+        except (OSError, ValueError, json.JSONDecodeError):
+            report["recovery"] = {"outcome": "UNKNOWN_MUTATION_OUTCOME"}
+            prior_write_possible = True
+    if writer and writer.created_identities:
+        report["known_created"] = {
+            alias: identity.to_dict() for alias, identity in writer.created_identities.items()
+        }
+        prior_write_possible = True
+    return report or None, prior_write_possible
+
+
+def _apply_guarded(
+    *,
+    adapter: github.GitHubReadAdapter,
+    writer: github_replanning.GitHubMutationWriter,
+    request: Mapping[str, Any],
+    snapshot: Snapshot,
+    scope: str,
+    plan: replanning.Plan,
+    actor: str,
+    recovery: replanning.RecoveryJournal,
+    resume: bool,
+) -> tuple[dict[str, replanning.CreatedIssueIdentity], list[dict[str, str]]]:
+    with recovery.lock():
+        if resume:
+            evidence = recovery.load()
+            if evidence["attempting_step"] is not None:
+                raise replanning.StalePlanError(
+                    "recovery has an unknown mutation outcome; inspect GitHub state manually"
+                )
+            recovered = replanning.recovery_identities(evidence)
+            recovery_snapshots = [snapshot]
+            for identity in recovered.values():
+                created_snapshot, canonical = github.load_snapshot(
+                    adapter, identity.key, include_reverse_dependencies=True
+                )
+                if canonical != identity.key:
+                    raise replanning.StalePlanError("recovery issue identity is no longer canonical")
+                recovery_snapshots.append(created_snapshot)
+            recovery_snapshot = _merge_snapshots(*recovery_snapshots)
+            next_step = int(evidence["next_step"])
+            replanning.verify_applied(
+                plan, recovery_snapshot, recovered, step_limit=next_step
+            )
+            replanning.verify_unchanged_relationships(
+                plan, snapshot, recovery_snapshot, recovered, step_limit=next_step
+            )
+        aliases = replanning.apply_plan(
+            plan,
+            snapshot,
+            actor=actor,
+            writer=writer,
+            recovery=recovery,
+            resume=resume,
+            recovery_locked=True,
+        )
+        post_snapshot, post_scope = _load_plan_snapshot(adapter, request)
+        expected_post_scope = (
+            aliases[plan.owner[1:]].key
+            if plan.owner and plan.owner.startswith("@")
+            else scope
+        )
+        if post_scope != expected_post_scope:
+            raise replanning.PlanError("owning scope changed during mutation")
+        replanning.verify_applied(plan, post_snapshot, aliases)
+        replanning.verify_unchanged_relationships(plan, snapshot, post_snapshot, aliases)
+        resolution = resolver.resolve(post_snapshot, post_scope)
+        if not resolution.complete or resolution.structurally_malformed:
+            raise replanning.PlanError("resulting canonical graph is incomplete or malformed")
+        return aliases, [item.as_json() for item in resolution.findings]
+
+
 def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=None) -> int:
     stdin, stdout, stderr = stdin or sys.stdin, stdout or sys.stdout, stderr or sys.stderr
     arguments = _parser().parse_args(argv)
@@ -140,6 +240,7 @@ def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=N
         timeout=arguments.timeout,
     )
     writer = None
+    recovery = None
     mutation_completed = False
     try:
         document = _read_json(arguments.request if arguments.command == "plan" else arguments.plan, stdin)
@@ -163,38 +264,54 @@ def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=N
             timeout=arguments.timeout,
         )
         writer = github_replanning.GitHubMutationWriter(mutation_adapter)
-        aliases = replanning.apply_plan(plan, snapshot, actor=actor, writer=writer)
-        mutation_completed = bool(plan.steps)
-        post_snapshot, post_scope = _load_plan_snapshot(adapter, request)
-        expected_post_scope = (
-            aliases[plan.owner[1:]] if plan.owner and plan.owner.startswith("@") else scope
+        signer = replanning.GitRecoverySigner.discover(Path.cwd())
+        recovery = replanning.RecoveryJournal.for_plan(plan, signer)
+        resume = arguments.command == "recover"
+        aliases, validation_findings = _apply_guarded(
+            adapter=adapter,
+            writer=writer,
+            request=request,
+            snapshot=snapshot,
+            scope=scope,
+            plan=plan,
+            actor=actor,
+            recovery=recovery,
+            resume=resume,
         )
-        if post_scope != expected_post_scope:
-            raise replanning.PlanError("owning scope changed during mutation")
-        replanning.verify_applied(plan, post_snapshot, aliases)
-        replanning.verify_unchanged_relationships(plan, snapshot, post_snapshot, aliases)
-        resolution = resolver.resolve(post_snapshot, post_scope)
-        if not resolution.complete or resolution.structurally_malformed:
-            raise replanning.PlanError("resulting canonical graph is incomplete or malformed")
+        mutation_completed = bool(plan.steps)
         _emit(
             {
                 "schema": replanning.SCHEMA,
                 "status": "applied",
                 "actor": actor,
                 "current_issue": plan.current_issue,
-                "created": aliases,
-                "validation_findings": [item.as_json() for item in resolution.findings],
+                "created": {alias: identity.to_dict() for alias, identity in aliases.items()},
+                "recovery_path": str(recovery.path),
+                "recovery": recovery.load(),
+                "validation_findings": validation_findings,
             },
             stdout,
         )
         return EXIT_OK
     except (replanning.PlanError, github.GitHubError, acceptance_criteria.MarkdownParserUnavailable) as exc:
-        mutation_started = mutation_completed or bool(writer and writer.mutation_index)
+        failure_evidence, prior_write_possible = _failure_evidence(arguments, writer, recovery)
+        mutation_started = (
+            mutation_completed
+            or bool(writer and writer.mutation_index)
+            or prior_write_possible
+        )
         code = "PARTIAL_MUTATION_FAILURE" if mutation_started else "REPLAN_BLOCKED"
-        _emit(_error(code, str(exc)), stderr)
+        error = _error(code, str(exc))
+        if failure_evidence:
+            error.update(failure_evidence)
+        _emit(error, stderr)
         return EXIT_MUTATION_FAILED if mutation_started else EXIT_INVALID
     except github_replanning.MutationError as exc:
-        mutation_started = bool(writer and writer.mutation_index)
+        failure_evidence, prior_write_possible = _failure_evidence(arguments, writer, recovery)
+        mutation_started = bool(writer and writer.mutation_index) or prior_write_possible
         code = "PARTIAL_MUTATION_FAILURE" if mutation_started else "REPLAN_BLOCKED"
-        _emit(_error(code, str(exc)), stderr)
+        error = _error(code, str(exc))
+        if failure_evidence:
+            error.update(failure_evidence)
+        _emit(error, stderr)
         return EXIT_MUTATION_FAILED if mutation_started else EXIT_INVALID

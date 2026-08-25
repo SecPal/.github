@@ -47,6 +47,7 @@ class GitHubMutationWriter:
     node_ids: dict[str, str] = field(default_factory=dict)
     repository_ids: dict[str, str] = field(default_factory=dict)
     alias_node_ids: dict[str, str] = field(default_factory=dict)
+    created_identities: dict[str, replanning.CreatedIssueIdentity] = field(default_factory=dict)
     mutation_index: int = 0
     plan_digest: str = ""
     expected_actor: str = ""
@@ -110,7 +111,25 @@ class GitHubMutationWriter:
         if login != self.expected_actor:
             raise MutationError("authenticated actor changed before mutation")
 
-    def apply(self, step: replanning.Step, aliases: dict[str, str]) -> str | None:
+    def restore_created(
+        self, aliases: Mapping[str, replanning.CreatedIssueIdentity]
+    ) -> None:
+        for alias, identity in aliases.items():
+            self.alias_node_ids[alias] = identity.node_id
+            self.node_ids[identity.key] = identity.node_id
+            repository, _ = identity.key.rsplit("#", 1)
+            expected_repository_id = self.repository_ids.get(repository)
+            if expected_repository_id != identity.repository_id:
+                raise MutationError("recovery repository identity differs from verified state")
+
+    def apply(
+        self,
+        step: replanning.Step,
+        aliases: Mapping[str, replanning.CreatedIssueIdentity],
+        *,
+        plan: replanning.Plan,
+        step_index: int,
+    ) -> replanning.CreatedIssueIdentity | None:
         arguments = step.arguments
         self._assert_actor()
         client_id = self._client_id()
@@ -119,7 +138,7 @@ class GitHubMutationWriter:
             payload: dict[str, Any] = {
                 "repositoryId": self.repository_ids[repository],
                 "title": str(arguments["title"]),
-                "body": str(arguments["body"]),
+                "body": replanning.created_issue_body(plan, step_index),
                 "clientMutationId": client_id,
             }
             if arguments["parent"] is not None:
@@ -127,12 +146,14 @@ class GitHubMutationWriter:
             data = self._query(CREATE_ISSUE, {"input": payload})
             issue = ((data.get("createIssue") or {}).get("issue") or {})
             live_repository = (issue.get("repository") or {}).get("nameWithOwner")
+            live_repository_id = (issue.get("repository") or {}).get("id")
             number = issue.get("number")
             node_id = issue.get("id")
             parent_id = (issue.get("parent") or {}).get("id")
             expected_parent_id = payload.get("parentIssueId")
             if (
                 live_repository != repository
+                or live_repository_id != self.repository_ids[repository]
                 or not isinstance(number, int)
                 or not node_id
                 or parent_id != expected_parent_id
@@ -142,7 +163,13 @@ class GitHubMutationWriter:
             alias = str(arguments["alias"])
             self.alias_node_ids[alias] = str(node_id)
             self.node_ids[canonical] = str(node_id)
-            return canonical
+            identity = replanning.CreatedIssueIdentity(
+                key=canonical,
+                node_id=str(node_id),
+                repository_id=str(live_repository_id),
+            )
+            self.created_identities[alias] = identity
+            return identity
 
         if step.kind == "ADD_SUB_ISSUE":
             parent_id = self._id(str(arguments["parent"]))

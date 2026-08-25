@@ -26,47 +26,29 @@ new sub-issue, and add or remove exact native `blocked by` edges. It has no
 generic GraphQL, REST, body-edit, re-parent, close, or arbitrary issue-update
 operation. Every stable native ID is resolved before the first write. A write
 failure stops the invocation without retry; because GitHub does not provide a
-transaction spanning these mutations, output reports a partial mutation
-failure whenever a write may already have landed.
+transaction spanning these mutations, the command durably records `NO_WRITES`,
+`KNOWN_WRITES`, `UNKNOWN_MUTATION_OUTCOME`, or `COMPLETE`. Every state is
+authenticated by a detached commit made with the user's existing Git signing
+configuration. Every successful create records the repository-qualified
+identity, issue node ID, and repository ID returned by GitHub. Recovery rereads
+that exact native identity and verifies its complete planned content and graph
+state, so an edited journal cannot substitute another issue. An ordinary replay
+with existing recovery state fails closed. The recovery path is derived from the
+exact semantic plan and stored in repository Git state, so changing the plan
+file's location cannot bypass replay protection.
 
 After the writes, the command rereads the graph, verifies every intended edge
 and sibling position, rejects any unrelated state or relationship change, and
 runs the canonical resolver's structural validation. Existing body-only mirror
 findings may still be reported; they are never used as mutation preconditions.
 
-## Request contract
+## Request representation
 
 A request names one repository-qualified `current_issue`, one explicit
-`finding`, and the exact semantic `operation`. The finding records
-`technically_blocking` and `mechanically_blocking` separately, plus
-`timing` (`BEFORE_FREEZE` or `AFTER_FREEZE`) and a finite `risk` list.
-
-The accepted risks are `P1`, `P2`, `P3`, `INFORMATIONAL`, `SECURITY`,
-`AUTHENTICATION`, `INTEGRITY`, and `FAIL_OPEN`. P1/P2 and security,
-authentication, integrity, or fail-open findings must remain technically
-blocking. They cannot use the non-blocking follow-up path.
-
-Classification selects placement and the bounded operation; it does not derive
-either blocking fact. A pre-freeze in-contract P3 or informational finding
-therefore stays in the current delivery contract even when it is not technically
-blocking. Likewise, an intentional rollout prerequisite or a contract-count
-promotion may require a graph operation without becoming a technical blocker.
-Mechanical conversation blocking alone never creates a native dependency.
-
-The operation is determined by the explicit classification:
-
-| Classification          | Required operation         |
-| ----------------------- | -------------------------- |
-| `IN_CONTRACT_DEFECT`    | `KEEP_IN_CURRENT_CONTRACT` |
-| `MISSING_PREREQUISITE`  | `INSERT_PREREQUISITE`      |
-| `NEW_RESPONSIBILITY`    | `CREATE_OWNED_SIBLING`     |
-| `PROMOTE_TO_SUB_EPIC`   | `PROMOTE_TO_SUB_EPIC`      |
-| `NON_BLOCKING_FOLLOWUP` | `CREATE_OWNED_FOLLOWUP`    |
-| `INVALID_FINDING`       | `REJECT_WITH_EVIDENCE`     |
-
-The first and last operations intentionally emit no graph writes. An
-in-contract defect stays in the current delivery contract. An invalid finding
-is rejected with evidence outside this command.
+`finding`, and one bounded `operation`. Section 8.1 of the canonical contract is
+the sole definition of classification, blocker, timing, and placement
+semantics. This guide documents only their JSON transport and the finite command
+surface.
 
 ## Creating owned work
 
@@ -94,13 +76,8 @@ is rejected with evidence outside this command.
 }
 ```
 
-Every created issue needs canonical acceptance criteria. The native parent is
-the current leaf's existing owning epic or sub-epic. The new sibling is placed
-after the current leaf without adding a dependency, so true parallelism is
-preserved. `NON_BLOCKING_FOLLOWUP` additionally requires `AFTER_FREEZE`, a false
-technical blocker, and no high-risk class. Mechanical conversation blocking may
-remain true. Authenticated conversation disposition and persistent delivery
-lifecycle continuity remain downstream work owned by #692.
+Every created issue needs canonical acceptance criteria. The planner derives
+the exact native placement and ordering steps from the canonical contract.
 
 ## Inserting a prerequisite
 
@@ -152,3 +129,14 @@ python3 scripts/secpal-work-graph.py validate OWNER/REPO#SCOPE
 Inspect the emitted classification, actor, owner, snapshot digest, and every
 step before applying. Never edit the plan to bypass a failed precondition;
 change the request or replan from fresh canonical state instead.
+
+If the command reports `KNOWN_WRITES`, preserve the original plan and the
+reported repository-managed recovery state. After confirming the recorded
+created identities in GitHub, the same bounded operation can resume with:
+
+```bash
+python3 scripts/secpal-work-graph-replan.py recover PLAN.json --apply
+```
+
+`UNKNOWN_MUTATION_OUTCOME` is terminal for automatic recovery. Inspect GitHub
+state manually; never retry that mutation blindly.

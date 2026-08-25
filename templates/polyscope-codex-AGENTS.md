@@ -121,28 +121,18 @@ Apply these rules only when the session says it is running inside Polyscope.
 
 ## Canonical Work-Graph Replanning
 
-- Under `docs/work-graph-contract.md`, classify a proven discovery before any
-  code change as exactly one of `IN_CONTRACT_DEFECT`, `MISSING_PREREQUISITE`,
-  `NEW_RESPONSIBILITY`, `PROMOTE_TO_SUB_EPIC`, `NON_BLOCKING_FOLLOWUP`, or
-  `INVALID_FINDING`. Record `technically_blocking` and
-  `mechanically_blocking` independently. P1, P2, security, authentication,
-  integrity, and fail-open findings cannot use `NON_BLOCKING_FOLLOWUP`.
-- Keep a pre-freeze `IN_CONTRACT_DEFECT` in the current leaf/current delivery
-  contract. Reject an invalid finding with evidence and no defensive code or
-  graph mutation. Authenticated conversation disposition and finite delivery
-  lifecycle continuity remain owned by #692.
-- For every graph-changing classification, use the owning `SecPal/.github`
+- Delegate all classification and graph-placement semantics to
+  `docs/work-graph-contract.md`; do not restate or reinterpret them here.
+- When that contract requires a graph change, use the owning `SecPal/.github`
   checkout's `python3 scripts/secpal-work-graph-replan.py plan REQUEST.json`,
   inspect the finite plan, then use
   `python3 scripts/secpal-work-graph-replan.py apply PLAN.json --apply` before
-  implementation scope expands. The apply command requires the exact
-  authenticated actor and unchanged canonical snapshot; stale state or graph
-  drift fails closed before mutation.
-- Attach new responsibilities and post-freeze follow-ups beneath the existing
-  owning epic or owning sub-epic. Preserve native sibling order and parallelism;
-  add or move only technically real dependency edges named by the plan. Never
-  use this boundary as a generic GitHub mutation command or replace native
-  hierarchy and dependencies with Markdown mirrors.
+  implementation scope expands. Inspect the exact recovery evidence if an
+  invocation stops after a write; use the bounded `recover` command only for a
+  known outcome.
+- The command requires the exact authenticated actor and unchanged canonical
+  state; stale state or graph drift fails closed. Never edit a plan to bypass
+  those checks or use this boundary as a generic GitHub mutation command.
 
 ## Work-graph semantics
 
