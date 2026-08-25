@@ -107,6 +107,12 @@ jobs:
       - name: Run Polyscope advisory contract tests
         run: python3 -m unittest tests/polyscope-work-graph-advisory.py
 
+      - name: Run graph-first replanning operation tests
+        run: python3 -m unittest tests/secpal-work-graph-replan-unit.py
+
+      - name: Run Polyscope replanning contract tests
+        run: python3 -m unittest tests/polyscope-work-graph-replanning.py
+
   vulnerability-policy:
     name: Vulnerability Policy
     runs-on: ubuntu-latest

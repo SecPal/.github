@@ -95,12 +95,13 @@ def issue_payload(
             "repository": {
                 "issue": {
                     "number": number,
+                    "id": f"ISSUE_{number}",
                     "title": f"Issue {number}",
                     "url": f"https://github.com/{owner}/{name}/issues/{number}",
                     "state": state,
                     "stateReason": state_reason,
                     "body": body,
-                    "repository": {"nameWithOwner": repository},
+                    "repository": {"id": f"REPO_{owner}_{name}", "nameWithOwner": repository},
                     "parent": reference(parent) if parent else None,
                     "labels": {
                         "pageInfo": {"hasNextPage": False, "endCursor": None},
@@ -120,7 +121,15 @@ def issue_payload(
                         },
                         "nodes": [reference(value) for value in blocked_by],
                     },
-                    "blocking": {"totalCount": blocking},
+                    "blocking": {
+                        "totalCount": len(blocking) if isinstance(blocking, (list, tuple)) else blocking,
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": (
+                            [reference(value) for value in blocking]
+                            if isinstance(blocking, (list, tuple))
+                            else []
+                        ),
+                    },
                     "closedByPullRequestsReferences": {
                         "pageInfo": {"hasNextPage": False, "endCursor": None},
                         "nodes": [

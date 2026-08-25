@@ -91,6 +91,36 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
+cat >"$workspace/tests/secpal-work-graph-replan-unit.py" <<'EOF'
+"""Fixture stand-in for preflight's replanning operation tests."""
+
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+
+cat >"$workspace/tests/polyscope-work-graph-replanning.py" <<'EOF'
+"""Fixture stand-in for preflight's managed replanning contract tests."""
+
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+
 cat >"$workspace/README.md" <<'EOF'
 # Test Workspace
 EOF

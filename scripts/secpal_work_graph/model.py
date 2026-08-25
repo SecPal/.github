@@ -69,8 +69,14 @@ class Node:
 
     repository: str
     number: int
+    # Native IDs are carried for guarded graph mutations. The read-only
+    # resolver never derives semantics from them.
+    node_id: str = ""
+    repository_id: str = ""
     title: str = ""
     url: str = ""
+    # Digest of the exact issue body, used only as a stale-plan precondition.
+    body_digest: str = ""
     state: str = OPEN
     state_reason: str | None = None
     parent: str | None = None
@@ -87,6 +93,10 @@ class Node:
     # False when this invocation has not yet read native dependencies for this
     # node. Dependency and scope traversal upgrade this fact monotonically.
     dependencies_observable: bool = True
+    # Reverse dependency identities are mutation preconditions only. Resolver
+    # semantics continue to consume ``blocking_count`` and ``blocked_by``.
+    blocking: tuple[str, ...] = ()
+    blocking_observable: bool = False
     blocking_count: int = 0
     priority_labels: tuple[str, ...] = ()
     # False when the priority labels could not be read. Section 1.2 keeps them
