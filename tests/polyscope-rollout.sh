@@ -1405,6 +1405,11 @@ state = Path(os.environ["RACE_STATE"])
 command = sys.argv[1:]
 with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
     handle.write(f"{label}:php:{' '.join(command)}\\n")
+if len(command) >= 2 and command[0:2] == ["artisan", "keys:generate-kek"]:
+    kek_path = Path(os.environ["KEK_PATH"])
+    kek_path.parent.mkdir(parents=True, exist_ok=True)
+    kek_path.write_bytes(b"generated-preview-kek")
+    raise SystemExit(0)
 if len(command) < 2 or command[0] != "artisan" or command[1] not in {"migrate", "migrate:fresh"}:
     raise SystemExit(0)
 
@@ -3829,6 +3834,10 @@ def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_e
             command_env["PGPASSWORD"],
         )
     )
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
 
 module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
 module.ensure_postgres_preview_database = fake_ensure_postgres_preview_database
@@ -3849,6 +3858,7 @@ assert db_calls == [
 assert calls == [
     (("composer", "install"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "keys:generate-kek"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "db:seed", "--force"), api_worktree, "source-only-password", "source-only-password"),
@@ -3959,9 +3969,17 @@ calls = []
 
 def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
 
 def fail_after_reused_storage_reset(worktree_path, command, *, command_env):
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
     if command == ["php", "artisan", "db:seed", "--force"]:
         raise RuntimeError("expected post-migration setup failure")
 
@@ -4055,6 +4073,10 @@ migration_attempts = [0]
 
 def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
     if command == ["php", "artisan", "migrate", "--force"]:
         migration_attempts[0] += 1
         if migration_attempts[0] == 1:
@@ -4068,6 +4090,7 @@ assert target == "database:secpal__preview__mighty_hyena", target
 assert calls == [
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
+    ("php", "artisan", "keys:generate-kek"),
     ("php", "artisan", "migrate", "--force"),
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
@@ -4204,6 +4227,10 @@ seed_attempts = [0]
 def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
     seed_attempts[0] += 1 if command == ["php", "artisan", "db:seed", "--force"] else 0
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        generated_kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        generated_kek_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_kek_path.write_bytes(b"generated-preview-kek")
     if command == ["php", "artisan", "db:seed", "--force"] and seed_attempts[0] == 1:
         raise subprocess.CalledProcessError(
             1,
@@ -4228,7 +4255,7 @@ finally:
     signal.signal(signal.SIGALRM, previous_alarm_handler)
 assert ready is True
 assert target == "database:secpal__preview__coral_crow", target
-assert not kek_path.exists(), "recovery must remove the stale isolated-preview KEK"
+assert kek_path.exists(), "recovery must replace the stale isolated-preview KEK"
 assert calls == [
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
@@ -4237,6 +4264,7 @@ assert calls == [
     ("php", "artisan", "db:seed", "--force"),
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
+    ("php", "artisan", "keys:generate-kek"),
     ("php", "artisan", "migrate:fresh", "--force"),
     ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
@@ -5526,6 +5554,11 @@ chmod +x "$fake_exec_dir/composer"
 cat >"$fake_exec_dir/php" <<'STUB'
 #!/usr/bin/env bash
 printf 'php:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+if [[ "$*" == "artisan keys:generate-kek" ]]; then
+    mkdir -p "$(dirname "$KEK_PATH")"
+    printf 'generated-preview-kek' > "$KEK_PATH"
+    chmod 0600 "$KEK_PATH"
+fi
 if [[ -n "${FAIL_ON_WORKTREE:-}" && "$PWD" == "$FAIL_ON_WORKTREE" ]]; then
     exit 23
 fi

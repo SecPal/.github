@@ -1431,6 +1431,27 @@ def _bootstrap_api_worktree_locked(
         command_env=command_env,
     )
 
+    configured_kek_path = env_values.get("KEK_PATH", "").strip()
+    expected_kek_path = pathlib.Path(build_api_preview_kek_path(worktree_path))
+    if (
+        not expected_kek_path.is_file()
+        and is_isolated_api_preview_storage_target(preview_storage_target)
+    ):
+        if not configured_kek_path or pathlib.Path(configured_kek_path).resolve() != expected_kek_path:
+            raise RuntimeError(
+                f"refusing to generate a preview KEK outside the managed worktree path {expected_kek_path}"
+            )
+        print(f"{prefix} generating isolated preview KEK")
+        run_api_worktree_bootstrap_command(
+            worktree_path,
+            ["php", "artisan", "keys:generate-kek"],
+            command_env=command_env,
+        )
+        if not expected_kek_path.is_file():
+            raise RuntimeError(
+                f"preview KEK generation did not persist the managed key at {expected_kek_path}"
+            )
+
     print(f"{prefix} {migration_label}")
     try:
         run_api_worktree_bootstrap_command(
