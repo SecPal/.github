@@ -30,6 +30,23 @@ module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
+expected_repository_names = {
+    ".github",
+    "GuardGuide",
+    "android",
+    "api",
+    "contracts",
+    "deployment",
+    "frontend",
+    "guardguide.de",
+    "operations",
+    "secpal.app",
+}
+assert set(module.REPO_SETTINGS) == expected_repository_names, (
+    "Polyscope must register every active SecPal repository, including "
+    "deployment and operations"
+)
+
 
 def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -> None:
     license_expression = "CC0-1.0" if repo_name == "api" else "AGPL-3.0-or-later"
@@ -260,6 +277,12 @@ assert "does not match managed repository source path state" in unsupported_lega
 )
 
 for repo_name, generated_spec in generated_specs.items():
+    if not module.is_workspace_automation_enabled(generated_spec):
+        assert repo_name == "operations", repo_name
+        assert generated_spec.get(module.REGISTRATION_ONLY_SPEC_KEY) is True
+        assert "agent_instructions" not in generated_spec
+        continue
+
     setup_commands = module.render_local_config(generated_spec).get("scripts", {}).get("setup", [])
     assert setup_commands, repo_name
     assert "--validate-instruction-worktree" in setup_commands[0], (repo_name, setup_commands)
@@ -317,6 +340,8 @@ for repo_name, generated_spec in generated_specs.items():
 # that entry, multiline commands remain ordered and any failure stops every
 # later command.
 for repo_name, generated_spec in generated_specs.items():
+    if not module.is_workspace_automation_enabled(generated_spec):
+        continue
     setup_commands = module.render_local_config(generated_spec)["scripts"]["setup"]
     assert len(setup_commands) == 1, (repo_name, setup_commands)
 
@@ -346,6 +371,8 @@ assert ordered_root.joinpath("failure-order.log").read_text().splitlines() == ["
 # Fully valid candidates retain the generated setup behavior for every managed
 # repository after entering the single fail-closed boundary.
 for repo_name, generated_spec in generated_specs.items():
+    if not module.is_workspace_automation_enabled(generated_spec):
+        continue
     valid_root = workspace / "native setup valid roots with spaces" / repo_name
     write_valid_instructions(valid_root, repo_name)
     valid_root.joinpath("package.json").write_text(
