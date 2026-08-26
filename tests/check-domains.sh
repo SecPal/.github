@@ -58,6 +58,8 @@ approved_technical_identifier="io.secpal.polyscope.preview"
 technical_identifier_authority="io.${domain_namespace}"
 unknown_technical_identifier="${technical_identifier_authority}.unreviewed"
 nested_unknown_technical_identifier="${technical_identifier_authority}.polyscope.unreviewed"
+technical_identifier_url="https://${approved_technical_identifier}/path"
+technical_identifier_host_declaration="HoSt: ${approved_technical_identifier}"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -273,6 +275,21 @@ assert_domain_policy_case \
   accept \
   "$approved_technical_identifier" \
   "Label: $approved_technical_identifier"
+assert_domain_policy_case \
+  "documentation describing the technical identifier as not a host" \
+  accept \
+  "$approved_technical_identifier" \
+  "The approved technical identifier is not a host: $approved_technical_identifier"
+assert_domain_policy_case \
+  "the approved technical identifier as an HTTPS host" \
+  reject \
+  "$approved_technical_identifier" \
+  "$technical_identifier_url"
+assert_domain_policy_case \
+  "the approved technical identifier in a case-insensitive Host declaration" \
+  reject \
+  "$approved_technical_identifier" \
+  "$technical_identifier_host_declaration"
 assert_domain_policy_case \
   "an unknown identifier under the technical authority" \
   reject \

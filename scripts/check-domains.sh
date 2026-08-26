@@ -104,6 +104,27 @@ is_approved_technical_identifier() {
     return 1
 }
 
+# Technical-identifier approval is usage-specific. Reject the same token when
+# it is an HTTP(S) authority or an explicit Host field. Keep the Host-field
+# pattern structural so ordinary prose such as "not a host" is not reclassified.
+is_explicit_host_usage() {
+    local candidate="$1"
+    local source_text="$2"
+    local candidate_pattern="${candidate//./\\.}"
+
+    if printf '%s\n' "$source_text" \
+        | grep -Eiq "https?://([^/@[:space:]]+@)?${candidate_pattern}([/:?#]|[[:space:]\"']|\$)"; then
+        return 0
+    fi
+
+    if printf '%s\n' "$source_text" \
+        | grep -Eiq "(^[[:space:]]*([-*][[:space:]]+)?|[,{][[:space:]]*)['\"]?host['\"]?[[:space:]]*:[[:space:]]*['\"]?${candidate_pattern}([:/?#[:space:],;}\"']|\$)"; then
+        return 0
+    fi
+
+    return 1
+}
+
 matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     --include="*.md" \
     --include="*.yaml" \
@@ -143,8 +164,9 @@ done <<< "$matches"
 
 # Allowlist approach: classify every matched secpal.* token independently.
 # Exact approved reverse-DNS technical identifiers form a separate class and
-# are checked before DNS/web/service hosts; namespace authority grants no host
-# authority. Unknown technical-looking values therefore still fail closed.
+# are accepted only outside explicit URL-authority and Host-field contexts;
+# namespace authority grants no host authority. Unknown technical-looking
+# values therefore still fail closed.
 # Public/external: secpal.app and apk.secpal.app. Development/preview: secpal.dev,
 # api.secpal.dev, app.secpal.dev, the preview.secpal.dev base, and arbitrary
 # *.preview.secpal.dev identities.
@@ -160,7 +182,8 @@ while IFS= read -r matched_line; do
     source_text="${line_remainder#*:}"
 
     while IFS= read -r token; do
-        if is_approved_technical_identifier "$token"; then
+        if is_approved_technical_identifier "$token" \
+            && ! is_explicit_host_usage "$token" "$source_text"; then
             continue
         fi
         case "$token" in
