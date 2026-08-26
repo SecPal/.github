@@ -5522,7 +5522,7 @@ def read_current_repository_metadata(
     placeholders = ", ".join("?" for _ in managed_repo_ids)
     current_links = set(
         cur.execute(
-            f"select repo_id, linked_repo_id from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
+            f"select repo_id, linked_repo_id from repository_links where repo_id in ({placeholders}) and linked_repo_id in ({placeholders})",
             managed_repo_ids + managed_repo_ids,
         ).fetchall()
     )
@@ -5560,7 +5560,7 @@ def sync_repository_metadata(
 
     placeholders = ", ".join("?" for _ in managed_repo_ids)
     cur.execute(
-        f"delete from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
+        f"delete from repository_links where repo_id in ({placeholders}) and linked_repo_id in ({placeholders})",
         managed_repo_ids + managed_repo_ids,
     )
 

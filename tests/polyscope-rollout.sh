@@ -954,6 +954,12 @@ repo_state = {
 for repo in repo_state.values():
     cur.execute('insert into repositories (id, name, path, created_at, base_branch, github_assign_self_enabled) values (?, ?, ?, datetime(\'now\'), ?, ?)', (repo['id'], repo['name'], repo['path'], 'main', 0))
 
+# Registration-only repositories remain outside rollout-owned link metadata.
+cur.execute(
+    'insert into repository_links (repo_id, linked_repo_id) values (?, ?)',
+    ('op123456', 'api12345'),
+)
+
 conn.commit()
 conn.close()
 repos_json.write_text(json.dumps(repo_state, indent=2))
@@ -5475,6 +5481,7 @@ assert ('gg123456', 'an123456') in links
 assert ('gg123456', 'api12345') in links
 assert ('gg123456', 'co123456') in links
 assert ('gg123456', 'fe123456') in links
+assert ('op123456', 'api12345') in links
 assert ('sa123456', 'rd123456') not in links
 assert operations_prompts is not None
 assert all(prompt is None for prompt in operations_prompts)
