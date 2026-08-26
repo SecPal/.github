@@ -258,6 +258,9 @@ package_scripts = {
         "lint": "eslint .",
         "test": "node --test tests/**/*.mjs",
     },
+    "deployment": {
+        "test:integration:browser": "node --test tests/**/*.mjs",
+    },
     ".github": {
         "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
         "test": "npm run test:openapi-verified-presence",
@@ -804,6 +807,31 @@ applyTo: 'src/**/*.astro'
 - Run formatting, lint, typecheck, and build.
 "
 
+create_repo "deployment" "$common_header
+
+# Deployment Instructions
+
+## Scope and Safety
+
+- Keep deployment changes bounded and preserve provider credential boundaries.
+
+## Validation and Review
+
+- Validate lifecycle ordering, immutable inputs, and observable evidence.
+" "deployment.instructions.md" "---
+name: Deployment Rules
+applyTo: 'infra/**'
+---
+
+# Deployment Rules
+
+- Preserve pinned infrastructure inputs and fail-closed cleanup behavior.
+"
+
+# Operations is intentionally registration-only until that repository owns a
+# versioned workspace policy. Its physical clone must still exist in fixtures.
+mkdir -p "$workspace_root/operations"
+
 create_repo ".github" "$common_header
 
 # Org Instructions
@@ -914,6 +942,8 @@ repo_state = {
     'android': {'id': 'an123456', 'name': 'SecPal/android', 'path': str(workspace_root / 'android')},
     'secpal.app': {'id': 'sa123456', 'name': 'SecPal/secpal.app', 'path': str(workspace_root / 'secpal.app')},
     'guardguide.de': {'id': 'gd123456', 'name': 'SecPal/guardguide.de', 'path': str(workspace_root / 'guardguide.de')},
+    'deployment': {'id': 'de123456', 'name': 'SecPal/deployment', 'path': str(workspace_root / 'deployment')},
+    'operations': {'id': 'op123456', 'name': 'SecPal/operations', 'path': str(workspace_root / 'operations')},
     # Preserve a retired database row to prove rollout ignores repositories
     # that are no longer part of the managed workspace.
     'retired-docs': {'id': 'rd123456', 'name': 'SecPal/retired-docs', 'path': str(workspace_root / 'retired-docs')},
@@ -5371,6 +5401,7 @@ fi
     "$workspace_root/GuardGuide/polyscope.local.json" \
     "$workspace_root/secpal.app/polyscope.local.json" \
     "$workspace_root/guardguide.de/polyscope.local.json" \
+    "$workspace_root/deployment/polyscope.local.json" \
     "$workspace_root/.github/polyscope.local.json" \
     >/dev/null
 
@@ -5393,8 +5424,12 @@ org_prompts = cur.execute(
     ('gh123456',),
 ).fetchone()
 prompt_rows = cur.execute(
-    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id != 'rd123456' order by id"
+    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id not in ('op123456', 'rd123456') order by id"
 ).fetchall()
+operations_prompts = cur.execute(
+    'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
+    ('op123456',),
+).fetchone()
 retired_prompts = cur.execute(
     'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
     ('rd123456',),
@@ -5441,6 +5476,8 @@ assert ('gg123456', 'api12345') in links
 assert ('gg123456', 'co123456') in links
 assert ('gg123456', 'fe123456') in links
 assert ('sa123456', 'rd123456') not in links
+assert operations_prompts is not None
+assert all(prompt is None for prompt in operations_prompts)
 assert retired_prompts is not None
 assert all(prompt is None for prompt in retired_prompts)
 
@@ -5453,6 +5490,8 @@ assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
 assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
 assert 'retired-docs' not in summary['repositories']
 assert summary['repositories']['contracts']['preview_prefix'] is None
+assert summary['repositories']['deployment']['preview_prefix'] is None
+assert summary['repositories']['operations']['workspace_automation'] == 'registration-only'
 assert summary['repositories']['api']['agent_instructions'].endswith('/api/AGENTS.md')
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
