@@ -18,9 +18,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   promotes multi-contract leaves through exact GitHub-native relationships
 - stale-state, actor, planned-cycle, unrelated-relationship, and post-mutation
   validation guards for every bounded replanning operation
-- cryptographically authenticated partial-mutation recovery evidence and exact
-  created-issue postcondition verification, preventing blind replay after a
-  create succeeds
+- signer-bound, Git-GC-durable partial-mutation recovery evidence with an
+  authenticated baseline and exact created-issue postconditions, preventing
+  blind replay while safely continuing a verified known prefix
 
 **Changed:**
 

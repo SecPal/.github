@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -56,11 +58,17 @@ def finding(name: str, **overrides) -> dict[str, object]:
 
 
 class FakeRecoverySigner:
-    def sign(self, digest):
-        return {"kind": "test-signature", "value": "signed:" + digest}
+    def sign(self, operation_digest, digest):
+        return {
+            "kind": "test-signature",
+            "value": "signed:" + operation_digest + ":" + digest,
+        }
 
-    def verify(self, authentication, digest):
-        if authentication != {"kind": "test-signature", "value": "signed:" + digest}:
+    def verify(self, authentication, operation_digest, digest):
+        if authentication != {
+            "kind": "test-signature",
+            "value": "signed:" + operation_digest + ":" + digest,
+        }:
             raise replanning.StalePlanError("recovery authentication is invalid")
 
 
@@ -885,6 +893,330 @@ class MutationBoundaryTests(TestCase):
                     recovery=journal,
                     resume=True,
                 )
+
+    def test_known_prefix_recovery_uses_the_authenticated_baseline(self):
+        before = graph(node(1, children=(key(2),)), node(2, parent=key(1)))
+        request = {
+            "current_issue": key(2),
+            "finding": finding("NEW_RESPONSIBILITY"),
+            "operation": {
+                "kind": "CREATE_OWNED_SIBLING",
+                "issue": {
+                    "alias": "new-work",
+                    "repository": REPO,
+                    "title": "Separate work",
+                    "body": "## Acceptance Criteria\n\n- Complete.\n",
+                },
+            },
+        }
+        plan = replanning.build_plan(before, request, actor="alice")
+        identity = replanning.CreatedIssueIdentity(
+            key=key(10), node_id="ISSUE_10", repository_id="REPO_ID"
+        )
+        after_prefix = graph(
+            node(1, children=(key(2), key(10))),
+            node(2, parent=key(1)),
+            node(
+                10,
+                parent=key(1),
+                title="Separate work",
+                body_digest=replanning.content_digest(replanning.created_issue_body(plan, 0)),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            journal = replanning.RecoveryJournal(
+                Path(directory) / "operation.json", plan, FakeRecoverySigner()
+            )
+            journal.start(before)
+            journal.begin_step(0)
+            journal.complete_step(0, identity)
+
+            recovered, baseline, identities, next_step = replanning.recover_plan(
+                plan.to_dict(), after_prefix, actor="alice", recovery=journal
+            )
+            self.assertEqual(recovered, plan)
+            self.assertEqual(baseline, before)
+            self.assertEqual(identities, {"new-work": identity})
+            self.assertEqual(next_step, 1)
+
+            drifted = graph(
+                node(1, children=(key(2), key(10))),
+                node(2, parent=key(1), title="unrelated change"),
+                after_prefix.require(key(10)),
+            )
+            with self.assertRaisesRegex(replanning.StalePlanError, "prefix"):
+                replanning.recover_plan(
+                    plan.to_dict(), drifted, actor="alice", recovery=journal
+                )
+            writer = replanning.RecordingWriter()
+            completed = replanning.apply_plan(
+                recovered,
+                after_prefix,
+                actor="alice",
+                writer=writer,
+                recovery=journal,
+                resume=True,
+                baseline_snapshot=baseline,
+            )
+            self.assertEqual(completed, {"new-work": identity})
+            self.assertEqual([step.kind for step in writer.calls], ["REPRIORITIZE_SUB_ISSUE"])
+
+
+class GitRecoverySignerTests(TestCase):
+    def test_authentication_survives_git_gc_and_ref_substitution_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "commit", "--allow-empty", "-S", "-m", "root"],
+                check=True,
+                capture_output=True,
+            )
+            signer = replanning.GitRecoverySigner.discover(repository)
+            authentication = signer.sign("a" * 64, "b" * 64)
+            replacement = signer.sign("a" * 64, "c" * 64)
+            ref = authentication["ref"]
+            self.assertEqual(
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(repository),
+                        "merge-base",
+                        "--is-ancestor",
+                        authentication["commit_oid"],
+                        ref,
+                    ]
+                ).returncode,
+                0,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "gc", "--prune=now", "--quiet"], check=True
+            )
+            signer.verify(authentication, "a" * 64, "b" * 64)
+            signer.verify(replacement, "a" * 64, "c" * 64)
+            with self.assertRaisesRegex(replanning.StalePlanError, "different evidence"):
+                signer.verify(authentication, "a" * 64, "e" * 64)
+            subprocess.run(
+                ["git", "-C", str(repository), "update-ref", "-d", ref], check=True
+            )
+            with self.assertRaisesRegex(replanning.StalePlanError, "reference"):
+                signer.verify(authentication, "a" * 64, "b" * 64)
+
+    def test_hostile_signing_environment_is_not_inherited(self):
+        hostile = {
+            "HOME": "/tmp/hostile-home",
+            "XDG_CONFIG_HOME": "/tmp/hostile-xdg",
+            "GNUPGHOME": "/tmp/hostile-gnupg",
+        }
+        previous = {name: os.environ.get(name) for name in hostile}
+        try:
+            os.environ.update(hostile)
+            environment = replanning.GitRecoverySigner._environment()
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        for name, value in hostile.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(environment.get(name), value)
+
+    def test_recovery_directory_symlink_is_rejected_before_signing(self):
+        before = graph(node(1))
+        request = {
+            "current_issue": key(1),
+            "finding": finding("IN_CONTRACT_DEFECT"),
+            "operation": {"kind": "KEEP_IN_CURRENT_CONTRACT"},
+        }
+        plan = replanning.build_plan(before, request, actor="alice")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir(mode=0o700)
+            link = root / "link"
+            link.symlink_to(target, target_is_directory=True)
+            journal = replanning.RecoveryJournal(
+                link / "operation.json", plan, FakeRecoverySigner()
+            )
+            with self.assertRaisesRegex(replanning.StalePlanError, "canonical"):
+                journal.start(before)
+
+    def test_another_locally_valid_ssh_signer_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "commit", "--allow-empty", "-S", "-m", "root"],
+                check=True,
+                capture_output=True,
+            )
+            signer = replanning.GitRecoverySigner.discover(repository)
+            if signer.signer_format != "ssh":
+                self.skipTest("the configured signing format is not SSH")
+            operation_digest, journal_digest = "c" * 64, "d" * 64
+            authentication = dict(signer.sign(operation_digest, journal_digest))
+
+            alternate = repository / "alternate"
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(alternate)],
+                check=True,
+            )
+            configured_allowed = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "config",
+                    "--path",
+                    "--get",
+                    "gpg.ssh.allowedSignersFile",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            allowed = repository / "allowed-signers"
+            allowed.write_text(
+                Path(configured_allowed).expanduser().read_text(encoding="utf-8").rstrip()
+                + "\nattacker@example.invalid "
+                + alternate.with_suffix(".pub").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "config",
+                    "gpg.ssh.allowedSignersFile",
+                    str(allowed),
+                ],
+                check=True,
+            )
+            tree = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD^{tree}"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            message = (
+                "Authenticate work-graph recovery\n\n"
+                f"Operation: {operation_digest}\nJournal: {journal_digest}\n"
+            )
+            alternate_commit = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "-c",
+                    "user.name=Attacker",
+                    "-c",
+                    "user.email=attacker@example.invalid",
+                    "-c",
+                    f"user.signingkey={alternate}",
+                    "commit-tree",
+                    "-S",
+                    tree,
+                    "-p",
+                    authentication["commit_oid"],
+                ],
+                check=True,
+                input=message,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "update-ref",
+                    authentication["ref"],
+                    alternate_commit,
+                    authentication["commit_oid"],
+                ],
+                check=True,
+            )
+            authentication["commit_oid"] = alternate_commit
+            with self.assertRaisesRegex(replanning.StalePlanError, "unintended identity"):
+                signer.verify(authentication, operation_digest, journal_digest)
+
+    def test_openpgp_configured_signer_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository, account_home = root / "repository", root / "account"
+            gnupg = account_home / ".gnupg"
+            gnupg.mkdir(parents=True, mode=0o700)
+            subprocess.run(
+                [
+                    "gpg",
+                    "--batch",
+                    "--homedir",
+                    str(gnupg),
+                    "--passphrase",
+                    "",
+                    "--quick-generate-key",
+                    "Recovery Test <recovery@example.invalid>",
+                    "ed25519",
+                    "sign",
+                    "0",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            fingerprint = next(
+                line.split(":")[9]
+                for line in subprocess.run(
+                    [
+                        "gpg",
+                        "--batch",
+                        "--homedir",
+                        str(gnupg),
+                        "--with-colons",
+                        "--list-secret-keys",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.splitlines()
+                if line.startswith("fpr:")
+            )
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            for key_name, value in (
+                ("user.name", "Recovery Test"),
+                ("user.email", "recovery@example.invalid"),
+                ("gpg.format", "openpgp"),
+                ("user.signingkey", fingerprint),
+            ):
+                subprocess.run(
+                    ["git", "-C", str(repository), "config", key_name, value], check=True
+                )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "commit",
+                    "--allow-empty",
+                    "--no-gpg-sign",
+                    "-m",
+                    "root",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            previous_home = replanning.ACCOUNT_HOME
+            try:
+                replanning.ACCOUNT_HOME = account_home
+                signer = replanning.GitRecoverySigner.discover(repository)
+                authentication = signer.sign("e" * 64, "f" * 64)
+                signer.verify(authentication, "e" * 64, "f" * 64)
+            finally:
+                replanning.ACCOUNT_HOME = previous_home
+            self.assertEqual(authentication["signer_format"], "openpgp")
+            self.assertEqual(authentication["signer_fingerprint"], fingerprint)
 
 
 if __name__ == "__main__":

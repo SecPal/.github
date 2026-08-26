@@ -28,14 +28,23 @@ operation. Every stable native ID is resolved before the first write. A write
 failure stops the invocation without retry; because GitHub does not provide a
 transaction spanning these mutations, the command durably records `NO_WRITES`,
 `KNOWN_WRITES`, `UNKNOWN_MUTATION_OUTCOME`, or `COMPLETE`. Every state is
-authenticated by a detached commit made with the user's existing Git signing
-configuration. Every successful create records the repository-qualified
-identity, issue node ID, and repository ID returned by GitHub. Recovery rereads
-that exact native identity and verifies its complete planned content and graph
-state, so an edited journal cannot substitute another issue. An ordinary replay
-with existing recovery state fails closed. The recovery path is derived from the
-exact semantic plan and stored in repository Git state, so changing the plan
-file's location cannot bypass replay protection.
+authenticated by a signed commit made with the user's controlled Git signing
+configuration. The configured signer fingerprint is established independently
+of the journal and checked on every state. A deterministic private Git ref keeps
+the signed states reachable across ordinary Git maintenance; each replacement
+is a signed child of the previous state, so a crash after advancing the ref
+cannot invalidate the last durable journal. These private refs are not part of
+an ordinary branch push and are never cleaned up implicitly.
+
+The signed journal binds the canonical plan digest, authenticated baseline
+snapshot, actor, current issue, applied step prefix, and every exact
+GitHub-returned create identity. Recovery authenticates those facts before it
+interprets live graph changes. It verifies the current graph as the exact
+baseline plus the recorded prefix, rejects unrelated drift, validates only the
+remaining suffix, and then continues with the recorded identities. An ordinary
+replay with existing recovery state fails closed. The recovery path and private
+ref are derived from the exact semantic plan and stored in repository Git state,
+so changing the plan file's location cannot bypass replay protection.
 
 After the writes, the command rereads the graph, verifies every intended edge
 and sibling position, rejects any unrelated state or relationship change, and
@@ -140,3 +149,10 @@ python3 scripts/secpal-work-graph-replan.py recover PLAN.json --apply
 
 `UNKNOWN_MUTATION_OUTCOME` is terminal for automatic recovery. Inspect GitHub
 state manually; never retry that mutation blindly.
+
+Recovery signing resolves the account home from the operating-system account,
+then fixes `HOME`, `XDG_CONFIG_HOME`, and `GNUPGHOME` to that account's canonical
+locations for both signing and verification. Git configuration override
+families and verifier-program substitution remain disabled. SSH and OpenPGP are
+accepted when they are the configured Git signing format; a cryptographically
+valid signature from any other fingerprint is rejected.

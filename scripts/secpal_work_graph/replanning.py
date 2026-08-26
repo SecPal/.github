@@ -14,7 +14,9 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import re
+import stat
 import subprocess
 import tempfile
 from contextlib import contextmanager, nullcontext
@@ -23,10 +25,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
-from .model import Node, Snapshot, parse_node_key
+from .model import Claim, Node, Snapshot, parse_node_key
 
 SCHEMA = "secpal-work-graph-replan/v1"
-RECOVERY_SCHEMA = "secpal-work-graph-replan-recovery/v1"
+RECOVERY_SCHEMA = "secpal-work-graph-replan-recovery/v2"
 AGGREGATE = "@aggregate"
 
 CLASSIFICATION_ACTIONS = MappingProxyType(
@@ -76,6 +78,7 @@ GIT_ENVIRONMENT_OVERRIDES = frozenset(
         "GIT_WORK_TREE",
     }
 )
+ACCOUNT_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
 SAFE_GIT_CONFIG = (
     ("core.fsmonitor", "false"),
     ("gpg.program", "gpg"),
@@ -193,17 +196,27 @@ def recovery_document_digest(value: Mapping[str, Any]) -> str:
 
 
 class RecoverySigner(Protocol):
-    def sign(self, digest: str) -> Mapping[str, str]: ...
+    def sign(self, operation_digest: str, digest: str) -> Mapping[str, str]: ...
 
-    def verify(self, authentication: Any, digest: str) -> None: ...
+    def verify(self, authentication: Any, operation_digest: str, digest: str) -> None: ...
 
 
 class GitRecoverySigner:
     """Authenticate recovery state with the user's configured Git signing key."""
 
-    def __init__(self, repository_root: Path, git_executable: str) -> None:
+    def __init__(
+        self,
+        repository_root: Path,
+        git_common_dir: Path,
+        git_executable: str,
+        signer_format: str,
+        signer_fingerprint: str,
+    ) -> None:
         self.repository_root = repository_root
+        self.git_common_dir = git_common_dir
         self.git_executable = git_executable
+        self.signer_format = signer_format
+        self.signer_fingerprint = signer_fingerprint
 
     @classmethod
     def discover(cls, directory: Path) -> GitRecoverySigner:
@@ -229,7 +242,25 @@ class GitRecoverySigner:
         )
         if result.returncode != 0 or not result.stdout.strip():
             raise PlanError("recovery evidence must be created inside a Git worktree")
-        return cls(Path(result.stdout.strip()).resolve(), str(executable))
+        repository_root = Path(result.stdout.strip()).resolve()
+        bootstrap = cls(repository_root, repository_root, str(executable), "", "")
+        common_dir = Path(
+            bootstrap._run(
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"]
+            ).strip()
+        )
+        common_dir = common_dir.resolve(strict=True)
+        signer_format = bootstrap._run(
+            ["config", "--get", "gpg.format"], allow_failure=True
+        ).strip()
+        signer_format = signer_format or "openpgp"
+        if signer_format not in {"ssh", "openpgp"}:
+            raise PlanError("recovery signing requires SSH or OpenPGP Git signatures")
+        bootstrap.git_common_dir = common_dir
+        bootstrap.signer_format = signer_format
+        fingerprint = bootstrap._configured_signer_fingerprint()
+        bootstrap.signer_fingerprint = fingerprint
+        return bootstrap
 
     @staticmethod
     def _environment() -> dict[str, str]:
@@ -242,6 +273,9 @@ class GitRecoverySigner:
             if key.startswith("GIT_TRACE"):
                 environment.pop(key, None)
         environment["PATH"] = os.pathsep.join(str(path) for path in TRUSTED_GIT_DIRECTORIES)
+        environment["HOME"] = str(ACCOUNT_HOME)
+        environment["XDG_CONFIG_HOME"] = str(ACCOUNT_HOME / ".config")
+        environment["GNUPGHOME"] = str(ACCOUNT_HOME / ".gnupg")
         environment["GIT_PAGER"] = "cat"
         environment["GIT_NO_LAZY_FETCH"] = "1"
         environment["GIT_NO_REPLACE_OBJECTS"] = "1"
@@ -252,7 +286,13 @@ class GitRecoverySigner:
             environment[f"GIT_CONFIG_VALUE_{index}"] = value
         return environment
 
-    def _run(self, arguments: list[str], *, input_text: str | None = None) -> str:
+    def _run(
+        self,
+        arguments: list[str],
+        *,
+        input_text: str | None = None,
+        allow_failure: bool = False,
+    ) -> str:
         result = subprocess.run(
             [self.git_executable, "-C", str(self.repository_root), *arguments],
             input=input_text,
@@ -262,40 +302,116 @@ class GitRecoverySigner:
             env=self._environment(),
             timeout=30,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and not allow_failure:
             raise StalePlanError("Git could not authenticate recovery evidence")
         return result.stdout
 
-    def sign(self, digest: str) -> Mapping[str, str]:
+    def _signature_identity(self, commit_oid: str) -> tuple[str, str]:
+        self._run(["verify-commit", commit_oid])
+        value = self._run(["show", "-s", "--format=%G?%x00%GF%x00%GP", commit_oid]).strip()
+        parts = value.split("\0")
+        if len(parts) != 3 or parts[0] not in {"G", "U"}:
+            raise StalePlanError("recovery signature identity is unavailable")
+        fingerprint = parts[2] if self.signer_format == "openpgp" and parts[2] else parts[1]
+        if not re.fullmatch(
+            r"(?:SHA256:)?[A-Za-z0-9+/=_-]{16,128}|[0-9A-Fa-f]{40,64}",
+            fingerprint,
+        ):
+            raise StalePlanError("recovery signature fingerprint is malformed")
+        return self.signer_format, fingerprint
+
+    def _configured_signer_fingerprint(self) -> str:
         tree = self._run(["rev-parse", "HEAD^{tree}"]).strip()
-        message = f"Authenticate work-graph recovery\n\n{digest}\n"
-        commit_oid = self._run(["commit-tree", "-S", tree], input_text=message).strip()
+        probe = self._run(
+            ["commit-tree", "-S", tree],
+            input_text="Establish work-graph recovery signer identity\n",
+        ).strip()
+        return self._signature_identity(probe)[1]
+
+    @staticmethod
+    def _ref_name(operation_digest: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{64}", operation_digest):
+            raise StalePlanError("recovery operation digest is malformed")
+        return f"refs/secpal-work-graph-replan/{operation_digest}"
+
+    def sign(self, operation_digest: str, digest: str) -> Mapping[str, str]:
+        tree = self._run(["rev-parse", "HEAD^{tree}"]).strip()
+        ref_name = self._ref_name(operation_digest)
+        previous = self._run(["rev-parse", "--verify", ref_name], allow_failure=True).strip()
+        message = (
+            "Authenticate work-graph recovery\n\n"
+            f"Operation: {operation_digest}\nJournal: {digest}\n"
+        )
+        arguments = ["commit-tree", "-S", tree]
+        if previous:
+            arguments.extend(["-p", previous])
+        commit_oid = self._run(arguments, input_text=message).strip()
         if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit_oid):
             raise StalePlanError("Git returned an invalid recovery attestation identity")
-        return {"kind": "git-signed-commit", "commit_oid": commit_oid}
+        signature_format, fingerprint = self._signature_identity(commit_oid)
+        if signature_format != self.signer_format or fingerprint != self.signer_fingerprint:
+            raise StalePlanError("recovery evidence was signed by an unintended identity")
+        object_format = self._run(["rev-parse", "--show-object-format"]).strip()
+        zero = "0" * (64 if object_format == "sha256" else 40)
+        self._run(["update-ref", ref_name, commit_oid, previous or zero])
+        return {
+            "kind": "git-signed-commit-chain",
+            "commit_oid": commit_oid,
+            "ref": ref_name,
+            "signer_format": signature_format,
+            "signer_fingerprint": fingerprint,
+        }
 
-    def verify(self, authentication: Any, digest: str) -> None:
+    def verify(self, authentication: Any, operation_digest: str, digest: str) -> None:
+        expected_ref = self._ref_name(operation_digest)
         if (
             not isinstance(authentication, Mapping)
-            or set(authentication) != {"kind", "commit_oid"}
-            or authentication.get("kind") != "git-signed-commit"
+            or set(authentication)
+            != {"kind", "commit_oid", "ref", "signer_format", "signer_fingerprint"}
+            or authentication.get("kind") != "git-signed-commit-chain"
             or not isinstance(authentication.get("commit_oid"), str)
             or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", authentication["commit_oid"])
+            or authentication.get("ref") != expected_ref
+            or authentication.get("signer_format") != self.signer_format
+            or authentication.get("signer_fingerprint") != self.signer_fingerprint
         ):
             raise StalePlanError("recovery authentication is malformed")
         commit_oid = str(authentication["commit_oid"])
-        self._run(["verify-commit", commit_oid])
+        tip = self._run(["rev-parse", "--verify", expected_ref], allow_failure=True).strip()
+        if not tip:
+            raise StalePlanError("recovery authentication reference is missing")
+        try:
+            self._run(["merge-base", "--is-ancestor", commit_oid, tip])
+        except StalePlanError as exc:
+            raise StalePlanError("recovery authentication reference was substituted") from exc
+        signature_format, fingerprint = self._signature_identity(commit_oid)
+        if signature_format != self.signer_format or fingerprint != self.signer_fingerprint:
+            raise StalePlanError("recovery evidence was signed by an unintended identity")
         message = self._run(["show", "-s", "--format=%B", commit_oid]).strip()
-        expected = f"Authenticate work-graph recovery\n\n{digest}"
+        expected = (
+            "Authenticate work-graph recovery\n\n"
+            f"Operation: {operation_digest}\nJournal: {digest}"
+        )
         if message != expected:
             raise StalePlanError("recovery authentication binds different evidence")
 
     def recovery_path(self, operation_digest: str) -> Path:
-        value = self._run(
-            ["rev-parse", "--git-path", f"secpal-work-graph-replan/{operation_digest}.json"]
-        ).strip()
-        path = Path(value)
-        return path.resolve() if path.is_absolute() else (self.repository_root / path).resolve()
+        self._ref_name(operation_digest)
+        directory = self.git_common_dir / "secpal-work-graph-replan"
+        try:
+            directory.mkdir(mode=0o700, exist_ok=True)
+            metadata = directory.lstat()
+        except OSError as exc:
+            raise StalePlanError("recovery directory is unavailable") from exc
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o077
+            or directory.resolve(strict=True) != directory
+        ):
+            raise StalePlanError("recovery directory is not private and canonical")
+        return directory / f"{operation_digest}.json"
 
 
 class RecoveryJournal:
@@ -306,17 +422,35 @@ class RecoveryJournal:
         self.plan = plan
         self.signer = signer
 
+    def _validate_parent(self) -> None:
+        try:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            metadata = self.path.parent.lstat()
+        except OSError as exc:
+            raise StalePlanError("recovery directory is unavailable") from exc
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o077
+            or self.path.parent.resolve(strict=True) != self.path.parent.absolute()
+        ):
+            raise StalePlanError("recovery directory is not private and canonical")
+
     @classmethod
     def for_plan(cls, plan: Plan, signer: GitRecoverySigner) -> RecoveryJournal:
         return cls(signer.recovery_path(plan_digest(plan)), plan, signer)
 
-    def _fields(self) -> dict[str, Any]:
+    def _fields(self, baseline: Snapshot) -> dict[str, Any]:
+        if snapshot_digest(baseline) != self.plan.snapshot_digest:
+            raise StalePlanError("recovery baseline differs from the planned snapshot")
         return {
             "schema": RECOVERY_SCHEMA,
             "plan_digest": plan_digest(self.plan),
             "actor": self.plan.actor,
             "current_issue": self.plan.current_issue,
             "snapshot_digest": self.plan.snapshot_digest,
+            "baseline": snapshot_document(baseline),
             "outcome": "NO_WRITES",
             "next_step": 0,
             "attempting_step": None,
@@ -324,10 +458,16 @@ class RecoveryJournal:
         }
 
     def _write(self, fields: Mapping[str, Any], *, exclusive: bool = False) -> None:
+        self._validate_parent()
+        if exclusive and self.path.exists():
+            raise StalePlanError(
+                "recovery state already exists; use bounded recovery instead of replay"
+            )
         document = dict(fields)
         document["journal_digest"] = _document_digest(document)
-        document["authentication"] = dict(self.signer.sign(document["journal_digest"]))
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        document["authentication"] = dict(
+            self.signer.sign(plan_digest(self.plan), document["journal_digest"])
+        )
         if exclusive:
             try:
                 descriptor = os.open(
@@ -360,21 +500,34 @@ class RecoveryJournal:
                 os.unlink(temporary)
 
     def _fsync_parent(self) -> None:
-        descriptor = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        descriptor = os.open(
+            self.path.parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        )
         try:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
 
-    def start(self) -> None:
-        self._write(self._fields(), exclusive=True)
+    def start(self, baseline: Snapshot) -> None:
+        self._write(self._fields(baseline), exclusive=True)
 
     @contextmanager
     def lock(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._validate_parent()
         lock_path = self.path.with_name(self.path.name + ".lock")
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        descriptor = os.open(
+            lock_path,
+            os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
         try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077
+            ):
+                raise StalePlanError("recovery lock is not private and canonical")
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
@@ -384,10 +537,27 @@ class RecoveryJournal:
             os.close(descriptor)
 
     def load(self) -> dict[str, Any]:
+        self._validate_parent()
+        descriptor: int | None = None
         try:
-            document = json.loads(self.path.read_text(encoding="utf-8"))
+            descriptor = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077
+            ):
+                raise StalePlanError("recovery evidence is not private and canonical")
+            with os.fdopen(descriptor, encoding="utf-8") as stream:
+                descriptor = None
+                document = json.load(stream)
+        except StalePlanError:
+            raise
         except (OSError, json.JSONDecodeError) as exc:
             raise StalePlanError("recovery evidence is missing or unreadable") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         if not isinstance(document, dict):
             raise StalePlanError("recovery evidence is malformed")
         authentication = document.pop("authentication", None)
@@ -396,13 +566,34 @@ class RecoveryJournal:
             raise StalePlanError("recovery evidence digest is invalid")
         if not isinstance(digest, str):
             raise StalePlanError("recovery evidence digest is malformed")
-        self.signer.verify(authentication, digest)
-        expected = self._fields()
-        if set(document) != set(expected):
+        self.signer.verify(authentication, plan_digest(self.plan), digest)
+        expected_fields = {
+            "schema",
+            "plan_digest",
+            "actor",
+            "current_issue",
+            "snapshot_digest",
+            "baseline",
+            "outcome",
+            "next_step",
+            "attempting_step",
+            "created",
+        }
+        if set(document) != expected_fields:
             raise StalePlanError("recovery evidence contains unknown or missing fields")
+        expected = {
+            "schema": RECOVERY_SCHEMA,
+            "plan_digest": plan_digest(self.plan),
+            "actor": self.plan.actor,
+            "current_issue": self.plan.current_issue,
+            "snapshot_digest": self.plan.snapshot_digest,
+        }
         for field in ("schema", "plan_digest", "actor", "current_issue", "snapshot_digest"):
             if document.get(field) != expected[field]:
                 raise StalePlanError("recovery evidence is bound to a different operation")
+        baseline = snapshot_from_document(document.get("baseline"))
+        if snapshot_digest(baseline) != self.plan.snapshot_digest:
+            raise StalePlanError("recovery baseline digest is invalid")
         next_step = document.get("next_step")
         attempting = document.get("attempting_step")
         created = document.get("created")
@@ -568,15 +759,88 @@ def _node_fingerprint(node: Node) -> dict[str, Any]:
         "dependencies_observable": node.dependencies_observable,
         "blocking": list(node.blocking),
         "blocking_observable": node.blocking_observable,
+        "blocking_count": node.blocking_count,
+        "priority_labels": list(node.priority_labels),
+        "priority_labels_observable": node.priority_labels_observable,
         "has_acceptance_criteria": node.has_acceptance_criteria,
+        "claims": [
+            {"executor": claim.executor, "pull_request": claim.pull_request, "url": claim.url}
+            for claim in node.claims
+        ],
+        "claims_observable": node.claims_observable,
         "resolved": node.resolved,
+        "unresolved_reason": node.unresolved_reason,
+        "mirror_relationships": list(node.mirror_relationships),
     }
 
 
+def snapshot_document(snapshot: Snapshot) -> list[dict[str, Any]]:
+    """Serialize every canonical fact needed to authenticate a recovery baseline."""
+
+    return [_node_fingerprint(snapshot.nodes[key]) for key in sorted(snapshot.nodes)]
+
+
 def snapshot_digest(snapshot: Snapshot) -> str:
-    document = [_node_fingerprint(snapshot.nodes[key]) for key in sorted(snapshot.nodes)]
+    document = snapshot_document(snapshot)
     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def snapshot_from_document(value: Any) -> Snapshot:
+    """Reconstruct only an exact, signed canonical baseline document."""
+
+    if not isinstance(value, list):
+        raise StalePlanError("recovery baseline is malformed")
+    nodes: list[Node] = []
+    expected_fields = set(_node_fingerprint(Node(repository="owner/repo", number=1)))
+    try:
+        for item in value:
+            if not isinstance(item, Mapping) or set(item) != expected_fields:
+                raise StalePlanError("recovery baseline node is malformed")
+            repository, number = parse_node_key(str(item["key"]))
+            claims = item["claims"]
+            if not isinstance(claims, list) or any(
+                not isinstance(claim, Mapping)
+                or set(claim) != {"executor", "pull_request", "url"}
+                for claim in claims
+            ):
+                raise StalePlanError("recovery baseline claims are malformed")
+            node = Node(
+                repository=repository,
+                number=number,
+                node_id=str(item["node_id"]),
+                repository_id=str(item["repository_id"]),
+                title=str(item["title"]),
+                body_digest=str(item["body_digest"]),
+                state=str(item["state"]),
+                state_reason=item["state_reason"],
+                parent=item["parent"],
+                parent_observable=item["parent_observable"],
+                children=tuple(item["children"]),
+                children_observable=item["children_observable"],
+                blocked_by=tuple(item["blocked_by"]),
+                dependencies_observable=item["dependencies_observable"],
+                blocking=tuple(item["blocking"]),
+                blocking_observable=item["blocking_observable"],
+                blocking_count=item["blocking_count"],
+                priority_labels=tuple(item["priority_labels"]),
+                priority_labels_observable=item["priority_labels_observable"],
+                has_acceptance_criteria=item["has_acceptance_criteria"],
+                claims=tuple(Claim(**dict(claim)) for claim in claims),
+                claims_observable=item["claims_observable"],
+                resolved=item["resolved"],
+                unresolved_reason=item["unresolved_reason"],
+                mirror_relationships=tuple(item["mirror_relationships"]),
+            )
+            if _node_fingerprint(node) != dict(item):
+                raise StalePlanError("recovery baseline node has invalid field types")
+            nodes.append(node)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StalePlanError("recovery baseline is malformed") from exc
+    snapshot = Snapshot({node.key: node for node in nodes})
+    if len(snapshot.nodes) != len(nodes):
+        raise StalePlanError("recovery baseline contains duplicate issue identities")
+    return snapshot
 
 
 def _issue_spec(value: Any) -> dict[str, str]:
@@ -760,13 +1024,19 @@ def build_plan(snapshot: Snapshot, request: Mapping[str, Any], *, actor: str) ->
     return plan
 
 
-def _validate_simulated_plan(snapshot: Snapshot, plan: Plan) -> None:
+def _validate_simulated_plan(
+    snapshot: Snapshot,
+    plan: Plan,
+    *,
+    start_step: int = 0,
+    known_aliases: Mapping[str, str] | None = None,
+) -> None:
     """Run the canonical validator over the exact planned graph before writes."""
 
     from . import resolver
 
     nodes = dict(snapshot.nodes)
-    aliases: dict[str, str] = {}
+    aliases = dict(known_aliases or {})
     next_number = 900_000_000
 
     def resolve_key(reference: str) -> str:
@@ -775,7 +1045,7 @@ def _validate_simulated_plan(snapshot: Snapshot, plan: Plan) -> None:
         return reference
 
     affected = {plan.current_issue}
-    for step in plan.steps:
+    for step in plan.steps[start_step:]:
         arguments = step.arguments
         if step.kind == "CREATE_ISSUE":
             while f"{arguments['repository']}#{next_number}" in nodes:
@@ -928,6 +1198,7 @@ def apply_plan(
     recovery: RecoveryJournal | None = None,
     resume: bool = False,
     recovery_locked: bool = False,
+    baseline_snapshot: Snapshot | None = None,
 ) -> dict[str, CreatedIssueIdentity]:
     """Apply only after exact actor and graph preconditions still match."""
 
@@ -939,7 +1210,8 @@ def apply_plan(
     with lock:
         if actor != plan.actor:
             raise StalePlanError("authenticated actor changed before mutation")
-        if snapshot_digest(snapshot) != plan.snapshot_digest:
+        baseline = baseline_snapshot or snapshot
+        if snapshot_digest(baseline) != plan.snapshot_digest:
             raise StalePlanError("canonical graph drift detected before mutation")
         prepare = getattr(writer, "prepare", None)
         if prepare is not None:
@@ -956,7 +1228,7 @@ def apply_plan(
                 aliases = recovery_identities(evidence)
                 start_step = int(evidence["next_step"])
             else:
-                recovery.start()
+                recovery.start(baseline)
                 aliases = {}
                 start_step = 0
         else:
@@ -997,6 +1269,101 @@ def rebuild_plan(document: Mapping[str, Any], snapshot: Snapshot, *, actor: str)
     if rebuilt.to_dict() != dict(document):
         raise StalePlanError("serialized plan differs from the verified canonical plan")
     return rebuilt
+
+
+def plan_from_document(document: Mapping[str, Any], *, actor: str) -> Plan:
+    """Decode an exact plan without granting its untrusted steps authority."""
+
+    expected_fields = {
+        "schema",
+        "actor",
+        "classification",
+        "current_issue",
+        "owner",
+        "snapshot_digest",
+        "request",
+        "steps",
+    }
+    if not isinstance(document, Mapping) or set(document) != expected_fields:
+        raise PlanError("serialized plan contains unknown or missing fields")
+    classification = document.get("classification")
+    raw_steps = document.get("steps")
+    if (
+        document.get("schema") != SCHEMA
+        or document.get("actor") != actor
+        or not isinstance(classification, Mapping)
+        or set(classification)
+        != {"name", "action", "technically_blocking", "mechanically_blocking", "timing", "risk"}
+        or not isinstance(raw_steps, list)
+        or not isinstance(document.get("request"), Mapping)
+    ):
+        raise StalePlanError("serialized recovery plan is malformed or belongs to another actor")
+    try:
+        steps = tuple(
+            Step(str(item["kind"]), item["arguments"])
+            for item in raw_steps
+            if isinstance(item, Mapping)
+            and set(item) == {"kind", "arguments"}
+            and isinstance(item["arguments"], Mapping)
+        )
+        plan = Plan(
+            actor=actor,
+            classification=Classification(
+                name=str(classification["name"]),
+                action=str(classification["action"]),
+                technically_blocking=classification["technically_blocking"],
+                mechanically_blocking=classification["mechanically_blocking"],
+                timing=str(classification["timing"]),
+                risk=tuple(classification["risk"]),
+            ),
+            current_issue=str(document["current_issue"]),
+            owner=document["owner"],
+            snapshot_digest=str(document["snapshot_digest"]),
+            steps=steps,
+            request=document["request"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StalePlanError("serialized recovery plan is malformed") from exc
+    if len(steps) != len(raw_steps) or plan.to_dict() != dict(document):
+        raise StalePlanError("serialized recovery plan is not canonical")
+    return plan
+
+
+def recover_plan(
+    document: Mapping[str, Any],
+    live: Snapshot,
+    *,
+    actor: str,
+    recovery: RecoveryJournal,
+) -> tuple[Plan, Snapshot, dict[str, CreatedIssueIdentity], int]:
+    """Authenticate a known prefix, reject unrelated drift, and validate its suffix."""
+
+    plan = plan_from_document(document, actor=actor)
+    if plan != recovery.plan:
+        raise StalePlanError("recovery journal was opened for a different plan")
+    evidence = recovery.load()
+    if evidence["attempting_step"] is not None:
+        raise StalePlanError(
+            "recovery has an unknown mutation outcome; inspect GitHub state manually"
+        )
+    baseline = snapshot_from_document(evidence["baseline"])
+    rebuilt = build_plan(baseline, plan.request, actor=actor)
+    if rebuilt.to_dict() != plan.to_dict():
+        raise StalePlanError("authenticated recovery plan differs from its baseline")
+    identities = recovery_identities(evidence)
+    next_step = int(evidence["next_step"])
+    try:
+        verify_applied(plan, live, identities, step_limit=next_step)
+        verify_unchanged_relationships(plan, baseline, live, identities, step_limit=next_step)
+        _validate_simulated_plan(
+            live,
+            plan,
+            start_step=next_step,
+            known_aliases={alias: identity.key for alias, identity in identities.items()},
+        )
+    except PlanError as exc:
+        raise StalePlanError("live graph differs from the authenticated recovery prefix") from exc
+    return plan, baseline, identities, next_step
 
 
 def _resolve(reference: str, aliases: Mapping[str, CreatedIssueIdentity]) -> str:

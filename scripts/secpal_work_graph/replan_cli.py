@@ -184,6 +184,7 @@ def _apply_guarded(
     resume: bool,
 ) -> tuple[dict[str, replanning.CreatedIssueIdentity], list[dict[str, str]]]:
     with recovery.lock():
+        baseline = snapshot
         if resume:
             evidence = recovery.load()
             if evidence["attempting_step"] is not None:
@@ -193,6 +194,8 @@ def _apply_guarded(
             recovered = replanning.recovery_identities(evidence)
             recovery_snapshots = [snapshot]
             for identity in recovered.values():
+                if snapshot.get(identity.key) is not None:
+                    continue
                 created_snapshot, canonical = github.load_snapshot(
                     adapter, identity.key, include_reverse_dependencies=True
                 )
@@ -200,13 +203,10 @@ def _apply_guarded(
                     raise replanning.StalePlanError("recovery issue identity is no longer canonical")
                 recovery_snapshots.append(created_snapshot)
             recovery_snapshot = _merge_snapshots(*recovery_snapshots)
-            next_step = int(evidence["next_step"])
-            replanning.verify_applied(
-                plan, recovery_snapshot, recovered, step_limit=next_step
+            plan, baseline, recovered, _ = replanning.recover_plan(
+                plan.to_dict(), recovery_snapshot, actor=actor, recovery=recovery
             )
-            replanning.verify_unchanged_relationships(
-                plan, snapshot, recovery_snapshot, recovered, step_limit=next_step
-            )
+            snapshot = recovery_snapshot
         aliases = replanning.apply_plan(
             plan,
             snapshot,
@@ -215,6 +215,7 @@ def _apply_guarded(
             recovery=recovery,
             resume=resume,
             recovery_locked=True,
+            baseline_snapshot=baseline,
         )
         post_snapshot, post_scope = _load_plan_snapshot(adapter, request)
         expected_post_scope = (
@@ -225,7 +226,7 @@ def _apply_guarded(
         if post_scope != expected_post_scope:
             raise replanning.PlanError("owning scope changed during mutation")
         replanning.verify_applied(plan, post_snapshot, aliases)
-        replanning.verify_unchanged_relationships(plan, snapshot, post_snapshot, aliases)
+        replanning.verify_unchanged_relationships(plan, baseline, post_snapshot, aliases)
         resolution = resolver.resolve(post_snapshot, post_scope)
         if not resolution.complete or resolution.structurally_malformed:
             raise replanning.PlanError("resulting canonical graph is incomplete or malformed")
@@ -258,7 +259,11 @@ def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=N
             _emit(plan.to_dict(), stdout)
             return EXIT_OK
 
-        plan = replanning.rebuild_plan(document, snapshot, actor=actor)
+        plan = (
+            replanning.plan_from_document(document, actor=actor)
+            if arguments.command == "recover"
+            else replanning.rebuild_plan(document, snapshot, actor=actor)
+        )
         mutation_adapter = github.GitHubGraphQLAdapter(
             gh_executable=arguments.gh,
             timeout=arguments.timeout,
