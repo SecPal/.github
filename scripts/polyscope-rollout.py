@@ -47,6 +47,7 @@ NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 NATIVE_SETUP_COMMANDS_KEY = "_native_setup_commands"
 WORKSPACE_ALIAS_REGISTRY_FILENAME = ".polyscope-secpal-workspace-aliases.json"
+REGISTRATION_ONLY_SPEC_KEY = "registration_only"
 DEFAULT_ANDROID_SDK_ROOT = pathlib.Path.home() / "Android" / "Sdk"
 PREVIEW_DATABASE_BASE_ENV_KEY = "POLYSCOPE_BASE_DB_DATABASE"
 PREVIEW_DB_PASSWORD_SOURCE_ENV_KEY = "POLYSCOPE_DB_PASSWORD_SOURCE"
@@ -1429,6 +1430,27 @@ def _bootstrap_api_worktree_locked(
         ["php", "artisan", "config:clear"],
         command_env=command_env,
     )
+
+    configured_kek_path = env_values.get("KEK_PATH", "").strip()
+    expected_kek_path = pathlib.Path(build_api_preview_kek_path(worktree_path))
+    if (
+        not expected_kek_path.is_file()
+        and is_isolated_api_preview_storage_target(preview_storage_target)
+    ):
+        if not configured_kek_path or pathlib.Path(configured_kek_path).resolve() != expected_kek_path:
+            raise RuntimeError(
+                f"refusing to generate a preview KEK outside the managed worktree path {expected_kek_path}"
+            )
+        print(f"{prefix} generating isolated preview KEK")
+        run_api_worktree_bootstrap_command(
+            worktree_path,
+            ["php", "artisan", "keys:generate-kek"],
+            command_env=command_env,
+        )
+        if not expected_kek_path.is_file():
+            raise RuntimeError(
+                f"preview KEK generation did not persist the managed key at {expected_kek_path}"
+            )
 
     print(f"{prefix} {migration_label}")
     try:
@@ -2907,6 +2929,43 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             ],
         },
     },
+    "deployment": {
+        "display_name": "SecPal/deployment",
+        "base_branch": "main",
+        "copilot_instructions": ".github/copilot-instructions.md",
+        "focus_instruction_paths": [],
+        "preview_prefix": None,
+        "review_focus": "Deployment lifecycle ordering, pinned images and actions, least-privilege credentials, observable evidence, and the repository boundary against production systems.",
+        "link_names": [],
+        "local_config": {
+            "copyGitignored": True,
+            "runMode": "replace",
+            "scripts": {
+                "setup": [build_verified_npm_ci_command()],
+                "run": [
+                    {
+                        "label": "Integration Browser Tests",
+                        "command": "npm run test:integration:browser",
+                        "runMode": "preserve",
+                    },
+                ],
+            },
+            "tasks": [
+                {
+                    "label": "Review deployment contract",
+                    "prompt": "Review the touched deployment contract for lifecycle ordering, credential-boundary, image-pinning, and evidence regressions. Keep the work scoped to the affected deployment concern and do not operate on production systems.",
+                },
+            ],
+        },
+    },
+    "operations": {
+        "display_name": "SecPal/operations",
+        "base_branch": "main",
+        # The repository currently contains no versioned agent or review
+        # instructions. Register it for normal Polyscope workspaces, but do
+        # not fabricate setup commands, prompts, or provisioning policy.
+        REGISTRATION_ONLY_SPEC_KEY: True,
+    },
 }
 
 
@@ -3057,6 +3116,11 @@ def format_bullets(bullets: list[str]) -> str:
     return "; ".join(bullets)
 
 
+def is_workspace_automation_enabled(spec: dict[str, Any]) -> bool:
+    """Keep incomplete repositories usable without inventing workspace policy."""
+    return not bool(spec.get(REGISTRATION_ONLY_SPEC_KEY))
+
+
 def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
     repo_specs: dict[str, dict[str, Any]] = {}
     for repo_name, settings in REPO_SETTINGS.items():
@@ -3064,6 +3128,9 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         repo_path = workspace_root / repo_name
         spec["repository_name"] = repo_name
         spec["path"] = repo_path
+        if not is_workspace_automation_enabled(spec):
+            repo_specs[repo_name] = spec
+            continue
         spec["agent_instructions"] = repo_path / "AGENTS.md"
         spec["copilot_instructions"] = repo_path / settings["copilot_instructions"]
         spec["focus_instruction_paths"] = [repo_path / path for path in settings["focus_instruction_paths"]]
@@ -3312,6 +3379,8 @@ def validate_repo_instruction_files(
 ) -> None:
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
+        if not is_workspace_automation_enabled(spec):
+            continue
         spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
             repo_path,
             validated_instruction_roots,
@@ -3626,6 +3695,8 @@ def validate_local_config_command(
 def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
+        if not is_workspace_automation_enabled(spec):
+            continue
         config = render_local_config(spec)
         package_scripts = load_package_scripts(repo_path)
         composer_scripts = load_composer_scripts(repo_path)
@@ -3845,6 +3916,8 @@ def ensure_exclude(repo_path: pathlib.Path, entries: set[str] | None = None) -> 
 def write_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
+        if not is_workspace_automation_enabled(spec):
+            continue
         config_path = repo_path / POLYSCOPE_LOCAL_CONFIG_NAME
         config_path.write_text(render_pretty_json(render_local_config(spec)) + "\n")
         sync_repo_auxiliary_files(repo_name, repo_path)
@@ -3855,6 +3928,7 @@ def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str
     return {
         repo_name: render_pretty_json(render_local_config(spec)) + "\n"
         for repo_name, spec in repo_specs.items()
+        if is_workspace_automation_enabled(spec)
     }
 
 
@@ -5116,6 +5190,8 @@ def provision_worktrees(
     canonical_validation_failed = False
 
     for repo_name, spec in repo_specs.items():
+        if not is_workspace_automation_enabled(spec):
+            continue
         validation_commands = list(spec[NATIVE_SETUP_COMMANDS_KEY])
         setup_commands = validation_commands
 
@@ -5422,6 +5498,8 @@ def build_desired_repository_metadata(
 
     for repo_name, spec in repo_specs.items():
         repo_id = repo_state[repo_name]["id"]
+        if not is_workspace_automation_enabled(spec):
+            continue
         for linked_name in spec["link_names"]:
             desired_links.add((repo_id, repo_state[linked_name]["id"]))
 
@@ -5444,7 +5522,7 @@ def read_current_repository_metadata(
     placeholders = ", ".join("?" for _ in managed_repo_ids)
     current_links = set(
         cur.execute(
-            f"select repo_id, linked_repo_id from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
+            f"select repo_id, linked_repo_id from repository_links where repo_id in ({placeholders}) and linked_repo_id in ({placeholders})",
             managed_repo_ids + managed_repo_ids,
         ).fetchall()
     )
@@ -5461,7 +5539,11 @@ def read_current_repository_metadata(
 def sync_repository_metadata(
     db_path: pathlib.Path, repo_state: dict[str, dict[str, Any]], repo_specs: dict[str, dict[str, Any]]
 ) -> pathlib.Path | None:
-    managed_repo_ids = [repo_state[name]["id"] for name in REPO_SETTINGS]
+    managed_repo_ids = [
+        repo_state[name]["id"]
+        for name, spec in repo_specs.items()
+        if is_workspace_automation_enabled(spec)
+    ]
     desired_links, desired_prompts = build_desired_repository_metadata(repo_state, repo_specs)
     ensure_polyscope_db_exists(db_path)
 
@@ -5478,12 +5560,14 @@ def sync_repository_metadata(
 
     placeholders = ", ".join("?" for _ in managed_repo_ids)
     cur.execute(
-        f"delete from repository_links where repo_id in ({placeholders}) or linked_repo_id in ({placeholders})",
+        f"delete from repository_links where repo_id in ({placeholders}) and linked_repo_id in ({placeholders})",
         managed_repo_ids + managed_repo_ids,
     )
 
     for repo_name, spec in repo_specs.items():
         repo_id = repo_state[repo_name]["id"]
+        if not is_workspace_automation_enabled(spec):
+            continue
         for linked_name in spec["link_names"]:
             cur.execute(
                 "insert or replace into repository_links (repo_id, linked_repo_id) values (?, ?)",
@@ -5964,6 +6048,13 @@ def build_summary(
         "repositories": {},
     }
     for repo_name, spec in repo_specs.items():
+        if not is_workspace_automation_enabled(spec):
+            summary["repositories"][repo_name] = {
+                "id": repo_state[repo_name]["id"],
+                "path": str(spec["path"]),
+                "workspace_automation": "registration-only",
+            }
+            continue
         prompts = build_prompt_bundle(spec)
         summary["repositories"][repo_name] = {
             "id": repo_state[repo_name]["id"],
