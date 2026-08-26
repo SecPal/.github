@@ -60,6 +60,10 @@ unknown_technical_identifier="${technical_identifier_authority}.unreviewed"
 nested_unknown_technical_identifier="${technical_identifier_authority}.polyscope.unreviewed"
 technical_identifier_url="https://${approved_technical_identifier}/path"
 technical_identifier_host_declaration="HoSt: ${approved_technical_identifier}"
+technical_identifier_short_header="curl -H 'HoSt: ${approved_technical_identifier}' https://example.invalid/"
+technical_identifier_long_header="curl --header \"hOsT: ${approved_technical_identifier}\" https://example.invalid/"
+technical_identifier_equals_header="curl --header='HOST: ${approved_technical_identifier}' https://example.invalid/"
+technical_identifier_unrelated_short_option="curl -h 'Host: ${approved_technical_identifier}' https://example.invalid/"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -290,6 +294,26 @@ assert_domain_policy_case \
   reject \
   "$approved_technical_identifier" \
   "$technical_identifier_host_declaration"
+assert_domain_policy_case \
+  "the approved technical identifier in a curl short-option Host header" \
+  reject \
+  "$approved_technical_identifier" \
+  "$technical_identifier_short_header"
+assert_domain_policy_case \
+  "the approved technical identifier in a curl long-option Host header" \
+  reject \
+  "$approved_technical_identifier" \
+  "$technical_identifier_long_header"
+assert_domain_policy_case \
+  "the approved technical identifier in a curl equals-form Host header" \
+  reject \
+  "$approved_technical_identifier" \
+  "$technical_identifier_equals_header"
+assert_domain_policy_case \
+  "Host-like text following curl's unrelated lowercase short option" \
+  accept \
+  "$approved_technical_identifier" \
+  "$technical_identifier_unrelated_short_option"
 assert_domain_policy_case \
   "an unknown identifier under the technical authority" \
   reject \

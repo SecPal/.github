@@ -122,6 +122,14 @@ is_explicit_host_usage() {
         return 0
     fi
 
+    # Curl's header options are case-sensitive syntax; only the Host field name
+    # is case-insensitive. Keep this separate from the structural field check so
+    # an unrelated short option such as `-h` does not become a header option.
+    if printf '%s\n' "$source_text" \
+        | grep -Eq "(^|[[:space:]])(-H[[:space:]]+|--header([[:space:]]+|=[[:space:]]*))['\"]?[Hh][Oo][Ss][Tt][[:space:]]*:[[:space:]]*${candidate_pattern}([:/?#[:space:],;}\"']|\$)"; then
+        return 0
+    fi
+
     return 1
 }
 
