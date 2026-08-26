@@ -13,7 +13,7 @@ import pathlib
 import re
 
 
-SAFE_NAME = re.compile(r"^[A-Za-z0-9._:@/+-]+$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+-]*$")
 
 
 def load_renderer(renderer_path: pathlib.Path):
@@ -89,6 +89,7 @@ def build_command(
         [
             "--entrypoint",
             "/usr/local/bin/frankenphp",
+            "--",
             image,
             "run",
             "--config",

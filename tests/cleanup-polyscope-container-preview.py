@@ -59,6 +59,10 @@ def main() -> None:
                 (str(repository_root / "api"),),
             )
             connection.execute(
+                "insert into repositories values ('stale-api-repo', 'SecPal/api', ?)",
+                (str(root / "missing-api-repository"),),
+            )
+            connection.execute(
                 "insert into worktrees values ('active', 'api-repo', ?, 'active')",
                 (str(worktree),),
             )

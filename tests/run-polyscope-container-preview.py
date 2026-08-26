@@ -71,6 +71,8 @@ def main() -> None:
         assert storage_mount in command
         assert f"{physical_worktree}:/workspaces/api-repo/{physical_worktree.name}:rw" not in command
         assert not any(".env" in argument for argument in command)
+        assert command[command.index("localhost/preview:latest") - 1] == "--"
+        assert module.SAFE_NAME.fullmatch("--privileged") is None
 
         (physical_worktree / "storage").rmdir()
         try:

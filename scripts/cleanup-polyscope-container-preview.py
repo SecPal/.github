@@ -23,6 +23,13 @@ def load_rollout(path: pathlib.Path):
     return module
 
 
+def resolve_existing(path: pathlib.Path) -> pathlib.Path | None:
+    try:
+        return path.resolve(strict=True)
+    except OSError:
+        return None
+
+
 def cleanup(
     db_path: pathlib.Path,
     clone_root: pathlib.Path,
@@ -41,7 +48,7 @@ def cleanup(
             str(repository_id)
             for repository_id, source_path in repository_rows
             if pathlib.Path(str(source_path)).is_absolute()
-            and pathlib.Path(str(source_path)).resolve(strict=True) == api_source
+            and resolve_existing(pathlib.Path(str(source_path))) == api_source
         ]
         if len(canonical_ids) != 1:
             raise RuntimeError(
