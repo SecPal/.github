@@ -11,6 +11,7 @@ human-readable `gh` output is parsed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from collections import deque
@@ -42,18 +43,19 @@ CLAIM_PAGE_SIZE = 50
 # operational failure of the invocation.
 UNRESOLVED_ERROR_TYPES = frozenset({"NOT_FOUND", "FORBIDDEN"})
 
-_REFERENCE_FIELDS = "number repository { nameWithOwner }"
+_REFERENCE_FIELDS = "id number repository { id nameWithOwner }"
 
 ISSUE_QUERY = f"""query WorkGraphIssue($owner: String!, $name: String!, $number: Int!) {{
   repository(owner: $owner, name: $name) {{
     issue(number: $number) {{
+      id
       number
       title
       url
       state
       stateReason
       body
-      repository {{ nameWithOwner }}
+      repository {{ id nameWithOwner }}
       parent {{ {_REFERENCE_FIELDS} }}
       labels(first: {LABEL_PAGE_SIZE}) {{
         pageInfo {{ hasNextPage endCursor }}
@@ -67,7 +69,11 @@ ISSUE_QUERY = f"""query WorkGraphIssue($owner: String!, $name: String!, $number:
         pageInfo {{ hasNextPage endCursor }}
         nodes {{ {_REFERENCE_FIELDS} }}
       }}
-      blocking(first: 1) {{ totalCount }}
+      blocking(first: {DEPENDENCY_PAGE_SIZE}) {{
+        totalCount
+        pageInfo {{ hasNextPage endCursor }}
+        nodes {{ {_REFERENCE_FIELDS} }}
+      }}
       closedByPullRequestsReferences(first: {CLAIM_PAGE_SIZE}, includeClosedPrs: false) {{
         pageInfo {{ hasNextPage endCursor }}
         nodes {{
@@ -104,6 +110,7 @@ _CLAIM_SELECTION = "number url state author { login } repository { nameWithOwner
 PAGE_QUERIES: Mapping[str, str] = {
     "subIssues": _page_query("WorkGraphSubIssues", "subIssues", SUB_ISSUE_PAGE_SIZE, _REFERENCE_FIELDS),
     "blockedBy": _page_query("WorkGraphBlockedBy", "blockedBy", DEPENDENCY_PAGE_SIZE, _REFERENCE_FIELDS),
+    "blocking": _page_query("WorkGraphBlocking", "blocking", DEPENDENCY_PAGE_SIZE, _REFERENCE_FIELDS),
     "labels": _page_query("WorkGraphLabels", "labels", LABEL_PAGE_SIZE, "name"),
     "closedByPullRequestsReferences": _page_query(
         "WorkGraphClaims",
@@ -151,8 +158,8 @@ class GraphQLResponse:
 
 
 @dataclass
-class GitHubReadAdapter:
-    """Runs read-only GraphQL documents through the `gh` CLI."""
+class GitHubGraphQLAdapter:
+    """Runs one structured GraphQL document through authenticated ``gh``."""
 
     gh_executable: str = "gh"
     timeout: float = DEFAULT_TIMEOUT_SECONDS
@@ -190,6 +197,11 @@ class GitHubReadAdapter:
         if fatal:
             raise GitHubError("; ".join(str(error.get("message", error)) for error in fatal))
         return GraphQLResponse(body.get("data"), errors)
+
+
+@dataclass
+class GitHubReadAdapter(GitHubGraphQLAdapter):
+    """The canonical read-only work-graph boundary."""
 
     def viewer_login(self) -> str:
         """Resolve the invocation-context executor identity from `gh` authentication."""
@@ -351,11 +363,15 @@ def _fetch(
         claims, claims_observable = (), False
 
     state_reason = issue.get("stateReason")
+    body = str(issue.get("body") or "")
     node = Node(
         repository=str((issue.get("repository") or {}).get("nameWithOwner") or repository),
         number=int(issue.get("number", number)),
+        node_id=str(issue.get("id") or ""),
+        repository_id=str((issue.get("repository") or {}).get("id") or ""),
         title=str(issue.get("title") or ""),
         url=str(issue.get("url") or ""),
+        body_digest=hashlib.sha256(body.encode()).hexdigest(),
         state=OPEN if str(issue.get("state", "")).upper() == "OPEN" else CLOSED,
         state_reason=str(state_reason).lower() if state_reason else None,
         parent=_reference(issue.get("parent")),
@@ -364,33 +380,39 @@ def _fetch(
         children_observable="subIssues" in required_connections,
         blocked_by=relationships.get("blockedBy", ()),
         dependencies_observable="blockedBy" in required_connections,
+        blocking=relationships.get("blocking", ()),
+        blocking_observable="blocking" in required_connections,
         blocking_count=int((issue.get("blocking") or {}).get("totalCount") or 0),
         priority_labels=tuple(sorted(label for label in labels if label in PRIORITY_RANKS)),
         priority_labels_observable=priority_labels_observable,
         claims=claims,
         claims_observable=claims_observable,
     )
-    return Fetched(node.key, node, issue.get("body") or "")
+    return Fetched(node.key, node, body)
 
 
 SCOPE = "scope"
 ANCESTOR = "ancestor"
 DEPENDENCY = "dependency"
+MUTATION_TARGET = "mutation_target"
 
 
-def _required_connections(mode: str) -> tuple[str, ...]:
+def _required_connections(mode: str, include_reverse_dependencies: bool = False) -> tuple[str, ...]:
     if mode == SCOPE:
-        return REQUIRED_CONNECTIONS
+        return REQUIRED_CONNECTIONS + (("blocking",) if include_reverse_dependencies else ())
     if mode == DEPENDENCY:
         return ("blockedBy",)
+    if mode == MUTATION_TARGET:
+        return ("blockedBy", "blocking")
     return ()
 
 
-def _needs_upgrade(node: Node, mode: str) -> bool:
-    required = _required_connections(mode)
+def _needs_upgrade(node: Node, mode: str, include_reverse_dependencies: bool = False) -> bool:
+    required = _required_connections(mode, include_reverse_dependencies)
     return (
         ("subIssues" in required and not node.children_observable)
         or ("blockedBy" in required and not node.dependencies_observable)
+        or ("blocking" in required and not node.blocking_observable)
     )
 
 
@@ -404,6 +426,8 @@ def _merge_node(existing: Node, upgraded: Node) -> Node:
         children_observable=existing.children_observable or upgraded.children_observable,
         blocked_by=upgraded.blocked_by if upgraded.dependencies_observable else existing.blocked_by,
         dependencies_observable=existing.dependencies_observable or upgraded.dependencies_observable,
+        blocking=upgraded.blocking if upgraded.blocking_observable else existing.blocking,
+        blocking_observable=existing.blocking_observable or upgraded.blocking_observable,
         priority_labels=(
             upgraded.priority_labels
             if upgraded.priority_labels_observable
@@ -423,6 +447,7 @@ def load_snapshot(
     *,
     node_executable: str = "node",
     parser_environment: Mapping[str, str] | None = None,
+    include_reverse_dependencies: bool = False,
 ) -> tuple[Snapshot, str]:
     """Collect one immutable snapshot for ``scope_root``.
 
@@ -449,13 +474,19 @@ def load_snapshot(
             continue
 
         cached = fetched.get(key)
-        if cached is None or (cached.resolved and _needs_upgrade(cached, mode)):
+        if cached is None or (
+            cached.resolved and _needs_upgrade(cached, mode, include_reverse_dependencies)
+        ):
             if cached is None and len(fetched) >= adapter.max_nodes:
                 raise GitHubError(
                     f"graph exceeds the configured budget of {adapter.max_nodes} issues; "
                     "narrow the scope root"
                 )
-            result = _fetch(adapter, requested, required_connections=_required_connections(mode))
+            result = _fetch(
+                adapter,
+                requested,
+                required_connections=_required_connections(mode, include_reverse_dependencies),
+            )
             key, node = result.canonical_key, result.node
             if key != requested:
                 canonical[requested] = key
@@ -483,7 +514,13 @@ def load_snapshot(
             pending.extend((target, DEPENDENCY) for target in node.blocked_by)
             if node.parent:
                 pending.append((node.parent, ANCESTOR))
+            if include_reverse_dependencies:
+                pending.extend((target, MUTATION_TARGET) for target in node.blocking)
         elif mode == ANCESTOR:
+            if node.parent:
+                pending.append((node.parent, ANCESTOR))
+        elif mode == MUTATION_TARGET:
+            pending.extend((target, DEPENDENCY) for target in node.blocked_by)
             if node.parent:
                 pending.append((node.parent, ANCESTOR))
         else:

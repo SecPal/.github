@@ -9,6 +9,26 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-25 - Add Bounded Work-Graph Replanning
+
+**Added:**
+
+- an authenticated plan/apply command that classifies implementation
+  discoveries, creates canonically owned issues, inserts prerequisites, and
+  promotes multi-contract leaves through exact GitHub-native relationships
+- stale-state, actor, planned-cycle, unrelated-relationship, and post-mutation
+  validation guards for every bounded replanning operation
+- signer-bound, Git-GC-durable partial-mutation recovery evidence with an
+  authenticated baseline and exact created-issue postconditions, preventing
+  blind replay while safely continuing a verified known prefix
+
+**Changed:**
+
+- managed Polyscope instructions now require the native graph change to land
+  before implementation expands beyond the current delivery contract
+
+---
+
 ## 2026-08-24 - Reconcile Internal Database Service Domain Policy
 
 **Changed:**
