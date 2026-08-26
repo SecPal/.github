@@ -13,6 +13,7 @@ NETWORK="${POLYSCOPE_PREVIEW_NETWORK:-polyscope-preview-db}"
 PREVIEW_PORT="${POLYSCOPE_PREVIEW_PORT:-18080}"
 POSTGRES_SOCKET="${POLYSCOPE_POSTGRES_SOCKET:-/var/run/postgresql/.s.PGSQL.5432}"
 CLONE_ROOT="${POLYSCOPE_CLONE_ROOT:-$HOME/.polyscope/clones}"
+REPOSITORY_ROOT="${POLYSCOPE_REPOSITORY_ROOT:-$HOME/.polyscope/repos/SecPal}"
 CADDYFILE="${POLYSCOPE_PREVIEW_CADDYFILE:-$HOME/.config/polyscope-preview/Caddyfile}"
 POLYSCOPE_DB_PATH="${POLYSCOPE_DB_PATH:-$HOME/.polyscope/polyscope.db}"
 BIN_DIR="${POLYSCOPE_BIN_DIR:-$HOME/.local/bin}"
@@ -48,7 +49,7 @@ if [[ ! "$NETWORK" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     echo "Error: network name contains unsupported characters." >&2
     exit 1
 fi
-for path_name in POSTGRES_SOCKET CLONE_ROOT CADDYFILE POLYSCOPE_DB_PATH BIN_DIR LIBEXEC_DIR UNIT_DIR; do
+for path_name in POSTGRES_SOCKET CLONE_ROOT REPOSITORY_ROOT CADDYFILE POLYSCOPE_DB_PATH BIN_DIR LIBEXEC_DIR UNIT_DIR; do
     path_value="${!path_name}"
     if [[ ! "$path_value" =~ ^/[A-Za-z0-9._/+-]+$ ]]; then
         echo "Error: $path_name must be an absolute path containing only supported characters." >&2
@@ -72,6 +73,10 @@ if [[ ! -S "$POSTGRES_SOCKET" ]]; then
 fi
 if [[ ! -d "$CLONE_ROOT" ]]; then
     echo "Error: Polyscope clone root is unavailable: $CLONE_ROOT" >&2
+    exit 1
+fi
+if [[ ! -d "$REPOSITORY_ROOT" ]]; then
+    echo "Error: canonical SecPal repository root is unavailable: $REPOSITORY_ROOT" >&2
     exit 1
 fi
 
@@ -103,7 +108,30 @@ trap 'rm -rf "$temporary_dir"' EXIT
 python3 "$RENDERER_SOURCE" \
     --db-path "$POLYSCOPE_DB_PATH" \
     --container-root /workspaces \
+    --clone-root "$CLONE_ROOT" \
+    --repository-root "$REPOSITORY_ROOT" \
     --output "$temporary_dir/Caddyfile"
+
+network_preexisting=0
+if podman network exists "$NETWORK"; then
+    network_preexisting=1
+    network_owner="$(podman network inspect "$NETWORK" --format '{{ index .Labels "io.secpal.polyscope.preview" }}')"
+    if [[ "$network_owner" != true ]]; then
+        echo "Error: refusing unmanaged pre-existing Podman network: $NETWORK" >&2
+        exit 1
+    fi
+    attached_containers="$(podman network inspect "$NETWORK" --format '{{ range .Containers }}{{ .Name }}{{ "\n" }}{{ end }}')"
+    while IFS= read -r attached_container; do
+        [[ -z "$attached_container" ]] && continue
+        case "$attached_container" in
+            polyscope-postgresql-proxy|polyscope-preview) ;;
+            *)
+                echo "Error: refusing preview network with foreign container: $attached_container" >&2
+                exit 1
+                ;;
+        esac
+    done <<<"$attached_containers"
+fi
 
 cat >"$temporary_dir/php" <<EOF
 #!/bin/sh
@@ -115,7 +143,7 @@ exec podman run --rm \\
   -e DB_HOST=polyscope-postgresql-proxy \\
   -e DB_PORT=5432 \\
   -v "\$PWD":/app:rw \\
-  -v '$CLONE_ROOT':'$CLONE_ROOT':rw \\
+  -v '$CLONE_ROOT':'$CLONE_ROOT':ro \\
   --workdir /app \\
   '$IMAGE' php "\$@"
 EOF
@@ -127,7 +155,7 @@ export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
 exec podman run --rm \\
   -v "\$PWD":/app:rw \\
-  -v '$CLONE_ROOT':'$CLONE_ROOT':rw \\
+  -v '$CLONE_ROOT':'$CLONE_ROOT':ro \\
   --workdir /app \\
   --entrypoint composer \\
   '$IMAGE' "\$@"
@@ -142,7 +170,7 @@ ConditionPathIsSocket=$POSTGRES_SOCKET
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v %h/.local/libexec/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
+ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
 ExecStop=/usr/bin/podman stop -t 10 polyscope-postgresql-proxy
 Restart=on-failure
 RestartSec=3
@@ -163,7 +191,7 @@ Requires=polyscope-postgresql-proxy.service
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=/usr/bin/podman run --replace --rm --name polyscope-preview --network $NETWORK -e DB_HOST=polyscope-postgresql-proxy -e DB_PORT=5432 -p 127.0.0.1:$PREVIEW_PORT:18080 -v $CADDYFILE:/etc/frankenphp/Caddyfile:ro -v $CLONE_ROOT:/workspaces:rw -v $CLONE_ROOT:$CLONE_ROOT:rw --entrypoint /usr/local/bin/frankenphp $IMAGE run --config /etc/frankenphp/Caddyfile --adapter caddyfile
+ExecStart=/usr/bin/podman run --replace --rm --name polyscope-preview --network $NETWORK -e DB_HOST=polyscope-postgresql-proxy -e DB_PORT=5432 -p 127.0.0.1:$PREVIEW_PORT:18080 -v $CADDYFILE:/etc/frankenphp/Caddyfile:ro -v $CLONE_ROOT:/workspaces:ro -v $CLONE_ROOT:$CLONE_ROOT:ro --entrypoint /usr/local/bin/frankenphp $IMAGE run --config /etc/frankenphp/Caddyfile --adapter caddyfile
 ExecStop=/usr/bin/podman stop -t 10 polyscope-preview
 Restart=always
 RestartSec=3
@@ -174,8 +202,10 @@ EOF
 
 install -d -m 0755 "$BIN_DIR" "$LIBEXEC_DIR" "$UNIT_DIR"
 install -d -m 0700 "$(dirname -- "$CADDYFILE")"
-backup_dir="$HOME/.local/state/polyscope/backups/$(date -u +%Y%m%dT%H%M%SZ)-container-preview"
-install -d -m 0700 "$backup_dir"
+backup_parent="$HOME/.local/state/polyscope/backups"
+install -d -m 0700 "$backup_parent"
+backup_dir="$(mktemp -d "$backup_parent/$(date -u +%Y%m%dT%H%M%SZ)-container-preview.XXXXXX")"
+chmod 0700 "$backup_dir"
 
 backup_target() {
     local target="$1"
@@ -219,6 +249,23 @@ proxy_unit_target="$UNIT_DIR/polyscope-postgresql-proxy.service"
 preview_unit_target="$UNIT_DIR/polyscope-preview.service"
 caddyfile_target="$CADDYFILE"
 
+proxy_was_enabled=0
+proxy_was_active=0
+preview_was_enabled=0
+preview_was_active=0
+if systemctl --user is-enabled --quiet polyscope-postgresql-proxy.service; then
+    proxy_was_enabled=1
+fi
+if systemctl --user is-active --quiet polyscope-postgresql-proxy.service; then
+    proxy_was_active=1
+fi
+if systemctl --user is-enabled --quiet polyscope-preview.service; then
+    preview_was_enabled=1
+fi
+if systemctl --user is-active --quiet polyscope-preview.service; then
+    preview_was_active=1
+fi
+
 backup_target "$proxy_target" proxy.py
 backup_target "$renderer_target" renderer.py
 backup_target "$php_target" php
@@ -238,8 +285,26 @@ rollback() {
     restore_target "$preview_unit_target" preview.service
     restore_target "$caddyfile_target" Caddyfile
     systemctl --user daemon-reload >/dev/null 2>&1 || true
-    systemctl --user restart polyscope-postgresql-proxy.service >/dev/null 2>&1 || true
-    systemctl --user restart polyscope-preview.service >/dev/null 2>&1 || true
+    if [[ "$proxy_was_enabled" -eq 1 ]]; then
+        systemctl --user enable polyscope-postgresql-proxy.service >/dev/null 2>&1 || true
+    else
+        systemctl --user disable polyscope-postgresql-proxy.service >/dev/null 2>&1 || true
+    fi
+    if [[ "$proxy_was_active" -eq 1 ]]; then
+        systemctl --user start polyscope-postgresql-proxy.service >/dev/null 2>&1 || true
+    else
+        systemctl --user stop polyscope-postgresql-proxy.service >/dev/null 2>&1 || true
+    fi
+    if [[ "$preview_was_enabled" -eq 1 ]]; then
+        systemctl --user enable polyscope-preview.service >/dev/null 2>&1 || true
+    else
+        systemctl --user disable polyscope-preview.service >/dev/null 2>&1 || true
+    fi
+    if [[ "$preview_was_active" -eq 1 ]]; then
+        systemctl --user start polyscope-preview.service >/dev/null 2>&1 || true
+    else
+        systemctl --user stop polyscope-preview.service >/dev/null 2>&1 || true
+    fi
     if [[ "$network_created" -eq 1 ]]; then
         podman network rm "$NETWORK" >/dev/null 2>&1 || true
     fi
@@ -248,8 +313,8 @@ rollback() {
 }
 trap rollback ERR
 
-if ! podman network exists "$NETWORK"; then
-    podman network create "$NETWORK" >/dev/null
+if [[ "$network_preexisting" -eq 0 ]]; then
+    podman network create --label io.secpal.polyscope.preview=true "$NETWORK" >/dev/null
     network_created=1
 fi
 

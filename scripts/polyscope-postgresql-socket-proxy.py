@@ -59,6 +59,7 @@ def relay(client: socket.socket, upstream_path: pathlib.Path) -> None:
                     try:
                         destination.shutdown(socket.SHUT_WR)
                     except OSError:
+                        # The peer may already have closed its write side.
                         pass
         finally:
             selector.close()

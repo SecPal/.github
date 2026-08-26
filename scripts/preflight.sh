@@ -386,6 +386,20 @@ fi
 
 python3 -m unittest tests/polyscope-work-graph-advisory.py
 
+for preview_test in \
+  tests/polyscope-postgresql-socket-proxy.py \
+  tests/render-polyscope-container-caddy.py \
+  tests/install-polyscope-container-preview.py; do
+  if [ -f "$preview_test" ]; then
+    python3 "$preview_test" || {
+      echo "" >&2
+      echo "❌ Polyscope container-preview regression test failed: $preview_test" >&2
+      echo "Keep the preview router, database bridge, and installer fail-closed." >&2
+      exit 1
+    }
+  fi
+done
+
 if [ -f tests/polyscope-clone-reaper.sh ]; then
   bash tests/polyscope-clone-reaper.sh || {
     echo "" >&2
