@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import sqlite3
 import tempfile
@@ -41,13 +42,27 @@ def main() -> None:
             (repository_root / repository_name).mkdir(parents=True)
 
         worktrees = {
-            "api": ("api-repo_1", "calm-otter", "public"),
-            "frontend": ("Frontend_2", "calm-otter", "dist"),
-            "GuardGuide": ("guardguide-3", "patient-fox", "public"),
-            "guardguide.de": ("guardguide_de_4", "patient-fox", "dist"),
+            "api": ("api-repo_1", "calm-otter", "calm-otter-a1b2c3d4", "public"),
+            "frontend": ("Frontend_2", "calm-otter", "calm-otter-e5f6a7b8", "dist"),
+            "GuardGuide": ("guardguide-3", "patient-fox", "patient-fox-11223344", "public"),
+            "guardguide.de": (
+                "guardguide_de_4",
+                "patient-fox",
+                "patient-fox-55667788",
+                "dist",
+            ),
         }
-        for repository_name, (repository_id, workspace, document_root) in worktrees.items():
-            (clone_root / repository_id / workspace / document_root).mkdir(parents=True)
+        for repository_name, (
+            repository_id,
+            workspace,
+            physical_workspace,
+            document_root,
+        ) in worktrees.items():
+            repository_clone_root = clone_root / repository_id
+            (repository_clone_root / physical_workspace / document_root).mkdir(parents=True)
+            (repository_clone_root / ".polyscope-secpal-workspace-aliases.json").write_text(
+                json.dumps({"version": 1, "aliases": {workspace: physical_workspace}})
+            )
 
         db_path = root / "polyscope #1.db"
         with sqlite3.connect(db_path) as connection:
@@ -57,7 +72,12 @@ def main() -> None:
             connection.execute(
                 "create table worktrees (id text primary key, repo_id text not null, path text not null, status text not null)"
             )
-            for repository_name, (repository_id, workspace, _document_root) in worktrees.items():
+            for repository_name, (
+                repository_id,
+                _workspace,
+                physical_workspace,
+                _document_root,
+            ) in worktrees.items():
                 connection.execute(
                     "insert into repositories (id, name, path) values (?, ?, ?)",
                     (
@@ -71,7 +91,7 @@ def main() -> None:
                     (
                         f"worktree-{repository_id}",
                         repository_id,
-                        str(clone_root / repository_id / workspace),
+                        str(clone_root / repository_id / physical_workspace),
                     ),
                 )
             inactive = clone_root / "api-repo_1/inactive-wolf/public"
@@ -93,8 +113,10 @@ def main() -> None:
         assert "guardguide-de-patient-fox.preview.secpal.dev" in rendered
         assert "inactive-wolf" not in rendered
         assert "{re." not in rendered
-        assert "root * /workspaces/api-repo_1/calm-otter/public" in rendered
-        assert "root * /workspaces/Frontend_2/calm-otter/dist" in rendered
+        assert "api-calm-otter-a1b2c3d4.preview.secpal.dev" not in rendered
+        assert "frontend-calm-otter-e5f6a7b8.preview.secpal.dev" not in rendered
+        assert "root * /workspaces/api-repo_1/calm-otter-a1b2c3d4/public" in rendered
+        assert "root * /workspaces/Frontend_2/calm-otter-e5f6a7b8/dist" in rendered
         assert "@non_front_controller_php_1 {" in rendered
         assert "not path /index.php" in rendered
         assert 'respond @non_front_controller_php_1 "Not found" 404' in rendered
@@ -120,7 +142,38 @@ def main() -> None:
         with sqlite3.connect(db_path) as connection:
             connection.execute("delete from repositories where id = 'duplicate'")
 
-        escaping_link = clone_root / "api-repo_1/calm-otter/public/leak"
+        alias_registry = clone_root / "api-repo_1/.polyscope-secpal-workspace-aliases.json"
+        alias_registry.write_text(json.dumps({"version": 1, "aliases": {}}))
+        expect_runtime_error(
+            lambda: module.render(
+                db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+            ),
+            "exactly one canonical Polyscope workspace alias",
+        )
+        alias_registry.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "aliases": {
+                        "calm-otter": "calm-otter-a1b2c3d4",
+                        "other-otter": "calm-otter-a1b2c3d4",
+                    },
+                }
+            )
+        )
+        expect_runtime_error(
+            lambda: module.render(
+                db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+            ),
+            "exactly one canonical Polyscope workspace alias",
+        )
+        alias_registry.write_text(
+            json.dumps(
+                {"version": 1, "aliases": {"calm-otter": "calm-otter-a1b2c3d4"}}
+            )
+        )
+
+        escaping_link = clone_root / "api-repo_1/calm-otter-a1b2c3d4/public/leak"
         escaping_link.symlink_to(pathlib.Path("../.env"))
         expect_runtime_error(
             lambda: module.render(

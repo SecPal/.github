@@ -4977,6 +4977,12 @@ def reconcile_api_runtime_units(
                 check=True,
                 env=systemctl_env,
             )
+        if stale_names:
+            systemctl_runner(
+                ["systemctl", "--user", "reset-failed", *sorted(stale_names)],
+                check=True,
+                env=systemctl_env,
+            )
         if desired_names:
             systemctl_runner(
                 ["systemctl", "--user", "enable", *sorted(desired_names)],

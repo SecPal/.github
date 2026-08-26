@@ -581,6 +581,15 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 [
                     "systemctl",
                     "--user",
+                    "reset-failed",
+                    *sorted((stale_unit.name, stale_link.name)),
+                ],
+                commands,
+            )
+            self.assertIn(
+                [
+                    "systemctl",
+                    "--user",
                     "enable",
                     *sorted(desired),
                 ],

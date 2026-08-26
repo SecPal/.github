@@ -8,6 +8,9 @@ umask 077
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROXY_SOURCE="$SCRIPT_DIR/polyscope-postgresql-socket-proxy.py"
 RENDERER_SOURCE="$SCRIPT_DIR/render-polyscope-container-caddy.py"
+REFRESH_SOURCE="$SCRIPT_DIR/refresh-polyscope-container-preview.sh"
+RUNNER_SOURCE="$SCRIPT_DIR/run-polyscope-container-preview.py"
+CLEANUP_SOURCE="$SCRIPT_DIR/cleanup-polyscope-container-preview.py"
 IMAGE="${POLYSCOPE_PREVIEW_IMAGE:-localhost/secpal-polyscope-api-toolchain:php84}"
 NETWORK="${POLYSCOPE_PREVIEW_NETWORK:-polyscope-preview-db}"
 PREVIEW_PORT="${POLYSCOPE_PREVIEW_PORT:-18080}"
@@ -61,7 +64,7 @@ if [[ ! "$PREVIEW_PORT" =~ ^[0-9]+$ || "$PREVIEW_PORT" -lt 1 || "$PREVIEW_PORT" 
     exit 1
 fi
 
-for required_file in "$PROXY_SOURCE" "$RENDERER_SOURCE" "$POSTGRES_SOCKET" "$POLYSCOPE_DB_PATH"; do
+for required_file in "$PROXY_SOURCE" "$RENDERER_SOURCE" "$REFRESH_SOURCE" "$RUNNER_SOURCE" "$CLEANUP_SOURCE" "$POSTGRES_SOCKET" "$POLYSCOPE_DB_PATH"; do
     if [[ ! -e "$required_file" ]]; then
         echo "Error: required runtime input is missing: $required_file" >&2
         exit 1
@@ -115,7 +118,7 @@ python3 "$RENDERER_SOURCE" \
 network_preexisting=0
 if podman network exists "$NETWORK"; then
     network_preexisting=1
-    network_owner="$(podman network inspect "$NETWORK" --format '{{ index .Labels "io.secpal.polyscope.preview" }}')"
+    network_owner="$(podman network inspect "$NETWORK" --format '{{ index .Labels "preview.secpal.dev/managed" }}')"
     if [[ "$network_owner" != true ]]; then
         echo "Error: refusing unmanaged pre-existing Podman network: $NETWORK" >&2
         exit 1
@@ -191,10 +194,36 @@ Requires=polyscope-postgresql-proxy.service
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=/usr/bin/podman run --replace --rm --name polyscope-preview --network $NETWORK -e DB_HOST=polyscope-postgresql-proxy -e DB_PORT=5432 -p 127.0.0.1:$PREVIEW_PORT:18080 -v $CADDYFILE:/etc/frankenphp/Caddyfile:ro -v $CLONE_ROOT:/workspaces:ro -v $CLONE_ROOT:$CLONE_ROOT:ro --entrypoint /usr/local/bin/frankenphp $IMAGE run --config /etc/frankenphp/Caddyfile --adapter caddyfile
+ExecStart=$LIBEXEC_DIR/run-polyscope-container-preview.py --renderer $LIBEXEC_DIR/render-polyscope-container-caddy.py --db-path $POLYSCOPE_DB_PATH --clone-root $CLONE_ROOT --repository-root $REPOSITORY_ROOT --caddyfile $CADDYFILE --image $IMAGE --network $NETWORK --preview-port $PREVIEW_PORT
 ExecStop=/usr/bin/podman stop -t 10 polyscope-preview
 Restart=always
 RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+
+cat >"$temporary_dir/polyscope-preview-refresh.service" <<EOF
+[Unit]
+Description=Refresh SecPal Polyscope workspace preview routes
+After=polyscope-preview.service
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+ExecStart=$LIBEXEC_DIR/refresh-polyscope-container-preview.sh $LIBEXEC_DIR/render-polyscope-container-caddy.py $LIBEXEC_DIR/cleanup-polyscope-container-preview.py $POLYSCOPE_DB_PATH $CLONE_ROOT $REPOSITORY_ROOT $CADDYFILE polyscope-preview.service
+TimeoutStartSec=21min
+UMask=0077
+EOF
+
+cat >"$temporary_dir/polyscope-preview-refresh.path" <<EOF
+[Unit]
+Description=Watch Polyscope workspace registry for preview route changes
+
+[Path]
+PathChanged=$POLYSCOPE_DB_PATH
+Unit=polyscope-preview-refresh.service
 
 [Install]
 WantedBy=default.target
@@ -243,16 +272,23 @@ restore_target() {
 
 proxy_target="$LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py"
 renderer_target="$LIBEXEC_DIR/render-polyscope-container-caddy.py"
+refresh_target="$LIBEXEC_DIR/refresh-polyscope-container-preview.sh"
+runner_target="$LIBEXEC_DIR/run-polyscope-container-preview.py"
+cleanup_target="$LIBEXEC_DIR/cleanup-polyscope-container-preview.py"
 php_target="$BIN_DIR/php"
 composer_target="$BIN_DIR/composer"
 proxy_unit_target="$UNIT_DIR/polyscope-postgresql-proxy.service"
 preview_unit_target="$UNIT_DIR/polyscope-preview.service"
+refresh_unit_target="$UNIT_DIR/polyscope-preview-refresh.service"
+refresh_path_target="$UNIT_DIR/polyscope-preview-refresh.path"
 caddyfile_target="$CADDYFILE"
 
 proxy_was_enabled=0
 proxy_was_active=0
 preview_was_enabled=0
 preview_was_active=0
+refresh_path_was_enabled=0
+refresh_path_was_active=0
 if systemctl --user is-enabled --quiet polyscope-postgresql-proxy.service; then
     proxy_was_enabled=1
 fi
@@ -265,13 +301,24 @@ fi
 if systemctl --user is-active --quiet polyscope-preview.service; then
     preview_was_active=1
 fi
+if systemctl --user is-enabled --quiet polyscope-preview-refresh.path; then
+    refresh_path_was_enabled=1
+fi
+if systemctl --user is-active --quiet polyscope-preview-refresh.path; then
+    refresh_path_was_active=1
+fi
 
 backup_target "$proxy_target" proxy.py
 backup_target "$renderer_target" renderer.py
+backup_target "$refresh_target" refresh.sh
+backup_target "$runner_target" runner.py
+backup_target "$cleanup_target" cleanup.py
 backup_target "$php_target" php
 backup_target "$composer_target" composer
 backup_target "$proxy_unit_target" postgresql-proxy.service
 backup_target "$preview_unit_target" preview.service
+backup_target "$refresh_unit_target" preview-refresh.service
+backup_target "$refresh_path_target" preview-refresh.path
 backup_target "$caddyfile_target" Caddyfile
 
 rollback() {
@@ -279,10 +326,15 @@ rollback() {
     trap - ERR
     restore_target "$proxy_target" proxy.py
     restore_target "$renderer_target" renderer.py
+    restore_target "$refresh_target" refresh.sh
+    restore_target "$runner_target" runner.py
+    restore_target "$cleanup_target" cleanup.py
     restore_target "$php_target" php
     restore_target "$composer_target" composer
     restore_target "$proxy_unit_target" postgresql-proxy.service
     restore_target "$preview_unit_target" preview.service
+    restore_target "$refresh_unit_target" preview-refresh.service
+    restore_target "$refresh_path_target" preview-refresh.path
     restore_target "$caddyfile_target" Caddyfile
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     if [[ "$proxy_was_enabled" -eq 1 ]]; then
@@ -305,6 +357,16 @@ rollback() {
     else
         systemctl --user stop polyscope-preview.service >/dev/null 2>&1 || true
     fi
+    if [[ "$refresh_path_was_enabled" -eq 1 ]]; then
+        systemctl --user enable polyscope-preview-refresh.path >/dev/null 2>&1 || true
+    else
+        systemctl --user disable polyscope-preview-refresh.path >/dev/null 2>&1 || true
+    fi
+    if [[ "$refresh_path_was_active" -eq 1 ]]; then
+        systemctl --user start polyscope-preview-refresh.path >/dev/null 2>&1 || true
+    else
+        systemctl --user stop polyscope-preview-refresh.path >/dev/null 2>&1 || true
+    fi
     if [[ "$network_created" -eq 1 ]]; then
         podman network rm "$NETWORK" >/dev/null 2>&1 || true
     fi
@@ -314,23 +376,32 @@ rollback() {
 trap rollback ERR
 
 if [[ "$network_preexisting" -eq 0 ]]; then
-    podman network create --label io.secpal.polyscope.preview=true "$NETWORK" >/dev/null
+    podman network create --label preview.secpal.dev/managed=true "$NETWORK" >/dev/null
     network_created=1
 fi
 
 install_managed "$PROXY_SOURCE" "$proxy_target" 0755
 install_managed "$RENDERER_SOURCE" "$renderer_target" 0755
+install_managed "$REFRESH_SOURCE" "$refresh_target" 0755
+install_managed "$RUNNER_SOURCE" "$runner_target" 0755
+install_managed "$CLEANUP_SOURCE" "$cleanup_target" 0755
 install_managed "$temporary_dir/Caddyfile" "$caddyfile_target" 0600
 install_managed "$temporary_dir/php" "$php_target" 0755
 install_managed "$temporary_dir/composer" "$composer_target" 0755
 install_managed "$temporary_dir/polyscope-postgresql-proxy.service" "$proxy_unit_target" 0644
 install_managed "$temporary_dir/polyscope-preview.service" "$preview_unit_target" 0644
+install_managed "$temporary_dir/polyscope-preview-refresh.service" "$refresh_unit_target" 0644
+install_managed "$temporary_dir/polyscope-preview-refresh.path" "$refresh_path_target" 0644
 
 systemctl --user daemon-reload
 systemctl --user enable --now polyscope-postgresql-proxy.service
 systemctl --user enable --now polyscope-preview.service
+systemctl --user enable --now polyscope-preview-refresh.path
+systemctl --user restart polyscope-postgresql-proxy.service
+systemctl --user restart polyscope-preview.service
 systemctl --user is-active --quiet polyscope-postgresql-proxy.service
 systemctl --user is-active --quiet polyscope-preview.service
+systemctl --user is-active --quiet polyscope-preview-refresh.path
 
 trap - ERR
 echo "Installed the Polyscope container preview runtime."
