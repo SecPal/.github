@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -829,6 +830,8 @@ def run_late_classification_origin_fixture(
     reviewed_thread_id: str,
     eligibility_thread_ids: Sequence[str],
     target_thread_id: str = "PRRT_LATE_ORIGIN_TARGET",
+    target_database_id: Any = 1001,
+    artifact_signer: mock.Mock | None = None,
 ) -> tuple[dict[str, Any], mock.Mock]:
     root = Path(directory)
     delivery = root / "delivery"
@@ -865,6 +868,9 @@ def run_late_classification_origin_fixture(
         head=attestation["head_sha"],
         comments=[("PRRC_LATE_ORIGIN_ROOT", body, None)],
     )
+    response["data"]["node"]["comments"]["nodes"][0]["databaseId"] = (
+        target_database_id
+    )
     github = FakeGh([response, response])
     def sign(
         artifact: dict[str, Any],
@@ -877,7 +883,7 @@ def run_late_classification_origin_fixture(
         )
         signature_output.write_text("fixture signature", encoding="utf-8")
 
-    signer = mock.Mock(side_effect=sign)
+    signer = artifact_signer or mock.Mock(side_effect=sign)
     with (
         mock.patch.object(MODULE, "_run_git", git),
         mock.patch.object(MODULE, "_run_gh", github),
@@ -908,6 +914,43 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_late_classification_rejects_missing_or_malformed_root_database_id(
+        self,
+    ) -> None:
+        signer = mock.Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "top-level comment database ID is unavailable",
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=(),
+                    target_database_id=None,
+                    artifact_signer=signer,
+                )
+        signer.assert_not_called()
+
+        for database_id in (0, -1, True, "1001"):
+            signer = mock.Mock()
+            with (
+                self.subTest(database_id=database_id),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "target thread comment identity is incomplete",
+                ):
+                    run_late_classification_origin_fixture(
+                        directory,
+                        reviewed_thread_id="PRRT_FINAL_KNOWN",
+                        eligibility_thread_ids=(),
+                        target_database_id=database_id,
+                        artifact_signer=signer,
+                    )
+                signer.assert_not_called()
+
     def test_cycle2_late_origin_rejects_preexisting_thread_omitted_from_eligibility(
         self,
     ) -> None:
@@ -3651,6 +3694,192 @@ class ResolveFixedThreadsTests(TestCase):
             "replyTo",
         ):
             self.assertIn(expected_fragment, query_argument)
+
+    def test_commit_bound_target_accepts_nullable_database_id(self) -> None:
+        thread_id = "PRRT_nullableDatabaseId"
+        comments = [("PRRC_nullableRoot", "Exact reviewed body.", None)]
+        response = target_response(thread_id, comments=comments)
+        response["data"]["node"]["comments"]["nodes"][0]["databaseId"] = None
+        fake = FakeGh([response])
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=False,
+            runner=fake,
+            reviewed_comments={thread_id: comments},
+        )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_commit_bound_target_rejects_malformed_database_id(self) -> None:
+        thread_id = "PRRT_malformedDatabaseId"
+        comments = [("PRRC_malformedRoot", "Exact reviewed body.", None)]
+        for database_id in (0, -1, True, "1001"):
+            with self.subTest(database_id=database_id):
+                response = target_response(thread_id, comments=comments)
+                response["data"]["node"]["comments"]["nodes"][0][
+                    "databaseId"
+                ] = database_id
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "target thread comment identity is incomplete",
+                ):
+                    resolve_threads(
+                        "SecPal/api",
+                        123,
+                        "a" * 40,
+                        [thread_id],
+                        apply=False,
+                        runner=FakeGh([response]),
+                        reviewed_comments={thread_id: comments},
+                    )
+
+    def test_late_ssh_signing_key_requires_regular_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            account_home = root / "account"
+            repository = root / "repository"
+            account_home.mkdir(mode=0o700)
+            repository.mkdir(mode=0o700)
+            (account_home / ".config").mkdir()
+            (account_home / ".gnupg").mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=account_home
+            )
+            regular_key = account_home / "key"
+            subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-f",
+                    str(regular_key),
+                ],
+                check=True,
+                env=environment,
+                capture_output=True,
+            )
+            fingerprint = subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-lf",
+                    f"{regular_key}.pub",
+                    "-E",
+                    "sha256",
+                ],
+                check=True,
+                env=environment,
+                capture_output=True,
+                text=True,
+            ).stdout.split()[1]
+            signer = MODULE.late_disposition.SignerIdentity("ssh", fingerprint)
+            key_alias = account_home / "key-alias"
+            key_alias.symlink_to(regular_key)
+            key_directory = account_home / "key-directory"
+            key_directory.mkdir(mode=0o700)
+            key_socket = account_home / "key-socket"
+            socket_handle = socket.socket(socket.AF_UNIX)
+            socket_handle.bind(str(key_socket))
+            key_socket.chmod(0o600)
+
+            def select(
+                path: Path,
+                repository_root: Path = repository,
+                *,
+                uid: int | None = None,
+            ) -> str:
+                with (
+                    mock.patch.object(
+                        MODULE.late_disposition,
+                        "read_signing_configuration",
+                        return_value=("ssh", str(path)),
+                    ),
+                    mock.patch.object(
+                        MODULE.late_disposition,
+                        "os_account_home",
+                        return_value=account_home,
+                    ),
+                ):
+                    if uid is None:
+                        return MODULE._late_signing_key(signer, repository_root)
+                    with mock.patch.object(MODULE.os, "getuid", return_value=uid):
+                        return MODULE._late_signing_key(signer, repository_root)
+
+            try:
+                for accepted in (regular_key, key_alias):
+                    with self.subTest(accepted=accepted.name):
+                        self.assertEqual(select(accepted), str(accepted))
+                for rejected in (key_directory, key_socket):
+                    with (
+                        self.subTest(rejected=rejected.name),
+                        self.assertRaisesRegex(
+                            MODULE.ResolutionError,
+                            "regular file",
+                        ),
+                    ):
+                        select(rejected)
+                output = account_home / "evidence"
+                output.mkdir(mode=0o700)
+                artifact = output / "artifact.json"
+                signature = output / "artifact.sig"
+                MODULE.late_disposition.sign_artifact(
+                    {"kind": "LATE_FEEDBACK_CLASSIFICATION"},
+                    artifact,
+                    signature,
+                    signer=signer,
+                    signing_key=str(regular_key),
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                )
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact,
+                    signature,
+                    signer,
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                )
+
+                delivery_repository = account_home / "delivery"
+                delivery_repository.mkdir(mode=0o700)
+                repository_key = delivery_repository / "key"
+                repository_key.write_bytes(b"fixture key")
+                repository_key.chmod(0o600)
+                with self.assertRaisesRegex(
+                        MODULE.ResolutionError,
+                        "OS-account controlled",
+                ):
+                    select(repository_key, delivery_repository)
+
+                for mode in (0o620, 0o602):
+                    regular_key.chmod(mode)
+                    with (
+                        self.subTest(mode=oct(mode)),
+                        self.assertRaisesRegex(
+                            MODULE.ResolutionError,
+                            "OS-account controlled",
+                        ),
+                    ):
+                        select(regular_key)
+                regular_key.chmod(0o600)
+                with self.assertRaisesRegex(
+                        MODULE.ResolutionError,
+                        "OS-account controlled",
+                ):
+                    select(regular_key, uid=os.getuid() + 1)
+            finally:
+                socket_handle.close()
 
     def test_apply_resolves_each_open_target_once(self) -> None:
         first = "PRRT_exampleOne"

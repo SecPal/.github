@@ -21,6 +21,7 @@ import json
 import operator
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1397,9 +1398,14 @@ def read_target_thread(
             if (
                 not isinstance(comment_id, str)
                 or not comment_id
-                or not isinstance(database_id, int)
-                or isinstance(database_id, bool)
-                or database_id < 1
+                or (
+                    database_id is not None
+                    and (
+                        not isinstance(database_id, int)
+                        or isinstance(database_id, bool)
+                        or database_id < 1
+                    )
+                )
                 or not isinstance(body, str)
                 or (
                     reply_to is not None
@@ -1645,6 +1651,10 @@ def _late_signing_key(signer: Any, resolved_root: Path) -> str:
             key_stat = resolved_key.stat()
         except (OSError, RuntimeError) as exc:
             raise ResolutionError("SSH signing key is unavailable") from exc
+        if not stat.S_ISREG(key_stat.st_mode):
+            raise ResolutionError(
+                "SSH signing key must resolve to a regular file"
+            )
         if (
             resolved_key == resolved_root
             or resolved_root in resolved_key.parents
@@ -1750,6 +1760,14 @@ def create_late_classification_artifact(
     if len(top_level) != 1 or target.thread.is_resolved:
         raise ResolutionError(
             f"late target must be one unresolved source conversation: {thread_id}"
+        )
+    if (
+        not isinstance(top_level[0].database_id, int)
+        or isinstance(top_level[0].database_id, bool)
+        or top_level[0].database_id < 1
+    ):
+        raise ResolutionError(
+            "late target top-level comment database ID is unavailable"
         )
     reply_digest, reply_count = _reply_state_digest(target.thread)
     artifact = {

@@ -345,6 +345,7 @@ ALLOWED_IMPORTS = {
         "import operator",
         "import os",
         "import re",
+        "import stat",
         "import subprocess",
         "import sys",
         "from dataclasses import dataclass",
