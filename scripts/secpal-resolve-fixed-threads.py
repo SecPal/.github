@@ -312,6 +312,7 @@ class ReviewedState:
     state_digest: str
     feedback_digest: str
     targets: dict[str, ExpectedThreadState]
+    thread_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -327,6 +328,20 @@ class ValidationEvidence:
 class EligibilityEvidence:
     evidence_digest: str
     canonical_payload: bytes
+    thread_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ParsedEligibility:
+    tracked_follow_ups: dict[str, FollowUpIdentity]
+    thread_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FinalFeedbackBoundary:
+    reviewed: ReviewedState
+    validation: ValidationEvidence
+    eligibility: EligibilityEvidence
 
 
 @dataclass(frozen=True)
@@ -704,6 +719,7 @@ def load_reviewed_state(
         payload = json.loads(
             path.read_text(encoding="utf-8"),
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
         )
     except (OSError, ValueError) as exc:
         raise ResolutionError(
@@ -781,7 +797,7 @@ def load_reviewed_state(
         )
 
     threads = payload["threads"]
-    indexed_threads: dict[str, dict[str, Any]] = {}
+    indexed_threads: dict[str, ExpectedThreadState] = {}
     for thread in threads:
         if (
             not isinstance(thread, dict)
@@ -799,15 +815,6 @@ def load_reviewed_state(
             or thread["node_id"] in indexed_threads
         ):
             raise ResolutionError("reviewed feedback thread state is malformed")
-        indexed_threads[thread["node_id"]] = thread
-
-    expected_targets: dict[str, ExpectedThreadState] = {}
-    for thread_id in thread_ids:
-        thread = indexed_threads.get(thread_id)
-        if thread is None:
-            raise ResolutionError(
-                f"target thread is absent from reviewed feedback: {thread_id}"
-            )
         comments: dict[str, ThreadCommentState] = {}
         for comment in thread["comments"]:
             if not isinstance(comment, dict):
@@ -833,19 +840,37 @@ def load_reviewed_state(
                 body_digest=body_digest,
                 reply_to_id=reply_to_id,
             )
-        expected_targets[thread_id] = ExpectedThreadState(
-            thread_id=thread_id,
+        if any(
+            comment.reply_to_id is not None
+            and (
+                comment.reply_to_id not in comments
+                or comments[comment.reply_to_id].reply_to_id is not None
+            )
+            for comment in comments.values()
+        ):
+            raise ResolutionError("reviewed target comment state is malformed")
+        indexed_threads[thread["node_id"]] = ExpectedThreadState(
+            thread_id=thread["node_id"],
             is_resolved=thread["is_resolved"],
             is_outdated=thread["is_outdated"],
             comments=tuple(
                 sorted(comments.values(), key=operator.attrgetter("comment_id"))
             ),
         )
+    expected_targets: dict[str, ExpectedThreadState] = {}
+    for thread_id in thread_ids:
+        thread = indexed_threads.get(thread_id)
+        if thread is None:
+            raise ResolutionError(
+                f"target thread is absent from reviewed feedback: {thread_id}"
+            )
+        expected_targets[thread_id] = thread
     return ReviewedState(
         head_sha=payload["head_sha"].lower(),
         state_digest=state_digest,
         feedback_digest=feedback_digest,
         targets=expected_targets,
+        thread_ids=frozenset(indexed_threads),
     )
 
 
@@ -1040,15 +1065,15 @@ def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any
     return value
 
 
-def _tracked_follow_ups_from_payload(
+def _parse_eligibility_payload(
     canonical_payload: bytes,
     *,
     repository: str,
     number: int,
     reviewed_state_digest: str,
-    thread_ids: tuple[str, ...],
+    expected_thread_ids: tuple[str, ...] | None,
     reviewed_head_sha: str | None = None,
-) -> dict[str, FollowUpIdentity]:
+) -> ParsedEligibility:
     try:
         payload = json.loads(
             canonical_payload,
@@ -1138,11 +1163,35 @@ def _tracked_follow_ups_from_payload(
                 "only tracked out-of-scope eligibility may carry follow-up identity"
             )
         observed_thread_ids.append(thread_id)
-    if tuple(observed_thread_ids) != thread_ids:
+    if len(observed_thread_ids) != len(set(observed_thread_ids)):
+        raise ResolutionError("eligibility evidence contains duplicate threads")
+    if (
+        expected_thread_ids is not None
+        and tuple(observed_thread_ids) != expected_thread_ids
+    ):
         raise ResolutionError(
             "eligibility evidence must cover requested threads exactly"
         )
-    return tracked
+    return ParsedEligibility(tracked, tuple(observed_thread_ids))
+
+
+def _tracked_follow_ups_from_payload(
+    canonical_payload: bytes,
+    *,
+    repository: str,
+    number: int,
+    reviewed_state_digest: str,
+    thread_ids: tuple[str, ...],
+    reviewed_head_sha: str | None = None,
+) -> dict[str, FollowUpIdentity]:
+    return _parse_eligibility_payload(
+        canonical_payload,
+        repository=repository,
+        number=number,
+        reviewed_state_digest=reviewed_state_digest,
+        expected_thread_ids=thread_ids,
+        reviewed_head_sha=reviewed_head_sha,
+    ).tracked_follow_ups
 
 
 def load_eligibility_evidence(
@@ -1151,7 +1200,7 @@ def load_eligibility_evidence(
     number: int,
     reviewed_head_sha: str,
     reviewed_state_digest: str,
-    thread_ids: tuple[str, ...],
+    thread_ids: tuple[str, ...] | None,
     *,
     authenticated_evidence_digest: str,
 ) -> EligibilityEvidence:
@@ -1173,18 +1222,78 @@ def load_eligibility_evidence(
     ):
         raise ResolutionError("eligibility evidence is not authenticated")
     canonical_payload = _canonical_json_bytes(payload)
-    _tracked_follow_ups_from_payload(
+    parsed = _parse_eligibility_payload(
         canonical_payload,
         repository=repository,
         number=number,
         reviewed_head_sha=reviewed_head_sha,
         reviewed_state_digest=reviewed_state_digest,
-        thread_ids=thread_ids,
+        expected_thread_ids=thread_ids,
     )
     return EligibilityEvidence(
         observed_evidence_digest,
         canonical_payload,
+        parsed.thread_ids,
     )
+
+
+def load_final_feedback_boundary(
+    *,
+    repository: str,
+    number: int,
+    expected_head: str,
+    final_reviewed_state_path: Path,
+    expected_final_reviewed_state_digest: str,
+    final_validation_evidence_path: Path,
+    final_eligibility_evidence_path: Path,
+) -> FinalFeedbackBoundary:
+    reviewed = load_reviewed_state(
+        final_reviewed_state_path,
+        repository,
+        number,
+        expected_final_reviewed_state_digest,
+        (),
+    )
+    validation = load_validation_evidence(
+        final_validation_evidence_path,
+        repository,
+        expected_head,
+        reviewed,
+    )
+    eligibility = load_eligibility_evidence(
+        final_eligibility_evidence_path,
+        repository,
+        number,
+        reviewed.head_sha,
+        reviewed.state_digest,
+        None,
+        authenticated_evidence_digest=validation.eligibility_evidence_digest,
+    )
+    missing = tuple(
+        thread_id
+        for thread_id in eligibility.thread_ids
+        if thread_id not in reviewed.thread_ids
+    )
+    if missing:
+        raise ResolutionError(
+            "final eligibility references a thread absent from final reviewed state: "
+            f"{missing[0]}"
+        )
+    return FinalFeedbackBoundary(reviewed, validation, eligibility)
+
+
+def require_late_target_origin(
+    boundary: FinalFeedbackBoundary,
+    thread_id: str,
+) -> None:
+    if thread_id in boundary.eligibility.thread_ids:
+        raise ResolutionError(
+            f"late target already has commit-bound eligibility: {thread_id}"
+        )
+    if thread_id in boundary.reviewed.thread_ids:
+        raise ResolutionError(
+            f"late target is present in authenticated final reviewed state: {thread_id}"
+        )
 
 
 def read_target_thread(
@@ -1559,6 +1668,7 @@ def create_late_classification_artifact(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str,
     thread_id: str,
     finding_id: str,
     finding_evidence_digest: str,
@@ -1603,19 +1713,16 @@ def create_late_classification_artifact(
         "DISPROVEN_WITH_EVIDENCE"
     ):
         raise ResolutionError("late classification decision is unsupported")
-    final_reviewed = load_reviewed_state(
-        Path(final_reviewed_state_path),
-        repository,
-        number,
-        expected_final_reviewed_state_digest,
-        (),
+    boundary = load_final_feedback_boundary(
+        repository=repository,
+        number=number,
+        expected_head=expected_head,
+        final_reviewed_state_path=Path(final_reviewed_state_path),
+        expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
+        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
     )
-    validation = load_validation_evidence(
-        Path(final_validation_evidence_path),
-        repository,
-        expected_head,
-        final_reviewed,
-    )
+    require_late_target_origin(boundary, thread_id)
     root = Path(repository_root)
     try:
         resolved_root = root.resolve(strict=True)
@@ -1625,8 +1732,8 @@ def create_late_classification_artifact(
         root,
         repository,
         expected_head,
-        final_reviewed,
-        validation,
+        boundary.reviewed,
+        boundary.validation,
         require_signer_identity=True,
     )
     limits = load_repository_limits(repository)
@@ -1720,6 +1827,7 @@ def create_late_disposition_artifact(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str,
     classification_evidence_path: Path | str,
     classification_signature_path: Path | str,
     output_path: Path | str,
@@ -1740,18 +1848,14 @@ def create_late_disposition_artifact(
         or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
     ):
         raise ResolutionError("late-disposition delivery identity is malformed")
-    final_reviewed = load_reviewed_state(
-        Path(final_reviewed_state_path),
-        repository,
-        number,
-        expected_final_reviewed_state_digest,
-        (),
-    )
-    validation = load_validation_evidence(
-        Path(final_validation_evidence_path),
-        repository,
-        expected_head,
-        final_reviewed,
+    boundary = load_final_feedback_boundary(
+        repository=repository,
+        number=number,
+        expected_head=expected_head,
+        final_reviewed_state_path=Path(final_reviewed_state_path),
+        expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
+        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
     )
     root = Path(repository_root)
     try:
@@ -1773,8 +1877,8 @@ def create_late_disposition_artifact(
         root,
         repository,
         expected_head,
-        final_reviewed,
-        validation,
+        boundary.reviewed,
+        boundary.validation,
         require_signer_identity=True,
     )
     try:
@@ -1799,6 +1903,7 @@ def create_late_disposition_artifact(
     )
     if not isinstance(thread_id, str) or not THREAD_ID.fullmatch(thread_id):
         raise ResolutionError("late classification thread binding is malformed")
+    require_late_target_origin(boundary, thread_id)
     try:
         classification = late_disposition.parse_classification_artifact(
             Path(classification_evidence_path),
@@ -1852,11 +1957,11 @@ def create_late_disposition_artifact(
         "delivery_issue_number": delivery_issue_number,
         "pull_request_number": number,
         "head_sha": expected_head.lower(),
-        "validated_tree_sha": validation.validated_tree_sha,
-        "validation_receipt_digest": validation.validation_receipt_digest,
-        "validation_attestation_digest": validation.evidence_digest,
+        "validated_tree_sha": boundary.validation.validated_tree_sha,
+        "validation_receipt_digest": boundary.validation.validation_receipt_digest,
+        "validation_attestation_digest": boundary.validation.evidence_digest,
         "final_eligibility_evidence_digest": (
-            validation.eligibility_evidence_digest
+            boundary.validation.eligibility_evidence_digest
         ),
         "delivery_signer": {
             "format": signer.signature_format,
@@ -1914,6 +2019,7 @@ def resolve_late_disposition_threads(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str,
     late_classification_evidence_path: Path | str,
     late_classification_signature_path: Path | str,
     late_disposition_evidence_path: Path | str,
@@ -1937,25 +2043,22 @@ def resolve_late_disposition_threads(
         or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
     ):
         raise ResolutionError("final reviewed-state digest is required")
-    final_reviewed = load_reviewed_state(
-        Path(final_reviewed_state_path),
-        repository,
-        number,
-        expected_final_reviewed_state_digest,
-        (),
+    boundary = load_final_feedback_boundary(
+        repository=repository,
+        number=number,
+        expected_head=expected_head,
+        final_reviewed_state_path=Path(final_reviewed_state_path),
+        expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
+        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
     )
-    validation = load_validation_evidence(
-        Path(final_validation_evidence_path),
-        repository,
-        expected_head,
-        final_reviewed,
-    )
+    require_late_target_origin(boundary, thread_ids[0])
     signer = verify_local_fix_commit(
         Path(repository_root),
         repository,
         expected_head,
-        final_reviewed,
-        validation,
+        boundary.reviewed,
+        boundary.validation,
         require_signer_identity=True,
     )
     try:
@@ -1967,11 +2070,11 @@ def resolve_late_disposition_threads(
             delivery_issue_number=delivery_issue_number,
             pull_request_number=number,
             head_sha=expected_head,
-            validated_tree_sha=validation.validated_tree_sha,
-            validation_receipt_digest=validation.validation_receipt_digest,
-            validation_attestation_digest=validation.evidence_digest,
+            validated_tree_sha=boundary.validation.validated_tree_sha,
+            validation_receipt_digest=boundary.validation.validation_receipt_digest,
+            validation_attestation_digest=boundary.validation.evidence_digest,
             final_eligibility_evidence_digest=(
-                validation.eligibility_evidence_digest
+                boundary.validation.eligibility_evidence_digest
             ),
             thread_ids=thread_ids,
             allowed_dispositions=ELIGIBLE_DISPOSITIONS,
@@ -2086,7 +2189,7 @@ def resolve_late_disposition_threads(
                     "delivery_issue_number": delivery_issue_number,
                     "pull_request_number": number,
                     "head_sha": expected_head.lower(),
-                    "validation_evidence_digest": validation.evidence_digest,
+                    "validation_evidence_digest": boundary.validation.evidence_digest,
                     "late_disposition_evidence_digest": authorization.artifact_digest,
                     "eligibility_path": "authenticated_late_disposition",
                     "mode": "apply",
@@ -2113,7 +2216,7 @@ def resolve_late_disposition_threads(
         "delivery_issue_number": delivery_issue_number,
         "pull_request_number": number,
         "head_sha": expected_head.lower(),
-        "validation_evidence_digest": validation.evidence_digest,
+        "validation_evidence_digest": boundary.validation.evidence_digest,
         "late_disposition_evidence_digest": authorization.artifact_digest,
         "eligibility_path": "authenticated_late_disposition",
         "mode": "apply" if apply else "dry-run",
@@ -2456,6 +2559,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--late-disposition-signature")
     parser.add_argument("--late-classification-evidence")
     parser.add_argument("--late-classification-signature")
+    parser.add_argument("--final-eligibility-evidence")
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -2478,11 +2582,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.late_disposition_signature,
             arguments.late_classification_evidence,
             arguments.late_classification_signature,
+            arguments.final_eligibility_evidence,
         )
         if any(value is not None for value in late_values):
             if not all(value is not None for value in late_values):
                 raise ResolutionError(
-                    "late disposition requires delivery issue, classification evidence/signature, and disposition evidence/signature"
+                    "late disposition requires delivery issue, final eligibility "
+                    "evidence, classification evidence/signature, and disposition "
+                    "evidence/signature"
                 )
             if arguments.eligibility_evidence is not None:
                 raise ResolutionError(
@@ -2514,6 +2621,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.expected_reviewed_state_digest
                 ),
                 final_validation_evidence_path=arguments.validation_evidence,
+                final_eligibility_evidence_path=(
+                    arguments.final_eligibility_evidence
+                ),
                 late_classification_evidence_path=(
                     arguments.late_classification_evidence
                 ),

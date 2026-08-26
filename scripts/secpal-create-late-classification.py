@@ -54,6 +54,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--final-reviewed-state", required=True)
     parser.add_argument("--expected-final-reviewed-state-digest", required=True)
     parser.add_argument("--final-validation-evidence", required=True)
+    parser.add_argument("--final-eligibility-evidence", required=True)
     parser.add_argument("--thread-id", required=True)
     parser.add_argument("--finding-id", required=True)
     parser.add_argument("--finding-evidence-digest", required=True)
@@ -80,6 +81,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.expected_final_reviewed_state_digest
             ),
             final_validation_evidence_path=arguments.final_validation_evidence,
+            final_eligibility_evidence_path=(
+                arguments.final_eligibility_evidence
+            ),
             thread_id=arguments.thread_id,
             finding_id=arguments.finding_id,
             finding_evidence_digest=arguments.finding_evidence_digest,

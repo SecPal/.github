@@ -896,11 +896,13 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_reply_state_digest",
     "_run_gh",
     "_run_git",
+    "_parse_eligibility_payload",
     "_tracked_follow_ups_from_payload",
     "_validate_manual_gate_evidence",
     "_validation_registry_binding",
     "load_repository_limits",
     "load_eligibility_evidence",
+    "load_final_feedback_boundary",
     "load_reviewed_state",
     "load_validation_evidence",
     "create_late_disposition_artifact",
@@ -910,6 +912,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "read_stable_target_thread",
     "read_target_thread",
     "require_expected_target",
+    "require_late_target_origin",
     "resolve_threads",
     "resolve_late_disposition_threads",
     "validate_expected_targets",
@@ -920,7 +923,9 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
 RESOLVER_CLASS_SHAPES = {
     "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "EligibilityEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "FinalFeedbackBoundary": ClassShape((), (), ("dataclass(frozen=True)",)),
     "InvocationBudget": ClassShape((), (), ("dataclass",)),
+    "ParsedEligibility": ClassShape((), (), ("dataclass(frozen=True)",)),
     "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ReviewedState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ResolutionError": ClassShape(("RuntimeError",), (), ()),
@@ -935,6 +940,10 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
+        ("load_reviewed_state",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("load_validation_evidence",),
         "_reject_nonfinite_json_constant",
     ),
@@ -947,11 +956,11 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
-        ("_tracked_follow_ups_from_payload",),
+        ("_parse_eligibility_payload",),
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
-        ("_tracked_follow_ups_from_payload",),
+        ("_parse_eligibility_payload",),
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
@@ -1020,7 +1029,7 @@ RESOLVER_LOOP_SITES = {
         ("_validate_manual_gate_evidence",),
         "enumerate(registered_gates)",
     ),
-    LoopSite("for", ("_tracked_follow_ups_from_payload",), "threads"),
+    LoopSite("for", ("_parse_eligibility_payload",), "threads"),
     LoopSite("for", ("_reject_duplicate_json_object",), "pairs"),
     LoopSite(
         "for",
@@ -1044,6 +1053,7 @@ RESOLVER_LOOP_SITES = {
     ),
     LoopSite("comprehension", ("_load_repository_entry",), "repositories"),
     LoopSite("comprehension", ("load_reviewed_state",), "feedback.values()"),
+    LoopSite("comprehension", ("load_reviewed_state",), "comments.values()"),
     LoopSite(
         "comprehension",
         ("_validate_manual_gate_evidence",),
@@ -1076,8 +1086,13 @@ RESOLVER_LOOP_SITES = {
     ),
     LoopSite(
         "comprehension",
-        ("_tracked_follow_ups_from_payload",),
+        ("_parse_eligibility_payload",),
         "finding_ids",
+    ),
+    LoopSite(
+        "comprehension",
+        ("load_final_feedback_boundary",),
+        "eligibility.thread_ids",
     ),
     LoopSite("comprehension", ("resolve_threads",), "thread_ids"),
     LoopSite("comprehension", ("validate_request",), "thread_ids"),

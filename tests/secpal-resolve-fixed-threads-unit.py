@@ -638,6 +638,7 @@ def write_authenticated_resolution_inputs(
     thread_ids: Sequence[str],
     *,
     manifest: dict[str, Any] | None = None,
+    eligibility_thread_ids: Sequence[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], FakeGit]:
     reviewed = reviewed_state_payload(thread_ids[0], [])
     if len(thread_ids) > 1:
@@ -674,7 +675,10 @@ def write_authenticated_resolution_inputs(
         reviewed["state_digest"] = MODULE._digest_json(
             {**identity, "feedback": feedback}
         )
-    eligibility = manifest or eligibility_payload(reviewed, thread_ids)
+    eligibility = manifest or eligibility_payload(
+        reviewed,
+        thread_ids if eligibility_thread_ids is None else eligibility_thread_ids,
+    )
     eligibility_digest = MODULE._digest_json(eligibility)
     attestation = validation_attestation_payload(
         reviewed,
@@ -711,12 +715,18 @@ def run_late_resolution_fixture(
     live_outdated: bool = False,
     live_resolved: bool = False,
     live_thread_id: str = "PRRT_LATE_NON_BLOCKING",
+    final_reviewed_thread_id: str = "PRRT_FINAL_KNOWN",
+    final_eligibility_thread_ids: Sequence[str] | None = None,
     apply: bool = True,
     signature_error: Exception | None = None,
 ) -> tuple[dict[str, Any], FakeGh, FakeGit]:
     root = Path(directory)
     reviewed, attestation, _eligibility, git = (
-        write_authenticated_resolution_inputs(directory, ["PRRT_FINAL_KNOWN"])
+        write_authenticated_resolution_inputs(
+            directory,
+            [final_reviewed_thread_id],
+            eligibility_thread_ids=final_eligibility_thread_ids,
+        )
     )
     body = "The reported recovery behavior is not present."
     artifact = late_disposition_payload(attestation, body=body)
@@ -804,6 +814,7 @@ def run_late_resolution_fixture(
             final_reviewed_state_path=root / "reviewed.json",
             expected_final_reviewed_state_digest=reviewed["state_digest"],
             final_validation_evidence_path=root / "validation.json",
+            final_eligibility_evidence_path=root / "eligibility.json",
             late_classification_evidence_path=classification_path,
             late_classification_signature_path=classification_signature_path,
             late_disposition_evidence_path=artifact_path,
@@ -812,7 +823,564 @@ def run_late_resolution_fixture(
     return result, github, git
 
 
+def run_late_classification_origin_fixture(
+    directory: str,
+    *,
+    reviewed_thread_id: str,
+    eligibility_thread_ids: Sequence[str],
+    target_thread_id: str = "PRRT_LATE_ORIGIN_TARGET",
+) -> tuple[dict[str, Any], mock.Mock]:
+    root = Path(directory)
+    delivery = root / "delivery"
+    output = root / "output"
+    delivery.mkdir()
+    output.mkdir()
+    body = "Exact independently classified non-blocking finding."
+    reviewed = reviewed_state_payload(
+        reviewed_thread_id,
+        [(f"PRRC_ROOT_{reviewed_thread_id}", body, None)],
+    )
+    eligibility = eligibility_payload(reviewed, eligibility_thread_ids)
+    attestation = validation_attestation_payload(
+        reviewed,
+        MODULE._digest_json(eligibility),
+    )
+    (delivery / "reviewed.json").write_text(
+        json.dumps(reviewed), encoding="utf-8"
+    )
+    (delivery / "validation.json").write_text(
+        json.dumps(attestation), encoding="utf-8"
+    )
+    (delivery / "eligibility.json").write_text(
+        json.dumps(eligibility), encoding="utf-8"
+    )
+    git = FakeGit(
+        expected_head=attestation["head_sha"],
+        reviewed_head=reviewed["head_sha"],
+        tree=attestation["validated_tree_sha"],
+        receipt_digest=attestation["validation_receipt_digest"],
+    )
+    response = target_response(
+        target_thread_id,
+        head=attestation["head_sha"],
+        comments=[("PRRC_LATE_ORIGIN_ROOT", body, None)],
+    )
+    github = FakeGh([response, response])
+    def sign(
+        artifact: dict[str, Any],
+        artifact_output: Path,
+        signature_output: Path,
+        **_kwargs: Any,
+    ) -> None:
+        artifact_output.write_bytes(
+            MODULE.late_disposition.canonical_json_bytes(artifact)
+        )
+        signature_output.write_text("fixture signature", encoding="utf-8")
+
+    signer = mock.Mock(side_effect=sign)
+    with (
+        mock.patch.object(MODULE, "_run_git", git),
+        mock.patch.object(MODULE, "_run_gh", github),
+        mock.patch.object(MODULE, "_late_signing_key", return_value="/fixture/key"),
+        mock.patch.object(MODULE.late_disposition, "sign_artifact", signer),
+    ):
+        result = MODULE.create_late_classification_artifact(
+            "SecPal/api",
+            724,
+            123,
+            attestation["head_sha"],
+            repository_root=delivery,
+            final_reviewed_state_path=delivery / "reviewed.json",
+            expected_final_reviewed_state_digest=reviewed["state_digest"],
+            final_validation_evidence_path=delivery / "validation.json",
+            final_eligibility_evidence_path=delivery / "eligibility.json",
+            thread_id=target_thread_id,
+            finding_id="LF-LATE-ORIGIN",
+            finding_evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
+            classification="INVALID_FALSE_OR_MISLEADING",
+            disposition="DISPROVEN_WITH_EVIDENCE",
+            technically_blocking=False,
+            technical_blockers=(),
+            output_path=output / "classification.json",
+            signature_output_path=output / "classification.sig",
+        )
+    return result, signer
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_cycle2_late_origin_rejects_preexisting_thread_omitted_from_eligibility(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "present in authenticated final reviewed state",
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
+                    eligibility_thread_ids=(),
+                )
+
+    def test_cycle2_late_origin_rejects_commit_bound_eligible_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "already has commit-bound eligibility",
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
+                    eligibility_thread_ids=("PRRT_LATE_ORIGIN_TARGET",),
+                )
+
+    def test_cycle2_late_origin_rejects_incoherent_final_evidence_pair(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "final eligibility references a thread absent from final reviewed state",
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=("PRRT_LATE_ORIGIN_TARGET",),
+                )
+
+    def test_cycle2_late_origin_accepts_target_absent_from_both_final_sets(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, signer = run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_FINAL_KNOWN",
+                eligibility_thread_ids=(),
+            )
+        self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
+        signer.assert_called_once()
+
+    def test_cycle2_disposition_reverifies_authenticated_final_origin(self) -> None:
+        cases = (
+            (
+                "pre-existing",
+                "PRRT_LATE_NON_BLOCKING",
+                (),
+                "present in authenticated final reviewed state",
+            ),
+            (
+                "commit-bound",
+                "PRRT_LATE_NON_BLOCKING",
+                ("PRRT_LATE_NON_BLOCKING",),
+                "already has commit-bound eligibility",
+            ),
+            (
+                "incoherent",
+                "PRRT_FINAL_KNOWN",
+                ("PRRT_LATE_NON_BLOCKING",),
+                "final eligibility references a thread absent",
+            ),
+        )
+        for label, reviewed_thread, eligible_threads, error in cases:
+            with (
+                self.subTest(label=label),
+                tempfile.TemporaryDirectory() as directory,
+                tempfile.TemporaryDirectory() as output_directory,
+            ):
+                root = Path(directory)
+                output = Path(output_directory)
+                reviewed, attestation, _eligibility, git = (
+                    write_authenticated_resolution_inputs(
+                        directory,
+                        [reviewed_thread],
+                        eligibility_thread_ids=eligible_threads,
+                    )
+                )
+                classification = late_disposition_payload(attestation)["threads"][0]
+                classification_path = output / "classification.json"
+                classification_path.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(
+                        {
+                            "thread": {
+                                "thread_id": classification["thread_id"]
+                            }
+                        }
+                    )
+                )
+                with (
+                    mock.patch.object(MODULE, "_run_git", git),
+                    self.assertRaisesRegex(MODULE.ResolutionError, error),
+                ):
+                    MODULE.create_late_disposition_artifact(
+                        "SecPal/api",
+                        724,
+                        123,
+                        attestation["head_sha"],
+                        repository_root=root,
+                        final_reviewed_state_path=root / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed["state_digest"],
+                        final_validation_evidence_path=root / "validation.json",
+                        final_eligibility_evidence_path=root / "eligibility.json",
+                        classification_evidence_path=classification_path,
+                        classification_signature_path=output / "classification.sig",
+                        output_path=output / "late.json",
+                        signature_output_path=output / "late.sig",
+                    )
+
+    def test_cycle2_resolver_reverifies_authenticated_final_origin(self) -> None:
+        cases = (
+            (
+                "pre-existing",
+                "PRRT_LATE_NON_BLOCKING",
+                (),
+                "present in authenticated final reviewed state",
+            ),
+            (
+                "commit-bound",
+                "PRRT_LATE_NON_BLOCKING",
+                ("PRRT_LATE_NON_BLOCKING",),
+                "already has commit-bound eligibility",
+            ),
+            (
+                "incoherent",
+                "PRRT_FINAL_KNOWN",
+                ("PRRT_LATE_NON_BLOCKING",),
+                "final eligibility references a thread absent",
+            ),
+        )
+        for label, reviewed_thread, eligible_threads, error in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(MODULE.ResolutionError, error):
+                    run_late_resolution_fixture(
+                        directory,
+                        final_reviewed_thread_id=reviewed_thread,
+                        final_eligibility_thread_ids=eligible_threads,
+                    )
+
+    def test_cycle2_final_eligibility_substitution_blocks_every_consumer(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed, attestation, eligibility, git = (
+                write_authenticated_resolution_inputs(
+                    directory,
+                    ["PRRT_FINAL_KNOWN"],
+                    eligibility_thread_ids=(),
+                )
+            )
+            substituted = copy.deepcopy(eligibility)
+            substituted["pull_request_number"] = 124
+            (root / "eligibility.json").write_text(
+                json.dumps(substituted), encoding="utf-8"
+            )
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError, "eligibility evidence is not authenticated"
+                ),
+            ):
+                MODULE.create_late_classification_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    attestation["head_sha"],
+                    repository_root=root,
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "validation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
+                    thread_id="PRRT_LATE_NON_BLOCKING",
+                    finding_id="LF-LATE-ORIGIN",
+                    finding_evidence_digest="c" * 64,
+                    classification="INVALID_FALSE_OR_MISLEADING",
+                    disposition="DISPROVEN_WITH_EVIDENCE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    output_path=root / "classification.json",
+                    signature_output_path=root / "classification.sig",
+                )
+
+    def test_cycle2_final_artifact_drift_after_classification_blocks_consumers(
+        self,
+    ) -> None:
+        for label in ("eligibility", "reviewed state"):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result, _signer = run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=(),
+                )
+                self.assertEqual(
+                    result["status"], "LATE_CLASSIFICATION_AUTHENTICATED"
+                )
+                delivery = root / "delivery"
+                output = root / "output"
+                reviewed = json.loads(
+                    (delivery / "reviewed.json").read_text(encoding="utf-8")
+                )
+                if label == "eligibility":
+                    eligibility = json.loads(
+                        (delivery / "eligibility.json").read_text(encoding="utf-8")
+                    )
+                    eligibility["pull_request_number"] = 124
+                    (delivery / "eligibility.json").write_text(
+                        json.dumps(eligibility), encoding="utf-8"
+                    )
+                    error = "eligibility evidence is not authenticated"
+                else:
+                    reviewed["threads"].append(copy.deepcopy(reviewed["threads"][0]))
+                    (delivery / "reviewed.json").write_text(
+                        json.dumps(reviewed), encoding="utf-8"
+                    )
+                    error = "reviewed feedback state digest is invalid"
+                arguments = {
+                    "repository_root": delivery,
+                    "final_reviewed_state_path": delivery / "reviewed.json",
+                    "expected_final_reviewed_state_digest": reviewed["state_digest"],
+                    "final_validation_evidence_path": delivery / "validation.json",
+                    "final_eligibility_evidence_path": delivery / "eligibility.json",
+                }
+                with self.assertRaisesRegex(MODULE.ResolutionError, error):
+                    MODULE.create_late_disposition_artifact(
+                        "SecPal/api",
+                        724,
+                        123,
+                        "c" * 40,
+                        **arguments,
+                        classification_evidence_path=output / "classification.json",
+                        classification_signature_path=output / "classification.sig",
+                        output_path=output / "disposition.json",
+                        signature_output_path=output / "disposition.sig",
+                    )
+                with self.assertRaisesRegex(MODULE.ResolutionError, error):
+                    MODULE.resolve_late_disposition_threads(
+                        "SecPal/api",
+                        724,
+                        123,
+                        "c" * 40,
+                        ("PRRT_LATE_ORIGIN_TARGET",),
+                        apply=False,
+                        **arguments,
+                        late_classification_evidence_path=(
+                            output / "classification.json"
+                        ),
+                        late_classification_signature_path=(
+                            output / "classification.sig"
+                        ),
+                        late_disposition_evidence_path=output / "disposition.json",
+                        late_disposition_signature_path=output / "disposition.sig",
+                    )
+
+    def test_cycle2_final_boundary_rejects_eligibility_binding_and_shape_drift(
+        self,
+    ) -> None:
+        cases = (
+            ("repository", lambda value: value.update(repository="Other/repo")),
+            ("pull request", lambda value: value.update(pull_request_number=124)),
+            ("reviewed head", lambda value: value.update(reviewed_head_sha="b" * 40)),
+            (
+                "reviewed state",
+                lambda value: value.update(reviewed_state_digest="9" * 64),
+            ),
+            ("schema", lambda value: value.update(schema_version="2.0")),
+            (
+                "duplicate thread",
+                lambda value: value["eligible_threads"].append(
+                    copy.deepcopy(value["eligible_threads"][0])
+                ),
+            ),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                reviewed, _attestation, eligibility, _git = (
+                    write_authenticated_resolution_inputs(
+                        directory,
+                        ["PRRT_FINAL_KNOWN"],
+                    )
+                )
+                mutate(eligibility)
+                attestation = validation_attestation_payload(
+                    reviewed,
+                    MODULE._digest_json(eligibility),
+                )
+                (root / "eligibility.json").write_text(
+                    json.dumps(eligibility), encoding="utf-8"
+                )
+                (root / "validation.json").write_text(
+                    json.dumps(attestation), encoding="utf-8"
+                )
+                with self.assertRaises(MODULE.ResolutionError):
+                    MODULE.load_final_feedback_boundary(
+                        repository="SecPal/api",
+                        number=123,
+                        expected_head=attestation["head_sha"],
+                        final_reviewed_state_path=root / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed["state_digest"],
+                        final_validation_evidence_path=root / "validation.json",
+                        final_eligibility_evidence_path=root / "eligibility.json",
+                    )
+
+    def test_cycle2_final_boundary_rejects_duplicate_or_changed_reviewed_membership(
+        self,
+    ) -> None:
+        for label, authenticate_change in (
+            ("duplicate", True),
+            ("changed without digest", False),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                reviewed, attestation, _eligibility, _git = (
+                    write_authenticated_resolution_inputs(
+                        directory,
+                        ["PRRT_FINAL_KNOWN"],
+                        eligibility_thread_ids=(),
+                    )
+                )
+                reviewed["threads"].append(copy.deepcopy(reviewed["threads"][0]))
+                if authenticate_change:
+                    feedback = {
+                        key: reviewed[key]
+                        for key in (
+                            "pull_request_reactions",
+                            "reviews",
+                            "conversation_comments",
+                            "threads",
+                        )
+                    }
+                    reviewed["feedback_digest"] = MODULE._digest_json(feedback)
+                    reviewed["state_digest"] = MODULE._digest_json(
+                        {
+                            "repository": reviewed["repository"],
+                            "pull_request_number": reviewed["pull_request_number"],
+                            "head_sha": reviewed["head_sha"],
+                            "base_ref": reviewed["base_ref"],
+                            "base_sha": reviewed["base_sha"],
+                            "pr_state": reviewed["pr_state"],
+                            "feedback": feedback,
+                        }
+                    )
+                (root / "reviewed.json").write_text(
+                    json.dumps(reviewed), encoding="utf-8"
+                )
+                with self.assertRaises(MODULE.ResolutionError):
+                    MODULE.load_final_feedback_boundary(
+                        repository="SecPal/api",
+                        number=123,
+                        expected_head=attestation["head_sha"],
+                        final_reviewed_state_path=root / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed["state_digest"],
+                        final_validation_evidence_path=root / "validation.json",
+                        final_eligibility_evidence_path=root / "eligibility.json",
+                    )
+
+    def test_cycle2_reviewed_loader_retains_and_validates_complete_membership(
+        self,
+    ) -> None:
+        reviewed = reviewed_state_payload("PRRT_FIRST", [])
+        reviewed["threads"].append(
+            {
+                "node_id": "PRRT_SECOND",
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [
+                    {
+                        "node_id": "PRRC_SECOND_REPLY",
+                        "body_digest": "c" * 64,
+                        "actor": {
+                            "login": "reviewer",
+                            "node_id": "USER_reviewer",
+                            "database_id": 7,
+                        },
+                        "reply_to_id": "PRRC_MISSING_ROOT",
+                        "reactions": [],
+                    }
+                ],
+            }
+        )
+        feedback = {
+            key: reviewed[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        reviewed["feedback_digest"] = MODULE._digest_json(feedback)
+        reviewed["state_digest"] = MODULE._digest_json(
+            {
+                "repository": reviewed["repository"],
+                "pull_request_number": reviewed["pull_request_number"],
+                "head_sha": reviewed["head_sha"],
+                "base_ref": reviewed["base_ref"],
+                "base_sha": reviewed["base_sha"],
+                "pr_state": reviewed["pr_state"],
+                "feedback": feedback,
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(reviewed), encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "reviewed target comment state is malformed",
+            ):
+                MODULE.load_reviewed_state(
+                    path,
+                    "SecPal/api",
+                    123,
+                    reviewed["state_digest"],
+                    (),
+                )
+
+    def test_cycle2_final_boundary_rejects_duplicate_eligibility_json_keys(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed, attestation, eligibility, _git = (
+                write_authenticated_resolution_inputs(
+                    directory,
+                    ["PRRT_FINAL_KNOWN"],
+                    eligibility_thread_ids=(),
+                )
+            )
+            canonical = MODULE._canonical_json_bytes(eligibility).decode("utf-8")
+            duplicate = canonical.replace(
+                '"schema_version":"1.1"',
+                '"schema_version":"1.1","schema_version":"1.1"',
+                1,
+            )
+            (root / "eligibility.json").write_text(duplicate, encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "eligibility evidence is unavailable or malformed",
+            ):
+                MODULE.load_final_feedback_boundary(
+                    repository="SecPal/api",
+                    number=123,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "validation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
+                )
+
+    def test_cycle2_genuine_late_origin_reaches_guarded_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, github, _git = run_late_resolution_fixture(
+                directory,
+                apply=False,
+                final_reviewed_thread_id="PRRT_FINAL_KNOWN",
+                final_eligibility_thread_ids=(),
+            )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
+        self.assertEqual(len(github.calls), 1)
+
     def test_post_push_late_feedback_deadlock_requires_detached_authority(
         self,
     ) -> None:
@@ -1007,6 +1575,7 @@ class ResolveFixedThreadsTests(TestCase):
                             reviewed["state_digest"]
                         ),
                         final_validation_evidence_path=root / "validation.json",
+                        final_eligibility_evidence_path=root / "eligibility.json",
                         thread_id="PRRT_LATE_NON_BLOCKING",
                         finding_id="LF-LATE-1",
                         finding_evidence_digest="c" * 64,
@@ -1027,6 +1596,7 @@ class ResolveFixedThreadsTests(TestCase):
                     final_reviewed_state_path=root / "reviewed.json",
                     expected_final_reviewed_state_digest=reviewed["state_digest"],
                     final_validation_evidence_path=root / "validation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
                     classification_evidence_path=classification_path,
                     classification_signature_path=classification_signature_path,
                     output_path=artifact_path,
@@ -1248,6 +1818,7 @@ class ResolveFixedThreadsTests(TestCase):
                 final_reviewed_state_path="unread",
                 expected_final_reviewed_state_digest="b" * 64,
                 final_validation_evidence_path="unread",
+                final_eligibility_evidence_path="unread",
                 late_classification_evidence_path="unread",
                 late_classification_signature_path="unread",
                 late_disposition_evidence_path="unread",
@@ -2276,6 +2847,7 @@ class ResolveFixedThreadsTests(TestCase):
         forged = MODULE.EligibilityEvidence(
             eligibility_digest,
             canonical_payload,
+            (thread_id,),
         )
         fake = FakeGh(
             [
@@ -2504,10 +3076,12 @@ class ResolveFixedThreadsTests(TestCase):
             "digest mismatch": MODULE.EligibilityEvidence(
                 "f" * 64,
                 canonical_payload,
+                (thread_id,),
             ),
             "malformed payload": MODULE.EligibilityEvidence(
                 hashlib.sha256(b"{}").hexdigest(),
                 b"{}",
+                (thread_id,),
             ),
         }
         for label, eligibility in cases.items():
@@ -3771,6 +4345,61 @@ class ResolveFixedThreadsTests(TestCase):
                     "reviewed.json",
                     "--thread-id",
                     "PRRT_exampleOne",
+                ]
+            )
+
+    def test_cycle2_late_cli_requires_distinct_final_eligibility_artifact(
+        self,
+    ) -> None:
+        arguments = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--delivery-issue",
+            "724",
+            "--late-classification-evidence",
+            "classification.json",
+            "--late-classification-signature",
+            "classification.sig",
+            "--late-disposition-evidence",
+            "disposition.json",
+            "--late-disposition-signature",
+            "disposition.sig",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(arguments)
+        parsed = MODULE.parse_args(
+            [
+                *arguments,
+                "--final-eligibility-evidence",
+                "final-eligibility.json",
+            ]
+        )
+        self.assertEqual(
+            parsed.final_eligibility_evidence,
+            "final-eligibility.json",
+        )
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(
+                [
+                    *arguments,
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                    "--eligibility-evidence",
+                    "ordinary-eligibility.json",
                 ]
             )
 
@@ -5521,6 +6150,7 @@ class ResolveFixedThreadsTests(TestCase):
             targets={
                 "PRRT_exampleOne": expected_thread_state("PRRT_exampleOne"),
             },
+            thread_ids=frozenset({"PRRT_exampleOne"}),
         )
         with (
             mock.patch.object(MODULE, "resolve_threads", return_value=report) as resolver,

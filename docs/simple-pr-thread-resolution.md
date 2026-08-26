@@ -196,14 +196,20 @@ field or `TRACKED_AS_FOLLOW_UP`; tracked follow-up resolution requires version
 
 Commit-bound eligibility remains the normal remediation path. A distinct
 resolution-only path exists only for exact technically non-blocking feedback
-that first appears after the final signed delivery push. It does not extend the
+outside the authenticated final feedback boundary and observed on the unchanged
+final delivery head. It does not extend the
 delivery lifecycle, rerun validation, consume an unrestricted review or
 remediation cycle, change the delivery tree, create a commit or push, inspect
 CI, request review, mark Ready, or imply merge readiness.
 
-The path first verifies the existing final reviewed state, validation receipt,
-final attestation, local final tree and head, receipt trailer, accepted commit
-signature, and exact origin. It derives the delivery signer fingerprint from
+The path first verifies the complete final reviewed state, canonical final
+eligibility artifact, validation receipt, final attestation, local final tree
+and head, receipt trailer, accepted commit signature, and exact origin. The
+eligibility digest must match the receipt and attestation, every eligible thread
+must exist in the reviewed snapshot, and the proposed late thread must be absent
+from both final sets. Classification creation, disposition creation, and
+resolution independently re-establish this origin predicate. It derives the
+delivery signer fingerprint from
 that cryptographic verification. It then captures only the one explicitly
 named live thread and signs the canonical
 [`late-classification.schema.json`](../.agents/skills/secpal-pr-review/references/late-classification.schema.json)
@@ -228,6 +234,11 @@ node and database identities, finding-body digest, reply-state digest and
 count, resolved/outdated states, classification evidence digest, disposition,
 and exact resolution action. It never selects threads by query or pattern.
 
+“Post-push” is lifecycle shorthand for this authenticated boundary. No GitHub
+wall-clock push-order proof is used or claimed: authority comes from exact
+absence in the authenticated final reviewed-state and commit-bound eligibility
+artifacts while the delivery head remains unchanged.
+
 Create authenticated classification evidence, then detached disposition
 evidence:
 
@@ -241,6 +252,7 @@ python3 scripts/secpal-create-late-classification.py \
   --final-reviewed-state FINAL_REVIEWED_STATE.json \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
+  --final-eligibility-evidence FINAL_ELIGIBILITY.json \
   --thread-id PRRT_example \
   --finding-id LF-LATE-1 \
   --finding-evidence-digest FINDING_EVIDENCE_SHA256 \
@@ -259,6 +271,7 @@ python3 scripts/secpal-create-late-disposition.py \
   --final-reviewed-state FINAL_REVIEWED_STATE.json \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
+  --final-eligibility-evidence FINAL_ELIGIBILITY.json \
   --classification-evidence LATE_CLASSIFICATION.json \
   --classification-signature LATE_CLASSIFICATION.json.sig \
   --output SESSION/LATE_DISPOSITION.json \
@@ -277,6 +290,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --reviewed-state FINAL_REVIEWED_STATE.json \
   --expected-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --validation-evidence FINAL_ATTESTATION.json \
+  --final-eligibility-evidence FINAL_ELIGIBILITY.json \
   --late-classification-evidence SESSION/LATE_CLASSIFICATION.json \
   --late-classification-signature SESSION/LATE_CLASSIFICATION.json.sig \
   --late-disposition-evidence SESSION/LATE_DISPOSITION.json \

@@ -60,17 +60,23 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 
 Repeat `--thread-id REVIEW_THREAD_NODE_ID` for each additional fixed thread.
 
-For an exact technically non-blocking thread that first appeared only after the
-final signed delivery push, do not create an empty delivery commit. Require an
+For an exact technically non-blocking thread outside the authenticated final
+feedback boundary and observed on the unchanged final delivery head, do not
+create an empty delivery commit. Require the complete final reviewed-state and
+eligibility artifacts, and prove that the thread is absent from both before
+creating any late authority. Require an
 independently established `INVALID_FALSE_OR_MISLEADING +
 DISPROVEN_WITH_EVIDENCE` classification with `technically_blocking=false`, then
 use `scripts/secpal-create-late-classification.py` to capture and authenticate
 that exact decision, then use `scripts/secpal-create-late-disposition.py` to
 verify it and create the canonical detached disposition artifact and signature.
-Both creators must verify the existing final reviewed
-state, receipt/attestation, final tree, receipt trailer, origin, head, and commit
-signature before deriving the delivery signer and reading the explicitly named
-thread. Resolve it only through `scripts/secpal-resolve-fixed-threads.py` with
+Both creators must verify the existing final reviewed state, canonical final
+eligibility artifact, receipt/attestation, final tree, receipt trailer, origin,
+head, and commit signature before deriving the delivery signer and reading the
+explicitly named thread. The final eligibility artifact must match its
+authenticated digest, every eligible thread must exist in the reviewed state,
+and the proposed late thread must be absent from both final sets. Resolve it
+only through `scripts/secpal-resolve-fixed-threads.py` with
 `--delivery-issue`, `--late-disposition-evidence`, and
 `--late-disposition-signature`, together with the matching
 `--late-classification-evidence` and `--late-classification-signature`. The
@@ -86,6 +92,11 @@ for that input shape and read
 [references/late-disposition.schema.json](references/late-disposition.schema.json)
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
+
+“Post-push” is lifecycle shorthand for this authenticated final-feedback
+boundary. The evidence proves absence from the final reviewed-state and
+commit-bound eligibility artifacts; it does not claim cryptographic proof of
+GitHub wall-clock ordering relative to a push.
 
 This resolution-only path does not capture or reclassify PR-wide feedback, run
 validation, inspect CI or readiness, create commits, push, or make a merge

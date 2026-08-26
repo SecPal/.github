@@ -383,9 +383,12 @@ one canonical detached-signed `late-classification.schema.json` artifact for
 exactly one named thread, then creates one canonical
 `late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
-receipt trailer, attestation, origin, and accepted commit signature, derives the
-actual delivery signer fingerprint, reads that named thread twice, and signs
-the classification with that same OS-account identity. The disposition creator
+receipt trailer, attestation, canonical final eligibility artifact, origin, and
+accepted commit signature. It proves the named thread absent from both the
+complete authenticated final reviewed state and eligibility set, verifies that
+every eligible thread belongs to the reviewed state, derives the actual
+delivery signer fingerprint, reads that named thread twice, and signs the
+classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
 digest internally. SSH and OpenPGP are supported.
 The resolver independently repeats the final-delivery verification, verifies
@@ -396,6 +399,9 @@ technical-blocking flag, and guarded action before resolving. This path is only
 `INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
 `technically_blocking=false`; it consumes no review/remediation counter and has
 no commit, push, Ready, CI, issue, label, review, or merge capability.
+The same origin predicate is independently re-established by disposition
+creation and resolution. “Post-final-push” names this lifecycle boundary; it
+does not claim cryptographic proof of GitHub wall-clock push ordering.
 
 An explicitly requested readiness path may compare one current stable-feedback
 projection and the requested volatile readiness state. It reports that

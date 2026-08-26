@@ -127,15 +127,21 @@ audit, forensic evidence capture, or merge evaluation.
 ### Authenticated post-final-push late disposition
 
 Commit-bound eligibility above remains unchanged and is the normal remediation
-path. One additional resolution-only path exists for an exact thread first
-observed after the final signed delivery push. It accepts only
+path. One additional resolution-only path exists for an exact thread outside
+the authenticated final feedback boundary and observed on the unchanged final
+delivery head. It accepts only
 `INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
 `technically_blocking=false`; classification is explicit independent review
 judgment and is never inferred from text.
 
-This path first independently verifies the existing final reviewed state,
-validation receipt and attestation, signed receipt trailer, final tree, exact
-head and origin, and accepted local commit signature. The verified signature's
+This path first independently verifies the existing complete final reviewed
+state, the canonical final eligibility artifact authenticated by the receipt
+and attestation, signed receipt trailer, final tree, exact head and origin, and
+accepted local commit signature. Every final-eligibility thread must exist in
+the final reviewed state. The proposed late target must be absent from both
+authenticated sets before classification authority is created, and the same
+origin predicate is independently re-established by disposition creation and
+resolution. The verified signature's
 actual format and fingerprint establish the only signer trust anchor. A strict
 canonical `late-classification.schema.json` document first authenticates the
 exact independently established decision, stable finding ID, finding-evidence
@@ -168,6 +174,12 @@ the target write, and resolves only the authenticated source conversation. The
 path consumes zero unrestricted reviews, remediation cycles, commits, pushes,
 and Ready transitions. It has no CI, review-request, label, issue, source,
 readiness, merge, or generic conversation authority.
+
+“Post-final-push” is lifecycle shorthand for feedback outside this
+authenticated final-feedback boundary. This evidence proves canonical snapshot
+and eligibility absence under the unchanged final head; it does not claim that
+GitHub wall-clock creation time is cryptographically ordered after a branch
+push.
 
 ## Normal fast-path state machine
 
