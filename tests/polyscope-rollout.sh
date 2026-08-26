@@ -258,6 +258,9 @@ package_scripts = {
         "lint": "eslint .",
         "test": "node --test tests/**/*.mjs",
     },
+    "deployment": {
+        "test:integration:browser": "node --test tests/**/*.mjs",
+    },
     ".github": {
         "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
         "test": "npm run test:openapi-verified-presence",
@@ -804,6 +807,31 @@ applyTo: 'src/**/*.astro'
 - Run formatting, lint, typecheck, and build.
 "
 
+create_repo "deployment" "$common_header
+
+# Deployment Instructions
+
+## Scope and Safety
+
+- Keep deployment changes bounded and preserve provider credential boundaries.
+
+## Validation and Review
+
+- Validate lifecycle ordering, immutable inputs, and observable evidence.
+" "deployment.instructions.md" "---
+name: Deployment Rules
+applyTo: 'infra/**'
+---
+
+# Deployment Rules
+
+- Preserve pinned infrastructure inputs and fail-closed cleanup behavior.
+"
+
+# Operations is intentionally registration-only until that repository owns a
+# versioned workspace policy. Its physical clone must still exist in fixtures.
+mkdir -p "$workspace_root/operations"
+
 create_repo ".github" "$common_header
 
 # Org Instructions
@@ -914,6 +942,8 @@ repo_state = {
     'android': {'id': 'an123456', 'name': 'SecPal/android', 'path': str(workspace_root / 'android')},
     'secpal.app': {'id': 'sa123456', 'name': 'SecPal/secpal.app', 'path': str(workspace_root / 'secpal.app')},
     'guardguide.de': {'id': 'gd123456', 'name': 'SecPal/guardguide.de', 'path': str(workspace_root / 'guardguide.de')},
+    'deployment': {'id': 'de123456', 'name': 'SecPal/deployment', 'path': str(workspace_root / 'deployment')},
+    'operations': {'id': 'op123456', 'name': 'SecPal/operations', 'path': str(workspace_root / 'operations')},
     # Preserve a retired database row to prove rollout ignores repositories
     # that are no longer part of the managed workspace.
     'retired-docs': {'id': 'rd123456', 'name': 'SecPal/retired-docs', 'path': str(workspace_root / 'retired-docs')},
@@ -923,6 +953,12 @@ repo_state = {
 
 for repo in repo_state.values():
     cur.execute('insert into repositories (id, name, path, created_at, base_branch, github_assign_self_enabled) values (?, ?, ?, datetime(\'now\'), ?, ?)', (repo['id'], repo['name'], repo['path'], 'main', 0))
+
+# Registration-only repositories remain outside rollout-owned link metadata.
+cur.execute(
+    'insert into repository_links (repo_id, linked_repo_id) values (?, ?)',
+    ('op123456', 'api12345'),
+)
 
 conn.commit()
 conn.close()
@@ -1405,6 +1441,11 @@ state = Path(os.environ["RACE_STATE"])
 command = sys.argv[1:]
 with Path(os.environ["RACE_COMMAND_LOG"]).open("a") as handle:
     handle.write(f"{label}:php:{' '.join(command)}\\n")
+if len(command) >= 2 and command[0:2] == ["artisan", "keys:generate-kek"]:
+    kek_path = Path(os.environ["KEK_PATH"])
+    kek_path.parent.mkdir(parents=True, exist_ok=True)
+    kek_path.write_bytes(b"generated-preview-kek")
+    raise SystemExit(0)
 if len(command) < 2 or command[0] != "artisan" or command[1] not in {"migrate", "migrate:fresh"}:
     raise SystemExit(0)
 
@@ -3829,6 +3870,10 @@ def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_e
             command_env["PGPASSWORD"],
         )
     )
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
 
 module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
 module.ensure_postgres_preview_database = fake_ensure_postgres_preview_database
@@ -3849,6 +3894,7 @@ assert db_calls == [
 assert calls == [
     (("composer", "install"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "config:clear"), api_worktree, "source-only-password", "source-only-password"),
+    (("php", "artisan", "keys:generate-kek"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "migrate:fresh", "--force"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"), api_worktree, "source-only-password", "source-only-password"),
     (("php", "artisan", "db:seed", "--force"), api_worktree, "source-only-password", "source-only-password"),
@@ -3959,9 +4005,17 @@ calls = []
 
 def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
 
 def fail_after_reused_storage_reset(worktree_path, command, *, command_env):
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
     if command == ["php", "artisan", "db:seed", "--force"]:
         raise RuntimeError("expected post-migration setup failure")
 
@@ -4055,6 +4109,10 @@ migration_attempts = [0]
 
 def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        kek_path.parent.mkdir(parents=True, exist_ok=True)
+        kek_path.write_bytes(b"generated-preview-kek")
     if command == ["php", "artisan", "migrate", "--force"]:
         migration_attempts[0] += 1
         if migration_attempts[0] == 1:
@@ -4068,6 +4126,7 @@ assert target == "database:secpal__preview__mighty_hyena", target
 assert calls == [
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
+    ("php", "artisan", "keys:generate-kek"),
     ("php", "artisan", "migrate", "--force"),
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
@@ -4204,6 +4263,10 @@ seed_attempts = [0]
 def fake_run_api_worktree_bootstrap_command(worktree_path, command, *, command_env):
     seed_attempts[0] += 1 if command == ["php", "artisan", "db:seed", "--force"] else 0
     calls.append(tuple(command))
+    if command == ["php", "artisan", "keys:generate-kek"]:
+        generated_kek_path = pathlib.Path(module.build_api_preview_kek_path(worktree_path))
+        generated_kek_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_kek_path.write_bytes(b"generated-preview-kek")
     if command == ["php", "artisan", "db:seed", "--force"] and seed_attempts[0] == 1:
         raise subprocess.CalledProcessError(
             1,
@@ -4228,7 +4291,7 @@ finally:
     signal.signal(signal.SIGALRM, previous_alarm_handler)
 assert ready is True
 assert target == "database:secpal__preview__coral_crow", target
-assert not kek_path.exists(), "recovery must remove the stale isolated-preview KEK"
+assert kek_path.exists(), "recovery must replace the stale isolated-preview KEK"
 assert calls == [
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
@@ -4237,6 +4300,7 @@ assert calls == [
     ("php", "artisan", "db:seed", "--force"),
     ("composer", "install"),
     ("php", "artisan", "config:clear"),
+    ("php", "artisan", "keys:generate-kek"),
     ("php", "artisan", "migrate:fresh", "--force"),
     ("php", "artisan", "addresses:import", "--if-empty", "--setup-only", "--no-interaction"),
     ("php", "artisan", "db:seed", "--force"),
@@ -5343,6 +5407,7 @@ fi
     "$workspace_root/GuardGuide/polyscope.local.json" \
     "$workspace_root/secpal.app/polyscope.local.json" \
     "$workspace_root/guardguide.de/polyscope.local.json" \
+    "$workspace_root/deployment/polyscope.local.json" \
     "$workspace_root/.github/polyscope.local.json" \
     >/dev/null
 
@@ -5365,8 +5430,12 @@ org_prompts = cur.execute(
     ('gh123456',),
 ).fetchone()
 prompt_rows = cur.execute(
-    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id != 'rd123456' order by id"
+    "select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id not in ('op123456', 'rd123456') order by id"
 ).fetchall()
+operations_prompts = cur.execute(
+    'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
+    ('op123456',),
+).fetchone()
 retired_prompts = cur.execute(
     'select review_prompt, pr_prompt, draft_pr_prompt, merge_prompt, merge_and_push_prompt from repositories where id = ?',
     ('rd123456',),
@@ -5412,7 +5481,10 @@ assert ('gg123456', 'an123456') in links
 assert ('gg123456', 'api12345') in links
 assert ('gg123456', 'co123456') in links
 assert ('gg123456', 'fe123456') in links
+assert ('op123456', 'api12345') in links
 assert ('sa123456', 'rd123456') not in links
+assert operations_prompts is not None
+assert all(prompt is None for prompt in operations_prompts)
 assert retired_prompts is not None
 assert all(prompt is None for prompt in retired_prompts)
 
@@ -5425,6 +5497,8 @@ assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
 assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
 assert 'retired-docs' not in summary['repositories']
 assert summary['repositories']['contracts']['preview_prefix'] is None
+assert summary['repositories']['deployment']['preview_prefix'] is None
+assert summary['repositories']['operations']['workspace_automation'] == 'registration-only'
 assert summary['repositories']['api']['agent_instructions'].endswith('/api/AGENTS.md')
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
 assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
@@ -5526,6 +5600,11 @@ chmod +x "$fake_exec_dir/composer"
 cat >"$fake_exec_dir/php" <<'STUB'
 #!/usr/bin/env bash
 printf 'php:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
+if [[ "$*" == "artisan keys:generate-kek" ]]; then
+    mkdir -p "$(dirname "$KEK_PATH")"
+    printf 'generated-preview-kek' > "$KEK_PATH"
+    chmod 0600 "$KEK_PATH"
+fi
 if [[ -n "${FAIL_ON_WORKTREE:-}" && "$PWD" == "$FAIL_ON_WORKTREE" ]]; then
     exit 23
 fi
