@@ -5739,6 +5739,26 @@ class FastPathTests(TestCase):
             attestation["eligibility_evidence_digest"], eligibility_digest
         )
 
+    def test_empty_resolution_eligibility_authenticates_zero_targets(self) -> None:
+        reviewed = fast_path.StableFeedbackState.from_payload(
+            fast_feedback(thread_count=0).to_dict()
+        )
+        manifest = {
+            "schema_version": "1.1",
+            "repository": "SecPal/.github",
+            "pull_request_number": 1,
+            "reviewed_head_sha": reviewed.head_sha,
+            "reviewed_state_digest": reviewed.state_digest,
+            "eligible_threads": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            observed = actions._resolution_eligibility_digest(
+                str(path), "SecPal/.github", reviewed
+            )
+        self.assertEqual(observed, fast_path.digest_json(manifest))
+
     def test_registered_manual_gates_require_explicit_satisfied_evidence(self) -> None:
         binding = actions._fast_registry_binding(registry_entry("SecPal/.github"))
         with self.assertRaisesRegex(

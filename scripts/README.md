@@ -83,10 +83,13 @@ current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
 For an exact technically non-blocking thread first created after the final
-signed delivery push, `secpal-create-late-disposition.py` verifies that existing
-final delivery evidence, captures only the named live thread, and creates a
-canonical detached SSH/OpenPGP-signed artifact without a delivery commit. The
-resolver consumes that artifact through a separate explicit eligibility path,
+signed delivery push, `secpal-create-late-classification.py` verifies the
+existing final delivery evidence, captures only the named live thread, and
+authenticates the explicit classification decision. Then
+`secpal-create-late-disposition.py` verifies that decision, computes its digest
+internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
+a delivery commit. The resolver consumes both signed artifacts through a
+separate explicit eligibility path,
 requires the actual detached signer to match the verified final delivery
 signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
 attestation, exact thread and top-level comment identities, body and reply

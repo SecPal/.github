@@ -18,7 +18,9 @@ FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
 SIMPLE_RESOLVER="$REPO_ROOT/scripts/secpal-resolve-fixed-threads.py"
 FOLLOW_UP="$REPO_ROOT/scripts/secpal_pr_review/follow_up.py"
 LATE_DISPOSITION="$REPO_ROOT/scripts/secpal_pr_review/late_disposition.py"
+LATE_CLASSIFICATION_CREATOR="$REPO_ROOT/scripts/secpal-create-late-classification.py"
 LATE_CREATOR="$REPO_ROOT/scripts/secpal-create-late-disposition.py"
+LATE_CLASSIFICATION_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/late-classification.schema.json"
 LATE_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/late-disposition.schema.json"
 STATIC_POLICY="$REPO_ROOT/tests/secpal-pr-review-static-policy.py"
 POLYSCOPE_TEMPLATE="$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
@@ -479,6 +481,7 @@ for required in \
   "$FAST_PATH" \
   "$SIMPLE_RESOLVER" \
   "$LATE_DISPOSITION" \
+  "$LATE_CLASSIFICATION_CREATOR" \
   "$LATE_CREATOR" \
   "$STATIC_POLICY" \
   "$POLYSCOPE_TEMPLATE" \
@@ -490,6 +493,7 @@ for required in \
   "$REGISTRY_SCHEMA" \
   "$PLAN_SCHEMA" \
   "$FAST_SCHEMA" \
+  "$LATE_CLASSIFICATION_SCHEMA" \
   "$LATE_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
@@ -650,7 +654,7 @@ prohibited_authority_pattern='gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|r
 if grep -En 'retrying' "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" "$LATE_DISPOSITION"; then
   fail 'mutation helper contains polling behavior'
 fi
-if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" "$LATE_DISPOSITION" "$LATE_CREATOR"; then
+if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" "$LATE_DISPOSITION" "$LATE_CLASSIFICATION_CREATOR" "$LATE_CREATOR"; then
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
@@ -662,6 +666,7 @@ python3 \
   "$SIMPLE_RESOLVER" \
   "$FOLLOW_UP" \
   "$LATE_DISPOSITION" \
+  "$LATE_CLASSIFICATION_CREATOR" \
   "$LATE_CREATOR"
 
 grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \

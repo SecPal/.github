@@ -64,17 +64,26 @@ For an exact technically non-blocking thread that first appeared only after the
 final signed delivery push, do not create an empty delivery commit. Require an
 independently established `INVALID_FALSE_OR_MISLEADING +
 DISPROVEN_WITH_EVIDENCE` classification with `technically_blocking=false`, then
-use `scripts/secpal-create-late-disposition.py` to create the canonical detached
-artifact and signature. The creator must verify the existing final reviewed
+use `scripts/secpal-create-late-classification.py` to capture and authenticate
+that exact decision, then use `scripts/secpal-create-late-disposition.py` to
+verify it and create the canonical detached disposition artifact and signature.
+Both creators must verify the existing final reviewed
 state, receipt/attestation, final tree, receipt trailer, origin, head, and commit
 signature before deriving the delivery signer and reading the explicitly named
 thread. Resolve it only through `scripts/secpal-resolve-fixed-threads.py` with
 `--delivery-issue`, `--late-disposition-evidence`, and
-`--late-disposition-signature`. The resolver independently verifies the same
+`--late-disposition-signature`, together with the matching
+`--late-classification-evidence` and `--late-classification-signature`. The
+resolver independently verifies the same
 final evidence, requires the detached SSH/OpenPGP signer to equal the verified
 delivery signer, and fails closed on any artifact, classification, action,
 head, thread, top-level comment, body, reply, resolved, or outdated-state drift.
-Read [references/late-disposition.schema.json](references/late-disposition.schema.json)
+The disposition creator computes the classification-evidence digest from the
+verified canonical classification artifact; caller-provided digests and
+blocking facts have no authority. Read
+[references/late-classification.schema.json](references/late-classification.schema.json)
+for that input shape and read
+[references/late-disposition.schema.json](references/late-disposition.schema.json)
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
 

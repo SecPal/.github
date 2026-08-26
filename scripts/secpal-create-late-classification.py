@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Create detached signed evidence for exact post-push review disposition."""
+"""Authenticate one exact post-push review classification decision."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ RESOLVER = Path(__file__).resolve().with_name("secpal-resolve-fixed-threads.py")
 
 def _load_resolver() -> Any:
     spec = importlib.util.spec_from_file_location(
-        "secpal_resolve_fixed_threads_for_late_evidence", RESOLVER
+        "secpal_resolve_fixed_threads_for_late_classification", RESOLVER
     )
     if spec is None or spec.loader is None:
         raise RuntimeError("maintained fixed-thread resolver is unavailable")
@@ -36,6 +36,14 @@ def _load_resolver() -> Any:
 resolver = _load_resolver()
 
 
+def _boolean(value: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise argparse.ArgumentTypeError("must be true or false")
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
@@ -46,8 +54,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--final-reviewed-state", required=True)
     parser.add_argument("--expected-final-reviewed-state-digest", required=True)
     parser.add_argument("--final-validation-evidence", required=True)
-    parser.add_argument("--classification-evidence", required=True)
-    parser.add_argument("--classification-signature", required=True)
+    parser.add_argument("--thread-id", required=True)
+    parser.add_argument("--finding-id", required=True)
+    parser.add_argument("--finding-evidence-digest", required=True)
+    parser.add_argument("--classification", required=True)
+    parser.add_argument("--disposition", required=True)
+    parser.add_argument("--technically-blocking", required=True, type=_boolean)
+    parser.add_argument("--technical-blocker", action="append", default=[])
     parser.add_argument("--output", required=True)
     parser.add_argument("--signature-output", required=True)
     return parser.parse_args(argv)
@@ -56,7 +69,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        result = resolver.create_late_disposition_artifact(
+        result = resolver.create_late_classification_artifact(
             arguments.repo,
             arguments.delivery_issue,
             arguments.pr,
@@ -67,8 +80,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.expected_final_reviewed_state_digest
             ),
             final_validation_evidence_path=arguments.final_validation_evidence,
-            classification_evidence_path=arguments.classification_evidence,
-            classification_signature_path=arguments.classification_signature,
+            thread_id=arguments.thread_id,
+            finding_id=arguments.finding_id,
+            finding_evidence_digest=arguments.finding_evidence_digest,
+            classification=arguments.classification,
+            disposition=arguments.disposition,
+            technically_blocking=arguments.technically_blocking,
+            technical_blockers=arguments.technical_blocker,
             output_path=arguments.output,
             signature_output_path=arguments.signature_output,
         )

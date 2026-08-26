@@ -137,12 +137,17 @@ This path first independently verifies the existing final reviewed state,
 validation receipt and attestation, signed receipt trailer, final tree, exact
 head and origin, and accepted local commit signature. The verified signature's
 actual format and fingerprint establish the only signer trust anchor. A strict
-canonical `late-disposition.schema.json` document is then detached-signed by
+canonical `late-classification.schema.json` document first authenticates the
+exact independently established decision, stable finding ID, finding-evidence
+digest, risk facts, and live finding under that signer.
+The disposition creator verifies it and internally computes its digest before
+creating `late-disposition.schema.json`. Both documents are detached-signed by
 that same OS-account identity without a Git commit. SSH and OpenPGP signatures
 use trusted absolute executables, bounded timeouts, the OS account home and
 configuration roots, and neutralized Git environment overrides.
-Artifact and signature outputs are required to remain outside the delivery
-repository.
+Artifact and signature inputs are verified from owned immutable byte snapshots.
+Outputs use descriptor-relative replacement in opened private directories and
+are required to remain outside the delivery repository.
 
 The signed document binds repository, delivery issue, PR, unchanged final head
 and tree, receipt/attestation/final-eligibility digests, derived signer, exact
@@ -156,7 +161,8 @@ corrupt evidence, an alternate valid signer, self-declared trust substitution,
 or any binding drift fail closed.
 
 The maintained fixed-thread resolver is still the sole GitHub mutation
-boundary. It re-verifies both evidence layers, reads only the named thread,
+boundary. It re-verifies the final-delivery, classification, and disposition
+evidence layers, reads only the named thread,
 checks every exact live binding before the first write and immediately before
 the target write, and resolves only the authenticated source conversation. The
 path consumes zero unrestricted reviews, remediation cycles, commits, pushes,
@@ -406,8 +412,10 @@ identity. It is read at most once only under the explicit CI and readiness path.
 
 A validation receipt is produced by the single complete run and binds its staged
 tree, canonical eligibility-manifest digest, and normalized satisfied evidence
-for every registered manual gate. After
-the signed commit, that receipt may be bound once only when the commit's parent,
+for every registered manual gate. The manifest is an explicit empty set when
+the reviewed state has no unresolved
+thread eligible for a guarded action; its canonical digest is still bound.
+After the signed commit, that receipt may be bound once only when the commit's parent,
 tree, and single `SecPal-Validation-Receipt` trailer match exactly. The final
 validation attestation contains at least `repository`, `head_sha`,
 `registry_digest`, `command_set_digest`, `successful_result`, validated tree,

@@ -206,6 +206,10 @@ final attestation, local final tree and head, receipt trailer, accepted commit
 signature, and exact origin. It derives the delivery signer fingerprint from
 that cryptographic verification. It then captures only the one explicitly
 named live thread and signs the canonical
+[`late-classification.schema.json`](../.agents/skills/secpal-pr-review/references/late-classification.schema.json)
+artifact. The disposition creator verifies that artifact and signature, checks
+the exact live finding again, computes the classification digest internally,
+and signs the canonical
 [`late-disposition.schema.json`](../.agents/skills/secpal-pr-review/references/late-disposition.schema.json)
 artifact with the OS-account signing configuration. The actual detached signer
 must equal the final delivery signer; a signer identity declared by the
@@ -216,31 +220,36 @@ cannot alter that worktree or tree.
 The initial supported authorization is exactly
 `INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
 `technically_blocking=false`. Classification is independently established and
-supplied explicitly; no comment-text heuristic exists. The signed artifact
+recorded in separately signed exact evidence; no comment-text heuristic exists.
+The signed artifact
 binds the repository, delivery issue, PR, unchanged final head and tree, final
 receipt/attestation/eligibility digests, signer, exact thread, top-level comment
 node and database identities, finding-body digest, reply-state digest and
 count, resolved/outdated states, classification evidence digest, disposition,
 and exact resolution action. It never selects threads by query or pattern.
 
-Create canonical classification input and detached evidence:
-
-```json
-{
-  "schema_version": "1.0",
-  "threads": [
-    {
-      "classification": "INVALID_FALSE_OR_MISLEADING",
-      "classification_evidence_digest": "CLASSIFICATION_EVIDENCE_SHA256",
-      "disposition": "DISPROVEN_WITH_EVIDENCE",
-      "technically_blocking": false,
-      "thread_id": "PRRT_example"
-    }
-  ]
-}
-```
+Create authenticated classification evidence, then detached disposition
+evidence:
 
 ```bash
+python3 scripts/secpal-create-late-classification.py \
+  --repo SecPal/api \
+  --delivery-issue 456 \
+  --pr 123 \
+  --repo-root /path/to/SecPal/api \
+  --expected-head 0123456789abcdef0123456789abcdef01234567 \
+  --final-reviewed-state FINAL_REVIEWED_STATE.json \
+  --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
+  --final-validation-evidence FINAL_ATTESTATION.json \
+  --thread-id PRRT_example \
+  --finding-id LF-LATE-1 \
+  --finding-evidence-digest FINDING_EVIDENCE_SHA256 \
+  --classification INVALID_FALSE_OR_MISLEADING \
+  --disposition DISPROVEN_WITH_EVIDENCE \
+  --technically-blocking false \
+  --output SESSION/LATE_CLASSIFICATION.json \
+  --signature-output SESSION/LATE_CLASSIFICATION.json.sig
+
 python3 scripts/secpal-create-late-disposition.py \
   --repo SecPal/api \
   --delivery-issue 456 \
@@ -251,6 +260,7 @@ python3 scripts/secpal-create-late-disposition.py \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
   --classification-evidence LATE_CLASSIFICATION.json \
+  --classification-signature LATE_CLASSIFICATION.json.sig \
   --output SESSION/LATE_DISPOSITION.json \
   --signature-output SESSION/LATE_DISPOSITION.json.sig
 ```
@@ -267,6 +277,8 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --reviewed-state FINAL_REVIEWED_STATE.json \
   --expected-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --validation-evidence FINAL_ATTESTATION.json \
+  --late-classification-evidence SESSION/LATE_CLASSIFICATION.json \
+  --late-classification-signature SESSION/LATE_CLASSIFICATION.json.sig \
   --late-disposition-evidence SESSION/LATE_DISPOSITION.json \
   --late-disposition-signature SESSION/LATE_DISPOSITION.json.sig \
   --thread-id PRRT_example \

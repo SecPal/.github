@@ -213,6 +213,7 @@ EXPECTED_CALLS = {
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
+    "secpal-create-late-classification.py": (),
     "secpal-create-late-disposition.py": (),
 }
 
@@ -235,6 +236,18 @@ SAFE_OS_ATTRIBUTES = {
     "path",
     "pathsep",
     "replace",
+    "open",
+    "fstat",
+    "read",
+    "write",
+    "stat",
+    "O_RDONLY",
+    "O_WRONLY",
+    "O_CREAT",
+    "O_EXCL",
+    "O_CLOEXEC",
+    "O_NOFOLLOW",
+    "O_DIRECTORY",
     "unlink",
 }
 ALLOWED_IMPORT_ROOTS = {
@@ -243,6 +256,7 @@ ALLOWED_IMPORT_ROOTS = {
     "copy",
     "dataclasses",
     "datetime",
+    "errno",
     "functools",
     "hashlib",
     "importlib",
@@ -252,6 +266,7 @@ ALLOWED_IMPORT_ROOTS = {
     "pathlib",
     "pwd",
     "re",
+    "secrets",
     "secpal_work_graph",
     "site",
     "stat",
@@ -338,11 +353,14 @@ ALLOWED_IMPORTS = {
     },
     "late_disposition.py": {
         "from __future__ import annotations",
+        "import errno",
         "import hashlib",
         "import json",
         "import os",
         "import pwd",
         "import re",
+        "import secrets",
+        "import stat",
         "import subprocess",
         "import tempfile",
         "from dataclasses import dataclass",
@@ -350,6 +368,15 @@ ALLOWED_IMPORTS = {
         "from typing import Any, Sequence",
     },
     "secpal-create-late-disposition.py": {
+        "from __future__ import annotations",
+        "import argparse",
+        "import importlib.util",
+        "import json",
+        "import sys",
+        "from pathlib import Path",
+        "from typing import Any, Sequence",
+    },
+    "secpal-create-late-classification.py": {
         "from __future__ import annotations",
         "import argparse",
         "import importlib.util",
@@ -444,10 +471,16 @@ DIRECT_MODULE_ATTRIBUTES = {
         "sys": {"argv", "modules", "stderr"},
     },
     "late_disposition.py": {
+        "errno": {"EINVAL", "ENOTSUP"},
         "pwd": {"getpwuid"},
-        "tempfile": {"mkstemp"},
+        "stat": {"S_ISREG"},
+        "tempfile": {"TemporaryDirectory"},
     },
     "secpal-create-late-disposition.py": {
+        "importlib": {"util"},
+        "sys": {"argv", "modules", "stderr"},
+    },
+    "secpal-create-late-classification.py": {
         "importlib": {"util"},
         "sys": {"argv", "modules", "stderr"},
     },
@@ -533,12 +566,20 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_live_follow_up",
         },
         "late_disposition": {
+            "CLASSIFICATION_KIND",
+            "CLASSIFICATION_PURPOSE",
+            "CLASSIFICATION_SIGNATURE_NAMESPACE",
             "KIND",
+            "IDENTITY",
+            "MAXIMUM_ARTIFACT_BYTES",
             "SCHEMA_VERSION",
+            "TECHNICAL_BLOCKERS",
             "LateDispositionError",
+            "_load_canonical_json",
             "canonical_json_bytes",
             "os_account_home",
             "parse_artifact",
+            "parse_classification_artifact",
             "read_signing_configuration",
             "sign_artifact",
             "signer_from_git_verification",
@@ -548,6 +589,12 @@ LOADED_MODULE_ATTRIBUTES = {
         "resolver": {
             "ResolutionError",
             "create_late_disposition_artifact",
+        },
+    },
+    "secpal-create-late-classification.py": {
+        "resolver": {
+            "ResolutionError",
+            "create_late_classification_artifact",
         },
     },
 }
@@ -651,6 +698,29 @@ DYNAMIC_IMPORT_CALLS = {
             "spec.loader.exec_module(module)",
         ),
     },
+    "secpal-create-late-classification.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_resolve_fixed_threads_for_late_classification', RESOLVER)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules[spec.name]",
+        ),
+    },
 }
 SAFE_GETATTR_CALLS = {
     "secpal-pr-review-actions.py": {
@@ -749,6 +819,12 @@ SAFE_SYS_MODULES_CALLS = {
             "sys.modules.pop(spec.name, None)",
         ),
     },
+    "secpal-create-late-classification.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+    },
 }
 SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
@@ -787,6 +863,12 @@ SAFE_SYS_MODULES_STORES = {
             "sys.modules[spec.name]",
         ),
     },
+    "secpal-create-late-classification.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules[spec.name]",
+        ),
+    },
 }
 RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_body_digest",
@@ -799,7 +881,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_load_evidence_helper",
     "_load_follow_up_helper",
     "_load_late_disposition_helper",
-    "_load_late_classification_evidence",
+    "_late_signing_key",
     "_markdown_parser_environment",
     "_matches_late_authorization",
     "_matches_reviewed_target",
@@ -822,6 +904,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "load_reviewed_state",
     "load_validation_evidence",
     "create_late_disposition_artifact",
+    "create_late_classification_artifact",
     "main",
     "parse_args",
     "read_stable_target_thread",
@@ -884,16 +967,12 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_run_gh",
     ),
     DynamicImportCall(
-        ("resolve_late_disposition_threads",),
+        ("create_late_classification_artifact",),
         "_run_gh",
     ),
     DynamicImportCall(
-        ("_load_late_classification_evidence",),
-        "_reject_nonfinite_json_constant",
-    ),
-    DynamicImportCall(
-        ("_load_late_classification_evidence",),
-        "_reject_duplicate_json_object",
+        ("resolve_late_disposition_threads",),
+        "_run_gh",
     ),
     DynamicImportCall(
         ("verify_live_follow_up",),
@@ -917,6 +996,16 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite(
+        "comprehension",
+        ("create_late_classification_artifact",),
+        "supplied_blockers",
+    ),
+    LoopSite(
+        "comprehension",
+        ("create_late_classification_artifact",),
+        "target.thread.comments",
+    ),
     LoopSite(
         "for",
         ("_resolve_trusted_markdown_node",),
@@ -947,8 +1036,6 @@ RESOLVER_LOOP_SITES = {
     LoopSite("for", ("validate_expected_targets",), "target.comments"),
     LoopSite("for", ("resolve_threads",), "thread_ids"),
     LoopSite("for", ("resolve_threads",), "enumerate(thread_ids)"),
-    LoopSite("for", ("_load_late_classification_evidence",), "payload['threads']"),
-    LoopSite("for", ("create_late_disposition_artifact",), "decisions"),
     LoopSite("for", ("resolve_late_disposition_threads",), "thread_ids"),
     LoopSite(
         "for",
@@ -1002,8 +1089,6 @@ RESOLVER_LOOP_SITES = {
     LoopSite("comprehension", ("_matches_reviewed_target",), "reviewed.comments"),
     LoopSite("comprehension", ("_reply_state_digest",), "thread.comments"),
     LoopSite("comprehension", ("_matches_late_authorization",), "thread.comments"),
-    LoopSite("comprehension", ("_load_late_classification_evidence",), "decisions"),
-    LoopSite("comprehension", ("create_late_disposition_artifact",), "decisions"),
     LoopSite(
         "comprehension",
         ("create_late_disposition_artifact",),
@@ -1889,11 +1974,11 @@ def self_test() -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 8:
+    if len(argv) != 9:
         raise SystemExit(
             "usage: secpal-pr-review-static-policy.py "
             "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER FOLLOW_UP "
-            "LATE_DISPOSITION LATE_CREATOR"
+            "LATE_DISPOSITION LATE_CLASSIFICATION_CREATOR LATE_CREATOR"
         )
     self_test()
     findings: list[str] = []

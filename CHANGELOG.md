@@ -18,6 +18,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   non-blocking review thread created only after the final signed delivery push,
   without changing the delivery tree or consuming another review or remediation
   cycle
+- separately authenticated canonical classification evidence whose digest is
+  derived only after exact finding, risk-fact, and delivery-signer verification
 
 **Changed:**
 
@@ -25,6 +27,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   eligibility evidence or the new exact post-final-push evidence, while failing
   closed on delivery-anchor, signer, repository, issue, PR, head, thread,
   comment, reply, state, classification, disposition, or action drift
+- detached verification now uses owned byte snapshots, and evidence output is
+  anchored to validated private directory descriptors so concurrent pathname
+  substitution cannot change the authenticated input or output destination
 
 ## 2026-08-24 - Reconcile Internal Database Service Domain Policy
 

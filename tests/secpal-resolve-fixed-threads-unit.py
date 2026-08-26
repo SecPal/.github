@@ -720,6 +720,39 @@ def run_late_resolution_fixture(
     )
     body = "The reported recovery behavior is not present."
     artifact = late_disposition_payload(attestation, body=body)
+    classification = {
+        "schema_version": "1.0",
+        "kind": "LATE_FEEDBACK_CLASSIFICATION",
+        "repository": "SecPal/api",
+        "delivery_issue_number": 724,
+        "pull_request_number": 123,
+        "head_sha": attestation["head_sha"],
+        "delivery_signer": {
+            "format": "ssh",
+            "fingerprint": "SHA256:fixtureDeliverySigner",
+        },
+        "authorized_purpose": "AUTHORIZE_LATE_FEEDBACK_DISPOSITION",
+        "finding_id": "LF-LATE-1",
+        "finding_evidence_digest": "c" * 64,
+        "thread": {
+            key: value
+            for key, value in artifact["threads"][0].items()
+            if key
+            not in {"classification_evidence_digest", "authorized_action"}
+        },
+    }
+    classification["thread"]["technical_blockers"] = []
+    classification_path = root / "late-classification.json"
+    classification_signature_path = root / "late-classification.json.sig"
+    classification_path.write_bytes(
+        MODULE.late_disposition.canonical_json_bytes(classification)
+    )
+    classification_signature_path.write_text(
+        "fixture classification signature", encoding="utf-8"
+    )
+    artifact["threads"][0]["classification_evidence_digest"] = hashlib.sha256(
+        classification_path.read_bytes()
+    ).hexdigest()
     if artifact_mutator is not None:
         artifact_mutator(artifact)
     artifact_path = root / "late-disposition.json"
@@ -771,6 +804,8 @@ def run_late_resolution_fixture(
             final_reviewed_state_path=root / "reviewed.json",
             expected_final_reviewed_state_digest=reviewed["state_digest"],
             final_validation_evidence_path=root / "validation.json",
+            late_classification_evidence_path=classification_path,
+            late_classification_signature_path=classification_signature_path,
             late_disposition_evidence_path=artifact_path,
             late_disposition_signature_path=signature_path,
         )
@@ -875,20 +910,10 @@ class ResolveFixedThreadsTests(TestCase):
             signing_key = Path(key_directory) / "signing-key"
             signing_key.write_text("fixture", encoding="utf-8")
             git.signing_key = str(signing_key)
-            classification = {
-                "schema_version": "1.0",
-                "threads": [
-                    {
-                        "thread_id": "PRRT_LATE_NON_BLOCKING",
-                        "classification": "INVALID_FALSE_OR_MISLEADING",
-                        "disposition": "DISPROVEN_WITH_EVIDENCE",
-                        "technically_blocking": False,
-                        "classification_evidence_digest": "d" * 64,
-                    }
-                ],
-            }
-            classification_path = root / "classification.json"
-            classification_path.write_bytes(MODULE._canonical_json_bytes(classification))
+            classification_path = Path(output_directory) / "classification.json"
+            classification_signature_path = (
+                Path(output_directory) / "classification.sig"
+            )
             artifact_path = Path(output_directory) / "late.json"
             signature_path = Path(output_directory) / "late.sig"
             response = target_response(
@@ -902,7 +927,40 @@ class ResolveFixedThreadsTests(TestCase):
                     )
                 ],
             )
-            github = FakeGh([response, response])
+            github = FakeGh([response, response, response, response])
+            finding_digest = hashlib.sha256(
+                b"The reported recovery behavior is not present."
+            ).hexdigest()
+            classification_authorization = (
+                MODULE.late_disposition.ClassificationEvidence(
+                    evidence_digest="d" * 64,
+                    canonical_payload=b"{}\n",
+                    repository="SecPal/api",
+                    delivery_issue_number=724,
+                    pull_request_number=123,
+                    head_sha=attestation["head_sha"],
+                    signer=MODULE.late_disposition.SignerIdentity(
+                        "ssh", "SHA256:fixtureDeliverySigner"
+                    ),
+                    finding_id="LF-LATE-1",
+                    finding_evidence_digest="c" * 64,
+                    thread=MODULE.late_disposition.ThreadAuthorization(
+                        thread_id="PRRT_LATE_NON_BLOCKING",
+                        top_level_comment_node_id="PRRC_LATE_FINDING",
+                        top_level_comment_database_id=1001,
+                        finding_body_digest=finding_digest,
+                        reply_state_digest=MODULE._digest_json([]),
+                        reply_count=0,
+                        is_resolved=False,
+                        is_outdated=False,
+                        classification="INVALID_FALSE_OR_MISLEADING",
+                        disposition="DISPROVEN_WITH_EVIDENCE",
+                        technically_blocking=False,
+                        classification_evidence_digest="d" * 64,
+                    ),
+                    technical_blockers=(),
+                )
+            )
 
             def sign(
                 artifact: dict[str, Any],
@@ -928,10 +986,38 @@ class ResolveFixedThreadsTests(TestCase):
                 ),
                 mock.patch.object(
                     MODULE.late_disposition,
+                    "parse_classification_artifact",
+                    return_value=classification_authorization,
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
                     "os_account_home",
                     return_value=Path(key_directory),
                 ),
             ):
+                classification_result = (
+                    MODULE.create_late_classification_artifact(
+                        "SecPal/api",
+                        724,
+                        123,
+                        attestation["head_sha"],
+                        repository_root=root,
+                        final_reviewed_state_path=root / "reviewed.json",
+                        expected_final_reviewed_state_digest=(
+                            reviewed["state_digest"]
+                        ),
+                        final_validation_evidence_path=root / "validation.json",
+                        thread_id="PRRT_LATE_NON_BLOCKING",
+                        finding_id="LF-LATE-1",
+                        finding_evidence_digest="c" * 64,
+                        classification="INVALID_FALSE_OR_MISLEADING",
+                        disposition="DISPROVEN_WITH_EVIDENCE",
+                        technically_blocking=False,
+                        technical_blockers=(),
+                        output_path=classification_path,
+                        signature_output_path=classification_signature_path,
+                    )
+                )
                 result = MODULE.create_late_disposition_artifact(
                     "SecPal/api",
                     724,
@@ -942,11 +1028,22 @@ class ResolveFixedThreadsTests(TestCase):
                     expected_final_reviewed_state_digest=reviewed["state_digest"],
                     final_validation_evidence_path=root / "validation.json",
                     classification_evidence_path=classification_path,
+                    classification_signature_path=classification_signature_path,
                     output_path=artifact_path,
                     signature_output_path=signature_path,
                 )
 
+            classification_artifact = json.loads(
+                classification_path.read_text(encoding="utf-8")
+            )
             artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                classification_result["status"],
+                "LATE_CLASSIFICATION_AUTHENTICATED",
+            )
+            self.assertEqual(
+                classification_artifact["thread"]["technical_blockers"], []
+            )
             self.assertEqual(result["status"], "LATE_DISPOSITION_AUTHENTICATED")
             self.assertFalse(result["delivery_tree_changed"])
             self.assertEqual(
@@ -955,6 +1052,10 @@ class ResolveFixedThreadsTests(TestCase):
             )
             self.assertEqual(
                 artifact["threads"][0]["top_level_comment_database_id"], 1001
+            )
+            self.assertEqual(
+                artifact["threads"][0]["classification_evidence_digest"],
+                classification_authorization.evidence_digest,
             )
             self.assertFalse(
                 any(call and call[0] in {"commit", "push"} for call in git.calls)
@@ -1005,7 +1106,7 @@ class ResolveFixedThreadsTests(TestCase):
                         "reply_count": 1,
                     }
                 ),
-                "error": "differs from authenticated late disposition",
+                "error": "does not match authenticated classification evidence",
             },
             "different top-level identity": {
                 "live_comments": [
@@ -1021,7 +1122,7 @@ class ResolveFixedThreadsTests(TestCase):
                 "artifact_mutator": lambda value: value["threads"][0].update(
                     {"top_level_comment_database_id": 9999}
                 ),
-                "error": "differs from authenticated late disposition",
+                "error": "does not match authenticated classification evidence",
             },
             "incompatible outdated state": {
                 "live_outdated": True,
@@ -1089,6 +1190,9 @@ class ResolveFixedThreadsTests(TestCase):
             "technically blocking": lambda value: value["threads"][0].update(
                 {"technically_blocking": True}
             ),
+            "classification evidence substituted": lambda value: value[
+                "threads"
+            ][0].update({"classification_evidence_digest": "e" * 64}),
             "action substituted": lambda value: value["threads"][0].update(
                 {"authorized_action": "RESOLVE_ANY_THREAD"}
             ),
@@ -1144,6 +1248,8 @@ class ResolveFixedThreadsTests(TestCase):
                 final_reviewed_state_path="unread",
                 expected_final_reviewed_state_digest="b" * 64,
                 final_validation_evidence_path="unread",
+                late_classification_evidence_path="unread",
+                late_classification_signature_path="unread",
                 late_disposition_evidence_path="unread",
                 late_disposition_signature_path="unread",
             )
@@ -1402,17 +1508,747 @@ class ResolveFixedThreadsTests(TestCase):
                     "_run_signature_command",
                     side_effect=mutate,
                 ),
+            ):
+                verified = MODULE.late_disposition.verify_detached_signature(
+                    artifact,
+                    signature,
+                    signer,
+                    environment={"PATH": "/usr/bin"},
+                )
+            self.assertEqual(
+                verified,
+                MODULE.late_disposition.canonical_json_bytes({"value": 1}),
+            )
+
+    def test_cycle1_r1_unsigned_classification_assertions_have_no_authority(
+        self,
+    ) -> None:
+        payload = {
+            "schema_version": "1.0",
+            "threads": [
+                {
+                    "thread_id": "PRRT_arbitraryCallerDecision",
+                    "classification": "INVALID_FALSE_OR_MISLEADING",
+                    "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    "technically_blocking": False,
+                    "classification_evidence_digest": "0" * 64,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "classification.json"
+            path.write_bytes(MODULE._canonical_json_bytes(payload))
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "signature is unavailable",
+            ):
+                MODULE.late_disposition.parse_classification_artifact(
+                    path,
+                    Path(directory) / "missing.sig",
+                    expected_signer=MODULE.late_disposition.SignerIdentity(
+                        "ssh", "SHA256:fixtureDeliverySigner"
+                    ),
+                    repository="SecPal/api",
+                    delivery_issue_number=724,
+                    pull_request_number=123,
+                    head_sha="a" * 40,
+                    thread_id="PRRT_arbitraryCallerDecision",
+                )
+
+    def test_cycle1_r1_authenticated_classification_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".config").mkdir()
+            (root / ".gnupg").mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=root
+            )
+            key = root / "classification-key"
+            alternate_key = root / "alternate-key"
+            for key_path in (key, alternate_key):
+                subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-q",
+                        "-t",
+                        "ed25519",
+                        "-N",
+                        "",
+                        "-f",
+                        str(key_path),
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                )
+
+            def fingerprint(key_path: Path) -> str:
+                return subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-lf",
+                        f"{key_path}.pub",
+                        "-E",
+                        "sha256",
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                ).stdout.split()[1]
+
+            signer = MODULE.late_disposition.SignerIdentity(
+                "ssh", fingerprint(key)
+            )
+            alternate = MODULE.late_disposition.SignerIdentity(
+                "ssh", fingerprint(alternate_key)
+            )
+            artifact = root / "classification.json"
+            signature = root / "classification.sig"
+            body_digest = hashlib.sha256(b"exact finding").hexdigest()
+            reply_digest = MODULE._digest_json([])
+            payload = {
+                "schema_version": "1.0",
+                "kind": "LATE_FEEDBACK_CLASSIFICATION",
+                "repository": "SecPal/api",
+                "delivery_issue_number": 724,
+                "pull_request_number": 123,
+                "head_sha": "a" * 40,
+                "delivery_signer": {
+                    "format": "ssh",
+                    "fingerprint": signer.fingerprint,
+                },
+                "authorized_purpose": "AUTHORIZE_LATE_FEEDBACK_DISPOSITION",
+                "finding_id": "LF-LATE-1",
+                "finding_evidence_digest": "c" * 64,
+                "thread": {
+                    "thread_id": "PRRT_exactLateFinding",
+                    "top_level_comment_node_id": "PRRC_exactRoot",
+                    "top_level_comment_database_id": 1001,
+                    "finding_body_digest": body_digest,
+                    "reply_state_digest": reply_digest,
+                    "reply_count": 0,
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "classification": "INVALID_FALSE_OR_MISLEADING",
+                    "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    "technically_blocking": False,
+                    "technical_blockers": [],
+                },
+            }
+            MODULE.evidence.validate_against_authoritative_schema(
+                payload,
+                ROOT
+                / ".agents/skills/secpal-pr-review/references/late-classification.schema.json",
+                "late classification evidence",
+            )
+
+            def sign(value: dict[str, Any], key_path: Path, identity: Any) -> None:
+                MODULE.late_disposition.sign_artifact(
+                    value,
+                    artifact,
+                    signature,
+                    signer=identity,
+                    signing_key=str(key_path),
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                )
+
+            def parse() -> Any:
+                return MODULE.late_disposition.parse_classification_artifact(
+                    artifact,
+                    signature,
+                    expected_signer=signer,
+                    repository="SecPal/api",
+                    delivery_issue_number=724,
+                    pull_request_number=123,
+                    head_sha="a" * 40,
+                    thread_id="PRRT_exactLateFinding",
+                    signature_environment=environment,
+                )
+
+            sign(payload, key, signer)
+            evidence = parse()
+            self.assertEqual(
+                evidence.evidence_digest,
+                hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            )
+            exact_live = MODULE.ThreadState(
+                thread_id="PRRT_exactLateFinding",
+                is_resolved=False,
+                is_outdated=False,
+                comments=(
+                    MODULE.ThreadCommentState(
+                        comment_id="PRRC_exactRoot",
+                        database_id=1001,
+                        body_digest=body_digest,
+                        reply_to_id=None,
+                    ),
+                ),
+            )
+            self.assertTrue(
+                MODULE._matches_late_authorization(exact_live, evidence.thread)
+            )
+
+            substitutions = (
+                ("repository", "Other/repository"),
+                ("delivery_issue_number", 725),
+                ("pull_request_number", 124),
+                ("head_sha", "b" * 40),
+            )
+            for field, value in substitutions:
+                changed = copy.deepcopy(payload)
+                changed[field] = value
+                sign(changed, key, signer)
+                with self.subTest(field=field), self.assertRaises(
+                    MODULE.late_disposition.LateDispositionError
+                ):
+                    parse()
+            for field, value in (
+                ("thread_id", "PRRT_otherLateFinding"),
+                ("classification", "VALID_ACTIONABLE"),
+                ("disposition", "CORRECTED_AND_VERIFIED"),
+            ):
+                changed = copy.deepcopy(payload)
+                changed["thread"][field] = value
+                sign(changed, key, signer)
+                with self.subTest(thread_field=field), self.assertRaises(
+                    MODULE.late_disposition.LateDispositionError
+                ):
+                    parse()
+            for blocker in (
+                "P1",
+                "P2",
+                "SECURITY",
+                "AUTHENTICATION",
+                "INTEGRITY",
+                "FAIL_OPEN",
+            ):
+                changed = copy.deepcopy(payload)
+                changed["thread"]["technically_blocking"] = True
+                changed["thread"]["technical_blockers"] = [blocker]
+                sign(changed, key, signer)
+                with self.subTest(blocker=blocker), self.assertRaisesRegex(
+                    MODULE.late_disposition.LateDispositionError,
+                    "not resolution-eligible",
+                ):
+                    parse()
+
+            changed = copy.deepcopy(payload)
+            changed["thread"]["top_level_comment_node_id"] = "PRRC_otherRoot"
+            sign(changed, key, signer)
+            root_substitution = parse()
+            self.assertFalse(
+                MODULE._matches_late_authorization(
+                    exact_live, root_substitution.thread
+                )
+            )
+            changed = copy.deepcopy(payload)
+            changed["thread"]["top_level_comment_database_id"] = 1002
+            sign(changed, key, signer)
+            database_substitution = parse()
+            self.assertFalse(
+                MODULE._matches_late_authorization(
+                    exact_live, database_substitution.thread
+                )
+            )
+            changed = copy.deepcopy(payload)
+            changed["thread"]["finding_body_digest"] = "f" * 64
+            changed["thread"]["reply_state_digest"] = "e" * 64
+            sign(changed, key, signer)
+            state_substitution = parse()
+            self.assertFalse(
+                MODULE._matches_late_authorization(
+                    exact_live, state_substitution.thread
+                )
+            )
+
+            alternate_payload = copy.deepcopy(payload)
+            alternate_payload["delivery_signer"]["fingerprint"] = (
+                alternate.fingerprint
+            )
+            sign(alternate_payload, alternate_key, alternate)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "signer does not match final delivery signer",
+            ):
+                parse()
+
+    def test_cycle1_r2_openpgp_verifies_captured_bytes_not_mutable_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".config").mkdir()
+            (root / ".gnupg").mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=root
+            )
+            subprocess.run(
+                [
+                    "/usr/bin/gpg",
+                    "--batch",
+                    "--no-tty",
+                    "--passphrase",
+                    "",
+                    "--quick-generate-key",
+                    "SecPal Cycle 1 <cycle1@example.invalid>",
+                    "ed25519",
+                    "sign",
+                    "0",
+                ],
+                check=True,
+                env=environment,
+                capture_output=True,
+            )
+            keys = subprocess.run(
+                ["/usr/bin/gpg", "--batch", "--with-colons", "--list-secret-keys"],
+                check=True,
+                env=environment,
+                capture_output=True,
+                text=True,
+            ).stdout
+            fingerprint = next(
+                line.split(":")[9]
+                for line in keys.splitlines()
+                if line.startswith("fpr:")
+            )
+            signer = MODULE.late_disposition.SignerIdentity(
+                "openpgp", fingerprint
+            )
+            artifact = root / "artifact.json"
+            signature = root / "artifact.asc"
+            MODULE.late_disposition.sign_artifact(
+                {"schema_version": "fixture", "value": "signed-B"},
+                artifact,
+                signature,
+                signer=signer,
+                signing_key=fingerprint,
+                environment=environment,
+            )
+            signed_b = artifact.read_bytes()
+            unsigned_a = MODULE.late_disposition.canonical_json_bytes(
+                {"schema_version": "fixture", "value": "unsigned-A"}
+            )
+            artifact.write_bytes(unsigned_a)
+            original_run = MODULE.late_disposition._run_signature_command
+
+            def race_artifact(
+                executable: str,
+                arguments: Sequence[str],
+                *,
+                environment: dict[str, str],
+                stdin: bytes | None = None,
+            ) -> Any:
+                if "--verify" in arguments:
+                    artifact.write_bytes(signed_b)
+                    try:
+                        return original_run(
+                            executable,
+                            arguments,
+                            environment=environment,
+                            stdin=stdin,
+                        )
+                    finally:
+                        artifact.write_bytes(unsigned_a)
+                return original_run(
+                    executable,
+                    arguments,
+                    environment=environment,
+                    stdin=stdin,
+                )
+
+            with (
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "_run_signature_command",
+                    side_effect=race_artifact,
+                ),
                 self.assertRaisesRegex(
                     MODULE.late_disposition.LateDispositionError,
-                    "changed during signature verification",
+                    "OpenPGP signature is invalid",
                 ),
             ):
                 MODULE.late_disposition.verify_detached_signature(
                     artifact,
                     signature,
                     signer,
-                    environment={"PATH": "/usr/bin"},
+                    environment=environment,
                 )
+            classification_payload = {
+                "kind": "LATE_FEEDBACK_CLASSIFICATION",
+                "value": "openpgp",
+            }
+            MODULE.late_disposition.sign_artifact(
+                classification_payload,
+                artifact,
+                signature,
+                signer=signer,
+                signing_key=fingerprint,
+                environment=environment,
+                signature_namespace=(
+                    MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                ),
+            )
+            self.assertEqual(
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact,
+                    signature,
+                    signer,
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                ),
+                MODULE.late_disposition.canonical_json_bytes(
+                    classification_payload
+                ),
+            )
+
+    def test_cycle1_r2_ssh_verifies_captured_signature_not_mutable_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".config").mkdir()
+            (root / ".gnupg").mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=root
+            )
+            key = root / "key"
+            subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-f",
+                    str(key),
+                ],
+                check=True,
+                env=environment,
+                capture_output=True,
+            )
+            fingerprint = subprocess.run(
+                ["/usr/bin/ssh-keygen", "-lf", f"{key}.pub", "-E", "sha256"],
+                check=True,
+                env=environment,
+                capture_output=True,
+                text=True,
+            ).stdout.split()[1]
+            signer = MODULE.late_disposition.SignerIdentity("ssh", fingerprint)
+            artifact_a = root / "a.json"
+            signature_a = root / "a.sig"
+            artifact_b = root / "b.json"
+            signature_b = root / "b.sig"
+            MODULE.late_disposition.sign_artifact(
+                {"value": "A"},
+                artifact_a,
+                signature_a,
+                signer=signer,
+                signing_key=str(key),
+                environment=environment,
+            )
+            MODULE.late_disposition.sign_artifact(
+                {"value": "B"},
+                artifact_b,
+                signature_b,
+                signer=signer,
+                signing_key=str(key),
+                environment=environment,
+            )
+            valid_for_a = signature_a.read_bytes()
+            restored_signature = signature_b.read_bytes()
+            signature_a.write_bytes(restored_signature)
+            original_run = MODULE.late_disposition._run_signature_command
+
+            def race_signature(
+                executable: str,
+                arguments: Sequence[str],
+                *,
+                environment: dict[str, str],
+                stdin: bytes | None = None,
+            ) -> Any:
+                if "check-novalidate" in arguments:
+                    signature_a.write_bytes(valid_for_a)
+                    try:
+                        return original_run(
+                            executable,
+                            arguments,
+                            environment=environment,
+                            stdin=stdin,
+                        )
+                    finally:
+                        signature_a.write_bytes(restored_signature)
+                return original_run(
+                    executable,
+                    arguments,
+                    environment=environment,
+                    stdin=stdin,
+                )
+
+            with (
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "_run_signature_command",
+                    side_effect=race_signature,
+                ),
+                self.assertRaisesRegex(
+                    MODULE.late_disposition.LateDispositionError,
+                    "SSH signature is invalid",
+                ),
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact_a,
+                    signature_a,
+                    signer,
+                    environment=environment,
+                )
+
+    def test_cycle1_r2_verification_uses_only_initial_regular_file_capture(
+        self,
+    ) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        for mutation in ("replace", "remove"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact = root / "artifact.json"
+                signature = root / "artifact.sig"
+                canonical = MODULE.late_disposition.canonical_json_bytes(
+                    {"value": "captured"}
+                )
+                artifact.write_bytes(canonical)
+                signature.write_bytes(b"captured-signature")
+
+                def mutate_originals(*_args: Any, **_kwargs: Any) -> Any:
+                    if mutation == "replace":
+                        artifact.write_bytes(
+                            MODULE.late_disposition.canonical_json_bytes(
+                                {"value": "replacement"}
+                            )
+                        )
+                        signature.write_bytes(b"replacement-signature")
+                    else:
+                        artifact.unlink()
+                        signature.unlink()
+                    return subprocess.CompletedProcess(
+                        (),
+                        0,
+                        b'Good "fixture" signature with ED25519 key '
+                        b"SHA256:fixtureDeliverySigner\n",
+                        b"",
+                    )
+
+                with (
+                    mock.patch.object(
+                        MODULE.late_disposition,
+                        "_trusted_executable",
+                        return_value="/usr/bin/ssh-keygen",
+                    ),
+                    mock.patch.object(
+                        MODULE.late_disposition,
+                        "_run_signature_command",
+                        side_effect=mutate_originals,
+                    ),
+                ):
+                    verified = MODULE.late_disposition.verify_detached_signature(
+                        artifact,
+                        signature,
+                        signer,
+                        environment={"PATH": "/usr/bin"},
+                    )
+                self.assertEqual(verified, canonical)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_artifact = root / "real.json"
+            real_signature = root / "real.sig"
+            real_artifact.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes({"value": 1})
+            )
+            real_signature.write_bytes(b"signature")
+            artifact_link = root / "artifact.json"
+            signature_link = root / "artifact.sig"
+            artifact_link.symlink_to(real_artifact)
+            signature_link.symlink_to(real_signature)
+            for artifact, signature in (
+                (artifact_link, real_signature),
+                (real_artifact, signature_link),
+            ):
+                with self.assertRaisesRegex(
+                    MODULE.late_disposition.LateDispositionError,
+                    "unavailable",
+                ):
+                    MODULE.late_disposition.verify_detached_signature(
+                        artifact,
+                        signature,
+                        signer,
+                        environment={"PATH": "/usr/bin"},
+                    )
+
+    def test_cycle1_r3_atomic_output_is_bound_to_validated_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "outside"
+            repository = root / "delivery-repository"
+            outside.mkdir(mode=0o700)
+            repository.mkdir(mode=0o700)
+            parent = root / "session"
+            parent.symlink_to(outside, target_is_directory=True)
+            target = parent / "late.json"
+            original_replace = os.replace
+
+            def race_parent(
+                source: Any, destination: Any, **kwargs: Any
+            ) -> None:
+                parent.unlink()
+                parent.symlink_to(repository, target_is_directory=True)
+                original_replace(source, destination, **kwargs)
+
+            with mock.patch.object(
+                MODULE.late_disposition.os,
+                "replace",
+                side_effect=race_parent,
+            ):
+                MODULE.late_disposition._atomic_write(target, b"evidence")
+
+            self.assertFalse((repository / "late.json").exists())
+            self.assertEqual((outside / "late.json").read_bytes(), b"evidence")
+
+    def test_cycle1_r3_output_containment_rejects_aliases_and_unsafe_targets(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            outside = root / "outside"
+            repository.mkdir(mode=0o700)
+            outside.mkdir(mode=0o700)
+            repository_alias = root / "repository-alias"
+            repository_alias.symlink_to(repository, target_is_directory=True)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "outside the delivery repository",
+            ):
+                MODULE.late_disposition._atomic_write(
+                    repository_alias / "late.json",
+                    b"evidence",
+                    repository_root=repository,
+                )
+            existing_target = outside / "existing-target"
+            existing_target.write_bytes(b"preserve")
+            unsafe_output = outside / "late.json"
+            unsafe_output.symlink_to(existing_target)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "unsafe output",
+            ):
+                MODULE.late_disposition._atomic_write(
+                    unsafe_output,
+                    b"evidence",
+                    repository_root=repository,
+                )
+            self.assertEqual(existing_target.read_bytes(), b"preserve")
+
+            signer = MODULE.late_disposition.SignerIdentity(
+                "ssh", "SHA256:fixtureDeliverySigner"
+            )
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "outputs must differ",
+            ):
+                MODULE.late_disposition.sign_artifact(
+                    {"value": "same-output"},
+                    outside / "same.json",
+                    outside / "same.json",
+                    signer=signer,
+                    signing_key="/unused",
+                    environment={"PATH": "/usr/bin"},
+                    repository_root=repository,
+                )
+
+            traversal = outside / ".." / "repository" / "late.json"
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "outside the delivery repository",
+            ):
+                MODULE.late_disposition._atomic_write(
+                    traversal,
+                    b"evidence",
+                    repository_root=repository,
+                )
+
+    def test_cycle1_r3_two_outputs_and_failure_cleanup_stay_descriptor_bound(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "outside"
+            repository = root / "repository"
+            outside.mkdir(mode=0o700)
+            repository.mkdir(mode=0o700)
+            parent = root / "session"
+            parent.symlink_to(outside, target_is_directory=True)
+            artifact = MODULE.late_disposition._open_bound_output(
+                parent / "artifact.json", repository_root=repository
+            )
+            signature = MODULE.late_disposition._open_bound_output(
+                parent / "artifact.sig", repository_root=repository
+            )
+            try:
+                MODULE.late_disposition._atomic_write_bound(
+                    artifact, b"artifact"
+                )
+                parent.unlink()
+                parent.symlink_to(repository, target_is_directory=True)
+                MODULE.late_disposition._atomic_write_bound(
+                    signature, b"signature"
+                )
+            finally:
+                signature.close()
+                artifact.close()
+            self.assertEqual((outside / "artifact.json").read_bytes(), b"artifact")
+            self.assertEqual((outside / "artifact.sig").read_bytes(), b"signature")
+            self.assertEqual(list(repository.iterdir()), [])
+
+            parent.unlink()
+            parent.symlink_to(outside, target_is_directory=True)
+            original_replace = os.replace
+
+            def fail_after_parent_swap(
+                source: Any, destination: Any, **kwargs: Any
+            ) -> None:
+                parent.unlink()
+                parent.symlink_to(repository, target_is_directory=True)
+                raise OSError("simulated final replacement failure")
+
+            with (
+                mock.patch.object(
+                    MODULE.late_disposition.os,
+                    "replace",
+                    side_effect=fail_after_parent_swap,
+                ),
+                self.assertRaisesRegex(OSError, "simulated"),
+            ):
+                MODULE.late_disposition._atomic_write(
+                    parent / "failed.json",
+                    b"evidence",
+                    repository_root=repository,
+                )
+            self.assertFalse((outside / "failed.json").exists())
+            self.assertFalse((repository / "failed.json").exists())
+            self.assertFalse(
+                any(path.name.startswith(".failed.json.") for path in outside.iterdir())
+            )
+            self.assertIs(os.replace, original_replace)
 
     def test_programmatic_apply_refuses_caller_constructed_authorization(
         self,

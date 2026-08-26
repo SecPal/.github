@@ -64,7 +64,8 @@ The workflow has six narrow parts:
    batch-resolution contracts;
 4. `scripts/secpal-pr-review-actions.py`, the compatible command entry point for
    stable capture, validation attestation, batch resolution, and legacy actions;
-5. `scripts/secpal-create-late-disposition.py` and
+5. `scripts/secpal-create-late-classification.py`,
+   `scripts/secpal-create-late-disposition.py`, and
    `scripts/secpal_pr_review/late_disposition.py`, which create and verify the
    narrowly scoped detached post-final-push disposition artifact;
 6. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
@@ -377,14 +378,18 @@ bounded PR-wide feedback and exact target-thread reads before resolving.
 The normal path performs no post-push PR-wide feedback or hosted-CI read. The
 simple resolver compares only each named target's exact state before its write.
 
-An explicitly requested post-final-push resolution-only action may create one
-canonical `late-disposition.schema.json` artifact for exactly one named thread.
+An explicitly requested post-final-push resolution-only action first creates
+one canonical detached-signed `late-classification.schema.json` artifact for
+exactly one named thread, then creates one canonical
+`late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
 receipt trailer, attestation, origin, and accepted commit signature, derives the
 actual delivery signer fingerprint, reads that named thread twice, and signs
-the artifact with that same OS-account identity. SSH and OpenPGP are supported.
+the classification with that same OS-account identity. The disposition creator
+verifies the classification signature and exact live binding and computes its
+digest internally. SSH and OpenPGP are supported.
 The resolver independently repeats the final-delivery verification, verifies
-canonical artifact bytes and the detached signature against the derived signer,
+both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,
 body digest, reply state, resolved/outdated state, classification, disposition,
 technical-blocking flag, and guarded action before resolving. This path is only

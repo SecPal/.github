@@ -1517,59 +1517,197 @@ def _matches_late_authorization(
     )
 
 
-def _load_late_classification_evidence(
-    path: Path,
-) -> tuple[dict[str, Any], ...]:
+def _late_signing_key(signer: Any, resolved_root: Path) -> str:
     try:
-        raw = path.read_bytes()
-        if not raw or len(raw) > 64 * 1024:
-            raise ValueError("invalid size")
-        payload = json.loads(
-            raw,
-            parse_constant=_reject_nonfinite_json_constant,
-            object_pairs_hook=_reject_duplicate_json_object,
-        )
-    except (OSError, ValueError) as exc:
+        configured_format, signing_key = late_disposition.read_signing_configuration()
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    if configured_format != signer.signature_format or not signing_key:
         raise ResolutionError(
-            "late classification evidence is unavailable or malformed"
-        ) from exc
-    if raw != _canonical_json_bytes(payload):
-        raise ResolutionError("late classification evidence is not canonical")
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != {"schema_version", "threads"}
-        or payload.get("schema_version") != "1.0"
-        or not isinstance(payload.get("threads"), list)
-        or len(payload["threads"]) != 1
-    ):
-        raise ResolutionError("late classification evidence shape is unsupported")
-    decisions: list[dict[str, Any]] = []
-    for item in payload["threads"]:
+            "OS-account signing configuration does not match final delivery signer"
+        )
+    if signer.signature_format == "ssh":
+        key_path = Path(signing_key)
+        if not key_path.is_absolute():
+            raise ResolutionError("SSH signing key must use an absolute path")
+        try:
+            resolved_key = key_path.resolve(strict=True)
+            account_home = late_disposition.os_account_home()
+            key_stat = resolved_key.stat()
+        except (OSError, RuntimeError) as exc:
+            raise ResolutionError("SSH signing key is unavailable") from exc
         if (
-            not isinstance(item, dict)
-            or set(item)
-            != {
-                "thread_id",
-                "classification",
-                "disposition",
-                "technically_blocking",
-                "classification_evidence_digest",
-            }
-            or not isinstance(item.get("thread_id"), str)
-            or not THREAD_ID.fullmatch(item["thread_id"])
-            or item.get("classification") != "INVALID_FALSE_OR_MISLEADING"
-            or item.get("disposition")
-            not in ELIGIBLE_DISPOSITIONS["INVALID_FALSE_OR_MISLEADING"]
-            or item.get("technically_blocking") is not False
-            or not isinstance(item.get("classification_evidence_digest"), str)
-            or not DIGEST.fullmatch(item["classification_evidence_digest"])
+            resolved_key == resolved_root
+            or resolved_root in resolved_key.parents
+            or not (
+                resolved_key == account_home or account_home in resolved_key.parents
+            )
+            or key_stat.st_uid != os.getuid()
+            or key_stat.st_mode & 0o022
         ):
-            raise ResolutionError("late classification is not resolution-eligible")
-        decisions.append(item)
-    identities = [item["thread_id"] for item in decisions]
-    if len(identities) != len(set(identities)):
-        raise ResolutionError("late classification contains duplicate threads")
-    return tuple(decisions)
+            raise ResolutionError("SSH signing key is not OS-account controlled")
+    return signing_key
+
+
+def create_late_classification_artifact(
+    repository: str,
+    delivery_issue_number: int,
+    number: int,
+    expected_head: str,
+    *,
+    repository_root: Path | str,
+    final_reviewed_state_path: Path | str,
+    expected_final_reviewed_state_digest: str,
+    final_validation_evidence_path: Path | str,
+    thread_id: str,
+    finding_id: str,
+    finding_evidence_digest: str,
+    classification: str,
+    disposition: str,
+    technically_blocking: bool,
+    technical_blockers: Sequence[str],
+    output_path: Path | str,
+    signature_output_path: Path | str,
+) -> dict[str, Any]:
+    if (
+        not REPOSITORY.fullmatch(repository)
+        or not isinstance(delivery_issue_number, int)
+        or isinstance(delivery_issue_number, bool)
+        or delivery_issue_number < 1
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not OID.fullmatch(expected_head)
+        or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
+        or not THREAD_ID.fullmatch(thread_id)
+        or not isinstance(finding_id, str)
+        or not late_disposition.IDENTITY.fullmatch(finding_id)
+        or not isinstance(finding_evidence_digest, str)
+        or not DIGEST.fullmatch(finding_evidence_digest)
+    ):
+        raise ResolutionError("late classification delivery identity is malformed")
+    supplied_blockers = tuple(technical_blockers)
+    if (
+        any(not isinstance(value, str) for value in supplied_blockers)
+        or len(supplied_blockers) != len(set(supplied_blockers))
+        or any(
+            value not in late_disposition.TECHNICAL_BLOCKERS
+            for value in supplied_blockers
+        )
+        or not isinstance(technically_blocking, bool)
+        or technically_blocking is not bool(supplied_blockers)
+    ):
+        raise ResolutionError("late classification risk facts are malformed")
+    blockers = tuple(sorted(supplied_blockers))
+    if classification != "INVALID_FALSE_OR_MISLEADING" or disposition != (
+        "DISPROVEN_WITH_EVIDENCE"
+    ):
+        raise ResolutionError("late classification decision is unsupported")
+    final_reviewed = load_reviewed_state(
+        Path(final_reviewed_state_path),
+        repository,
+        number,
+        expected_final_reviewed_state_digest,
+        (),
+    )
+    validation = load_validation_evidence(
+        Path(final_validation_evidence_path),
+        repository,
+        expected_head,
+        final_reviewed,
+    )
+    root = Path(repository_root)
+    try:
+        resolved_root = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ResolutionError("delivery repository is unavailable") from exc
+    signer = verify_local_fix_commit(
+        root,
+        repository,
+        expected_head,
+        final_reviewed,
+        validation,
+        require_signer_identity=True,
+    )
+    limits = load_repository_limits(repository)
+    budget = InvocationBudget(
+        limits.maximum_api_calls,
+        limits.maximum_threads,
+        limits.maximum_comments,
+    )
+    target = read_stable_target_thread(
+        repository, number, thread_id, budget, _run_gh
+    )
+    require_expected_target(target, repository, number, expected_head)
+    top_level = [item for item in target.thread.comments if item.reply_to_id is None]
+    if len(top_level) != 1 or target.thread.is_resolved:
+        raise ResolutionError(
+            f"late target must be one unresolved source conversation: {thread_id}"
+        )
+    reply_digest, reply_count = _reply_state_digest(target.thread)
+    artifact = {
+        "schema_version": late_disposition.SCHEMA_VERSION,
+        "kind": late_disposition.CLASSIFICATION_KIND,
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "delivery_signer": {
+            "format": signer.signature_format,
+            "fingerprint": signer.fingerprint,
+        },
+        "authorized_purpose": late_disposition.CLASSIFICATION_PURPOSE,
+        "finding_id": finding_id,
+        "finding_evidence_digest": finding_evidence_digest,
+        "thread": {
+            "thread_id": thread_id,
+            "top_level_comment_node_id": top_level[0].comment_id,
+            "top_level_comment_database_id": top_level[0].database_id,
+            "finding_body_digest": top_level[0].body_digest,
+            "reply_state_digest": reply_digest,
+            "reply_count": reply_count,
+            "is_resolved": False,
+            "is_outdated": target.thread.is_outdated,
+            "classification": classification,
+            "disposition": disposition,
+            "technically_blocking": technically_blocking,
+            "technical_blockers": list(blockers),
+        },
+    }
+    signing_key = _late_signing_key(signer, resolved_root)
+    try:
+        late_disposition.sign_artifact(
+            artifact,
+            Path(output_path),
+            Path(signature_output_path),
+            signer=signer,
+            signing_key=signing_key,
+            signature_namespace=(
+                late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+            ),
+            repository_root=resolved_root,
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    return {
+        "status": "LATE_CLASSIFICATION_AUTHENTICATED",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "artifact_digest": hashlib.sha256(
+            late_disposition.canonical_json_bytes(artifact)
+        ).hexdigest(),
+        "signature_format": signer.signature_format,
+        "signer_fingerprint": signer.fingerprint,
+        "thread_id": thread_id,
+        "finding_id": finding_id,
+        "finding_evidence_digest": finding_evidence_digest,
+        "classification": classification,
+        "disposition": disposition,
+        "technically_blocking": technically_blocking,
+        "technical_blockers": list(blockers),
+    }
 
 
 def create_late_disposition_artifact(
@@ -1583,6 +1721,7 @@ def create_late_disposition_artifact(
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
     classification_evidence_path: Path | str,
+    classification_signature_path: Path | str,
     output_path: Path | str,
     signature_output_path: Path | str,
 ) -> dict[str, Any]:
@@ -1601,10 +1740,6 @@ def create_late_disposition_artifact(
         or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
     ):
         raise ResolutionError("late-disposition delivery identity is malformed")
-    decisions = _load_late_classification_evidence(
-        Path(classification_evidence_path)
-    )
-    thread_ids = tuple(item["thread_id"] for item in decisions)
     final_reviewed = load_reviewed_state(
         Path(final_reviewed_state_path),
         repository,
@@ -1642,46 +1777,74 @@ def create_late_disposition_artifact(
         validation,
         require_signer_identity=True,
     )
+    try:
+        classification_payload, _classification_canonical = (
+            late_disposition._load_canonical_json(
+                Path(classification_evidence_path),
+                "late classification artifact",
+                late_disposition.MAXIMUM_ARTIFACT_BYTES,
+            )
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    classification_thread = (
+        classification_payload.get("thread")
+        if isinstance(classification_payload, dict)
+        else None
+    )
+    thread_id = (
+        classification_thread.get("thread_id")
+        if isinstance(classification_thread, dict)
+        else None
+    )
+    if not isinstance(thread_id, str) or not THREAD_ID.fullmatch(thread_id):
+        raise ResolutionError("late classification thread binding is malformed")
+    try:
+        classification = late_disposition.parse_classification_artifact(
+            Path(classification_evidence_path),
+            Path(classification_signature_path),
+            expected_signer=signer,
+            repository=repository,
+            delivery_issue_number=delivery_issue_number,
+            pull_request_number=number,
+            head_sha=expected_head,
+            thread_id=thread_id,
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    thread_ids = (thread_id,)
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
         limits.maximum_api_calls,
         limits.maximum_threads,
         limits.maximum_comments,
     )
-    authorizations: list[dict[str, Any]] = []
-    for decision in decisions:
-        thread_id = decision["thread_id"]
-        target = read_stable_target_thread(
-            repository, number, thread_id, budget, _run_gh
-        )
-        require_expected_target(target, repository, number, expected_head)
-        top_level = [
-            item for item in target.thread.comments if item.reply_to_id is None
-        ]
-        if len(top_level) != 1 or target.thread.is_resolved:
-            raise ResolutionError(
-                f"late target must be one unresolved source conversation: {thread_id}"
-            )
-        reply_digest, reply_count = _reply_state_digest(target.thread)
-        authorizations.append(
-            {
-                "thread_id": thread_id,
-                "top_level_comment_node_id": top_level[0].comment_id,
-                "top_level_comment_database_id": top_level[0].database_id,
-                "finding_body_digest": top_level[0].body_digest,
-                "reply_state_digest": reply_digest,
-                "reply_count": reply_count,
-                "is_resolved": False,
-                "is_outdated": target.thread.is_outdated,
-                "classification": decision["classification"],
-                "disposition": decision["disposition"],
-                "technically_blocking": False,
-                "classification_evidence_digest": decision[
-                    "classification_evidence_digest"
-                ],
-                "authorized_action": "RESOLVE_REVIEW_THREAD",
-            }
-        )
+    target = read_stable_target_thread(
+        repository, number, thread_id, budget, _run_gh
+    )
+    require_expected_target(target, repository, number, expected_head)
+    if not _matches_late_authorization(target.thread, classification.thread):
+        raise ResolutionError("late classification does not match current thread state")
+    authorization = classification.thread
+    authorizations = [
+        {
+            "thread_id": authorization.thread_id,
+            "top_level_comment_node_id": authorization.top_level_comment_node_id,
+            "top_level_comment_database_id": (
+                authorization.top_level_comment_database_id
+            ),
+            "finding_body_digest": authorization.finding_body_digest,
+            "reply_state_digest": authorization.reply_state_digest,
+            "reply_count": authorization.reply_count,
+            "is_resolved": False,
+            "is_outdated": authorization.is_outdated,
+            "classification": authorization.classification,
+            "disposition": authorization.disposition,
+            "technically_blocking": False,
+            "classification_evidence_digest": classification.evidence_digest,
+            "authorized_action": "RESOLVE_REVIEW_THREAD",
+        }
+    ]
     artifact = {
         "schema_version": late_disposition.SCHEMA_VERSION,
         "kind": late_disposition.KIND,
@@ -1702,37 +1865,7 @@ def create_late_disposition_artifact(
         "authorized_action": "RESOLVE_EXACT_REVIEW_THREADS",
         "threads": authorizations,
     }
-    try:
-        configured_format, signing_key = (
-            late_disposition.read_signing_configuration()
-        )
-    except late_disposition.LateDispositionError as exc:
-        raise ResolutionError(str(exc)) from exc
-    if configured_format != signer.signature_format or not signing_key:
-        raise ResolutionError(
-            "OS-account signing configuration does not match final delivery signer"
-        )
-    if signer.signature_format == "ssh":
-        key_path = Path(signing_key)
-        if not key_path.is_absolute():
-            raise ResolutionError("SSH signing key must use an absolute path")
-        try:
-            resolved_key = key_path.resolve(strict=True)
-            account_home = late_disposition.os_account_home()
-            key_stat = resolved_key.stat()
-        except (OSError, RuntimeError) as exc:
-            raise ResolutionError("SSH signing key is unavailable") from exc
-        if (
-            resolved_key == resolved_root
-            or resolved_root in resolved_key.parents
-            or not (
-                resolved_key == account_home
-                or account_home in resolved_key.parents
-            )
-            or key_stat.st_uid != os.getuid()
-            or key_stat.st_mode & 0o022
-        ):
-            raise ResolutionError("SSH signing key is not OS-account controlled")
+    signing_key = _late_signing_key(signer, resolved_root)
     try:
         late_disposition.sign_artifact(
             artifact,
@@ -1740,6 +1873,7 @@ def create_late_disposition_artifact(
             Path(signature_output_path),
             signer=signer,
             signing_key=signing_key,
+            repository_root=resolved_root,
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
@@ -1780,6 +1914,8 @@ def resolve_late_disposition_threads(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
+    late_classification_evidence_path: Path | str,
+    late_classification_signature_path: Path | str,
     late_disposition_evidence_path: Path | str,
     late_disposition_signature_path: Path | str,
 ) -> dict[str, Any]:
@@ -1842,6 +1978,23 @@ def resolve_late_disposition_threads(
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
+    try:
+        classification = late_disposition.parse_classification_artifact(
+            Path(late_classification_evidence_path),
+            Path(late_classification_signature_path),
+            expected_signer=signer,
+            repository=repository,
+            delivery_issue_number=delivery_issue_number,
+            pull_request_number=number,
+            head_sha=expected_head,
+            thread_id=thread_ids[0],
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    if authorization.threads != (classification.thread,):
+        raise ResolutionError(
+            "late disposition does not match authenticated classification evidence"
+        )
 
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
@@ -2301,6 +2454,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--delivery-issue", type=int)
     parser.add_argument("--late-disposition-evidence")
     parser.add_argument("--late-disposition-signature")
+    parser.add_argument("--late-classification-evidence")
+    parser.add_argument("--late-classification-signature")
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -2321,11 +2476,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.delivery_issue,
             arguments.late_disposition_evidence,
             arguments.late_disposition_signature,
+            arguments.late_classification_evidence,
+            arguments.late_classification_signature,
         )
         if any(value is not None for value in late_values):
             if not all(value is not None for value in late_values):
                 raise ResolutionError(
-                    "late disposition requires delivery issue, artifact, and signature"
+                    "late disposition requires delivery issue, classification evidence/signature, and disposition evidence/signature"
                 )
             if arguments.eligibility_evidence is not None:
                 raise ResolutionError(
@@ -2357,6 +2514,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.expected_reviewed_state_digest
                 ),
                 final_validation_evidence_path=arguments.validation_evidence,
+                late_classification_evidence_path=(
+                    arguments.late_classification_evidence
+                ),
+                late_classification_signature_path=(
+                    arguments.late_classification_signature
+                ),
                 late_disposition_evidence_path=(
                     arguments.late_disposition_evidence
                 ),
