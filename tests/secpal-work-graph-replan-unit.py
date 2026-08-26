@@ -203,17 +203,78 @@ def finding(name: str, **overrides) -> dict[str, object]:
     return value
 
 
+def signer_document(operation_digest: str, **state_overrides) -> dict[str, object]:
+    document: dict[str, object] = {
+        "schema": replanning.RECOVERY_SCHEMA,
+        "plan_digest": operation_digest,
+        "actor": "alice",
+        "current_issue": key(1),
+        "snapshot_digest": "0" * 64,
+        "baseline": [],
+        "outcome": "NO_WRITES",
+        "next_step": 0,
+        "attempting_step": None,
+        "created": {},
+    }
+    document.update(state_overrides)
+    document["journal_digest"] = replanning.recovery_document_digest(document)
+    return document
+
+
+def signer_evidence(document, authentication):
+    return {**document, "authentication": authentication}
+
+
+def recovery_child_commit(fixture, parent, message, *, signing_key=None, signed=True):
+    repository = fixture["repository"]
+    tree = subprocess.run(
+        [str(fixture["git"]), "-C", str(repository), "rev-parse", "HEAD^{tree}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=fixture["environment"],
+    ).stdout.strip()
+    command = [str(fixture["git"]), "-C", str(repository)]
+    if signing_key is not None:
+        command.extend(["-c", f"user.signingkey={signing_key}"])
+    command.extend(["commit-tree", *( ["-S"] if signed else []), tree, "-p", parent])
+    return subprocess.run(
+        command,
+        check=True,
+        input=message.rstrip() + "\n",
+        capture_output=True,
+        text=True,
+        env=fixture["environment"],
+    ).stdout.strip()
+
+
+def advance_recovery_ref(fixture, authentication, commit_oid):
+    subprocess.run(
+        [
+            str(fixture["git"]),
+            "-C",
+            str(fixture["repository"]),
+            "update-ref",
+            authentication["ref"],
+            commit_oid,
+            authentication["commit_oid"],
+        ],
+        check=True,
+        env=fixture["environment"],
+    )
+
+
 class FakeRecoverySigner:
-    def sign(self, operation_digest, digest):
+    def sign(self, operation_digest, document, previous=None):
         return {
             "kind": "test-signature",
-            "value": "signed:" + operation_digest + ":" + digest,
+            "value": "signed:" + operation_digest + ":" + document["journal_digest"],
         }
 
-    def verify(self, authentication, operation_digest, digest):
+    def verify(self, authentication, operation_digest, document):
         if authentication != {
             "kind": "test-signature",
-            "value": "signed:" + operation_digest + ":" + digest,
+            "value": "signed:" + operation_digest + ":" + document["journal_digest"],
         }:
             raise replanning.StalePlanError("recovery authentication is invalid")
 
@@ -1114,8 +1175,19 @@ class GitRecoverySignerTests(TestCase):
             repository = fixture["repository"]
             signer = replanning.GitRecoverySigner.discover(repository)
             self.assertEqual(signer.signer_format, "ssh")
-            authentication = signer.sign("a" * 64, "b" * 64)
-            replacement = signer.sign("a" * 64, "c" * 64)
+            operation_digest = "a" * 64
+            initial = signer_document(operation_digest)
+            authentication = signer.sign(operation_digest, initial)
+            attempting = signer_document(
+                operation_digest,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            )
+            replacement = signer.sign(
+                operation_digest,
+                attempting,
+                signer_evidence(initial, authentication),
+            )
             ref = authentication["ref"]
             self.assertEqual(
                 subprocess.run(
@@ -1137,17 +1209,19 @@ class GitRecoverySignerTests(TestCase):
                 check=True,
                 env=fixture["environment"],
             )
-            signer.verify(authentication, "a" * 64, "b" * 64)
-            signer.verify(replacement, "a" * 64, "c" * 64)
-            with self.assertRaisesRegex(replanning.StalePlanError, "different evidence"):
-                signer.verify(authentication, "a" * 64, "e" * 64)
+            signer.verify(authentication, operation_digest, initial)
+            signer.verify(replacement, operation_digest, attempting)
+            changed = dict(initial)
+            changed["journal_digest"] = "e" * 64
+            with self.assertRaisesRegex(replanning.StalePlanError, "digest"):
+                signer.verify(authentication, operation_digest, changed)
             subprocess.run(
                 [str(fixture["git"]), "-C", str(repository), "update-ref", "-d", ref],
                 check=True,
                 env=fixture["environment"],
             )
             with self.assertRaisesRegex(replanning.StalePlanError, "reference"):
-                signer.verify(authentication, "a" * 64, "b" * 64)
+                signer.verify(authentication, operation_digest, initial)
 
     def test_hostile_signing_environment_is_not_inherited(self):
         hostile = {
@@ -1194,8 +1268,9 @@ class GitRecoverySignerTests(TestCase):
             repository = fixture["repository"]
             signer = replanning.GitRecoverySigner.discover(repository)
             self.assertEqual(signer.signer_format, "ssh")
-            operation_digest, journal_digest = "c" * 64, "d" * 64
-            authentication = dict(signer.sign(operation_digest, journal_digest))
+            operation_digest = "c" * 64
+            document = signer_document(operation_digest)
+            authentication = dict(signer.sign(operation_digest, document))
 
             alternate = repository / "alternate"
             subprocess.run(
@@ -1227,10 +1302,9 @@ class GitRecoverySignerTests(TestCase):
                 text=True,
                 env=fixture["environment"],
             ).stdout.strip()
-            message = (
-                "Authenticate work-graph recovery\n\n"
-                f"Operation: {operation_digest}\nJournal: {journal_digest}\n"
-            )
+            message = replanning._authentication_message(
+                operation_digest, document, authentication["commit_oid"]
+            ) + "\n"
             alternate_commit = subprocess.run(
                 [
                     str(fixture["git"]),
@@ -1267,15 +1341,301 @@ class GitRecoverySignerTests(TestCase):
                 check=True,
                 env=fixture["environment"],
             )
-            authentication["commit_oid"] = alternate_commit
-            with self.assertRaisesRegex(replanning.StalePlanError, "unintended identity"):
-                signer.verify(authentication, operation_digest, journal_digest)
+            with self.assertRaises(replanning.StalePlanError):
+                signer.verify(authentication, operation_digest, document)
+
+    def test_unsigned_private_ref_descendant_is_rejected(self):
+        with hermetic_signing_account("ssh") as fixture:
+            repository = fixture["repository"]
+            signer = replanning.GitRecoverySigner.discover(repository)
+            operation_digest = "1" * 64
+            document = signer_document(operation_digest)
+            authentication = dict(signer.sign(operation_digest, document))
+            tree = subprocess.run(
+                [str(fixture["git"]), "-C", str(repository), "rev-parse", "HEAD^{tree}"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            unsigned = subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(repository),
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    authentication["commit_oid"],
+                ],
+                check=True,
+                input="unsigned descendant\n",
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(repository),
+                    "update-ref",
+                    authentication["ref"],
+                    unsigned,
+                    authentication["commit_oid"],
+                ],
+                check=True,
+                env=fixture["environment"],
+            )
+
+            with self.assertRaises(replanning.StalePlanError):
+                signer.verify(authentication, operation_digest, document)
+
+    def test_signed_private_ref_descendants_require_the_exact_operation_and_transition(self):
+        cases = ("wrong-operation", "malformed", "invalid-transition")
+        for case in cases:
+            with self.subTest(case=case), hermetic_signing_account("ssh") as fixture:
+                signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+                operation_digest = "6" * 64
+                document = signer_document(operation_digest)
+                authentication = dict(signer.sign(operation_digest, document))
+                attempting = signer_document(
+                    operation_digest,
+                    outcome="UNKNOWN_MUTATION_OUTCOME",
+                    attempting_step=0,
+                )
+                if case == "wrong-operation":
+                    message = replanning._authentication_message(
+                        "7" * 64, attempting, authentication["commit_oid"]
+                    )
+                elif case == "malformed":
+                    message = "Authenticate work-graph recovery\n\nmalformed"
+                else:
+                    invalid = signer_document(
+                        operation_digest,
+                        outcome="COMPLETE",
+                        next_step=1,
+                    )
+                    message = replanning._authentication_message(
+                        operation_digest, invalid, authentication["commit_oid"]
+                    )
+                descendant = recovery_child_commit(
+                    fixture, authentication["commit_oid"], message
+                )
+                advance_recovery_ref(fixture, authentication, descendant)
+
+                with self.assertRaises(replanning.StalePlanError):
+                    signer.verify(authentication, operation_digest, document)
+
+    def test_signed_private_ref_descendant_must_be_linear(self):
+        with hermetic_signing_account("ssh") as fixture:
+            repository = fixture["repository"]
+            signer = replanning.GitRecoverySigner.discover(repository)
+            operation_digest = "9" * 64
+            document = signer_document(operation_digest)
+            authentication = dict(signer.sign(operation_digest, document))
+            attempting = signer_document(
+                operation_digest,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            )
+            tree = subprocess.run(
+                [str(fixture["git"]), "-C", str(repository), "rev-parse", "HEAD^{tree}"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            source_head = subprocess.run(
+                [str(fixture["git"]), "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            descendant = subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(repository),
+                    "commit-tree",
+                    "-S",
+                    tree,
+                    "-p",
+                    authentication["commit_oid"],
+                    "-p",
+                    source_head,
+                ],
+                check=True,
+                input=replanning._authentication_message(
+                    operation_digest, attempting, authentication["commit_oid"]
+                )
+                + "\n",
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            advance_recovery_ref(fixture, authentication, descendant)
+
+            with self.assertRaisesRegex(replanning.StalePlanError, "substituted"):
+                signer.verify(authentication, operation_digest, document)
+
+    def test_legitimate_signed_crash_ahead_state_is_reused(self):
+        with hermetic_signing_account("ssh") as fixture:
+            before = graph(node(1, children=(key(2),)), node(2, parent=key(1)))
+            request = {
+                "current_issue": key(2),
+                "finding": finding("NEW_RESPONSIBILITY"),
+                "operation": {
+                    "kind": "CREATE_OWNED_SIBLING",
+                    "issue": {
+                        "alias": "new-work",
+                        "repository": REPO,
+                        "title": "Separate work",
+                        "body": "## Acceptance Criteria\n\n- Complete.\n",
+                    },
+                },
+            }
+            plan = replanning.build_plan(before, request, actor="alice")
+            signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+            journal = replanning.RecoveryJournal.for_plan(plan, signer)
+            journal.start(before)
+            durable_journal = journal.path.read_bytes()
+            journal.begin_step(0)
+            crash_ahead_tip = subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(fixture["repository"]),
+                    "rev-parse",
+                    "--verify",
+                    signer._ref_name(replanning.plan_digest(plan)),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+
+            journal.path.write_bytes(durable_journal)
+            self.assertEqual(journal.load()["outcome"], "NO_WRITES")
+            journal.begin_step(0)
+            reused_tip = subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(fixture["repository"]),
+                    "rev-parse",
+                    "--verify",
+                    signer._ref_name(replanning.plan_digest(plan)),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            self.assertEqual(reused_tip, crash_ahead_tip)
+            self.assertEqual(journal.load()["outcome"], "UNKNOWN_MUTATION_OUTCOME")
+
+    def test_private_ref_compare_and_swap_rejects_a_concurrent_substitution(self):
+        with hermetic_signing_account("ssh") as fixture:
+            signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+            operation_digest = "8" * 64
+            document = signer_document(operation_digest)
+            authentication = dict(signer.sign(operation_digest, document))
+            unsigned = recovery_child_commit(
+                fixture,
+                authentication["commit_oid"],
+                "concurrent unsigned descendant",
+                signed=False,
+            )
+            attempting = signer_document(
+                operation_digest,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            )
+            original_run = signer._run
+            substituted = False
+
+            def race(arguments, **kwargs):
+                nonlocal substituted
+                if arguments and arguments[0] == "update-ref" and not substituted:
+                    substituted = True
+                    advance_recovery_ref(fixture, authentication, unsigned)
+                return original_run(arguments, **kwargs)
+
+            signer._run = race
+            with self.assertRaises(replanning.StalePlanError):
+                signer.sign(
+                    operation_digest,
+                    attempting,
+                    signer_evidence(document, authentication),
+                )
+            self.assertTrue(substituted)
+
+    def test_signing_refuses_to_extend_an_unsigned_private_ref_descendant(self):
+        with hermetic_signing_account("ssh") as fixture:
+            repository = fixture["repository"]
+            signer = replanning.GitRecoverySigner.discover(repository)
+            operation_digest = "3" * 64
+            document = signer_document(operation_digest)
+            authentication = dict(signer.sign(operation_digest, document))
+            tree = subprocess.run(
+                [str(fixture["git"]), "-C", str(repository), "rev-parse", "HEAD^{tree}"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            unsigned = subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(repository),
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    authentication["commit_oid"],
+                ],
+                check=True,
+                input="unsigned descendant\n",
+                capture_output=True,
+                text=True,
+                env=fixture["environment"],
+            ).stdout.strip()
+            subprocess.run(
+                [
+                    str(fixture["git"]),
+                    "-C",
+                    str(repository),
+                    "update-ref",
+                    authentication["ref"],
+                    unsigned,
+                    authentication["commit_oid"],
+                ],
+                check=True,
+                env=fixture["environment"],
+            )
+
+            attempting = signer_document(
+                operation_digest,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            )
+            with self.assertRaises(replanning.StalePlanError):
+                signer.sign(
+                    operation_digest,
+                    attempting,
+                    signer_evidence(document, authentication),
+                )
 
     def test_openpgp_configured_signer_is_accepted(self):
         with hermetic_signing_account("openpgp") as fixture:
             signer = replanning.GitRecoverySigner.discover(fixture["repository"])
-            authentication = signer.sign("e" * 64, "f" * 64)
-            signer.verify(authentication, "e" * 64, "f" * 64)
+            operation_digest = "e" * 64
+            document = signer_document(operation_digest)
+            authentication = signer.sign(operation_digest, document)
+            signer.verify(authentication, operation_digest, document)
             self.assertEqual(authentication["signer_format"], "openpgp")
             self.assertEqual(
                 authentication["signer_fingerprint"], fixture["signer_identity"]

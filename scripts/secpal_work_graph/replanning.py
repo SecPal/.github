@@ -28,7 +28,7 @@ from typing import Any, Mapping, Protocol
 from .model import Claim, Node, Snapshot, parse_node_key
 
 SCHEMA = "secpal-work-graph-replan/v1"
-RECOVERY_SCHEMA = "secpal-work-graph-replan-recovery/v2"
+RECOVERY_SCHEMA = "secpal-work-graph-replan-recovery/v3"
 AGGREGATE = "@aggregate"
 
 CLASSIFICATION_ACTIONS = MappingProxyType(
@@ -195,10 +195,166 @@ def recovery_document_digest(value: Mapping[str, Any]) -> str:
     return _document_digest({key: item for key, item in value.items() if key != "journal_digest"})
 
 
-class RecoverySigner(Protocol):
-    def sign(self, operation_digest: str, digest: str) -> Mapping[str, str]: ...
+RECOVERY_DOCUMENT_FIELDS = frozenset(
+    {
+        "schema",
+        "plan_digest",
+        "actor",
+        "current_issue",
+        "snapshot_digest",
+        "baseline",
+        "outcome",
+        "next_step",
+        "attempting_step",
+        "created",
+        "journal_digest",
+    }
+)
+RECOVERY_STATE_FIELDS = frozenset({"outcome", "next_step", "attempting_step", "created"})
 
-    def verify(self, authentication: Any, operation_digest: str, digest: str) -> None: ...
+
+def _signed_recovery_document(value: Mapping[str, Any]) -> dict[str, Any]:
+    document = dict(value)
+    if set(document) != RECOVERY_DOCUMENT_FIELDS:
+        raise StalePlanError("signed recovery state is malformed")
+    digest = document.get("journal_digest")
+    if not isinstance(digest, str) or digest != recovery_document_digest(document):
+        raise StalePlanError("signed recovery state digest is invalid")
+    state = {key: document[key] for key in RECOVERY_STATE_FIELDS}
+    if (
+        state["outcome"]
+        not in {"NO_WRITES", "KNOWN_WRITES", "UNKNOWN_MUTATION_OUTCOME", "COMPLETE"}
+        or type(state["next_step"]) is not int
+        or state["next_step"] < 0
+        or (
+            state["attempting_step"] is not None
+            and type(state["attempting_step"]) is not int
+        )
+        or not isinstance(state["created"], dict)
+    ):
+        raise StalePlanError("signed recovery state is invalid")
+    return document
+
+
+def _recovery_state(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value[key] for key in sorted(RECOVERY_STATE_FIELDS)}
+
+
+def _authentication_message(
+    operation_digest: str,
+    document: Mapping[str, Any],
+    predecessor_oid: str = "",
+) -> str:
+    signed = _signed_recovery_document(document)
+    state = json.dumps(_recovery_state(signed), sort_keys=True, separators=(",", ":"))
+    return (
+        "Authenticate work-graph recovery\n\n"
+        f"Operation: {operation_digest}\n"
+        f"Journal: {signed['journal_digest']}\n"
+        f"Predecessor: {predecessor_oid or 'ROOT'}\n"
+        f"State: {state}"
+    )
+
+
+def _parse_authentication_message(message: str) -> tuple[str, str, str, dict[str, Any]]:
+    lines = message.strip().splitlines()
+    if (
+        len(lines) != 6
+        or lines[0] != "Authenticate work-graph recovery"
+        or lines[1] != ""
+        or not lines[2].startswith("Operation: ")
+        or not lines[3].startswith("Journal: ")
+        or not lines[4].startswith("Predecessor: ")
+        or not lines[5].startswith("State: ")
+    ):
+        raise StalePlanError("recovery authentication message is malformed")
+    operation = lines[2].removeprefix("Operation: ")
+    digest = lines[3].removeprefix("Journal: ")
+    predecessor = lines[4].removeprefix("Predecessor: ")
+    try:
+        state = json.loads(lines[5].removeprefix("State: "))
+    except json.JSONDecodeError as exc:
+        raise StalePlanError("recovery authentication state is malformed") from exc
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", operation)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or (
+            predecessor != "ROOT"
+            and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", predecessor)
+        )
+        or not isinstance(state, dict)
+        or set(state) != RECOVERY_STATE_FIELDS
+    ):
+        raise StalePlanError("recovery authentication state is malformed")
+    return operation, digest, "" if predecessor == "ROOT" else predecessor, state
+
+
+def _transition_document(
+    previous: Mapping[str, Any], digest: str, state: Mapping[str, Any]
+) -> dict[str, Any]:
+    document = {
+        key: value
+        for key, value in previous.items()
+        if key not in RECOVERY_STATE_FIELDS | {"journal_digest"}
+    }
+    document.update(state)
+    document["journal_digest"] = digest
+    return _signed_recovery_document(document)
+
+
+def _validate_recovery_transition(
+    previous: Mapping[str, Any], current: Mapping[str, Any]
+) -> None:
+    old = _signed_recovery_document(previous)
+    new = _signed_recovery_document(current)
+    immutable = RECOVERY_DOCUMENT_FIELDS - RECOVERY_STATE_FIELDS - {"journal_digest"}
+    if any(old[field] != new[field] for field in immutable):
+        raise StalePlanError("recovery authentication changed immutable operation state")
+
+    old_next = old["next_step"]
+    old_attempting = old["attempting_step"]
+    old_created = old["created"]
+    if old_attempting is None:
+        valid = (
+            old["outcome"] in {"NO_WRITES", "KNOWN_WRITES"}
+            and new["outcome"] == "UNKNOWN_MUTATION_OUTCOME"
+            and new["next_step"] == old_next
+            and new["attempting_step"] == old_next
+            and new["created"] == old_created
+        )
+    else:
+        cancelled = (
+            new["next_step"] == old_next
+            and new["attempting_step"] is None
+            and new["created"] == old_created
+            and new["outcome"] == ("KNOWN_WRITES" if old_next else "NO_WRITES")
+        )
+        old_aliases = set(old_created)
+        new_aliases = set(new["created"])
+        completed = (
+            new["next_step"] == old_next + 1
+            and new["attempting_step"] is None
+            and new["outcome"] in {"KNOWN_WRITES", "COMPLETE"}
+            and old_aliases <= new_aliases
+            and len(new_aliases - old_aliases) <= 1
+            and all(new["created"][alias] == old_created[alias] for alias in old_aliases)
+        )
+        valid = cancelled or completed
+    if not valid:
+        raise StalePlanError("recovery authentication contains an invalid state transition")
+
+
+class RecoverySigner(Protocol):
+    def sign(
+        self,
+        operation_digest: str,
+        document: Mapping[str, Any],
+        previous: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, str]: ...
+
+    def verify(
+        self, authentication: Any, operation_digest: str, document: Mapping[str, Any]
+    ) -> None: ...
 
 
 class GitRecoverySigner:
@@ -334,66 +490,168 @@ class GitRecoverySigner:
             raise StalePlanError("recovery operation digest is malformed")
         return f"refs/secpal-work-graph-replan/{operation_digest}"
 
-    def sign(self, operation_digest: str, digest: str) -> Mapping[str, str]:
-        tree = self._run(["rev-parse", "HEAD^{tree}"]).strip()
-        ref_name = self._ref_name(operation_digest)
-        previous = self._run(["rev-parse", "--verify", ref_name], allow_failure=True).strip()
-        message = (
-            "Authenticate work-graph recovery\n\n"
-            f"Operation: {operation_digest}\nJournal: {digest}\n"
-        )
-        arguments = ["commit-tree", "-S", tree]
-        if previous:
-            arguments.extend(["-p", previous])
-        commit_oid = self._run(arguments, input_text=message).strip()
-        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit_oid):
-            raise StalePlanError("Git returned an invalid recovery attestation identity")
+    def _parents(self, commit_oid: str) -> tuple[str, ...]:
+        value = self._run(["rev-list", "--parents", "-n", "1", commit_oid]).strip().split()
+        if not value or value[0] != commit_oid:
+            raise StalePlanError("recovery authentication ancestry is malformed")
+        return tuple(value[1:])
+
+    def _authentication(
+        self,
+        commit_oid: str,
+        operation_digest: str,
+        document: Mapping[str, Any],
+        predecessor_oid: str,
+    ) -> dict[str, str]:
         signature_format, fingerprint = self._signature_identity(commit_oid)
         if signature_format != self.signer_format or fingerprint != self.signer_fingerprint:
             raise StalePlanError("recovery evidence was signed by an unintended identity")
-        object_format = self._run(["rev-parse", "--show-object-format"]).strip()
-        zero = "0" * (64 if object_format == "sha256" else 40)
-        self._run(["update-ref", ref_name, commit_oid, previous or zero])
+        message = self._run(["show", "-s", "--format=%B", commit_oid]).strip()
+        if (
+            self._parents(commit_oid) != ((predecessor_oid,) if predecessor_oid else ())
+            or message
+            != _authentication_message(operation_digest, document, predecessor_oid)
+        ):
+            raise StalePlanError("recovery authentication binds different evidence")
         return {
             "kind": "git-signed-commit-chain",
             "commit_oid": commit_oid,
-            "ref": ref_name,
-            "signer_format": signature_format,
-            "signer_fingerprint": fingerprint,
+            "predecessor_oid": predecessor_oid,
+            "ref": self._ref_name(operation_digest),
+            "signer_format": self.signer_format,
+            "signer_fingerprint": self.signer_fingerprint,
         }
 
-    def verify(self, authentication: Any, operation_digest: str, digest: str) -> None:
+    def _commit_document(
+        self,
+        commit_oid: str,
+        operation_digest: str,
+        template: Mapping[str, Any],
+        predecessor_oid: str,
+    ) -> dict[str, Any]:
+        signature_format, fingerprint = self._signature_identity(commit_oid)
+        if signature_format != self.signer_format or fingerprint != self.signer_fingerprint:
+            raise StalePlanError("recovery evidence was signed by an unintended identity")
+        message = self._run(["show", "-s", "--format=%B", commit_oid]).strip()
+        operation, digest, predecessor, state = _parse_authentication_message(message)
+        if operation != operation_digest or predecessor != predecessor_oid:
+            raise StalePlanError("recovery authentication belongs to another operation")
+        if self._parents(commit_oid) != ((predecessor_oid,) if predecessor_oid else ()):
+            raise StalePlanError("recovery authentication chain is non-linear")
+        return _transition_document(template, digest, state)
+
+    def _successor_document(
+        self,
+        commit_oid: str,
+        operation_digest: str,
+        previous: Mapping[str, Any],
+        previous_oid: str,
+    ) -> dict[str, Any]:
+        document = self._commit_document(
+            commit_oid, operation_digest, previous, previous_oid
+        )
+        _validate_recovery_transition(previous, document)
+        return document
+
+    def sign(
+        self,
+        operation_digest: str,
+        document: Mapping[str, Any],
+        previous: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, str]:
+        signed_document = _signed_recovery_document(document)
+        tree = self._run(["rev-parse", "HEAD^{tree}"]).strip()
+        ref_name = self._ref_name(operation_digest)
+        tip = self._run(["rev-parse", "--verify", ref_name], allow_failure=True).strip()
+        expected_parent = ""
+        if previous is None:
+            if tip:
+                if self._parents(tip):
+                    raise StalePlanError("recovery authentication reference was substituted")
+                return self._authentication(tip, operation_digest, signed_document, "")
+        else:
+            prior = dict(previous)
+            prior_authentication = prior.pop("authentication", None)
+            prior_document = _signed_recovery_document(prior)
+            self.verify(prior_authentication, operation_digest, prior_document)
+            expected_parent = str(prior_authentication["commit_oid"])
+            tip = self._run(["rev-parse", "--verify", ref_name], allow_failure=True).strip()
+            if tip != expected_parent:
+                if self._parents(tip) != (expected_parent,):
+                    raise StalePlanError("recovery authentication reference was substituted")
+                crash_ahead = self._successor_document(
+                    tip, operation_digest, prior_document, expected_parent
+                )
+                if crash_ahead != signed_document:
+                    raise StalePlanError("recovery authentication reference advanced unexpectedly")
+                return self._authentication(
+                    tip, operation_digest, signed_document, expected_parent
+                )
+
+        message = (
+            _authentication_message(operation_digest, signed_document, expected_parent) + "\n"
+        )
+        arguments = ["commit-tree", "-S", tree]
+        if expected_parent:
+            arguments.extend(["-p", expected_parent])
+        commit_oid = self._run(arguments, input_text=message).strip()
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit_oid):
+            raise StalePlanError("Git returned an invalid recovery attestation identity")
+        authentication = self._authentication(
+            commit_oid, operation_digest, signed_document, expected_parent
+        )
+        object_format = self._run(["rev-parse", "--show-object-format"]).strip()
+        zero = "0" * (64 if object_format == "sha256" else 40)
+        self._run(["update-ref", ref_name, commit_oid, expected_parent or zero])
+        return authentication
+
+    def verify(
+        self, authentication: Any, operation_digest: str, document: Mapping[str, Any]
+    ) -> None:
+        signed_document = _signed_recovery_document(document)
         expected_ref = self._ref_name(operation_digest)
         if (
             not isinstance(authentication, Mapping)
             or set(authentication)
-            != {"kind", "commit_oid", "ref", "signer_format", "signer_fingerprint"}
+            != {
+                "kind",
+                "commit_oid",
+                "predecessor_oid",
+                "ref",
+                "signer_format",
+                "signer_fingerprint",
+            }
             or authentication.get("kind") != "git-signed-commit-chain"
             or not isinstance(authentication.get("commit_oid"), str)
             or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", authentication["commit_oid"])
             or authentication.get("ref") != expected_ref
             or authentication.get("signer_format") != self.signer_format
             or authentication.get("signer_fingerprint") != self.signer_fingerprint
+            or not isinstance(authentication.get("predecessor_oid"), str)
+            or (
+                authentication.get("predecessor_oid") != ""
+                and not re.fullmatch(
+                    r"[0-9a-f]{40}|[0-9a-f]{64}",
+                    authentication["predecessor_oid"],
+                )
+            )
         ):
             raise StalePlanError("recovery authentication is malformed")
         commit_oid = str(authentication["commit_oid"])
         tip = self._run(["rev-parse", "--verify", expected_ref], allow_failure=True).strip()
         if not tip:
             raise StalePlanError("recovery authentication reference is missing")
-        try:
-            self._run(["merge-base", "--is-ancestor", commit_oid, tip])
-        except StalePlanError as exc:
-            raise StalePlanError("recovery authentication reference was substituted") from exc
-        signature_format, fingerprint = self._signature_identity(commit_oid)
-        if signature_format != self.signer_format or fingerprint != self.signer_fingerprint:
-            raise StalePlanError("recovery evidence was signed by an unintended identity")
-        message = self._run(["show", "-s", "--format=%B", commit_oid]).strip()
-        expected = (
-            "Authenticate work-graph recovery\n\n"
-            f"Operation: {operation_digest}\nJournal: {digest}"
+        self._authentication(
+            commit_oid,
+            operation_digest,
+            signed_document,
+            str(authentication["predecessor_oid"]),
         )
-        if message != expected:
-            raise StalePlanError("recovery authentication binds different evidence")
+        if tip == commit_oid:
+            return
+        if self._parents(tip) != (commit_oid,):
+            raise StalePlanError("recovery authentication reference was substituted")
+        self._successor_document(tip, operation_digest, signed_document, commit_oid)
 
     def recovery_path(self, operation_digest: str) -> Path:
         self._ref_name(operation_digest)
@@ -457,7 +715,13 @@ class RecoveryJournal:
             "created": {},
         }
 
-    def _write(self, fields: Mapping[str, Any], *, exclusive: bool = False) -> None:
+    def _write(
+        self,
+        fields: Mapping[str, Any],
+        *,
+        exclusive: bool = False,
+        previous: Mapping[str, Any] | None = None,
+    ) -> None:
         self._validate_parent()
         if exclusive and self.path.exists():
             raise StalePlanError(
@@ -466,7 +730,7 @@ class RecoveryJournal:
         document = dict(fields)
         document["journal_digest"] = _document_digest(document)
         document["authentication"] = dict(
-            self.signer.sign(plan_digest(self.plan), document["journal_digest"])
+            self.signer.sign(plan_digest(self.plan), document, previous)
         )
         if exclusive:
             try:
@@ -561,12 +825,13 @@ class RecoveryJournal:
         if not isinstance(document, dict):
             raise StalePlanError("recovery evidence is malformed")
         authentication = document.pop("authentication", None)
-        digest = document.pop("journal_digest", None)
-        if digest != _document_digest(document):
+        digest = document.get("journal_digest")
+        if digest != recovery_document_digest(document):
             raise StalePlanError("recovery evidence digest is invalid")
         if not isinstance(digest, str):
             raise StalePlanError("recovery evidence digest is malformed")
-        self.signer.verify(authentication, plan_digest(self.plan), digest)
+        self.signer.verify(authentication, plan_digest(self.plan), document)
+        document.pop("journal_digest")
         expected_fields = {
             "schema",
             "plan_digest",
@@ -629,31 +894,34 @@ class RecoveryJournal:
         }
 
     def begin_step(self, step_index: int) -> None:
-        document = self.load()
-        if document["next_step"] != step_index or document["attempting_step"] is not None:
+        previous = self.load()
+        if previous["next_step"] != step_index or previous["attempting_step"] is not None:
             raise StalePlanError("recovery step does not match the exact mutation sequence")
+        document = dict(previous)
         document.pop("journal_digest")
         document.pop("authentication")
         document["attempting_step"] = step_index
         document["outcome"] = "UNKNOWN_MUTATION_OUTCOME"
-        self._write(document)
+        self._write(document, previous=previous)
 
     def cancel_unattempted_step(self, step_index: int) -> None:
-        document = self.load()
-        if document["attempting_step"] != step_index:
+        previous = self.load()
+        if previous["attempting_step"] != step_index:
             raise StalePlanError("recovery attempt state changed unexpectedly")
+        document = dict(previous)
         document.pop("journal_digest")
         document.pop("authentication")
         document["attempting_step"] = None
         document["outcome"] = "KNOWN_WRITES" if document["next_step"] else "NO_WRITES"
-        self._write(document)
+        self._write(document, previous=previous)
 
     def complete_step(
         self, step_index: int, created: CreatedIssueIdentity | None
     ) -> None:
-        document = self.load()
-        if document["attempting_step"] != step_index or document["next_step"] != step_index:
+        previous = self.load()
+        if previous["attempting_step"] != step_index or previous["next_step"] != step_index:
             raise StalePlanError("recovery completion does not match the attempted mutation")
+        document = dict(previous)
         document.pop("journal_digest")
         document.pop("authentication")
         if created is not None:
@@ -664,7 +932,7 @@ class RecoveryJournal:
         document["outcome"] = (
             "COMPLETE" if document["next_step"] == len(self.plan.steps) else "KNOWN_WRITES"
         )
-        self._write(document)
+        self._write(document, previous=previous)
 
 
 def _strict_bool(value: Any, field: str) -> bool:
@@ -841,6 +1109,31 @@ def snapshot_from_document(value: Any) -> Snapshot:
     if len(snapshot.nodes) != len(nodes):
         raise StalePlanError("recovery baseline contains duplicate issue identities")
     return snapshot
+
+
+def validate_dependency_endpoints(snapshot: Snapshot, endpoint_keys: set[str]) -> None:
+    """Require complete, coherent native dependency facts for mutation endpoints."""
+
+    endpoints: dict[str, Node] = {}
+    for key in endpoint_keys:
+        node = snapshot.get(key)
+        if (
+            node is None
+            or not node.resolved
+            or not node.dependencies_observable
+            or not node.blocking_observable
+            or node.blocking_count != len(node.blocking)
+        ):
+            raise PlanError(f"dependency mutation endpoint {key} is incomplete")
+        endpoints[key] = node
+
+    for key, node in endpoints.items():
+        for blocker in node.blocked_by:
+            if blocker in endpoints and key not in endpoints[blocker].blocking:
+                raise PlanError("dependency endpoint forward and reverse facts disagree")
+        for dependent in node.blocking:
+            if dependent in endpoints and key not in endpoints[dependent].blocked_by:
+                raise PlanError("dependency endpoint forward and reverse facts disagree")
 
 
 def _issue_spec(value: Any) -> dict[str, str]:

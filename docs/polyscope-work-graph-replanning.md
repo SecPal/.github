@@ -46,6 +46,22 @@ replay with existing recovery state fails closed. The recovery path and private
 ref are derived from the exact semantic plan and stored in repository Git state,
 so changing the plan file's location cannot bypass replay protection.
 
+Every signed recovery commit also binds the exact journal state needed to
+validate its transition. Verification checks the complete accepted transition
+from the authenticated journal commit to the private-ref tip and rejects an
+unsigned, differently signed, wrong-operation, malformed, branched, or
+invalid-transition descendant. A single exact signed crash-ahead state may be
+reused when the ref advanced before the journal file; the next state advances
+through compare-and-swap from the verified predecessor, never from an arbitrary
+current ref tip.
+
+Before dependency steps are compiled, the command derives their finite existing
+endpoint set from the semantic request and current native relationships. Those
+endpoints are upgraded through the canonical reader to complete forward and
+reverse dependency observations, including coherent reverse counts. Missing,
+partially paginated, or directionally inconsistent endpoint evidence blocks the
+plan before simulation or mutation.
+
 After the writes, the command rereads the graph, verifies every intended edge
 and sibling position, rejects any unrelated state or relationship change, and
 runs the canonical resolver's structural validation. Existing body-only mirror

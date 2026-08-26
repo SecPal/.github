@@ -95,13 +95,34 @@ def _load_plan_snapshot(
     if canonical_current != current_key:
         raise replanning.PlanError("current issue reference is not canonical")
     scope = current.parent or canonical_current
+    raw_operation = request.get("operation")
+    operation = raw_operation if isinstance(raw_operation, Mapping) else {}
+    mutation_targets = {current_key}
+    if operation.get("kind") == "INSERT_PREREQUISITE":
+        moved = operation.get("move_current_blockers")
+        if isinstance(moved, list):
+            mutation_targets.update(item for item in moved if isinstance(item, str))
+        if isinstance(operation.get("existing_issue"), str):
+            mutation_targets.add(operation["existing_issue"])
+    elif operation.get("kind") == "PROMOTE_TO_SUB_EPIC":
+        mutation_targets.update(current.blocked_by)
+        mutation_targets.update(current.blocking)
+        for placement_name in ("blocked_by_placement", "blocking_placement"):
+            placement = operation.get(placement_name)
+            if isinstance(placement, Mapping):
+                mutation_targets.update(
+                    endpoint for endpoint in placement if isinstance(endpoint, str)
+                )
     base, canonical_scope = github.load_snapshot(
-        adapter, scope, include_reverse_dependencies=True
+        adapter,
+        scope,
+        include_reverse_dependencies=True,
+        mutation_targets=sorted(mutation_targets),
     )
     if canonical_scope != scope:
         raise replanning.PlanError("owning scope reference is not canonical")
     snapshots = [base]
-    existing = (request.get("operation") or {}).get("existing_issue")
+    existing = operation.get("existing_issue")
     if existing and base.get(str(existing)) is None:
         external, canonical_external = github.load_snapshot(
             adapter, str(existing), include_reverse_dependencies=True
@@ -109,7 +130,9 @@ def _load_plan_snapshot(
         if canonical_external != existing:
             raise replanning.PlanError("existing prerequisite reference is not canonical")
         snapshots.append(external)
-    return _merge_snapshots(*snapshots), scope
+    merged = _merge_snapshots(*snapshots)
+    replanning.validate_dependency_endpoints(merged, mutation_targets)
+    return merged, scope
 
 
 def _validate_new_issue_contracts(request: Mapping[str, Any]) -> None:

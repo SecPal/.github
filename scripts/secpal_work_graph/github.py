@@ -448,6 +448,7 @@ def load_snapshot(
     node_executable: str = "node",
     parser_environment: Mapping[str, str] | None = None,
     include_reverse_dependencies: bool = False,
+    mutation_targets: Iterable[str] = (),
 ) -> tuple[Snapshot, str]:
     """Collect one immutable snapshot for ``scope_root``.
 
@@ -465,7 +466,9 @@ def load_snapshot(
     bodies: dict[str, str] = {}
     canonical: dict[str, str] = {}
     expanded: set[tuple[str, str]] = set()
-    pending: deque[tuple[str, str]] = deque([(scope_root, SCOPE)])
+    pending: deque[tuple[str, str]] = deque(
+        [(scope_root, SCOPE), *((target, MUTATION_TARGET) for target in mutation_targets)]
+    )
 
     while pending:
         requested, mode = pending.popleft()
