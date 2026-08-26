@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-26 - Restore Rocky Polyscope Container Previews
+
+**Fixed:**
+
+- added a reproducible rootless Podman preview installer that bridges the native
+  PostgreSQL Unix socket through one constrained network proxy, avoiding direct
+  socket mounts that SELinux correctly denies in ordinary workspace containers
+- added deterministic Caddy routing generation from active Polyscope repository
+  registrations and transactional runtime-file backups
+- retained PostgreSQL's reject-only TCP HBA baseline, loopback-only public
+  preview handoff, and normal SELinux confinement for API and frontend
+  workspace containers
+
+---
+
 ## 2026-08-24 - Reconcile Internal Database Service Domain Policy
 
 **Changed:**

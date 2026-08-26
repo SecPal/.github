@@ -286,6 +286,29 @@ root-owned helper validates and renders the one fixed preview nginx target
 before testing and reloading nginx. Failed validation or reload restores the
 previous target.
 
+Rocky development hosts that run Polyscope under a separate `polyscope` user
+and serve previews through the rootless container runtime use the bounded
+container-preview installer instead of mounting PostgreSQL's package-managed
+Unix socket into every PHP container:
+
+```bash
+sudo -u polyscope -H env \
+  XDG_RUNTIME_DIR=/run/user/$(id -u polyscope) \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u polyscope)/bus \
+  bash ./scripts/install-polyscope-container-preview.sh
+```
+
+The installer requires the local preview image, initialized Polyscope database,
+PostgreSQL socket, and a clone root already labelled `container_file_t`. It
+creates a dedicated rootless Podman network, installs the PHP and Composer
+wrappers, renders the Caddyfile from the current registered repository IDs, and
+activates the preview and database-proxy user services. The proxy is
+the only container allowed to use `label=disable`; it is read-only, drops all
+capabilities, has no host port, and exposes the host PostgreSQL socket only to
+the dedicated container network. Workspace containers retain normal SELinux
+labels. Existing managed files are backed up before atomic replacement and are
+restored if activation fails.
+
 Every generated workspace setup is one fail-closed shell unit: canonical
 instruction validation must succeed before the complete native setup sequence,
 and any later setup failure stops all remaining commands. The external
