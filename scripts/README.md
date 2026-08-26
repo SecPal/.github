@@ -82,6 +82,18 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
+For an exact technically non-blocking thread first created after the final
+signed delivery push, `secpal-create-late-disposition.py` verifies that existing
+final delivery evidence, captures only the named live thread, and creates a
+canonical detached SSH/OpenPGP-signed artifact without a delivery commit. The
+resolver consumes that artifact through a separate explicit eligibility path,
+requires the actual detached signer to match the verified final delivery
+signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
+attestation, exact thread and top-level comment identities, body and reply
+state, classification, disposition, technical-blocking flag, and guarded
+resolution action. It cannot select arbitrary threads or authorize any other
+GitHub mutation.
+
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.
 

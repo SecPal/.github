@@ -9,6 +9,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-26 - Authenticate Post-Push Late-Feedback Disposition
+
+**Added:**
+
+- a detached SSH/OpenPGP-signed evidence path that lets the maintained guarded
+  resolver disposition an exact independently classified, technically
+  non-blocking review thread created only after the final signed delivery push,
+  without changing the delivery tree or consuming another review or remediation
+  cycle
+
+**Changed:**
+
+- the fixed-thread resolver now accepts either its existing commit-bound
+  eligibility evidence or the new exact post-final-push evidence, while failing
+  closed on delivery-anchor, signer, repository, issue, PR, head, thread,
+  comment, reply, state, classification, disposition, or action drift
+
 ## 2026-08-24 - Reconcile Internal Database Service Domain Policy
 
 **Changed:**

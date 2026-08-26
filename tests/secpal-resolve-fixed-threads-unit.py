@@ -55,6 +55,9 @@ class FakeGit:
         receipt_digest: str,
         repository: str = "SecPal/api",
         signature_valid: bool = True,
+        signature_format: str = "ssh",
+        signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
+        signing_key: str = "/tmp/fixture-signing-key",
     ) -> None:
         self.expected_head = expected_head
         self.reviewed_head = reviewed_head
@@ -62,6 +65,9 @@ class FakeGit:
         self.receipt_digest = receipt_digest
         self.repository = repository
         self.signature_valid = signature_valid
+        self.signature_format = signature_format
+        self.signer_fingerprint = signer_fingerprint
+        self.signing_key = signing_key
         self.calls: list[tuple[str, ...]] = []
 
     def __call__(
@@ -85,15 +91,30 @@ class FakeGit:
         elif call[0:2] == ("show", "-s"):
             stdout = f"{self.receipt_digest}\n"
         elif call == ("cat-file", "commit", self.expected_head):
+            signature_label = (
+                "SSH SIGNATURE"
+                if self.signature_format == "ssh"
+                else "PGP SIGNATURE"
+            )
             stdout = (
                 f"tree {self.tree}\nparent {self.reviewed_head}\n"
-                "gpgsig -----BEGIN SSH SIGNATURE-----\n signature\n"
-                " -----END SSH SIGNATURE-----\n\nmessage\n"
+                f"gpgsig -----BEGIN {signature_label}-----\n signature\n"
+                f" -----END {signature_label}-----\n\nmessage\n"
             )
         elif call == ("verify-commit", "--raw", self.expected_head):
             if not self.signature_valid:
                 return subprocess.CompletedProcess(call, 1, "", "bad signature")
-            stdout = 'Good "git" signature for fixture\n'
+            if self.signature_format == "ssh":
+                stdout = (
+                    'Good "git" signature for fixture with ED25519 key '
+                    f"{self.signer_fingerprint}\n"
+                )
+            else:
+                stdout = f"[GNUPG:] VALIDSIG {self.signer_fingerprint} 2026-01-01\n"
+        elif call == ("config", "--global", "--get", "gpg.format"):
+            stdout = f"{self.signature_format}\n"
+        elif call == ("config", "--global", "--get", "user.signingkey"):
+            stdout = f"{self.signing_key}\n"
         else:
             raise AssertionError(f"unexpected git call: {call}")
         return subprocess.CompletedProcess(call, 0, stdout, "")
@@ -139,6 +160,7 @@ def target_response(
                     "nodes": [
                         {
                             "id": comment_id,
+                            "databaseId": index,
                             "body": body,
                             "replyTo": (
                                 {"id": reply_to_id}
@@ -146,7 +168,9 @@ def target_response(
                                 else None
                             ),
                         }
-                        for comment_id, body, reply_to_id in (comments or [])
+                        for index, (comment_id, body, reply_to_id) in enumerate(
+                            comments or [], start=1001
+                        )
                     ],
                     "pageInfo": {
                         "hasNextPage": has_next_page,
@@ -240,6 +264,7 @@ def expected_thread_state(
     states = [
         MODULE.ThreadCommentState(
             comment_id=comment_id,
+            database_id=None,
             body_digest=MODULE._body_digest(body),
             reply_to_id=reply_to_id,
         )
@@ -545,6 +570,69 @@ def eligibility_payload(
     return fields
 
 
+def late_disposition_payload(
+    attestation: dict[str, Any],
+    *,
+    thread_id: str = "PRRT_LATE_NON_BLOCKING",
+    comment_id: str = "PRRC_LATE_FINDING",
+    comment_database_id: int = 1001,
+    body: str = "The reported recovery behavior is not present.",
+    replies: list[tuple[str, int, str, str]] | None = None,
+    delivery_issue: int = 724,
+    pull_request: int = 123,
+    repository: str = "SecPal/api",
+    signer_format: str = "ssh",
+    signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
+) -> dict[str, Any]:
+    reply_state = [
+        {
+            "node_id": node_id,
+            "database_id": database_id,
+            "body_digest": MODULE._body_digest(reply_body),
+            "reply_to_id": reply_to_id,
+        }
+        for node_id, database_id, reply_body, reply_to_id in (replies or [])
+    ]
+    return {
+        "schema_version": "1.0",
+        "kind": "LATE_FEEDBACK_DISPOSITION",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue,
+        "pull_request_number": pull_request,
+        "head_sha": attestation["head_sha"],
+        "validated_tree_sha": attestation["validated_tree_sha"],
+        "validation_receipt_digest": attestation[
+            "validation_receipt_digest"
+        ],
+        "validation_attestation_digest": attestation["attestation_digest"],
+        "final_eligibility_evidence_digest": attestation[
+            "eligibility_evidence_digest"
+        ],
+        "delivery_signer": {
+            "format": signer_format,
+            "fingerprint": signer_fingerprint,
+        },
+        "authorized_action": "RESOLVE_EXACT_REVIEW_THREADS",
+        "threads": [
+            {
+                "thread_id": thread_id,
+                "top_level_comment_node_id": comment_id,
+                "top_level_comment_database_id": comment_database_id,
+                "finding_body_digest": MODULE._body_digest(body),
+                "reply_state_digest": MODULE._digest_json(reply_state),
+                "reply_count": len(reply_state),
+                "is_resolved": False,
+                "is_outdated": False,
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+                "technically_blocking": False,
+                "classification_evidence_digest": "d" * 64,
+                "authorized_action": "RESOLVE_REVIEW_THREAD",
+            }
+        ],
+    }
+
+
 def write_authenticated_resolution_inputs(
     directory: str,
     thread_ids: Sequence[str],
@@ -614,7 +702,718 @@ def write_authenticated_resolution_inputs(
     return reviewed, attestation, eligibility, git
 
 
+def run_late_resolution_fixture(
+    directory: str,
+    *,
+    artifact_mutator: Any | None = None,
+    live_comments: list[tuple[str, str, str | None]] | None = None,
+    live_head: str | None = None,
+    live_outdated: bool = False,
+    live_resolved: bool = False,
+    live_thread_id: str = "PRRT_LATE_NON_BLOCKING",
+    apply: bool = True,
+    signature_error: Exception | None = None,
+) -> tuple[dict[str, Any], FakeGh, FakeGit]:
+    root = Path(directory)
+    reviewed, attestation, _eligibility, git = (
+        write_authenticated_resolution_inputs(directory, ["PRRT_FINAL_KNOWN"])
+    )
+    body = "The reported recovery behavior is not present."
+    artifact = late_disposition_payload(attestation, body=body)
+    if artifact_mutator is not None:
+        artifact_mutator(artifact)
+    artifact_path = root / "late-disposition.json"
+    signature_path = root / "late-disposition.json.sig"
+    artifact_path.write_bytes(MODULE.late_disposition.canonical_json_bytes(artifact))
+    signature_path.write_text("fixture signature", encoding="utf-8")
+    comments = live_comments or [("PRRC_LATE_FINDING", body, None)]
+    response = target_response(
+        live_thread_id,
+        head=live_head or attestation["head_sha"],
+        outdated=live_outdated,
+        resolved=live_resolved,
+        comments=comments,
+    )
+    responses = [response]
+    if apply:
+        responses.extend(
+            [response, response, response, response, resolve_response(live_thread_id)]
+        )
+    github = FakeGh(responses)
+
+    def verify_signature(
+        artifact_value: Path,
+        _signature_value: Path,
+        _expected_signer: Any,
+        **_kwargs: Any,
+    ) -> bytes:
+        if signature_error is not None:
+            raise signature_error
+        return artifact_value.read_bytes()
+
+    with (
+        mock.patch.object(MODULE, "_run_git", git),
+        mock.patch.object(MODULE, "_run_gh", github),
+        mock.patch.object(
+            MODULE.late_disposition,
+            "verify_detached_signature",
+            side_effect=verify_signature,
+        ),
+    ):
+        result = MODULE.resolve_late_disposition_threads(
+            "SecPal/api",
+            724,
+            123,
+            attestation["head_sha"],
+            ("PRRT_LATE_NON_BLOCKING",),
+            apply=apply,
+            repository_root=root,
+            final_reviewed_state_path=root / "reviewed.json",
+            expected_final_reviewed_state_digest=reviewed["state_digest"],
+            final_validation_evidence_path=root / "validation.json",
+            late_disposition_evidence_path=artifact_path,
+            late_disposition_signature_path=signature_path,
+        )
+    return result, github, git
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_post_push_late_feedback_deadlock_requires_detached_authority(
+        self,
+    ) -> None:
+        final_thread = "PRRT_FINAL_KNOWN"
+        late_thread = "PRRT_LATE_NON_BLOCKING"
+        with tempfile.TemporaryDirectory() as directory:
+            reviewed, attestation, _eligibility, git = (
+                write_authenticated_resolution_inputs(directory, [final_thread])
+            )
+            root = Path(directory)
+            late_manifest = eligibility_payload(reviewed, [late_thread])
+            late_manifest_path = root / "late-eligibility.json"
+            late_manifest_path.write_text(
+                json.dumps(late_manifest), encoding="utf-8"
+            )
+
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(
+                    MODULE,
+                    "_run_gh",
+                    side_effect=AssertionError(
+                        "commit-bound rejection must precede GitHub access"
+                    ),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    f"target thread is absent from reviewed feedback: {late_thread}",
+                ):
+                    MODULE.resolve_threads(
+                        reviewed["repository"],
+                        reviewed["pull_request_number"],
+                        attestation["head_sha"],
+                        (late_thread,),
+                        apply=True,
+                        repository_root=root,
+                        reviewed_state_path=root / "reviewed.json",
+                        expected_reviewed_state_digest=reviewed["state_digest"],
+                        validation_evidence_path=root / "validation.json",
+                        eligibility_evidence_path=late_manifest_path,
+                    )
+
+        self.assertTrue(
+            hasattr(MODULE, "resolve_late_disposition_threads"),
+            "#724 needs a detached authenticated path without a delivery commit",
+        )
+
+    def test_authenticated_post_push_late_feedback_resolves_without_tree_change(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, github, git = run_late_resolution_fixture(directory)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["resolved"], ["PRRT_LATE_NON_BLOCKING"])
+        self.assertEqual(
+            result["eligibility_path"], "authenticated_late_disposition"
+        )
+        self.assertEqual(
+            result["lifecycle_consumption"],
+            {
+                "unrestricted_reviews": 0,
+                "remediation_cycles": 0,
+                "delivery_commits": 0,
+                "pushes": 0,
+                "ready_transitions": 0,
+            },
+        )
+        self.assertEqual(
+            sum(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in github.calls
+            ),
+            1,
+        )
+        self.assertFalse(
+            any(call and call[0] in {"commit", "push"} for call in git.calls)
+        )
+
+    def test_creator_authenticates_fresh_exact_late_thread_without_commit(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as key_directory,
+            tempfile.TemporaryDirectory() as output_directory,
+        ):
+            root = Path(directory)
+            reviewed, attestation, _eligibility, git = (
+                write_authenticated_resolution_inputs(
+                    directory, ["PRRT_FINAL_KNOWN"]
+                )
+            )
+            signing_key = Path(key_directory) / "signing-key"
+            signing_key.write_text("fixture", encoding="utf-8")
+            git.signing_key = str(signing_key)
+            classification = {
+                "schema_version": "1.0",
+                "threads": [
+                    {
+                        "thread_id": "PRRT_LATE_NON_BLOCKING",
+                        "classification": "INVALID_FALSE_OR_MISLEADING",
+                        "disposition": "DISPROVEN_WITH_EVIDENCE",
+                        "technically_blocking": False,
+                        "classification_evidence_digest": "d" * 64,
+                    }
+                ],
+            }
+            classification_path = root / "classification.json"
+            classification_path.write_bytes(MODULE._canonical_json_bytes(classification))
+            artifact_path = Path(output_directory) / "late.json"
+            signature_path = Path(output_directory) / "late.sig"
+            response = target_response(
+                "PRRT_LATE_NON_BLOCKING",
+                head=attestation["head_sha"],
+                comments=[
+                    (
+                        "PRRC_LATE_FINDING",
+                        "The reported recovery behavior is not present.",
+                        None,
+                    )
+                ],
+            )
+            github = FakeGh([response, response])
+
+            def sign(
+                artifact: dict[str, Any],
+                artifact_output: Path,
+                signature_output: Path,
+                **_kwargs: Any,
+            ) -> None:
+                artifact_output.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_output.write_text("signed", encoding="utf-8")
+
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", github),
+                mock.patch.object(
+                    MODULE.late_disposition, "sign_artifact", side_effect=sign
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "read_signing_configuration",
+                    return_value=("ssh", str(signing_key)),
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "os_account_home",
+                    return_value=Path(key_directory),
+                ),
+            ):
+                result = MODULE.create_late_disposition_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    attestation["head_sha"],
+                    repository_root=root,
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "validation.json",
+                    classification_evidence_path=classification_path,
+                    output_path=artifact_path,
+                    signature_output_path=signature_path,
+                )
+
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "LATE_DISPOSITION_AUTHENTICATED")
+            self.assertFalse(result["delivery_tree_changed"])
+            self.assertEqual(
+                artifact["validation_attestation_digest"],
+                attestation["attestation_digest"],
+            )
+            self.assertEqual(
+                artifact["threads"][0]["top_level_comment_database_id"], 1001
+            )
+            self.assertFalse(
+                any(call and call[0] in {"commit", "push"} for call in git.calls)
+            )
+
+    def test_late_disposition_live_state_drift_blocks_before_mutation(self) -> None:
+        cases = {
+            "changed head": {
+                "live_head": "e" * 40,
+                "error": "pull request head changed",
+            },
+            "changed top-level comment": {
+                "live_comments": [
+                    ("PRRC_LATE_FINDING", "changed finding text", None)
+                ],
+                "error": "differs from authenticated late disposition",
+            },
+            "new material reply": {
+                "live_comments": [
+                    (
+                        "PRRC_LATE_FINDING",
+                        "The reported recovery behavior is not present.",
+                        None,
+                    ),
+                    (
+                        "PRRC_NEW_REPLY",
+                        "new material evidence",
+                        "PRRC_LATE_FINDING",
+                    ),
+                ],
+                "error": "differs from authenticated late disposition",
+            },
+            "removed reply": {
+                "artifact_mutator": lambda value: value["threads"][0].update(
+                    {
+                        "reply_state_digest": MODULE._digest_json(
+                            [
+                                {
+                                    "node_id": "PRRC_REMOVED_REPLY",
+                                    "database_id": 1002,
+                                    "body_digest": MODULE._body_digest(
+                                        "previous material reply"
+                                    ),
+                                    "reply_to_id": "PRRC_LATE_FINDING",
+                                }
+                            ]
+                        ),
+                        "reply_count": 1,
+                    }
+                ),
+                "error": "differs from authenticated late disposition",
+            },
+            "different top-level identity": {
+                "live_comments": [
+                    (
+                        "PRRC_SUBSTITUTED",
+                        "The reported recovery behavior is not present.",
+                        None,
+                    )
+                ],
+                "error": "differs from authenticated late disposition",
+            },
+            "different top-level database identity": {
+                "artifact_mutator": lambda value: value["threads"][0].update(
+                    {"top_level_comment_database_id": 9999}
+                ),
+                "error": "differs from authenticated late disposition",
+            },
+            "incompatible outdated state": {
+                "live_outdated": True,
+                "error": "differs from authenticated late disposition",
+            },
+            "changed resolved state": {
+                "live_resolved": True,
+                "error": "differs from authenticated late disposition",
+            },
+            "different thread": {
+                "live_thread_id": "PRRT_SUBSTITUTED",
+                "error": "pull request identity is incomplete",
+            },
+        }
+        for label, case in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(MODULE.ResolutionError, case["error"]):
+                    _result, github, _git = run_late_resolution_fixture(
+                        directory,
+                        artifact_mutator=case.get("artifact_mutator"),
+                        live_head=case.get("live_head"),
+                        live_outdated=case.get("live_outdated", False),
+                        live_resolved=case.get("live_resolved", False),
+                        live_comments=case.get("live_comments"),
+                        live_thread_id=case.get(
+                            "live_thread_id", "PRRT_LATE_NON_BLOCKING"
+                        ),
+                    )
+
+    def test_late_disposition_binding_and_policy_drift_blocks_before_github(
+        self,
+    ) -> None:
+        mutations = {
+            "repository replay": lambda value: value.update(
+                {"repository": "SecPal/other"}
+            ),
+            "PR replay": lambda value: value.update(
+                {"pull_request_number": 124}
+            ),
+            "issue replay": lambda value: value.update(
+                {"delivery_issue_number": 725}
+            ),
+            "head replay": lambda value: value.update({"head_sha": "e" * 40}),
+            "receipt substituted": lambda value: value.update(
+                {"validation_receipt_digest": "e" * 64}
+            ),
+            "attestation substituted": lambda value: value.update(
+                {"validation_attestation_digest": "e" * 64}
+            ),
+            "validated tree substituted": lambda value: value.update(
+                {"validated_tree_sha": "e" * 40}
+            ),
+            "final eligibility substituted": lambda value: value.update(
+                {"final_eligibility_evidence_digest": "e" * 64}
+            ),
+            "artifact claims another trust anchor": lambda value: value[
+                "delivery_signer"
+            ].update({"fingerprint": "SHA256:attackerChosen"}),
+            "classification changed": lambda value: value["threads"][0].update(
+                {"classification": "INFORMATIONAL"}
+            ),
+            "disposition changed": lambda value: value["threads"][0].update(
+                {"disposition": "NON_ACTIONABLE"}
+            ),
+            "technically blocking": lambda value: value["threads"][0].update(
+                {"technically_blocking": True}
+            ),
+            "action substituted": lambda value: value["threads"][0].update(
+                {"authorized_action": "RESOLVE_ANY_THREAD"}
+            ),
+            "unsupported field": lambda value: value.update({"query": "*"}),
+            "unsupported version": lambda value: value.update(
+                {"schema_version": "2.0"}
+            ),
+        }
+        for label, mutation in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(MODULE.ResolutionError):
+                    run_late_resolution_fixture(
+                        directory,
+                        artifact_mutator=mutation,
+                    )
+
+    def test_late_disposition_runtime_payload_matches_canonical_schema(self) -> None:
+        reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
+        attestation = validation_attestation_payload(reviewed)
+        MODULE.evidence.validate_against_authoritative_schema(
+            late_disposition_payload(attestation),
+            ROOT
+            / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+            "late-disposition evidence",
+        )
+
+    def test_late_disposition_alternate_valid_signer_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "signer does not match final delivery signer",
+            ):
+                run_late_resolution_fixture(
+                    directory,
+                    signature_error=MODULE.late_disposition.LateDispositionError(
+                        "late-disposition signer does not match final delivery signer"
+                    ),
+                )
+
+    def test_late_disposition_rejects_multi_thread_authority(self) -> None:
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "exactly one review thread",
+        ):
+            MODULE.resolve_late_disposition_threads(
+                "SecPal/api",
+                724,
+                123,
+                "a" * 40,
+                ("PRRT_FIRST", "PRRT_SECOND"),
+                apply=True,
+                repository_root="unread",
+                final_reviewed_state_path="unread",
+                expected_final_reviewed_state_digest="b" * 64,
+                final_validation_evidence_path="unread",
+                late_disposition_evidence_path="unread",
+                late_disposition_signature_path="unread",
+            )
+
+    def test_detached_ssh_signature_is_hermetic_and_signer_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".config").mkdir()
+            (root / ".gnupg").mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=root
+            )
+            first_key = root / "first"
+            second_key = root / "second"
+            for key in (first_key, second_key):
+                subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-q",
+                        "-t",
+                        "ed25519",
+                        "-N",
+                        "",
+                        "-f",
+                        str(key),
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                )
+
+            def fingerprint(key: Path) -> str:
+                result = subprocess.run(
+                    ["/usr/bin/ssh-keygen", "-lf", f"{key}.pub", "-E", "sha256"],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                return result.stdout.split()[1]
+
+            first_signer = MODULE.late_disposition.SignerIdentity(
+                "ssh", fingerprint(first_key)
+            )
+            second_signer = MODULE.late_disposition.SignerIdentity(
+                "ssh", fingerprint(second_key)
+            )
+            artifact = root / "artifact.json"
+            signature = root / "artifact.sig"
+            MODULE.late_disposition.sign_artifact(
+                {"schema_version": "fixture", "value": 1},
+                artifact,
+                signature,
+                signer=first_signer,
+                signing_key=str(first_key),
+                environment=environment,
+            )
+            MODULE.late_disposition.verify_detached_signature(
+                artifact, signature, first_signer, environment=environment
+            )
+            original_artifact = artifact.read_bytes()
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "does not match final delivery signer",
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact, signature, second_signer, environment=environment
+                )
+            artifact.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes(
+                    {"schema_version": "fixture", "value": 2}
+                )
+            )
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "SSH signature is invalid",
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact, signature, first_signer, environment=environment
+                )
+            artifact.write_bytes(original_artifact)
+            signature.write_bytes(b"corrupted signature")
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "SSH signature is invalid",
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact, signature, first_signer, environment=environment
+                )
+
+    def test_detached_openpgp_signature_is_hermetic_and_signer_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".config").mkdir()
+            gnupg = root / ".gnupg"
+            gnupg.mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=root
+            )
+            subprocess.run(
+                [
+                    "/usr/bin/gpg",
+                    "--batch",
+                    "--no-tty",
+                    "--passphrase",
+                    "",
+                    "--quick-generate-key",
+                    "SecPal Fixture <fixture@example.invalid>",
+                    "ed25519",
+                    "sign",
+                    "0",
+                ],
+                check=True,
+                env=environment,
+                capture_output=True,
+            )
+            keys = subprocess.run(
+                ["/usr/bin/gpg", "--batch", "--with-colons", "--list-secret-keys"],
+                check=True,
+                env=environment,
+                capture_output=True,
+                text=True,
+            ).stdout
+            fingerprint = next(
+                line.split(":")[9]
+                for line in keys.splitlines()
+                if line.startswith("fpr:")
+            )
+            signer = MODULE.late_disposition.SignerIdentity(
+                "openpgp", fingerprint
+            )
+            artifact = root / "artifact.json"
+            signature = root / "artifact.asc"
+            MODULE.late_disposition.sign_artifact(
+                {"schema_version": "fixture", "value": 1},
+                artifact,
+                signature,
+                signer=signer,
+                signing_key=fingerprint,
+                environment=environment,
+            )
+            MODULE.late_disposition.verify_detached_signature(
+                artifact, signature, signer, environment=environment
+            )
+            alternate = MODULE.late_disposition.SignerIdentity(
+                "openpgp", "A" * len(fingerprint)
+            )
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "does not match final delivery signer",
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact, signature, alternate, environment=environment
+                )
+
+    def test_detached_artifact_rejects_missing_signature_and_duplicate_keys(
+        self,
+    ) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "artifact.json"
+            artifact.write_bytes(b'{"schema_version":"1.0","schema_version":"1.0"}\n')
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "malformed",
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact, root / "missing.sig", signer
+                )
+            artifact.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes(
+                    {"schema_version": "1.0"}
+                )
+            )
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "signature is unavailable",
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact, root / "missing.sig", signer
+                )
+
+    def test_detached_signing_environment_ignores_repository_overrides(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "HOME": "/repository/controlled",
+                    "XDG_CONFIG_HOME": "/repository/controlled/xdg",
+                    "GNUPGHOME": "/repository/controlled/gnupg",
+                    "GIT_CONFIG_GLOBAL": "/repository/controlled/gitconfig",
+                    "GIT_CONFIG_KEY_0": "gpg.program",
+                    "LD_PRELOAD": "/repository/controlled/library",
+                    "SSH_AUTH_SOCK": "/repository/controlled/agent",
+                    "PATH": "/repository/controlled/bin",
+                },
+                clear=False,
+            ):
+                environment = MODULE.late_disposition.signing_environment(
+                    account_home=root
+                )
+
+        self.assertEqual(environment["HOME"], str(root))
+        self.assertEqual(environment["XDG_CONFIG_HOME"], str(root / ".config"))
+        self.assertEqual(environment["GNUPGHOME"], str(root / ".gnupg"))
+        self.assertEqual(
+            environment["PATH"], MODULE.late_disposition.TRUSTED_COMMAND_PATH
+        )
+        for key in (
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_KEY_0",
+            "LD_PRELOAD",
+            "SSH_AUTH_SOCK",
+        ):
+            self.assertNotIn(key, environment)
+
+    def test_detached_verification_rejects_evidence_toctou(self) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "artifact.json"
+            signature = root / "artifact.sig"
+            artifact.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes({"value": 1})
+            )
+            signature.write_text("signature", encoding="utf-8")
+
+            def mutate(*_args: Any, **_kwargs: Any) -> Any:
+                artifact.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes({"value": 2})
+                )
+                return subprocess.CompletedProcess(
+                    (),
+                    0,
+                    b'Good "fixture" signature with ED25519 key '
+                    b"SHA256:fixtureDeliverySigner\n",
+                    b"",
+                )
+
+            with (
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "_trusted_executable",
+                    return_value="/usr/bin/ssh-keygen",
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "_run_signature_command",
+                    side_effect=mutate,
+                ),
+                self.assertRaisesRegex(
+                    MODULE.late_disposition.LateDispositionError,
+                    "changed during signature verification",
+                ),
+            ):
+                MODULE.late_disposition.verify_detached_signature(
+                    artifact,
+                    signature,
+                    signer,
+                    environment={"PATH": "/usr/bin"},
+                )
+
     def test_programmatic_apply_refuses_caller_constructed_authorization(
         self,
     ) -> None:

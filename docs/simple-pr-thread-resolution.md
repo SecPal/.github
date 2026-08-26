@@ -56,6 +56,11 @@ verifies that the remaining budgets cover every known target recheck and
 mutation plus the unavoidable first API read for every later unresolved tracked
 follow-up. It does not guess the cost of variable future graph traversal.
 
+The authenticated late-disposition path performs two equal capture reads when
+the detached artifact is created. At apply time it reads the named target once,
+performs two equal preflight projections before any write, and performs two more
+equal projections immediately before the exact mutation.
+
 ## Safety boundary
 
 The command verifies only the invariants required for this operation:
@@ -187,6 +192,93 @@ field or `TRACKED_AS_FOLLOW_UP`; tracked follow-up resolution requires version
 }
 ```
 
+## Post-final-push late disposition
+
+Commit-bound eligibility remains the normal remediation path. A distinct
+resolution-only path exists only for exact technically non-blocking feedback
+that first appears after the final signed delivery push. It does not extend the
+delivery lifecycle, rerun validation, consume an unrestricted review or
+remediation cycle, change the delivery tree, create a commit or push, inspect
+CI, request review, mark Ready, or imply merge readiness.
+
+The path first verifies the existing final reviewed state, validation receipt,
+final attestation, local final tree and head, receipt trailer, accepted commit
+signature, and exact origin. It derives the delivery signer fingerprint from
+that cryptographic verification. It then captures only the one explicitly
+named live thread and signs the canonical
+[`late-disposition.schema.json`](../.agents/skills/secpal-pr-review/references/late-disposition.schema.json)
+artifact with the OS-account signing configuration. The actual detached signer
+must equal the final delivery signer; a signer identity declared by the
+artifact is never its trust root. Artifact and signature outputs must be in the
+private session area outside the delivery repository, so creating the evidence
+cannot alter that worktree or tree.
+
+The initial supported authorization is exactly
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
+`technically_blocking=false`. Classification is independently established and
+supplied explicitly; no comment-text heuristic exists. The signed artifact
+binds the repository, delivery issue, PR, unchanged final head and tree, final
+receipt/attestation/eligibility digests, signer, exact thread, top-level comment
+node and database identities, finding-body digest, reply-state digest and
+count, resolved/outdated states, classification evidence digest, disposition,
+and exact resolution action. It never selects threads by query or pattern.
+
+Create canonical classification input and detached evidence:
+
+```json
+{
+  "schema_version": "1.0",
+  "threads": [
+    {
+      "classification": "INVALID_FALSE_OR_MISLEADING",
+      "classification_evidence_digest": "CLASSIFICATION_EVIDENCE_SHA256",
+      "disposition": "DISPROVEN_WITH_EVIDENCE",
+      "technically_blocking": false,
+      "thread_id": "PRRT_example"
+    }
+  ]
+}
+```
+
+```bash
+python3 scripts/secpal-create-late-disposition.py \
+  --repo SecPal/api \
+  --delivery-issue 456 \
+  --pr 123 \
+  --repo-root /path/to/SecPal/api \
+  --expected-head 0123456789abcdef0123456789abcdef01234567 \
+  --final-reviewed-state FINAL_REVIEWED_STATE.json \
+  --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
+  --final-validation-evidence FINAL_ATTESTATION.json \
+  --classification-evidence LATE_CLASSIFICATION.json \
+  --output SESSION/LATE_DISPOSITION.json \
+  --signature-output SESSION/LATE_DISPOSITION.json.sig
+```
+
+Resolve only the authenticated conversation:
+
+```bash
+python3 scripts/secpal-resolve-fixed-threads.py \
+  --repo SecPal/api \
+  --delivery-issue 456 \
+  --pr 123 \
+  --repo-root /path/to/SecPal/api \
+  --expected-head 0123456789abcdef0123456789abcdef01234567 \
+  --reviewed-state FINAL_REVIEWED_STATE.json \
+  --expected-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
+  --validation-evidence FINAL_ATTESTATION.json \
+  --late-disposition-evidence SESSION/LATE_DISPOSITION.json \
+  --late-disposition-signature SESSION/LATE_DISPOSITION.json.sig \
+  --thread-id PRRT_example \
+  --apply
+```
+
+Commit-bound `--eligibility-evidence` and detached
+`--late-disposition-evidence` are mutually exclusive. Missing, non-canonical,
+duplicate-keyed, unknown-version, unsigned, corrupt, differently signed, or
+rebound evidence fails before GitHub access. Any live head, PR, thread, comment,
+body, reply, resolution, or outdated-state drift blocks before mutation.
+
 ## Operational rule
 
 When the user explicitly asks to resolve comments that have been fixed and
@@ -197,8 +289,10 @@ created from the completed finding classifications and dispositions and
 authenticated by the signed validation receipt.
 Full review remediation also uses this path after its signed push. A raw
 validation receipt for an unchanged head is not authenticated by that existing
-commit and cannot authorize resolution; do not create an artificial commit to
-work around this boundary. Do not route resolution through the readiness or
+commit and cannot authorize commit-bound resolution; do not create an
+artificial commit to work around this boundary. Only an exact post-final-push
+thread with separately authenticated late-disposition evidence may use the
+resolution-only exception above. Do not route resolution through the readiness or
 forensic workflow unless the current user instruction explicitly asks for CI
 inspection, readiness, or merge authorization. Even then, the CI observation
 is one bounded current-state read with no polling, waiting, sleeping, or

@@ -124,6 +124,45 @@ only. It is also the default post-push resolution step after
 feedback remediation. It is not selected for a separately requested readiness
 audit, forensic evidence capture, or merge evaluation.
 
+### Authenticated post-final-push late disposition
+
+Commit-bound eligibility above remains unchanged and is the normal remediation
+path. One additional resolution-only path exists for an exact thread first
+observed after the final signed delivery push. It accepts only
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
+`technically_blocking=false`; classification is explicit independent review
+judgment and is never inferred from text.
+
+This path first independently verifies the existing final reviewed state,
+validation receipt and attestation, signed receipt trailer, final tree, exact
+head and origin, and accepted local commit signature. The verified signature's
+actual format and fingerprint establish the only signer trust anchor. A strict
+canonical `late-disposition.schema.json` document is then detached-signed by
+that same OS-account identity without a Git commit. SSH and OpenPGP signatures
+use trusted absolute executables, bounded timeouts, the OS account home and
+configuration roots, and neutralized Git environment overrides.
+Artifact and signature outputs are required to remain outside the delivery
+repository.
+
+The signed document binds repository, delivery issue, PR, unchanged final head
+and tree, receipt/attestation/final-eligibility digests, derived signer, exact
+authorized action, and exactly one thread authorization. That authorization
+binds the GraphQL thread ID, top-level comment node and database
+IDs, finding body digest, reply-state digest and count, resolved/outdated state,
+independently established classification evidence digest, classification,
+disposition, `technically_blocking=false`, and `RESOLVE_REVIEW_THREAD`.
+Unknown fields, versions, duplicate keys, non-canonical bytes, unsigned or
+corrupt evidence, an alternate valid signer, self-declared trust substitution,
+or any binding drift fail closed.
+
+The maintained fixed-thread resolver is still the sole GitHub mutation
+boundary. It re-verifies both evidence layers, reads only the named thread,
+checks every exact live binding before the first write and immediately before
+the target write, and resolves only the authenticated source conversation. The
+path consumes zero unrestricted reviews, remediation cycles, commits, pushes,
+and Ready transitions. It has no CI, review-request, label, issue, source,
+readiness, merge, or generic conversation authority.
+
 ## Normal fast-path state machine
 
 ```text
@@ -224,9 +263,12 @@ target projections, and exact mutation response. It does not read or depend on
 hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
 reactions, unrelated feedback, or worktree cleanliness.
 
-Only the final attestation for a new signed fix commit is accepted as validation
-evidence. A raw validation receipt for an unchanged head has no receipt trailer
-in that pre-existing commit and fails closed before any GitHub read.
+Only the final attestation for a signed delivery commit is accepted as the
+delivery anchor. A raw validation receipt for an unchanged head has no receipt
+trailer in that pre-existing commit and fails closed before any GitHub read.
+Post-final-push late resolution additionally requires the independently signed
+artifact above; neither the prior attestation alone nor a user-created file can
+authorize it.
 
 `STOP` reports the commit, branch, remote synchronization, local validation,
 worktree state, PR identity, and resolution results. The workflow never merges;

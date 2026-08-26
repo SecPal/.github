@@ -17,6 +17,9 @@ FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-bat
 FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
 SIMPLE_RESOLVER="$REPO_ROOT/scripts/secpal-resolve-fixed-threads.py"
 FOLLOW_UP="$REPO_ROOT/scripts/secpal_pr_review/follow_up.py"
+LATE_DISPOSITION="$REPO_ROOT/scripts/secpal_pr_review/late_disposition.py"
+LATE_CREATOR="$REPO_ROOT/scripts/secpal-create-late-disposition.py"
+LATE_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/late-disposition.schema.json"
 STATIC_POLICY="$REPO_ROOT/tests/secpal-pr-review-static-policy.py"
 POLYSCOPE_TEMPLATE="$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
 WORKFLOW_DOC="$REPO_ROOT/docs/secpal-pr-review-workflow.md"
@@ -475,6 +478,8 @@ for required in \
   "$ACTIONS" \
   "$FAST_PATH" \
   "$SIMPLE_RESOLVER" \
+  "$LATE_DISPOSITION" \
+  "$LATE_CREATOR" \
   "$STATIC_POLICY" \
   "$POLYSCOPE_TEMPLATE" \
   "$WORKFLOW_DOC" \
@@ -484,7 +489,8 @@ for required in \
   "$REGISTRY" \
   "$REGISTRY_SCHEMA" \
   "$PLAN_SCHEMA" \
-  "$FAST_SCHEMA"; do
+  "$FAST_SCHEMA" \
+  "$LATE_SCHEMA"; do
   test -f "$required" || fail "missing ${required#"$REPO_ROOT"/}"
 done
 test -x "$GOVERNANCE_SUITE" || fail 'registered governance suite is not executable'
@@ -641,10 +647,10 @@ done
 
 prohibited_authority_pattern='gh[[:space:]]+pr[[:space:]]+(review|ready|merge)|requestReviews|enablePullRequestAutoMerge|mergePullRequest|addLabelsToLabelable|createIssue'
 
-if grep -En 'retrying' "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER"; then
+if grep -En 'retrying' "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" "$LATE_DISPOSITION"; then
   fail 'mutation helper contains polling behavior'
 fi
-if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER"; then
+if grep -En "$prohibited_authority_pattern" "$ACTIONS" "$FAST_PATH" "$SIMPLE_RESOLVER" "$LATE_DISPOSITION" "$LATE_CREATOR"; then
   fail 'mutation helper exposes prohibited GitHub authority'
 fi
 
@@ -654,7 +660,9 @@ python3 \
   "$ACTIONS" \
   "$FAST_PATH" \
   "$SIMPLE_RESOLVER" \
-  "$FOLLOW_UP"
+  "$FOLLOW_UP" \
+  "$LATE_DISPOSITION" \
+  "$LATE_CREATOR"
 
 grep -Eq "$prohibited_authority_pattern" <<< 'mergePullRequest' \
   || fail 'authority policy negative fixture was not detected'

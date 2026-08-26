@@ -60,6 +60,24 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 
 Repeat `--thread-id REVIEW_THREAD_NODE_ID` for each additional fixed thread.
 
+For an exact technically non-blocking thread that first appeared only after the
+final signed delivery push, do not create an empty delivery commit. Require an
+independently established `INVALID_FALSE_OR_MISLEADING +
+DISPROVEN_WITH_EVIDENCE` classification with `technically_blocking=false`, then
+use `scripts/secpal-create-late-disposition.py` to create the canonical detached
+artifact and signature. The creator must verify the existing final reviewed
+state, receipt/attestation, final tree, receipt trailer, origin, head, and commit
+signature before deriving the delivery signer and reading the explicitly named
+thread. Resolve it only through `scripts/secpal-resolve-fixed-threads.py` with
+`--delivery-issue`, `--late-disposition-evidence`, and
+`--late-disposition-signature`. The resolver independently verifies the same
+final evidence, requires the detached SSH/OpenPGP signer to equal the verified
+delivery signer, and fails closed on any artifact, classification, action,
+head, thread, top-level comment, body, reply, resolved, or outdated-state drift.
+Read [references/late-disposition.schema.json](references/late-disposition.schema.json)
+for the exact artifact shape. This exception consumes no review/remediation
+counter and has no commit, push, CI, Ready, or merge authority.
+
 This resolution-only path does not capture or reclassify PR-wide feedback, run
 validation, inspect CI or readiness, create commits, push, or make a merge
 decision. Report the exact resolved and already-resolved targets, then stop.
@@ -166,7 +184,9 @@ The following state machine applies only to the full feedback-remediation path.
    reviewed head and skip the commit and push states; never create an artificial
    empty commit. A receipt created after that existing commit is not
    authenticated by it and cannot authorize a thread-resolution mutation; stop
-   without resolution when no authenticated fix-commit attestation exists.
+   without commit-bound resolution when no authenticated fix-commit attestation
+   exists. Only an exact post-final-push thread satisfying the separately signed
+   late-disposition contract above may use its resolution-only exception.
 7. For the changed-tree path only, recheck the remote predecessor, push once
    without bypassing local hooks, and verify that local, remote, and PR heads
    equal the signed commit. Do not inspect hosted CI as a consequence of the
