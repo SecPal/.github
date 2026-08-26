@@ -55,6 +55,13 @@ reused when the ref advanced before the journal file; the next state advances
 through compare-and-swap from the verified predecessor, never from an arbitrary
 current ref tip.
 
+The Git signer authenticates that optional crash-ahead document but does not
+define delivery-step semantics. The recovery journal validates the authenticated
+document against the exact plan step before accepting or reusing it. A create
+step must add exactly its planned alias with a canonical identity in the planned
+repository; every other step must preserve created identities exactly, and the
+outcome must match the resulting position in the finite plan.
+
 Before dependency steps are compiled, the command derives their finite existing
 endpoint set from the semantic request and current native relationships. Those
 endpoints are upgraded through the canonical reader to complete forward and

@@ -302,7 +302,7 @@ def _transition_document(
     return _signed_recovery_document(document)
 
 
-def _validate_recovery_transition(
+def _validate_recovery_transition_shape(
     previous: Mapping[str, Any], current: Mapping[str, Any]
 ) -> None:
     old = _signed_recovery_document(previous)
@@ -344,6 +344,118 @@ def _validate_recovery_transition(
         raise StalePlanError("recovery authentication contains an invalid state transition")
 
 
+def _validate_recovery_state(
+    plan: Plan, value: Mapping[str, Any]
+) -> dict[str, CreatedIssueIdentity]:
+    document = _signed_recovery_document(value)
+    expected_binding = {
+        "schema": RECOVERY_SCHEMA,
+        "plan_digest": plan_digest(plan),
+        "actor": plan.actor,
+        "current_issue": plan.current_issue,
+        "snapshot_digest": plan.snapshot_digest,
+    }
+    if any(document[field] != expected for field, expected in expected_binding.items()):
+        raise StalePlanError("recovery state is bound to a different plan")
+    baseline = snapshot_from_document(document["baseline"])
+    if snapshot_digest(baseline) != plan.snapshot_digest:
+        raise StalePlanError("recovery baseline digest is invalid")
+
+    next_step = document["next_step"]
+    attempting = document["attempting_step"]
+    if (
+        not 0 <= next_step <= len(plan.steps)
+        or (
+            attempting is not None
+            and (attempting != next_step or next_step >= len(plan.steps))
+        )
+    ):
+        raise StalePlanError("recovery state has an invalid plan position")
+    expected_outcome = (
+        "UNKNOWN_MUTATION_OUTCOME"
+        if attempting is not None
+        else "NO_WRITES"
+        if next_step == 0
+        else "COMPLETE"
+        if next_step == len(plan.steps)
+        else "KNOWN_WRITES"
+    )
+    if document["outcome"] != expected_outcome:
+        raise StalePlanError("recovery state outcome differs from the exact plan position")
+
+    expected_created = {
+        str(step.arguments["alias"]): str(step.arguments["repository"])
+        for step in plan.steps[:next_step]
+        if step.kind == "CREATE_ISSUE"
+    }
+    identities = _identities(document["created"])
+    if set(identities) != set(expected_created):
+        raise StalePlanError("recovery created identities differ from the exact plan prefix")
+    if len({item.key for item in identities.values()}) != len(identities) or len(
+        {item.node_id for item in identities.values()}
+    ) != len(identities):
+        raise StalePlanError("recovery created identities are not unique")
+    for alias, identity in identities.items():
+        repository, _ = parse_node_key(identity.key)
+        if repository != expected_created[alias]:
+            raise StalePlanError("recovery created identity belongs to another repository")
+    return identities
+
+
+def _validate_recovery_transition(
+    plan: Plan, previous: Mapping[str, Any], current: Mapping[str, Any]
+) -> None:
+    old = _signed_recovery_document(previous)
+    new = _signed_recovery_document(current)
+    _validate_recovery_state(plan, old)
+    _validate_recovery_state(plan, new)
+    immutable = RECOVERY_DOCUMENT_FIELDS - RECOVERY_STATE_FIELDS - {"journal_digest"}
+    if any(old[field] != new[field] for field in immutable):
+        raise StalePlanError("recovery plan transition changed immutable operation state")
+
+    old_next = old["next_step"]
+    old_attempting = old["attempting_step"]
+    old_created = old["created"]
+    if old_attempting is None:
+        valid = (
+            old_next < len(plan.steps)
+            and new["next_step"] == old_next
+            and new["attempting_step"] == old_next
+            and new["outcome"] == "UNKNOWN_MUTATION_OUTCOME"
+            and new["created"] == old_created
+        )
+    else:
+        cancelled = (
+            new["next_step"] == old_next
+            and new["attempting_step"] is None
+            and new["created"] == old_created
+            and new["outcome"] == ("KNOWN_WRITES" if old_next else "NO_WRITES")
+        )
+        completed = (
+            new["next_step"] == old_next + 1
+            and new["attempting_step"] is None
+            and new["outcome"]
+            == ("COMPLETE" if old_next + 1 == len(plan.steps) else "KNOWN_WRITES")
+        )
+        if completed:
+            step = plan.steps[old_next]
+            if step.kind == "CREATE_ISSUE":
+                alias = str(step.arguments["alias"])
+                completed = (
+                    alias not in old_created
+                    and set(new["created"]) == set(old_created) | {alias}
+                    and all(
+                        new["created"][old_alias] == old_identity
+                        for old_alias, old_identity in old_created.items()
+                    )
+                )
+            else:
+                completed = new["created"] == old_created
+        valid = cancelled or completed
+    if not valid:
+        raise StalePlanError("recovery authentication contains an invalid plan transition")
+
+
 class RecoverySigner(Protocol):
     def sign(
         self,
@@ -354,7 +466,7 @@ class RecoverySigner(Protocol):
 
     def verify(
         self, authentication: Any, operation_digest: str, document: Mapping[str, Any]
-    ) -> None: ...
+    ) -> Mapping[str, Any] | None: ...
 
 
 class GitRecoverySigner:
@@ -550,7 +662,7 @@ class GitRecoverySigner:
         document = self._commit_document(
             commit_oid, operation_digest, previous, previous_oid
         )
-        _validate_recovery_transition(previous, document)
+        _validate_recovery_transition_shape(previous, document)
         return document
 
     def sign(
@@ -607,7 +719,7 @@ class GitRecoverySigner:
 
     def verify(
         self, authentication: Any, operation_digest: str, document: Mapping[str, Any]
-    ) -> None:
+    ) -> Mapping[str, Any] | None:
         signed_document = _signed_recovery_document(document)
         expected_ref = self._ref_name(operation_digest)
         if (
@@ -648,10 +760,12 @@ class GitRecoverySigner:
             str(authentication["predecessor_oid"]),
         )
         if tip == commit_oid:
-            return
+            return None
         if self._parents(tip) != (commit_oid,):
             raise StalePlanError("recovery authentication reference was substituted")
-        self._successor_document(tip, operation_digest, signed_document, commit_oid)
+        return self._successor_document(
+            tip, operation_digest, signed_document, commit_oid
+        )
 
     def recovery_path(self, operation_digest: str) -> Path:
         self._ref_name(operation_digest)
@@ -729,6 +843,13 @@ class RecoveryJournal:
             )
         document = dict(fields)
         document["journal_digest"] = _document_digest(document)
+        if previous is None:
+            _validate_recovery_state(self.plan, document)
+        else:
+            previous_document = {
+                key: value for key, value in previous.items() if key != "authentication"
+            }
+            _validate_recovery_transition(self.plan, previous_document, document)
         document["authentication"] = dict(
             self.signer.sign(plan_digest(self.plan), document, previous)
         )
@@ -830,7 +951,10 @@ class RecoveryJournal:
             raise StalePlanError("recovery evidence digest is invalid")
         if not isinstance(digest, str):
             raise StalePlanError("recovery evidence digest is malformed")
-        self.signer.verify(authentication, plan_digest(self.plan), document)
+        signed_document = dict(document)
+        authenticated_successor = self.signer.verify(
+            authentication, plan_digest(self.plan), signed_document
+        )
         document.pop("journal_digest")
         expected_fields = {
             "schema",
@@ -856,37 +980,11 @@ class RecoveryJournal:
         for field in ("schema", "plan_digest", "actor", "current_issue", "snapshot_digest"):
             if document.get(field) != expected[field]:
                 raise StalePlanError("recovery evidence is bound to a different operation")
-        baseline = snapshot_from_document(document.get("baseline"))
-        if snapshot_digest(baseline) != self.plan.snapshot_digest:
-            raise StalePlanError("recovery baseline digest is invalid")
-        next_step = document.get("next_step")
-        attempting = document.get("attempting_step")
-        created = document.get("created")
-        if (
-            type(next_step) is not int
-            or not 0 <= next_step <= len(self.plan.steps)
-            or (attempting is not None and (type(attempting) is not int or attempting != next_step))
-            or not isinstance(created, dict)
-            or document.get("outcome")
-            not in {"NO_WRITES", "KNOWN_WRITES", "UNKNOWN_MUTATION_OUTCOME", "COMPLETE"}
-        ):
-            raise StalePlanError("recovery evidence has an invalid state")
-        expected_outcome = (
-            "UNKNOWN_MUTATION_OUTCOME"
-            if attempting is not None
-            else "NO_WRITES"
-            if next_step == 0
-            else "COMPLETE"
-            if next_step == len(self.plan.steps)
-            else "KNOWN_WRITES"
-        )
-        expected_aliases = {
-            str(step.arguments["alias"])
-            for step in self.plan.steps[:next_step]
-            if step.kind == "CREATE_ISSUE"
-        }
-        if document["outcome"] != expected_outcome or set(created) != expected_aliases:
-            raise StalePlanError("recovery evidence does not match the applied step prefix")
+        _validate_recovery_state(self.plan, signed_document)
+        if authenticated_successor is not None:
+            _validate_recovery_transition(
+                self.plan, signed_document, authenticated_successor
+            )
         return {
             **document,
             "journal_digest": digest,
@@ -924,9 +1022,15 @@ class RecoveryJournal:
         document = dict(previous)
         document.pop("journal_digest")
         document.pop("authentication")
-        if created is not None:
-            alias = str(self.plan.steps[step_index].arguments["alias"])
+        document["created"] = dict(previous["created"])
+        step = self.plan.steps[step_index]
+        if step.kind == "CREATE_ISSUE":
+            if created is None:
+                raise StalePlanError("create completion is missing its canonical identity")
+            alias = str(step.arguments["alias"])
             document["created"][alias] = created.to_dict()
+        elif created is not None:
+            raise StalePlanError("non-create completion returned an issue identity")
         document["next_step"] = step_index + 1
         document["attempting_step"] = None
         document["outcome"] = (
@@ -1451,21 +1555,27 @@ class RecordingWriter:
 def _identities(document: Mapping[str, Any]) -> dict[str, CreatedIssueIdentity]:
     identities: dict[str, CreatedIssueIdentity] = {}
     for alias, value in document.items():
-        if not isinstance(alias, str) or not isinstance(value, Mapping):
+        if (
+            not isinstance(alias, str)
+            or not alias
+            or not isinstance(value, Mapping)
+            or any(
+                not isinstance(value.get(field), str) or not value[field]
+                for field in ("key", "node_id", "repository_id")
+            )
+        ):
             raise StalePlanError("recovery created identity is malformed")
         if set(value) != {"key", "node_id", "repository_id"}:
             raise StalePlanError("recovery created identity has unknown or missing fields")
         try:
             identity = CreatedIssueIdentity(
-                key=str(value["key"]),
-                node_id=str(value["node_id"]),
-                repository_id=str(value["repository_id"]),
+                key=value["key"],
+                node_id=value["node_id"],
+                repository_id=value["repository_id"],
             )
             parse_node_key(identity.key)
         except (KeyError, ValueError) as exc:
             raise StalePlanError("recovery created identity is malformed") from exc
-        if not identity.node_id or not identity.repository_id:
-            raise StalePlanError("recovery created identity is incomplete")
         identities[alias] = identity
     return identities
 

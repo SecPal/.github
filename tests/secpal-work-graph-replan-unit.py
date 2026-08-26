@@ -225,6 +225,53 @@ def signer_evidence(document, authentication):
     return {**document, "authentication": authentication}
 
 
+def recovery_plan(*steps):
+    baseline = graph(node(1))
+    plan = replanning.Plan(
+        actor="alice",
+        classification=replanning.Classification(
+            "MISSING_PREREQUISITE",
+            "INSERT_PREREQUISITE",
+            True,
+            True,
+            "BEFORE_FREEZE",
+            ("P2",),
+        ),
+        current_issue=key(1),
+        owner=None,
+        snapshot_digest=replanning.snapshot_digest(baseline),
+        steps=tuple(steps),
+        request={},
+    )
+    return plan, baseline
+
+
+def recovery_state(plan, baseline, **overrides):
+    document = {
+        "schema": replanning.RECOVERY_SCHEMA,
+        "plan_digest": replanning.plan_digest(plan),
+        "actor": plan.actor,
+        "current_issue": plan.current_issue,
+        "snapshot_digest": plan.snapshot_digest,
+        "baseline": replanning.snapshot_document(baseline),
+        "outcome": "NO_WRITES",
+        "next_step": 0,
+        "attempting_step": None,
+        "created": {},
+    }
+    document.update(overrides)
+    document["journal_digest"] = replanning.recovery_document_digest(document)
+    return document
+
+
+def created_identity(number, *, repository=REPO):
+    return {
+        "key": f"{repository}#{number}",
+        "node_id": f"ISSUE_{number}",
+        "repository_id": f"REPOSITORY_{repository}",
+    }
+
+
 def recovery_child_commit(fixture, parent, message, *, signing_key=None, signed=True):
     repository = fixture["repository"]
     tree = subprocess.run(
@@ -277,6 +324,7 @@ class FakeRecoverySigner:
             "value": "signed:" + operation_digest + ":" + document["journal_digest"],
         }:
             raise replanning.StalePlanError("recovery authentication is invalid")
+        return None
 
 
 class ClassificationTests(TestCase):
@@ -1170,6 +1218,81 @@ class MutationBoundaryTests(TestCase):
 
 
 class GitRecoverySignerTests(TestCase):
+    def test_plan_rejects_signed_crash_ahead_alias_for_non_create_step(self):
+        with hermetic_signing_account("ssh") as fixture:
+            plan, baseline = recovery_plan(
+                replanning.Step(
+                    "ADD_BLOCKED_BY", {"blocked": key(1), "blocker": key(2)}
+                )
+            )
+            signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+            journal = replanning.RecoveryJournal.for_plan(plan, signer)
+            journal.start(baseline)
+            journal.begin_step(0)
+            durable = journal.load()
+            invalid = recovery_state(
+                plan,
+                baseline,
+                outcome="COMPLETE",
+                next_step=1,
+                created={"invented": created_identity(99)},
+            )
+            predecessor = durable["authentication"]["commit_oid"]
+            descendant = recovery_child_commit(
+                fixture,
+                predecessor,
+                replanning._authentication_message(
+                    replanning.plan_digest(plan), invalid, predecessor
+                ),
+            )
+            advance_recovery_ref(fixture, durable["authentication"], descendant)
+
+            with self.assertRaises(replanning.StalePlanError):
+                journal.load()
+
+    def test_plan_accepts_and_reuses_exact_create_completion_crash_ahead(self):
+        with hermetic_signing_account("ssh") as fixture:
+            plan, baseline = recovery_plan(
+                replanning.Step(
+                    "CREATE_ISSUE",
+                    {
+                        "alias": "created",
+                        "repository": REPO,
+                        "title": "Created",
+                        "body": "Created",
+                    },
+                )
+            )
+            signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+            journal = replanning.RecoveryJournal.for_plan(plan, signer)
+            journal.start(baseline)
+            journal.begin_step(0)
+            durable = journal.load()
+            identity = replanning.CreatedIssueIdentity(**created_identity(99))
+            completed = recovery_state(
+                plan,
+                baseline,
+                outcome="COMPLETE",
+                next_step=1,
+                created={"created": identity.to_dict()},
+            )
+            predecessor = durable["authentication"]["commit_oid"]
+            descendant = recovery_child_commit(
+                fixture,
+                predecessor,
+                replanning._authentication_message(
+                    replanning.plan_digest(plan), completed, predecessor
+                ),
+            )
+            advance_recovery_ref(fixture, durable["authentication"], descendant)
+
+            self.assertEqual(journal.load()["outcome"], "UNKNOWN_MUTATION_OUTCOME")
+            journal.complete_step(0, identity)
+            evidence = journal.load()
+            self.assertEqual(evidence["outcome"], "COMPLETE")
+            self.assertEqual(evidence["created"], {"created": identity.to_dict()})
+            self.assertEqual(evidence["authentication"]["commit_oid"], descendant)
+
     def test_authentication_survives_git_gc_and_ref_substitution_fails(self):
         with hermetic_signing_account("ssh") as fixture:
             repository = fixture["repository"]
@@ -1480,6 +1603,36 @@ class GitRecoverySignerTests(TestCase):
             with self.assertRaisesRegex(replanning.StalePlanError, "substituted"):
                 signer.verify(authentication, operation_digest, document)
 
+    def test_private_ref_cannot_advance_two_states_beyond_the_journal(self):
+        with hermetic_signing_account("ssh") as fixture:
+            signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+            operation_digest = "5" * 64
+            initial = signer_document(operation_digest)
+            authentication = dict(signer.sign(operation_digest, initial))
+            attempting = signer_document(
+                operation_digest,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            )
+            first = recovery_child_commit(
+                fixture,
+                authentication["commit_oid"],
+                replanning._authentication_message(
+                    operation_digest,
+                    attempting,
+                    authentication["commit_oid"],
+                ),
+            )
+            second = recovery_child_commit(
+                fixture,
+                first,
+                replanning._authentication_message(operation_digest, initial, first),
+            )
+            advance_recovery_ref(fixture, authentication, second)
+
+            with self.assertRaisesRegex(replanning.StalePlanError, "substituted"):
+                signer.verify(authentication, operation_digest, initial)
+
     def test_legitimate_signed_crash_ahead_state_is_reused(self):
         with hermetic_signing_account("ssh") as fixture:
             before = graph(node(1, children=(key(2),)), node(2, parent=key(1)))
@@ -1640,6 +1793,207 @@ class GitRecoverySignerTests(TestCase):
             self.assertEqual(
                 authentication["signer_fingerprint"], fixture["signer_identity"]
             )
+
+
+class RecoveryTransitionTests(TestCase):
+    def test_begin_and_cancel_transitions_are_exact_and_preserve_aliases(self):
+        plan, baseline = recovery_plan(
+            replanning.Step(
+                "ADD_BLOCKED_BY", {"blocked": key(1), "blocker": key(2)}
+            )
+        )
+        initial = recovery_state(plan, baseline)
+        attempting = recovery_state(
+            plan,
+            baseline,
+            outcome="UNKNOWN_MUTATION_OUTCOME",
+            attempting_step=0,
+        )
+        replanning._validate_recovery_transition(plan, initial, attempting)
+        replanning._validate_recovery_transition(plan, attempting, initial)
+
+        invalid_begin = recovery_state(
+            plan,
+            baseline,
+            outcome="UNKNOWN_MUTATION_OUTCOME",
+            attempting_step=0,
+            created={"invented": created_identity(99)},
+        )
+        with self.assertRaises(replanning.StalePlanError):
+            replanning._validate_recovery_transition(plan, initial, invalid_begin)
+
+    def test_create_completion_rejects_wrong_or_multiple_aliases_and_changed_identity(self):
+        first = replanning.Step(
+            "CREATE_ISSUE",
+            {"alias": "first", "repository": REPO, "title": "First", "body": "First"},
+        )
+        second = replanning.Step(
+            "CREATE_ISSUE",
+            {"alias": "second", "repository": REPO, "title": "Second", "body": "Second"},
+        )
+        plan, baseline = recovery_plan(first, second)
+        previous = recovery_state(
+            plan,
+            baseline,
+            outcome="UNKNOWN_MUTATION_OUTCOME",
+            next_step=1,
+            attempting_step=1,
+            created={"first": created_identity(10)},
+        )
+        invalid_created = (
+            {"first": created_identity(10)},
+            {"first": created_identity(10), "wrong": created_identity(11)},
+            {
+                "first": created_identity(10),
+                "second": created_identity(11),
+                "extra": created_identity(12),
+            },
+            {"first": created_identity(99), "second": created_identity(11)},
+        )
+        for created in invalid_created:
+            with self.subTest(created=created), self.assertRaises(
+                replanning.StalePlanError
+            ):
+                replanning._validate_recovery_transition(
+                    plan,
+                    previous,
+                    recovery_state(
+                        plan,
+                        baseline,
+                        outcome="COMPLETE",
+                        next_step=2,
+                        created=created,
+                    ),
+                )
+
+    def test_create_completion_rejects_malformed_cross_repository_or_colliding_identity(self):
+        first = replanning.Step(
+            "CREATE_ISSUE",
+            {"alias": "first", "repository": REPO, "title": "First", "body": "First"},
+        )
+        second = replanning.Step(
+            "CREATE_ISSUE",
+            {"alias": "second", "repository": REPO, "title": "Second", "body": "Second"},
+        )
+        plan, baseline = recovery_plan(first, second)
+        existing = created_identity(10)
+        previous = recovery_state(
+            plan,
+            baseline,
+            outcome="UNKNOWN_MUTATION_OUTCOME",
+            next_step=1,
+            attempting_step=1,
+            created={"first": existing},
+        )
+        invalid_identities = (
+            {"key": key(11), "node_id": 11, "repository_id": "REPOSITORY"},
+            {"key": "not-a-canonical-issue", "node_id": "ISSUE_11", "repository_id": "R"},
+            created_identity(11, repository="SecPal/api"),
+            {**created_identity(11), "key": existing["key"]},
+            {**created_identity(11), "node_id": existing["node_id"]},
+        )
+        for identity in invalid_identities:
+            with self.subTest(identity=identity), self.assertRaises(
+                replanning.StalePlanError
+            ):
+                replanning._validate_recovery_transition(
+                    plan,
+                    previous,
+                    recovery_state(
+                        plan,
+                        baseline,
+                        outcome="COMPLETE",
+                        next_step=2,
+                        created={"first": existing, "second": identity},
+                    ),
+                )
+
+    def test_completion_outcome_must_match_the_exact_plan_position(self):
+        steps = (
+            replanning.Step(
+                "ADD_BLOCKED_BY", {"blocked": key(1), "blocker": key(2)}
+            ),
+            replanning.Step(
+                "REMOVE_BLOCKED_BY", {"blocked": key(1), "blocker": key(3)}
+            ),
+        )
+        plan, baseline = recovery_plan(*steps)
+        cases = (
+            (
+                recovery_state(
+                    plan,
+                    baseline,
+                    outcome="UNKNOWN_MUTATION_OUTCOME",
+                    attempting_step=0,
+                ),
+                recovery_state(plan, baseline, outcome="COMPLETE", next_step=1),
+            ),
+            (
+                recovery_state(
+                    plan,
+                    baseline,
+                    outcome="UNKNOWN_MUTATION_OUTCOME",
+                    next_step=1,
+                    attempting_step=1,
+                ),
+                recovery_state(plan, baseline, outcome="KNOWN_WRITES", next_step=2),
+            ),
+            (
+                recovery_state(plan, baseline, outcome="COMPLETE", next_step=2),
+                recovery_state(
+                    plan,
+                    baseline,
+                    outcome="UNKNOWN_MUTATION_OUTCOME",
+                    next_step=2,
+                    attempting_step=2,
+                ),
+            ),
+        )
+        for previous, current in cases:
+            with self.subTest(previous=previous["outcome"]), self.assertRaises(
+                replanning.StalePlanError
+            ):
+                replanning._validate_recovery_transition(plan, previous, current)
+
+    def test_valid_non_create_and_create_completions_are_accepted(self):
+        non_create_plan, baseline = recovery_plan(
+            replanning.Step(
+                "ADD_BLOCKED_BY", {"blocked": key(1), "blocker": key(2)}
+            )
+        )
+        replanning._validate_recovery_transition(
+            non_create_plan,
+            recovery_state(
+                non_create_plan,
+                baseline,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            ),
+            recovery_state(non_create_plan, baseline, outcome="COMPLETE", next_step=1),
+        )
+
+        create_plan, baseline = recovery_plan(
+            replanning.Step(
+                "CREATE_ISSUE",
+                {"alias": "created", "repository": REPO, "title": "New", "body": "New"},
+            )
+        )
+        replanning._validate_recovery_transition(
+            create_plan,
+            recovery_state(
+                create_plan,
+                baseline,
+                outcome="UNKNOWN_MUTATION_OUTCOME",
+                attempting_step=0,
+            ),
+            recovery_state(
+                create_plan,
+                baseline,
+                outcome="COMPLETE",
+                next_step=1,
+                created={"created": created_identity(10)},
+            ),
+        )
 
 
 if __name__ == "__main__":
