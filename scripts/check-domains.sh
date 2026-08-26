@@ -26,6 +26,7 @@ echo "Public hosts: secpal.app, apk.secpal.app"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
 echo "Identifier-only values: app.secpal (Android application ID)"
+echo "Approved reverse-DNS technical identifiers: io.secpal.polyscope.preview (exact only; not a host)"
 echo "Deprecated web hosts: api.secpal.app"
 echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io,"
 echo "  secpal.example, app.secpal.app, every other secpal.internal name, and any"
@@ -85,6 +86,24 @@ is_historical_evidence_path() {
     return 1
 }
 
+# SecPal's control of secpal.io establishes io.secpal as legitimate reverse-DNS
+# namespace authority, but it does not authorize web or service hosts. Technical
+# identifiers are approved individually and remain separate from host policy.
+approved_technical_identifiers=(
+    "io.secpal.polyscope.preview"
+)
+
+is_approved_technical_identifier() {
+    local candidate="$1"
+    local approved_identifier
+    for approved_identifier in "${approved_technical_identifiers[@]}"; do
+        if [ "$candidate" = "$approved_identifier" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \
     --include="*.md" \
     --include="*.yaml" \
@@ -123,6 +142,9 @@ while IFS= read -r matched_line; do
 done <<< "$matches"
 
 # Allowlist approach: classify every matched secpal.* token independently.
+# Exact approved reverse-DNS technical identifiers form a separate class and
+# are checked before DNS/web/service hosts; namespace authority grants no host
+# authority. Unknown technical-looking values therefore still fail closed.
 # Public/external: secpal.app and apk.secpal.app. Development/preview: secpal.dev,
 # api.secpal.dev, app.secpal.dev, the preview.secpal.dev base, and arbitrary
 # *.preview.secpal.dev identities.
@@ -138,6 +160,9 @@ while IFS= read -r matched_line; do
     source_text="${line_remainder#*:}"
 
     while IFS= read -r token; do
+        if is_approved_technical_identifier "$token"; then
+            continue
+        fi
         case "$token" in
             secpal.app | apk.secpal.app | secpal.dev | api.secpal.dev | app.secpal.dev | preview.secpal.dev | db.secpal.internal | *.preview.secpal.dev | api.secpal.app)
                 ;;
@@ -183,7 +208,7 @@ deprecated_web_hosts=$(printf '%s\n' "$active_matches" | \
 
 if [[ -z "$violations" && -z "$deprecated_web_hosts" ]]; then
     echo -e "${GREEN}✅ Domain Policy Check PASSED${NC}"
-    echo "All secpal.* usage matches the approved SecPal classifications"
+    echo "All secpal.* usage matches the approved host/service or technical-identifier classifications"
     exit 0
 else
     echo -e "${RED}❌ Domain Policy Check FAILED${NC}"
@@ -203,6 +228,8 @@ else
     echo "  - Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and *.preview.secpal.dev identities"
     echo "  - Private internal service identity: db.secpal.internal (exact only; not a public host)"
     echo "  - Identifier-only value: app.secpal (Android application ID)"
+    echo "  - Reverse-DNS technical identifier: io.secpal.polyscope.preview (exact only; not a host)"
+    echo "  - Reverse-DNS namespace authority does not authorize web or service hosts"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
     echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."

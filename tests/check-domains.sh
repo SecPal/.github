@@ -25,9 +25,10 @@
 #      even when describing the regression fixture;
 #      such hosts only ever live inside the test's own temporary workspace
 #      so the prose cannot accidentally trip the gate after a reword.
-#   5. Behaviour matches the documented classification: existing public and
-#      development hosts plus the exact private database service identity pass;
-#      an unapproved secpal.* host and another internal identity fail.
+#   5. Behaviour matches the documented classification: existing public,
+#      development, and private service identities plus the exact approved
+#      reverse-DNS technical identifier pass; unknown technical identifiers,
+#      an unapproved secpal.* host, and another internal identity fail.
 #   6. The gate skips the gitignored agent scratch directory `.context/` so
 #      Polyscope-managed workspaces can stash PR body drafts and other
 #      throwaway notes that quote forbidden hosts verbatim without tripping
@@ -53,6 +54,10 @@ bad_public_domain="${domain_namespace}.xyz"
 bad_internal_domain="cache.${domain_namespace}.internal"
 bad_development_suffix="${domain_namespace}.dev.example"
 bad_direct_development="foo.${domain_namespace}.dev"
+approved_technical_identifier="io.secpal.polyscope.preview"
+technical_identifier_authority="io.${domain_namespace}"
+unknown_technical_identifier="${technical_identifier_authority}.unreviewed"
+nested_unknown_technical_identifier="${technical_identifier_authority}.polyscope.unreviewed"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -263,6 +268,31 @@ assert_domain_policy_case \
   reject \
   "$bad_internal_domain" \
   "Mixed: db.secpal.internal $bad_internal_domain"
+assert_domain_policy_case \
+  "the exact approved reverse-DNS technical identifier" \
+  accept \
+  "$approved_technical_identifier" \
+  "Label: $approved_technical_identifier"
+assert_domain_policy_case \
+  "an unknown identifier under the technical authority" \
+  reject \
+  "$unknown_technical_identifier" \
+  "Label: $unknown_technical_identifier"
+assert_domain_policy_case \
+  "a nested unknown technical-looking identifier" \
+  reject \
+  "$nested_unknown_technical_identifier" \
+  "Label: $nested_unknown_technical_identifier"
+assert_domain_policy_case \
+  "an approved host and an unknown technical identifier on one line" \
+  reject \
+  "$unknown_technical_identifier" \
+  "Mixed: secpal.dev $unknown_technical_identifier"
+assert_domain_policy_case \
+  "the approved technical identifier and a forbidden host on one line" \
+  reject \
+  "$bad_public_domain" \
+  "Mixed: $approved_technical_identifier $bad_public_domain"
 
 rm "$workspace/domain-policy-case.md"
 

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-26 - Distinguish Reverse-DNS Technical Identifiers
+
+**Fixed:**
+
+- updated the domain-policy guard to classify the exact approved
+  `io.secpal.polyscope.preview` Podman label as a reverse-DNS technical
+  identifier, separately from DNS, web, and service hosts, while continuing to
+  reject unknown technical identifiers and unauthorized host usage
+
+---
+
 ## 2026-08-26 - Restore Rocky Polyscope Container Previews
 
 **Fixed:**
