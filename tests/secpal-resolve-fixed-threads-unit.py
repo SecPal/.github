@@ -1039,7 +1039,7 @@ class ResolveFixedThreadsTests(TestCase):
         for label, case in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
                 with self.assertRaisesRegex(MODULE.ResolutionError, case["error"]):
-                    _result, github, _git = run_late_resolution_fixture(
+                    run_late_resolution_fixture(
                         directory,
                         artifact_mutator=case.get("artifact_mutator"),
                         live_head=case.get("live_head"),
