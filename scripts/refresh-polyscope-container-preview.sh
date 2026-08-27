@@ -26,7 +26,11 @@ if [[ ! "$attempts" =~ ^[1-9][0-9]*$ || ! "$delay" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 error_file="$(mktemp "${TMPDIR:-/tmp}/polyscope-preview-refresh.XXXXXX")"
-trap 'rm -f -- "$error_file"' EXIT
+caddy_directory="$(dirname -- "$caddyfile")"
+rendered_file="$(mktemp "$caddy_directory/.Caddyfile.refresh.XXXXXX")"
+previous_file="$(mktemp "$caddy_directory/.Caddyfile.previous.XXXXXX")"
+had_previous=false
+trap 'rm -f -- "$error_file" "$rendered_file" "$previous_file"' EXIT
 
 for ((attempt = 1; attempt <= attempts; attempt++)); do
     if python3 "$cleanup" \
@@ -39,10 +43,27 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
         --container-root /workspaces \
         --clone-root "$clone_root" \
         --repository-root "$repository_root" \
-        --output "$caddyfile" \
+        --output "$rendered_file" \
         2>"$error_file"; then
-        systemctl --user restart "$preview_service"
-        exit 0
+        if [[ -f "$caddyfile" ]] && cmp -s -- "$rendered_file" "$caddyfile"; then
+            exit 0
+        fi
+        if [[ -f "$caddyfile" ]]; then
+            cp -p -- "$caddyfile" "$previous_file"
+            had_previous=true
+        else
+            had_previous=false
+        fi
+        mv -f -- "$rendered_file" "$caddyfile"
+        if systemctl --user restart "$preview_service" 2>"$error_file"; then
+            rm -f -- "$previous_file"
+            exit 0
+        fi
+        if [[ "$had_previous" == true ]]; then
+            mv -f -- "$previous_file" "$caddyfile"
+        else
+            rm -f -- "$caddyfile"
+        fi
     fi
     if ((attempt < attempts)); then
         sleep "$delay"
