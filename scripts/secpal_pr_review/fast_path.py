@@ -96,6 +96,28 @@ RESOLUTION_MERGE_STATE_POLICY = {
     **MERGE_STATE_POLICY,
     "BLOCKED": "required_checks",
 }
+READY_INTEGRATION_KIND = "TWO_PARENT_READY_INTEGRATION"
+READY_INTEGRATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_delivery_head_sha",
+        "target_base",
+        "ordered_parent_shas",
+        "validated_tree_sha",
+        "mechanical_merge_tree_sha",
+        "manual_conflict_resolution_delta",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "validation_execution",
+        "expected_signer",
+        "eligibility",
+    }
+)
 
 
 class SecurityBlocker(RuntimeError):
@@ -158,6 +180,249 @@ def _require_digest(value: Any, label: str) -> str:
     if not isinstance(value, str) or not DIGEST.fullmatch(value):
         raise SecurityBlocker(f"{label} is not a SHA-256 digest")
     return value
+
+
+def _require_positive_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise SecurityBlocker(f"{label} is not a positive integer")
+    return value
+
+
+def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise SecurityBlocker("integration conflict-resolution delta is malformed")
+    normalized: list[dict[str, str]] = []
+    expected_keys = {"path", "status", "old_mode", "new_mode", "old_oid", "new_oid"}
+    allowed_modes = {"000000", "100644", "100755", "120000", "160000"}
+    for item in value:
+        if not isinstance(item, dict) or set(item) != expected_keys:
+            raise SecurityBlocker("integration conflict-resolution delta is malformed")
+        path = item.get("path")
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or not EVIDENCE_TEXT.fullmatch(path)
+        ):
+            raise SecurityBlocker("integration conflict-resolution path is unsafe")
+        status = item.get("status")
+        old_mode = item.get("old_mode")
+        new_mode = item.get("new_mode")
+        if (
+            status not in {"A", "D", "M", "T"}
+            or old_mode not in allowed_modes
+            or new_mode not in allowed_modes
+            or (status == "A" and old_mode != "000000")
+            or (status == "D" and new_mode != "000000")
+        ):
+            raise SecurityBlocker("integration conflict-resolution operation is invalid")
+        normalized.append(
+            {
+                "path": path,
+                "status": status,
+                "old_mode": old_mode,
+                "new_mode": new_mode,
+                "old_oid": _require_oid(item.get("old_oid"), "integration old object"),
+                "new_oid": _require_oid(item.get("new_oid"), "integration new object"),
+            }
+        )
+    if normalized != sorted(normalized, key=lambda item: item["path"]):
+        raise SecurityBlocker("integration conflict-resolution delta is not canonical")
+    paths = [item["path"] for item in normalized]
+    if len(paths) != len(set(paths)):
+        raise SecurityBlocker("integration conflict-resolution delta repeats a path")
+    return normalized
+
+
+def normalize_ready_integration_evidence(
+    value: Any,
+    *,
+    repository: str,
+    reviewed_state: "StableFeedbackState",
+    registry: dict[str, Any],
+    validated_tree_sha: str,
+) -> dict[str, Any]:
+    """Normalize and admit one explicitly authorized Ready-head integration."""
+
+    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_KEYS:
+        raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
+    if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
+        raise SecurityBlocker("Ready integration evidence contains secret-like text")
+    if value.get("schema_version") != "1.0" or value.get("kind") != READY_INTEGRATION_KIND:
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    normalized_repository = _require_string(value.get("repository"), "integration repository")
+    if normalized_repository != repository or reviewed_state.repository != repository:
+        raise SecurityBlocker("integration repository binding changed")
+    pull_request_number = _require_positive_integer(
+        value.get("pull_request_number"), "integration pull request"
+    )
+    if pull_request_number != reviewed_state.pull_request_number:
+        raise SecurityBlocker("integration pull-request binding changed")
+    delivery_issue_number = _require_positive_integer(
+        value.get("delivery_issue_number"), "integration delivery issue"
+    )
+    authorization_id = _require_string(
+        value.get("authorization_id"), "integration authorization identity"
+    )
+    prior_head = _require_oid(
+        value.get("prior_delivery_head_sha"), "prior delivery head"
+    )
+    if prior_head != reviewed_state.head_sha:
+        raise SecurityBlocker("integration first parent is stale or substituted")
+    target_base = value.get("target_base")
+    if not isinstance(target_base, dict) or set(target_base) != {
+        "ref",
+        "authorized_sha",
+        "observed_sha",
+    }:
+        raise SecurityBlocker("integration target-base evidence is malformed")
+    target_ref = _require_string(target_base.get("ref"), "integration target-base ref")
+    authorized_base = _require_oid(
+        target_base.get("authorized_sha"), "authorized target-base head"
+    )
+    observed_base = _require_oid(
+        target_base.get("observed_sha"), "observed target-base head"
+    )
+    if (
+        target_ref != registry.get("default_branch")
+        or target_ref != reviewed_state.base_ref
+        or authorized_base != reviewed_state.base_sha
+        or observed_base != authorized_base
+    ):
+        raise SecurityBlocker("integration target-base identity or bound ref drifted")
+    parents = value.get("ordered_parent_shas")
+    if not isinstance(parents, list) or len(parents) != 2:
+        raise SecurityBlocker("Ready integration requires exactly two ordered parents")
+    normalized_parents = [
+        _require_oid(parent, "integration parent") for parent in parents
+    ]
+    if normalized_parents != [prior_head, authorized_base] or prior_head == authorized_base:
+        raise SecurityBlocker("integration ordered parents are invalid")
+    validated_tree = _require_oid(
+        value.get("validated_tree_sha"), "integration validated tree"
+    )
+    if validated_tree != _require_oid(validated_tree_sha, "observed validated tree"):
+        raise SecurityBlocker("integration validated tree changed")
+    mechanical_tree = _require_oid(
+        value.get("mechanical_merge_tree_sha"), "mechanical merge tree"
+    )
+    reviewed_state_digest = _require_digest(
+        value.get("reviewed_state_digest"), "integration reviewed-state digest"
+    )
+    reviewed_feedback_digest = _require_digest(
+        value.get("reviewed_feedback_digest"), "integration stable-feedback digest"
+    )
+    if (
+        reviewed_state.pr_state != "OPEN"
+        or reviewed_state_digest != reviewed_state.state_digest
+        or reviewed_feedback_digest != reviewed_state.feedback_digest
+    ):
+        raise SecurityBlocker("integration stable-feedback evidence is stale")
+    validation_execution = value.get("validation_execution")
+    if not isinstance(validation_execution, dict) or set(validation_execution) != {
+        "registry_digest",
+        "command_set_digest",
+    }:
+        raise SecurityBlocker("integration validation execution is malformed")
+    expected_execution = {
+        "registry_digest": digest_json(registry),
+        "command_set_digest": digest_json(registry.get("validation")),
+    }
+    normalized_execution = {
+        "registry_digest": _require_digest(
+            validation_execution.get("registry_digest"), "integration registry digest"
+        ),
+        "command_set_digest": _require_digest(
+            validation_execution.get("command_set_digest"),
+            "integration command-set digest",
+        ),
+    }
+    if normalized_execution != expected_execution:
+        raise SecurityBlocker("integration validation execution is stale or substituted")
+    signer = value.get("expected_signer")
+    if not isinstance(signer, dict) or set(signer) != {"kind", "identity"}:
+        raise SecurityBlocker("integration signer evidence is malformed")
+    signer_kind = signer.get("kind")
+    signer_identity = _require_string(signer.get("identity"), "integration signer identity")
+    if signer_kind == "SSH_PRINCIPAL":
+        if not IDENTITY.fullmatch(signer_identity):
+            raise SecurityBlocker("integration SSH signer identity is malformed")
+    elif signer_kind == "OPENPGP_FINGERPRINT":
+        if not re.fullmatch(r"[0-9A-F]{40,64}", signer_identity):
+            raise SecurityBlocker("integration OpenPGP signer identity is malformed")
+    else:
+        raise SecurityBlocker("integration signer kind is unsupported")
+    eligibility = value.get("eligibility")
+    eligibility_keys = {
+        "eligible",
+        "draft_before",
+        "draft_after",
+        "ready_before",
+        "ready_after",
+        "ready_transition",
+        "review_requested",
+        "unrestricted_reviews_before",
+        "unrestricted_reviews_after",
+        "remediation_cycles_before",
+        "remediation_cycles_after",
+        "cycle_3",
+    }
+    if not isinstance(eligibility, dict) or set(eligibility) != eligibility_keys:
+        raise SecurityBlocker("integration eligibility evidence is malformed")
+    before_reviews = eligibility.get("unrestricted_reviews_before")
+    after_reviews = eligibility.get("unrestricted_reviews_after")
+    before_cycles = eligibility.get("remediation_cycles_before")
+    after_cycles = eligibility.get("remediation_cycles_after")
+    if (
+        eligibility.get("eligible") is not True
+        or eligibility.get("draft_before") is not False
+        or eligibility.get("draft_after") is not False
+        or eligibility.get("ready_before") is not True
+        or eligibility.get("ready_after") is not True
+        or eligibility.get("ready_transition") is not False
+        or eligibility.get("review_requested") is not False
+        or eligibility.get("cycle_3") is not False
+        or isinstance(before_reviews, bool)
+        or not isinstance(before_reviews, int)
+        or before_reviews != 1
+        or after_reviews != before_reviews
+        or isinstance(before_cycles, bool)
+        or not isinstance(before_cycles, int)
+        or not 0 <= before_cycles <= 2
+        or after_cycles != before_cycles
+    ):
+        raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
+    normalized = {
+        "schema_version": "1.0",
+        "kind": READY_INTEGRATION_KIND,
+        "authorization_id": authorization_id,
+        "repository": normalized_repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": pull_request_number,
+        "prior_delivery_head_sha": prior_head,
+        "target_base": {
+            "ref": target_ref,
+            "authorized_sha": authorized_base,
+            "observed_sha": observed_base,
+        },
+        "ordered_parent_shas": normalized_parents,
+        "validated_tree_sha": validated_tree,
+        "mechanical_merge_tree_sha": mechanical_tree,
+        "manual_conflict_resolution_delta": _ready_integration_delta(
+            value.get("manual_conflict_resolution_delta")
+        ),
+        "reviewed_state_digest": reviewed_state_digest,
+        "reviewed_feedback_digest": reviewed_feedback_digest,
+        "validation_execution": normalized_execution,
+        "expected_signer": {
+            "kind": signer_kind,
+            "identity": signer_identity,
+        },
+        "eligibility": copy.deepcopy(eligibility),
+    }
+    return normalized
 
 
 def _actor(value: Any, label: str, *, allow_deleted: bool = False) -> dict[str, Any]:
@@ -909,6 +1174,105 @@ def create_validation_attestation(
             "eligibility_evidence_digest"
         ]
     return {**fields, "attestation_digest": digest_json(fields)}
+
+
+def create_ready_integration_attestation(
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    validation_receipt: Any,
+    integration_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble final evidence for the one bounded Ready integration topology."""
+
+    ordinary = create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+    )
+    normalized = normalize_ready_integration_evidence(
+        integration_evidence,
+        repository=repository,
+        reviewed_state=reviewed_state,
+        registry=registry,
+        validated_tree_sha=validation_receipt.get("validated_tree_sha"),
+    )
+    fields = {
+        "schema_version": "1.0",
+        "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "repository": normalized["repository"],
+        "delivery_issue_number": normalized["delivery_issue_number"],
+        "pull_request_number": normalized["pull_request_number"],
+        "head_sha": _require_oid(head_sha, "integration attestation head"),
+        "topology_kind": normalized["kind"],
+        "authorization_id": normalized["authorization_id"],
+        "ordered_parent_shas": copy.deepcopy(normalized["ordered_parent_shas"]),
+        "validated_tree_sha": normalized["validated_tree_sha"],
+        "mechanical_merge_tree_sha": normalized["mechanical_merge_tree_sha"],
+        "manual_conflict_resolution_delta": copy.deepcopy(
+            normalized["manual_conflict_resolution_delta"]
+        ),
+        "validation_receipt_digest": ordinary["validation_receipt_digest"],
+        "integration_evidence_digest": digest_json(normalized),
+        "registry_digest": ordinary["registry_digest"],
+        "command_set_digest": ordinary["command_set_digest"],
+        "reviewed_head_sha": ordinary["reviewed_head_sha"],
+        "reviewed_state_digest": ordinary["reviewed_state_digest"],
+        "reviewed_feedback_digest": ordinary["reviewed_feedback_digest"],
+        "expected_signer": copy.deepcopy(normalized["expected_signer"]),
+        "eligibility": copy.deepcopy(normalized["eligibility"]),
+        "successful_result": True,
+    }
+    return {**fields, "attestation_digest": digest_json(fields)}
+
+
+def verify_ready_integration_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    validation_receipt: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    commit_parent_shas: list[str],
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    commit_integration_evidence_digest: str | None,
+) -> None:
+    normalized = normalize_ready_integration_evidence(
+        integration_evidence,
+        repository=repository,
+        reviewed_state=reviewed_state,
+        registry=registry,
+        validated_tree_sha=commit_tree_sha,
+    )
+    if commit_parent_shas != normalized["ordered_parent_shas"]:
+        raise SecurityBlocker("integration attestation ordered parents changed")
+    if (
+        commit_validation_receipt_digest != validation_receipt.get("receipt_digest")
+        or commit_integration_evidence_digest != digest_json(normalized)
+    ):
+        raise SecurityBlocker("integration commit evidence trailers changed")
+    expected = create_ready_integration_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+        integration_evidence=normalized,
+    )
+    if not isinstance(attestation, dict) or attestation != expected:
+        raise SecurityBlocker("Ready integration attestation is invalid or stale")
 
 
 def verify_validation_attestation(

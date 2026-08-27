@@ -269,6 +269,38 @@ that existing commit is not authenticated by it, the raw receipt cannot
 authorize thread resolution. Stop without resolution unless a final attestation
 is bound to a new signed fix commit.
 
+### Explicit Ready-head integration evidence
+
+Ordinary remediation and recovery continue to require one parent. A separately
+user-authorized mechanical integration into an already-Ready delivery PR uses
+`attest-validation --integration-evidence` and the closed
+`TWO_PARENT_READY_INTEGRATION` topology. The invocation also supplies the exact
+delivery issue, authorization ID, and expected signer. Its evidence fixes parent
+1 to the previously authenticated Ready head and parent 2 to the explicitly
+authenticated current registered `main` snapshot, in that order, and requires
+exactly two parents.
+
+Before the candidate is bound, the same complete registered validation produces
+a fresh receipt for the combined staged tree. The signed integration candidate
+carries one `SecPal-Validation-Receipt` trailer and one
+`SecPal-Integration-Evidence` trailer. Binding reconstructs the receipt, verifies
+the ordered parents, combined tree, both trailers, configured signature policy,
+expected signer identity, stable-feedback and validation-execution digests,
+explicit eligibility, and the exact raw delta between the authenticated
+mechanical merge tree and the validated tree. Every permitted manual conflict-
+resolution path, mode, status, old object, and new object must appear exactly in
+that canonical delta; unlisted file drift fails closed.
+
+The integration evidence proves unchanged unrestricted-review and remediation
+counters, no Cycle 3, no review request, no Ready transition, and preserved
+`Draft=false` / `Ready=true`. It is not remediation and cannot be replayed through
+the remediation path. Conversely, ordinary remediation evidence cannot select
+the integration path. The helper does not create the integration commit, push a
+branch, observe post-push checks, transition the PR, or authorize merging. After
+push, fresh head-bound checks, stable feedback, eligibility, and readiness must
+be assessed in a separately authorized evidence phase; platform-triggered
+reviews are evidence only.
+
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
 per-thread eligibility manifest authenticated by the signed validation

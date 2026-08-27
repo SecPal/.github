@@ -51,6 +51,17 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+`attest-validation` also exposes a separately selected
+`TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one signed
+two-parent candidate whose first parent is the prior Ready delivery head and
+whose second parent is the explicitly authorized current registered `main`
+snapshot. The versioned manifest, fresh tree receipt, integration-evidence
+trailer, final attestation, expected signer, stable-feedback and eligibility
+digests, unchanged lifecycle counters, and exact bounded manual tree delta all
+fail closed together. This does not relax the ordinary sole-parent path, create
+or push an integration, change Ready state, read post-push checks, or authorize
+merge automation.
+
 ### `secpal-resolve-fixed-threads.py`
 
 Resolves only explicitly named review threads after their findings have already

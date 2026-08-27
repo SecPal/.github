@@ -4646,6 +4646,57 @@ def fast_attestation(reviewed: Any, *, head_sha: str = p21.HEAD) -> dict[str, An
     )
 
 
+def ready_integration_evidence(
+    reviewed: Any,
+    *,
+    validated_tree: str,
+    registry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    registry = registry or fast_registry()
+    return {
+        "schema_version": "1.0",
+        "kind": "TWO_PARENT_READY_INTEGRATION",
+        "authorization_id": "ready-integration-authorization-001",
+        "repository": reviewed.repository,
+        "delivery_issue_number": 9,
+        "pull_request_number": reviewed.pull_request_number,
+        "prior_delivery_head_sha": reviewed.head_sha,
+        "target_base": {
+            "ref": reviewed.base_ref,
+            "authorized_sha": reviewed.base_sha,
+            "observed_sha": reviewed.base_sha,
+        },
+        "ordered_parent_shas": [reviewed.head_sha, reviewed.base_sha],
+        "validated_tree_sha": validated_tree,
+        "mechanical_merge_tree_sha": validated_tree,
+        "manual_conflict_resolution_delta": [],
+        "reviewed_state_digest": reviewed.state_digest,
+        "reviewed_feedback_digest": reviewed.feedback_digest,
+        "validation_execution": {
+            "registry_digest": fast_path.digest_json(registry),
+            "command_set_digest": fast_path.digest_json(registry["validation"]),
+        },
+        "expected_signer": {
+            "kind": "SSH_PRINCIPAL",
+            "identity": "aroviqen",
+        },
+        "eligibility": {
+            "eligible": True,
+            "draft_before": False,
+            "draft_after": False,
+            "ready_before": True,
+            "ready_after": True,
+            "ready_transition": False,
+            "review_requested": False,
+            "unrestricted_reviews_before": 1,
+            "unrestricted_reviews_after": 1,
+            "remediation_cycles_before": 1,
+            "remediation_cycles_after": 1,
+            "cycle_3": False,
+        },
+    }
+
+
 def fast_request(
     reviewed: Any,
     thread_count: int = 2,
@@ -6138,6 +6189,477 @@ class FastPathTests(TestCase):
         ):
             with self.assertRaisesRegex(fast_path.SecurityBlocker, "sole parent"):
                 actions._validated_commit_parent(REPO_ROOT, head)
+
+    def test_ready_integration_bind_accepts_an_explicit_signed_two_parent_candidate(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        final_head = "d" * 40
+        tree = "a" * 40
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        binding = actions._fast_registry_binding(entry)
+        receipt = actions._validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            tree_sha=tree,
+            binding=binding,
+            reviewed=reviewed,
+            manual_gate_evidence=[],
+        )
+        integration = ready_integration_evidence(
+            reviewed,
+            validated_tree=tree,
+            registry=binding,
+        )
+        integration_digest = fast_path.digest_json(integration)
+        arguments = SimpleNamespace(
+            expected_head=final_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=True,
+            receipt="receipt.json",
+            output="attestation.json",
+            manual_gate_evidence=None,
+            eligibility_evidence=None,
+            integration_evidence="integration.json",
+            delivery_issue=9,
+            integration_authorization_id="ready-integration-authorization-001",
+            expected_integration_signer="aroviqen",
+        )
+
+        def read_json(path: str, _label: str) -> Any:
+            return integration if path == "integration.json" else receipt
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            if command[:4] == ["rev-list", "--parents", "-n", "1"]:
+                stdout = f"{final_head} {reviewed.head_sha} {reviewed.base_sha}\n"
+                stderr = ""
+            elif command == ["rev-parse", "HEAD^{tree}"]:
+                stdout = f"{tree}\n"
+                stderr = ""
+            elif command[:2] == ["show", "-s"]:
+                trailer = (
+                    integration_digest
+                    if "SecPal-Integration-Evidence" in command[-2]
+                    else receipt["receipt_digest"]
+                )
+                stdout = f"{trailer}\n"
+                stderr = ""
+            elif command[:2] == ["cat-file", "commit"]:
+                stdout = (
+                    "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+                    " signature\n -----END SSH SIGNATURE-----\n\nmessage\n"
+                )
+                stderr = ""
+            elif command[:2] == ["verify-commit", "--raw"]:
+                stdout = ""
+                stderr = (
+                    'Good "git" signature for aroviqen with ED25519 key '
+                    "SHA256:test\n"
+                )
+            elif command[:2] == ["merge-tree", "--write-tree"]:
+                stdout = f"{tree}\n"
+                stderr = ""
+            elif command[:2] == ["diff-tree", "--raw"]:
+                stdout = ""
+                stderr = ""
+            else:
+                raise AssertionError(command)
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(final_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(actions, "_read_json", side_effect=read_json),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_write_fast_report") as write_report,
+        ):
+            self.assertEqual(actions._command_attest_validation(arguments), 0)
+        write_report.assert_called_once()
+
+    def test_ready_integration_evidence_fails_closed_for_identity_and_lifecycle_drift(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        original = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        cases = (
+            "swapped_parents",
+            "missing_parent",
+            "extra_parent",
+            "stale_first_parent",
+            "substituted_first_parent",
+            "stale_second_parent",
+            "substituted_second_parent",
+            "base_snapshot_mismatch",
+            "tree_mismatch",
+            "repository_substitution",
+            "pull_request_substitution",
+            "topology_substitution",
+            "version_substitution",
+            "ambiguous_topology",
+            "stale_reviewed_state",
+            "stale_stable_feedback",
+            "stale_registry",
+            "stale_command_set",
+            "bound_ref_drift",
+            "draft_transition",
+            "fabricated_ready_transition",
+            "review_request",
+            "review_counter_increment",
+            "remediation_counter_increment",
+            "cycle_3",
+            "ineligible",
+        )
+        for case in cases:
+            candidate = copy.deepcopy(original)
+            observed_tree = tree
+            if case == "swapped_parents":
+                candidate["ordered_parent_shas"].reverse()
+            elif case == "missing_parent":
+                candidate["ordered_parent_shas"].pop()
+            elif case == "extra_parent":
+                candidate["ordered_parent_shas"].append("f" * 40)
+            elif case == "stale_first_parent":
+                candidate["prior_delivery_head_sha"] = "b" * 40
+            elif case == "substituted_first_parent":
+                candidate["ordered_parent_shas"][0] = "c" * 40
+            elif case == "stale_second_parent":
+                candidate["target_base"]["authorized_sha"] = "1" * 40
+                candidate["target_base"]["observed_sha"] = "1" * 40
+                candidate["ordered_parent_shas"][1] = "1" * 40
+            elif case == "substituted_second_parent":
+                candidate["ordered_parent_shas"][1] = "c" * 40
+            elif case == "base_snapshot_mismatch":
+                candidate["target_base"]["observed_sha"] = "d" * 40
+            elif case == "tree_mismatch":
+                observed_tree = "b" * 40
+            elif case == "repository_substitution":
+                candidate["repository"] = "SecPal/api"
+            elif case == "pull_request_substitution":
+                candidate["pull_request_number"] = 2
+            elif case == "topology_substitution":
+                candidate["kind"] = "GENERIC_MERGE"
+            elif case == "version_substitution":
+                candidate["schema_version"] = "2.0"
+            elif case == "ambiguous_topology":
+                candidate["allow_merge_commit"] = True
+            elif case == "stale_reviewed_state":
+                candidate["reviewed_state_digest"] = "0" * 64
+            elif case == "stale_stable_feedback":
+                candidate["reviewed_feedback_digest"] = "0" * 64
+            elif case == "stale_registry":
+                candidate["validation_execution"]["registry_digest"] = "0" * 64
+            elif case == "stale_command_set":
+                candidate["validation_execution"]["command_set_digest"] = "0" * 64
+            elif case == "bound_ref_drift":
+                candidate["target_base"]["ref"] = "release"
+            elif case == "draft_transition":
+                candidate["eligibility"]["draft_after"] = True
+            elif case == "fabricated_ready_transition":
+                candidate["eligibility"]["ready_transition"] = True
+            elif case == "review_request":
+                candidate["eligibility"]["review_requested"] = True
+            elif case == "review_counter_increment":
+                candidate["eligibility"]["unrestricted_reviews_after"] = 2
+            elif case == "remediation_counter_increment":
+                candidate["eligibility"]["remediation_cycles_after"] = 2
+            elif case == "cycle_3":
+                candidate["eligibility"]["cycle_3"] = True
+            else:
+                candidate["eligibility"]["eligible"] = False
+            with self.subTest(case=case), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_ready_integration_evidence(
+                    candidate,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=registry,
+                    validated_tree_sha=observed_tree,
+                )
+
+    def test_ready_integration_explicit_selection_rejects_issue_or_signer_substitution(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        integration = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        base_arguments = {
+            "delivery_issue": integration["delivery_issue_number"],
+            "integration_authorization_id": integration["authorization_id"],
+            "expected_integration_signer": integration["expected_signer"]["identity"],
+        }
+        actions._verify_integration_selection(
+            integration, SimpleNamespace(**base_arguments)
+        )
+        for field, value in (
+            ("delivery_issue", 10),
+            ("integration_authorization_id", "another-authorization"),
+            ("expected_integration_signer", "another-signer"),
+        ):
+            changed = {**base_arguments, field: value}
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                actions._verify_integration_selection(
+                    integration, SimpleNamespace(**changed)
+                )
+
+    def test_ready_integration_commit_requires_exactly_two_ordered_parents(self) -> None:
+        head = "d" * 40
+        first = "e" * 40
+        second = "f" * 40
+        for case, output in (
+            ("missing", f"{head} {first}\n"),
+            ("swapped", f"{head} {second} {first}\n"),
+            ("extra", f"{head} {first} {second} {'a' * 40}\n"),
+            ("stale_first", f"{head} {'b' * 40} {second}\n"),
+            ("stale_second", f"{head} {first} {'b' * 40}\n"),
+        ):
+            with (
+                self.subTest(case=case),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    return_value=SimpleNamespace(stdout=output),
+                ),
+                self.assertRaisesRegex(fast_path.SecurityBlocker, "ordered parents"),
+            ):
+                actions._validated_integration_commit_parents(
+                    REPO_ROOT, head, [first, second]
+                )
+
+    def test_ready_integration_manual_delta_must_match_the_exact_tree_delta(self) -> None:
+        reviewed = fast_feedback()
+        integration = fast_path.normalize_ready_integration_evidence(
+            ready_integration_evidence(reviewed, validated_tree="a" * 40),
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        raw_delta = (
+            f":100644 100644 {'1' * 40} {'2' * 40} M\x00"
+            "governance.md\x00"
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_mechanical_integration_tree",
+                return_value="a" * 40,
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(returncode=0, stdout=raw_delta, stderr=""),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "not authenticated"
+            ):
+                actions._verify_integration_tree_delta(
+                    REPO_ROOT, integration, "a" * 40
+                )
+        integration["manual_conflict_resolution_delta"] = [
+            {
+                "path": "governance.md",
+                "status": "M",
+                "old_mode": "100644",
+                "new_mode": "100644",
+                "old_oid": "1" * 40,
+                "new_oid": "2" * 40,
+            }
+        ]
+        with (
+            mock.patch.object(
+                actions,
+                "_mechanical_integration_tree",
+                return_value="a" * 40,
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(returncode=0, stdout=raw_delta, stderr=""),
+            ),
+        ):
+            actions._verify_integration_tree_delta(
+                REPO_ROOT, integration, "a" * 40
+            )
+        with mock.patch.object(
+            actions,
+            "_mechanical_integration_tree",
+            return_value="b" * 40,
+        ):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "authorized parents"
+            ):
+                actions._verify_integration_tree_delta(
+                    REPO_ROOT, integration, "a" * 40
+                )
+
+    def test_ready_integration_signature_requires_the_explicit_signer(self) -> None:
+        actions._verify_integration_signer(
+            'Good "git" signature for aroviqen with ED25519 key SHA256:test\n',
+            {"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
+        )
+        for output in (
+            "",
+            'Good "git" signature for another with ED25519 key SHA256:test\n',
+        ):
+            with self.subTest(output=output), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "accepted identity"
+            ):
+                actions._verify_integration_signer(
+                    output,
+                    {"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
+                )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "unsigned"):
+            fast_path.verify_commit_signatures(
+                [
+                    {
+                        "oid": "d" * 40,
+                        "source": "USER",
+                        "local_signature": {
+                            "state": "unsigned",
+                            "verified": False,
+                            "format": "ssh",
+                        },
+                        "github_verification": {
+                            "verified": False,
+                            "reason": "unsigned",
+                        },
+                    }
+                ],
+                {"accepted_formats": ["ssh", "openpgp"]},
+            )
+
+    def test_ready_integration_rejects_historical_first_parent_receipt_reuse(self) -> None:
+        reviewed = fast_feedback()
+        historical_reviewed = fast_feedback(head_sha="c" * 40)
+        registry = fast_registry()
+        historical_receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=historical_reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=historical_reviewed,
+            manual_gate_evidence=[],
+        )
+        integration = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40, registry=registry
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "invalid or stale"):
+            fast_path.create_ready_integration_attestation(
+                repository="SecPal/.github",
+                head_sha="d" * 40,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=historical_receipt,
+                integration_evidence=integration,
+            )
+
+    def test_remediation_evidence_cannot_select_ready_integration_topology(self) -> None:
+        reviewed = fast_feedback()
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "malformed"):
+            fast_path.normalize_ready_integration_evidence(
+                receipt,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha="a" * 40,
+            )
+
+    def test_ready_integration_attestation_rejects_stale_or_other_candidate_evidence(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+
+        def verify(candidate: dict[str, Any], evidence_value: dict[str, Any]) -> None:
+            fast_path.verify_ready_integration_attestation(
+                candidate,
+                repository="SecPal/.github",
+                head_sha=head,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=evidence_value,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(evidence_value),
+            )
+
+        verify(attestation, integration)
+        for field in ("head_sha", "validation_receipt_digest", "attestation_digest"):
+            changed = copy.deepcopy(attestation)
+            changed[field] = "0" * (40 if field == "head_sha" else 64)
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                verify(changed, integration)
+        another = copy.deepcopy(integration)
+        another["authorization_id"] = "ready-integration-authorization-002"
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "invalid or stale"):
+            verify(attestation, another)
 
     def test_signed_validation_receipt_trailer_must_be_unique_and_well_formed(self) -> None:
         digest_value = "a" * 64

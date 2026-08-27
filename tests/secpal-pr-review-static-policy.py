@@ -420,9 +420,11 @@ LOADED_MODULE_ATTRIBUTES = {
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
+            "create_ready_integration_attestation",
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "normalize_ready_integration_evidence",
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
         },
@@ -546,6 +548,34 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'eligibility_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'integration_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'integration_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'expected_integration_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_integration_selection",),
+            "getattr(arguments, 'delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_integration_selection",),
+            "getattr(arguments, 'integration_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_integration_selection",),
+            "getattr(arguments, 'expected_integration_signer', None)",
         ),
     },
     "secpal-resolve-fixed-threads.py": {

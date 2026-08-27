@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-27 - Authenticate Ready Pull Request Integration Heads
+
+**Added:**
+
+- added an explicitly selected evidence topology for one signed two-parent
+  integration candidate whose ordered parents, validated combined tree,
+  authenticated current `main` snapshot, stable feedback, eligibility,
+  validation execution, signer, and unchanged Ready lifecycle fail closed as
+  one final attestation while ordinary remediation remains single-parent
+
+---
+
 ## 2026-08-26 - Stop Requiring Up-To-Date Pull Request Branches
 
 **Changed:**

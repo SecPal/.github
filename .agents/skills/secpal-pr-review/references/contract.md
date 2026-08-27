@@ -379,6 +379,29 @@ attestation. It contains no environment dump, command output, credential, or
 secret. Manual-gate evidence and every user-controlled batch string are rejected
 when they contain the same secret-like patterns prohibited in forensic plans.
 
+The sole-parent rule above remains authoritative for remediation and recovery.
+`attest-validation --integration-evidence` is the distinct, explicitly selected
+exception for one already-authorized Ready-PR integration candidate. Its closed
+versioned evidence kind is `TWO_PARENT_READY_INTEGRATION`; it requires explicit
+delivery-issue, authorization-ID, and signer selectors and authenticates the
+repository, PR, prior Ready head, current registered default-branch snapshot,
+exact ordered parents `[prior Ready head, authorized base head]`, combined tree,
+stable-feedback digests, registered validation execution, accepted signer, and
+finite lifecycle continuity. The candidate also carries exactly one signed
+`SecPal-Integration-Evidence` digest trailer in addition to its validation-
+receipt trailer. The final integration attestation binds both trailers, the new
+head, ordered parents, validated and mechanical tree identities, and the exact
+raw tree delta allowed for manual conflict resolution.
+
+This integration topology consumes no unrestricted review or remediation cycle,
+does not create Cycle 3, requests no review, and preserves `Draft=false` and
+`Ready=true` without a transition. Unknown versions, ambiguous fields, generic
+merge commits, reordered or substituted parents, base-ref drift, unlisted tree
+delta, stale evidence, and signer substitution fail closed. The helper only
+authenticates an already created candidate: it performs no branch integration,
+push, Ready transition, hosted-check observation, or merge automation. A push
+requires a separate fresh head-bound readiness evidence phase.
+
 An explicitly requested readiness batch validates against
 `fast-path-batch.schema.json`. It binds one
 repository, PR, expected head, reviewed base branch/SHA, actor, reviewed digests, authorization digest,

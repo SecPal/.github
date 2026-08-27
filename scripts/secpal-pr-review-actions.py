@@ -4029,6 +4029,10 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--receipt")
     attestation_parser.add_argument("--manual-gate-evidence")
     attestation_parser.add_argument("--eligibility-evidence")
+    attestation_parser.add_argument("--integration-evidence")
+    attestation_parser.add_argument("--delivery-issue", type=_positive_integer)
+    attestation_parser.add_argument("--integration-authorization-id")
+    attestation_parser.add_argument("--expected-integration-signer")
     batch_parser = subparsers.add_parser("resolve-batch")
     batch_parser.add_argument("--repo", required=True)
     batch_parser.add_argument("--pr", required=True, type=_positive_integer)
@@ -4261,16 +4265,42 @@ def _validated_commit_parent(repository_root: Path, head: str) -> str:
     return identities[1]
 
 
-def _commit_validation_receipt_digest(
+def _validated_integration_commit_parents(
     repository_root: Path,
     head: str,
+    expected_parents: list[str],
+) -> list[str]:
+    result = _run_attestation_git(
+        repository_root,
+        ["rev-list", "--parents", "-n", "1", head],
+    )
+    identities = result.stdout.split()
+    if (
+        len(identities) != 3
+        or identities[0] != head
+        or identities[1:] != expected_parents
+    ):
+        raise fast_path.SecurityBlocker(
+            "validated Ready integration must have the exact two ordered parents"
+        )
+    if not all(OID_PATTERN.fullmatch(identity) for identity in identities):
+        raise fast_path.SecurityBlocker(
+            "validated Ready integration ancestry is malformed"
+        )
+    return identities[1:]
+
+
+def _commit_trailer_digest(
+    repository_root: Path,
+    head: str,
+    trailer: str,
 ) -> str | None:
     result = _run_attestation_git(
         repository_root,
         [
             "show",
             "-s",
-            "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)",
+            f"--format=%(trailers:key={trailer},valueonly,separator=%x00)",
             head,
         ],
     )
@@ -4286,6 +4316,161 @@ def _commit_validation_receipt_digest(
             "signed commit validation-receipt trailer is malformed"
         )
     return values[0]
+
+
+def _commit_validation_receipt_digest(
+    repository_root: Path,
+    head: str,
+) -> str | None:
+    return _commit_trailer_digest(
+        repository_root, head, "SecPal-Validation-Receipt"
+    )
+
+
+def _commit_integration_evidence_digest(
+    repository_root: Path,
+    head: str,
+) -> str | None:
+    return _commit_trailer_digest(
+        repository_root, head, "SecPal-Integration-Evidence"
+    )
+
+
+def _integration_tree_delta(
+    repository_root: Path,
+    mechanical_tree: str,
+    validated_tree: str,
+) -> list[dict[str, str]]:
+    result = _run_attestation_git(
+        repository_root,
+        [
+            "diff-tree",
+            "--raw",
+            "--no-abbrev",
+            "-z",
+            "--no-renames",
+            mechanical_tree,
+            validated_tree,
+        ],
+        allow_failure=True,
+    )
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker(
+            "mechanical integration tree is unavailable or invalid"
+        )
+    fields = result.stdout.split("\x00")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) % 2:
+        raise fast_path.SecurityBlocker(
+            "mechanical integration tree delta is malformed"
+        )
+    delta: list[dict[str, str]] = []
+    for index in range(0, len(fields), 2):
+        header = fields[index]
+        path = fields[index + 1]
+        parts = header[1:].split() if header.startswith(":") else []
+        if len(parts) != 5:
+            raise fast_path.SecurityBlocker(
+                "mechanical integration tree delta is malformed"
+            )
+        old_mode, new_mode, old_oid, new_oid, status = parts
+        delta.append(
+            {
+                "path": path,
+                "status": status,
+                "old_mode": old_mode,
+                "new_mode": new_mode,
+                "old_oid": old_oid.lower(),
+                "new_oid": new_oid.lower(),
+            }
+        )
+    return sorted(delta, key=lambda item: item["path"])
+
+
+def _mechanical_integration_tree(
+    repository_root: Path,
+    ordered_parents: list[str],
+) -> str:
+    result = _run_attestation_git(
+        repository_root,
+        ["merge-tree", "--write-tree", *ordered_parents],
+        allow_failure=True,
+    )
+    lines = result.stdout.splitlines()
+    if (
+        result.returncode not in {0, 1}
+        or not lines
+        or not OID_PATTERN.fullmatch(lines[0])
+    ):
+        raise fast_path.SecurityBlocker(
+            "mechanical integration tree cannot be derived from the authorized parents"
+        )
+    return lines[0].lower()
+
+
+def _verify_integration_tree_delta(
+    repository_root: Path,
+    integration_evidence: dict[str, Any],
+    validated_tree: str,
+) -> None:
+    if _mechanical_integration_tree(
+        repository_root,
+        integration_evidence["ordered_parent_shas"],
+    ) != integration_evidence["mechanical_merge_tree_sha"]:
+        raise fast_path.SecurityBlocker(
+            "mechanical integration tree does not match the authorized parents"
+        )
+    if _integration_tree_delta(
+        repository_root,
+        integration_evidence["mechanical_merge_tree_sha"],
+        validated_tree,
+    ) != integration_evidence["manual_conflict_resolution_delta"]:
+        raise fast_path.SecurityBlocker(
+            "integration manual conflict-resolution delta is not authenticated"
+        )
+
+
+def _verify_integration_signer(
+    verification_output: str,
+    expected_signer: dict[str, str],
+) -> None:
+    kind = expected_signer["kind"]
+    identity = expected_signer["identity"]
+    if kind == "SSH_PRINCIPAL":
+        matches = re.findall(
+            r'(?m)^Good "git" signature for ([^\s]+) with ', verification_output
+        )
+    else:
+        matches = re.findall(
+            r"(?m)^\[GNUPG:\] VALIDSIG ([0-9A-F]{40,64})(?:\s|$)",
+            verification_output.upper(),
+        )
+    if matches != [identity]:
+        raise fast_path.SecurityBlocker(
+            "integration commit signer does not match the explicitly accepted identity"
+        )
+
+
+def _verify_integration_selection(
+    integration_evidence: dict[str, Any],
+    arguments: argparse.Namespace,
+) -> None:
+    expected_issue = getattr(arguments, "delivery_issue", None)
+    expected_authorization = getattr(arguments, "integration_authorization_id", None)
+    expected_signer = getattr(arguments, "expected_integration_signer", None)
+    if not all((expected_issue, expected_authorization, expected_signer)):
+        raise fast_path.RecoverableLocalError(
+            "Ready integration requires explicit delivery-issue, authorization, and signer selectors"
+        )
+    if (
+        integration_evidence["delivery_issue_number"] != expected_issue
+        or integration_evidence["authorization_id"] != expected_authorization
+        or integration_evidence["expected_signer"]["identity"] != expected_signer
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready integration selection differs from the explicit authorization"
+        )
 
 
 def _attestation_local_state(repository_root: Path, repository: str) -> tuple[str, str]:
@@ -4459,6 +4644,20 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
+    integration_evidence_path = getattr(arguments, "integration_evidence", None)
+    integration_selectors = (
+        getattr(arguments, "delivery_issue", None),
+        getattr(arguments, "integration_authorization_id", None),
+        getattr(arguments, "expected_integration_signer", None),
+    )
+    if not integration_evidence_path and any(integration_selectors):
+        raise fast_path.RecoverableLocalError(
+            "integration selectors are valid only with --integration-evidence"
+        )
+    if integration_evidence_path and getattr(arguments, "eligibility_evidence", None):
+        raise fast_path.SecurityBlocker(
+            "Ready integration evidence cannot be combined with remediation eligibility"
+        )
     if arguments.bind_commit:
         if not arguments.receipt:
             raise fast_path.RecoverableLocalError("--bind-commit requires --receipt")
@@ -4487,9 +4686,38 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         )
         if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
-        parent = _validated_commit_parent(repository_root, head)
         tree = _run_attestation_git(repository_root, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
-        if parent != receipt["head_sha"] or tree != receipt["validated_tree_sha"]:
+        integration_evidence = None
+        if integration_evidence_path:
+            integration_evidence = fast_path.normalize_ready_integration_evidence(
+                _read_json(integration_evidence_path, "Ready integration evidence"),
+                repository=arguments.repo,
+                reviewed_state=reviewed,
+                registry=binding,
+                validated_tree_sha=tree,
+            )
+            _verify_integration_selection(integration_evidence, arguments)
+            parents = _validated_integration_commit_parents(
+                repository_root,
+                head,
+                integration_evidence["ordered_parent_shas"],
+            )
+            if (
+                parents[0] != receipt["head_sha"]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "integration parent, tree, or manual conflict-resolution delta changed"
+                )
+            _verify_integration_tree_delta(
+                repository_root, integration_evidence, tree
+            )
+        else:
+            parent = _validated_commit_parent(repository_root, head)
+            if parent != receipt["head_sha"]:
+                raise fast_path.SecurityBlocker(
+                    "signed commit does not contain exactly the validated staged tree"
+                )
+        if tree != receipt["validated_tree_sha"]:
             raise fast_path.SecurityBlocker(
                 "signed commit does not contain exactly the validated staged tree"
             )
@@ -4499,6 +4727,13 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         ):
             raise fast_path.SecurityBlocker(
                 "signed commit does not bind the validation receipt"
+            )
+        if integration_evidence is not None and (
+            _commit_integration_evidence_digest(repository_root, head)
+            != fast_path.digest_json(integration_evidence)
+        ):
+            raise fast_path.SecurityBlocker(
+                "signed integration commit does not bind the integration evidence"
             )
         supplied_manual_evidence = getattr(
             arguments, "manual_gate_evidence", None
@@ -4551,15 +4786,30 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             ],
             local_signature_policy,
         )
-        attestation = fast_path.create_validation_attestation(
-            repository=arguments.repo,
-            head_sha=head,
-            registry=binding,
-            command_set=binding["validation"],
-            successful_result=True,
-            reviewed_state=reviewed,
-            validation_receipt=receipt,
-        )
+        if integration_evidence is not None:
+            _verify_integration_signer(
+                f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                integration_evidence["expected_signer"],
+            )
+            attestation = fast_path.create_ready_integration_attestation(
+                repository=arguments.repo,
+                head_sha=head,
+                registry=binding,
+                command_set=binding["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration_evidence,
+            )
+        else:
+            attestation = fast_path.create_validation_attestation(
+                repository=arguments.repo,
+                head_sha=head,
+                registry=binding,
+                command_set=binding["validation"],
+                successful_result=True,
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+            )
         _write_fast_report(arguments.output, attestation)
         return 0
     if arguments.receipt:
@@ -4580,6 +4830,17 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         else None
     )
     tree = _staged_tree(repository_root, status)
+    integration_evidence = None
+    if integration_evidence_path:
+        integration_evidence = fast_path.normalize_ready_integration_evidence(
+            _read_json(integration_evidence_path, "Ready integration evidence"),
+            repository=arguments.repo,
+            reviewed_state=reviewed,
+            registry=binding,
+            validated_tree_sha=tree,
+        )
+        _verify_integration_selection(integration_evidence, arguments)
+        _verify_integration_tree_delta(repository_root, integration_evidence, tree)
     if arguments.output:
         _write_fast_report(
             arguments.output,
@@ -4612,6 +4873,19 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "eligibility evidence changed during complete validation"
         )
+    if integration_evidence_path:
+        integration_after = fast_path.normalize_ready_integration_evidence(
+            _read_json(integration_evidence_path, "Ready integration evidence"),
+            repository=arguments.repo,
+            reviewed_state=reviewed,
+            registry=binding,
+            validated_tree_sha=tree_after,
+        )
+        _verify_integration_selection(integration_after, arguments)
+        if integration_after != integration_evidence:
+            raise fast_path.SecurityBlocker(
+                "Ready integration evidence changed during complete validation"
+            )
     receipt = _validation_receipt(
         repository=arguments.repo,
         head_sha=head,
