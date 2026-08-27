@@ -10,8 +10,11 @@ repository. Path-specific review criteria live in focused instruction files,
 including `.github/instructions/github-workflows.instructions.md`.
 
 Work structure, ordering, selection, delivery, and evidence semantics are defined
-once in `docs/work-graph-contract.md`. This baseline references that contract and
-does not restate it.
+once in `docs/work-graph-contract.md`. Evidence-pipeline and external-system
+architecture semantics are defined once in `docs/evidence-architecture-contract.md`.
+These canonical contracts are organization-wide governance sources; repository
+baselines may add stricter stack-specific rules but must not weaken or restate
+them divergently.
 
 ## Scope and Safety
 
@@ -102,6 +105,9 @@ does not restate it.
 - Delegate every work-graph decision to `docs/work-graph-contract.md`; do not
   restate its decomposition, topology, selection, replanning, or evidence
   semantics locally.
+- Delegate evidence/external-system architecture decisions to
+  `docs/evidence-architecture-contract.md`; do not redefine its layer,
+  invariant-ownership, diagnosability, or anti-loop semantics locally.
 
 ## Security and Repository Invariants
 

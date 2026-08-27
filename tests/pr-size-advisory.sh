@@ -125,6 +125,10 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
+  cat >"$repository/tests/evidence-architecture-governance.py" <<'EOF'
+"""Fixture stand-in for preflight's required governance-test dependency."""
+EOF
+
   cat >"$repository/bin/npx" <<'EOF'
 #!/usr/bin/env bash
 exit 0
