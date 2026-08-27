@@ -24,6 +24,7 @@ ROUTES = (
 )
 REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$")
 WORKSPACE_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+PHYSICAL_SUFFIX_PATTERN = re.compile(r"^.+-[0-9a-f]{8}$")
 WORKSPACE_ALIAS_REGISTRY = ".polyscope-secpal-workspace-aliases.json"
 
 
@@ -87,17 +88,21 @@ def active_workspaces(
         return []
     repository_clone_root = _resolved(clone_root / repository_id)
     registry_path = clone_root / repository_id / WORKSPACE_ALIAS_REGISTRY
-    if registry_path.is_symlink() or not registry_path.is_file():
-        raise RuntimeError(f"required Polyscope workspace alias registry is unavailable: {registry_path}")
-    try:
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}") from error
-    if not isinstance(registry, dict) or registry.get("version") != 1:
-        raise RuntimeError(f"unsupported Polyscope workspace alias registry: {registry_path}")
-    aliases = registry.get("aliases")
-    if not isinstance(aliases, dict):
-        raise RuntimeError(f"invalid Polyscope workspace aliases: {registry_path}")
+    aliases: dict[str, str] = {}
+    if registry_path.is_symlink():
+        raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}")
+    if registry_path.exists():
+        if not registry_path.is_file():
+            raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}")
+        try:
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}") from error
+        if not isinstance(registry, dict) or registry.get("version") != 1:
+            raise RuntimeError(f"unsupported Polyscope workspace alias registry: {registry_path}")
+        aliases = registry.get("aliases")
+        if not isinstance(aliases, dict):
+            raise RuntimeError(f"invalid Polyscope workspace aliases: {registry_path}")
     for logical_name, physical_name in aliases.items():
         if (
             not isinstance(logical_name, str)
@@ -135,6 +140,8 @@ def active_workspaces(
             for logical_name, physical_name in aliases.items()
             if physical_name == physical_workspace
         ]
+        if not logical_aliases and PHYSICAL_SUFFIX_PATTERN.fullmatch(physical_workspace) is None:
+            logical_aliases = [physical_workspace]
         if len(logical_aliases) != 1:
             raise RuntimeError(
                 "expected exactly one canonical Polyscope workspace alias for "

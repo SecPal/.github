@@ -173,6 +173,32 @@ def main() -> None:
             )
         )
 
+        legacy_path = clone_root / "api-repo_1/legacy-otter"
+        (legacy_path / "public").mkdir(parents=True)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+                ("legacy-api", "api-repo_1", str(legacy_path)),
+            )
+        legacy_rendered = module.render(
+            db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+        )
+        assert "api-legacy-otter.preview.secpal.dev" in legacy_rendered
+        assert "root * /workspaces/api-repo_1/legacy-otter/public" in legacy_rendered
+
+        alias_registry.unlink()
+        expect_runtime_error(
+            lambda: module.render(
+                db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+            ),
+            "canonical Polyscope workspace alias",
+        )
+        alias_registry.write_text(
+            json.dumps(
+                {"version": 1, "aliases": {"calm-otter": "calm-otter-a1b2c3d4"}}
+            )
+        )
+
         escaping_link = clone_root / "api-repo_1/calm-otter-a1b2c3d4/public/leak"
         escaping_link.symlink_to(pathlib.Path("../.env"))
         expect_runtime_error(

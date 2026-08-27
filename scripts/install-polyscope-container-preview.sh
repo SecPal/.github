@@ -83,12 +83,18 @@ if [[ ! -d "$REPOSITORY_ROOT" ]]; then
     exit 1
 fi
 
-for command_name in podman python3 systemctl; do
+for command_name in podman python3 systemctl psql; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "Error: required command is unavailable: $command_name" >&2
         exit 1
     fi
 done
+PSQL_PATH="$(command -v psql)"
+if [[ "$PSQL_PATH" != /* || ! -x "$PSQL_PATH" ]]; then
+    echo "Error: psql must resolve to an absolute executable path." >&2
+    exit 1
+fi
+PSQL_DIR="${PSQL_PATH%/*}"
 
 if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" == Enforcing ]]; then
     clone_context="$(ls -Zd -- "$CLONE_ROOT")"
@@ -119,7 +125,10 @@ network_preexisting=0
 if podman network exists "$NETWORK"; then
     network_preexisting=1
     network_owner="$(podman network inspect "$NETWORK" --format '{{ index .Labels "preview.secpal.dev/managed" }}')"
-    if [[ "$network_owner" != true ]]; then
+    legacy_label_namespace="secpal"
+    legacy_network_label="io.${legacy_label_namespace}.polyscope.preview"
+    legacy_network_owner="$(podman network inspect "$NETWORK" --format "{{ index .Labels \"$legacy_network_label\" }}")"
+    if [[ "$network_owner" != true && "$legacy_network_owner" != true ]]; then
         echo "Error: refusing unmanaged pre-existing Podman network: $NETWORK" >&2
         exit 1
     fi
@@ -212,6 +221,7 @@ After=polyscope-preview.service
 Type=oneshot
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=PATH=$PSQL_DIR:/usr/bin
 ExecStart=$LIBEXEC_DIR/refresh-polyscope-container-preview.sh $LIBEXEC_DIR/render-polyscope-container-caddy.py $LIBEXEC_DIR/cleanup-polyscope-container-preview.py $POLYSCOPE_DB_PATH $CLONE_ROOT $REPOSITORY_ROOT $CADDYFILE polyscope-preview.service
 TimeoutStartSec=21min
 UMask=0077
@@ -223,6 +233,7 @@ Description=Watch Polyscope workspace registry for preview route changes
 
 [Path]
 PathChanged=$POLYSCOPE_DB_PATH
+PathChanged=${POLYSCOPE_DB_PATH}-wal
 Unit=polyscope-preview-refresh.service
 
 [Install]

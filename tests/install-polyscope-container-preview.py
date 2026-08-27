@@ -85,7 +85,8 @@ def main() -> None:
             'if [ "$1 $2" = "network create" ]; then : >"$NETWORK_STATE"; exit 0; fi\n'
             'if [ "$1 $2" = "network inspect" ]; then\n'
             '  case "$*" in\n'
-            '    *Labels*) if [ "${UNMANAGED_NETWORK:-0}" = 1 ]; then printf "false\\n"; else printf "true\\n"; fi ;;\n'
+            '    *preview.secpal.dev/managed*) if [ "${UNMANAGED_NETWORK:-0}" = 1 ] || [ "${LEGACY_MANAGED_NETWORK:-0}" = 1 ]; then printf "false\\n"; else printf "true\\n"; fi ;;\n'
+            '    *polyscope.preview*) if [ "${LEGACY_MANAGED_NETWORK:-0}" = 1 ]; then printf "true\\n"; else printf "false\\n"; fi ;;\n'
             '    *Containers*) if [ "${FOREIGN_NETWORK:-0}" = 1 ]; then printf "foreign-container\\n"; fi ;;\n'
             '  esac\n'
             '  exit 0\n'
@@ -115,6 +116,7 @@ def main() -> None:
         )
         write_executable(fake_bin / "getenforce", "#!/bin/sh\nprintf 'Disabled\\n'\n")
         write_executable(fake_bin / "date", "#!/bin/sh\nprintf '20260826T120000Z\\n'\n")
+        write_executable(fake_bin / "psql", "#!/bin/sh\nexit 0\n")
 
         socket_path = root / "postgresql/.s.PGSQL.5432"
         socket_path.parent.mkdir()
@@ -169,6 +171,19 @@ def main() -> None:
             assert rejected_unmanaged.returncode != 0
             assert "unmanaged pre-existing Podman network" in rejected_unmanaged.stderr
 
+            legacy_env = env | {"LEGACY_MANAGED_NETWORK": "1"}
+            accepted_legacy = subprocess.run(
+                ["bash", str(INSTALLER)],
+                env=legacy_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert accepted_legacy.returncode == 0, (
+                accepted_legacy.stdout,
+                accepted_legacy.stderr,
+            )
+
         unit_dir = home / ".config/systemd/user"
         proxy_unit = unit_dir.joinpath("polyscope-postgresql-proxy.service").read_text()
         preview_unit = unit_dir.joinpath("polyscope-preview.service").read_text()
@@ -192,13 +207,15 @@ def main() -> None:
         assert "root * /workspaces/api-repo/calm-otter-a1b2c3d4/public" in caddyfile
         assert "root * /workspaces/frontend_repo/calm-otter-e5f6a7b8/dist" in caddyfile
         assert f"PathChanged={db_path}" in refresh_path
+        assert f"PathChanged={db_path}-wal" in refresh_path
         assert "polyscope-preview-refresh.service" in refresh_path
         assert "refresh-polyscope-container-preview.sh" in refresh_unit
         assert "cleanup-polyscope-container-preview.py" in refresh_unit
+        assert f"Environment=PATH={fake_bin}:/usr/bin" in refresh_unit
         assert home.joinpath("custom-libexec/cleanup-polyscope-container-preview.py").is_file()
         assert "Restart=" not in refresh_unit
         backups = list((home / ".local/state/polyscope/backups").iterdir())
-        assert len(backups) == 2, backups
+        assert len(backups) == 3, backups
 
         for state_path in service_state.iterdir():
             state_path.unlink()
