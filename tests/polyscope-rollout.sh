@@ -1606,7 +1606,7 @@ other_worktree.joinpath(".env").write_text(
 first = start_api_mode(physical_worktree, "held-worktree", hold=True)
 assert wait_for(race_state / "held-worktree-pending", 10)
 second = start_api_mode(other_worktree, "other-worktree", state=other_state)
-different_worktree_overlapped = wait_for(other_state / "other-worktree-pending", 2)
+different_worktree_overlapped = wait_for(other_state / "other-worktree-pending", 10)
 if different_worktree_overlapped:
     second_output, _ = second.communicate(timeout=10)
 else:
