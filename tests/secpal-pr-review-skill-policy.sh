@@ -129,7 +129,12 @@ import re
 import sys
 
 WORK_GRAPH = "docs/work-graph-contract.md"
+EVIDENCE_ARCHITECTURE = "docs/evidence-architecture-contract.md"
 WORK_GRAPH_SUBJECT = re.compile(r"\bwork[- ]graphs?\b", re.IGNORECASE)
+EVIDENCE_SUBJECT = re.compile(
+    r"\bevidence(?:[- ]pipeline)?\b|\bexternal[- ]system\b|\barchitecture\b",
+    re.IGNORECASE,
+)
 DELEGATION_RELATION = re.compile(
     r"\bdelegat(?:e|es|ed|ing)\b"
     r"|\bfollow(?:s|ed|ing)?\b"
@@ -167,7 +172,11 @@ def semantic_units(text):
 
 
 def delegates(unit, context):
-    candidate = f"{context}\n{unit}".replace(WORK_GRAPH, "")
+    candidate = (
+        f"{context}\n{unit}"
+        .replace(WORK_GRAPH, "")
+        .replace(EVIDENCE_ARCHITECTURE, "")
+    )
     normalized = candidate.casefold()
     has_work_graph_context = WORK_GRAPH_SUBJECT.search(candidate) or all(
         subject in normalized
@@ -176,11 +185,17 @@ def delegates(unit, context):
     has_delegation_relation = DELEGATION_RELATION.search(unit) or re.search(
         r"\bdefined\s+once\b", unit, re.IGNORECASE
     )
-    if (
+    delegates_work_graph = (
         WORK_GRAPH in unit
         and has_work_graph_context
         and has_delegation_relation
-    ):
+    )
+    delegates_evidence_architecture = (
+        EVIDENCE_ARCHITECTURE in unit
+        and EVIDENCE_SUBJECT.search(candidate)
+        and has_delegation_relation
+    )
+    if delegates_work_graph or delegates_evidence_architecture:
         return True
     # Normalize the superseded local PR-count rule out of the accepted baseline.
     return "EPIC" in unit and re.search(r"pull requests?", unit) is not None
@@ -197,14 +212,20 @@ PY
 
 assert_agents_work_graph_invariants() {
   local text
+  local require_evidence_architecture="${1:-false}"
 
   text="$(cat)"
-  python3 - "$text" <<'PY'
+  python3 - "$text" "$require_evidence_architecture" <<'PY'
 import re
 import sys
 
 WORK_GRAPH = "docs/work-graph-contract.md"
+EVIDENCE_ARCHITECTURE = "docs/evidence-architecture-contract.md"
 WORK_GRAPH_SUBJECT = re.compile(r"\bwork[- ]graphs?\b", re.IGNORECASE)
+EVIDENCE_SUBJECT = re.compile(
+    r"\bevidence(?:[- ]pipeline)?\b|\bexternal[- ]system\b|\barchitecture\b",
+    re.IGNORECASE,
+)
 DELEGATION_RELATION = re.compile(
     r"\bdelegat(?:e|es|ed|ing)\b"
     r"|\bfollow(?:s|ed|ing)?\b"
@@ -214,6 +235,7 @@ DELEGATION_RELATION = re.compile(
     re.IGNORECASE,
 )
 text = sys.argv[1]
+require_evidence_architecture = sys.argv[2] == "true"
 
 
 def units(body):
@@ -246,12 +268,22 @@ def semantic_units(blocks):
 
 
 def delegates(unit, context):
-    candidate = f"{context}\n{unit}".replace(WORK_GRAPH, "")
-    return (
+    candidate = (
+        f"{context}\n{unit}"
+        .replace(WORK_GRAPH, "")
+        .replace(EVIDENCE_ARCHITECTURE, "")
+    )
+    delegates_work_graph = (
         WORK_GRAPH in unit
         and WORK_GRAPH_SUBJECT.search(candidate)
         and DELEGATION_RELATION.search(unit)
     )
+    delegates_evidence_architecture = (
+        EVIDENCE_ARCHITECTURE in unit
+        and EVIDENCE_SUBJECT.search(candidate)
+        and DELEGATION_RELATION.search(unit)
+    )
+    return delegates_work_graph or delegates_evidence_architecture
 
 
 semantic_blocks = list(semantic_units(blocks))
@@ -259,8 +291,20 @@ semantic_blocks = list(semantic_units(blocks))
 if WORK_GRAPH not in text:
     raise SystemExit(1)
 
-if not any(delegates(unit, context) for unit, context in semantic_blocks):
+if not any(
+    WORK_GRAPH in unit and delegates(unit, context)
+    for unit, context in semantic_blocks
+):
     raise SystemExit(1)
+
+if require_evidence_architecture:
+    if EVIDENCE_ARCHITECTURE not in text:
+        raise SystemExit(1)
+    if not any(
+        EVIDENCE_ARCHITECTURE in unit and delegates(unit, context)
+        for unit, context in semantic_blocks
+    ):
+        raise SystemExit(1)
 
 pr_count_decomposition = re.compile(
     r"(multiple possible pull requests"
@@ -285,14 +329,22 @@ for unit, context in semantic_blocks:
     for sentence in re.split(r"(?<=[.!?])\s+", unit):
         if not re.search(r"[A-Za-z]", sentence):
             continue
-        if WORK_GRAPH in sentence or re.search(r"\bcontracts?\b", sentence, re.IGNORECASE):
+        if (
+            WORK_GRAPH in sentence
+            or EVIDENCE_ARCHITECTURE in sentence
+            or re.search(r"\bcontracts?\b", sentence, re.IGNORECASE)
+        ):
             continue
         raise SystemExit(1)
 PY
 }
 
-assert_agents_work_graph_invariants <"$REPO_ROOT/AGENTS.md" \
-  || fail 'AGENTS.md no longer delegates work-graph semantics to the contract'
+assert_agents_work_graph_invariants true <"$REPO_ROOT/AGENTS.md" \
+  || fail 'AGENTS.md no longer delegates canonical governance semantics to the contracts'
+if sed '/docs\/evidence-architecture-contract\.md/d' "$REPO_ROOT/AGENTS.md" \
+  | assert_agents_work_graph_invariants true; then
+  fail 'AGENTS.md accepted a missing evidence-architecture delegation'
+fi
 assert_agents_work_graph_invariants <"$POLYSCOPE_TEMPLATE" \
   || fail 'managed Polyscope instructions no longer delegate work-graph semantics to the contract'
 if sed \

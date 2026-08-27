@@ -10,6 +10,13 @@ SPDX-License-Identifier: CC0-1.0
 Canonical. This document is the single organization-wide definition of how
 SecPal work is structured, ordered, selected, delivered, and evidenced.
 
+This contract normatively incorporates
+`docs/evidence-architecture-contract.md` for evidence-pipeline and
+external-system architecture. The companion owns those specialized semantics;
+this document remains their organization-wide governance entry point. A
+repository baseline that delegates generic governance and evidence semantics to
+this contract therefore consumes the companion without copying its rules.
+
 Any repository baseline or Polyscope runtime instruction set that states
 work-graph semantics — `AGENTS.md`, and any `.github/copilot-instructions.md` or
 `.github/instructions/*.instructions.md` overlay that touches them — MUST
@@ -735,6 +742,11 @@ fail. The classes below are the available kinds of proof, not a checklist to
 fill: an acceptance criterion is satisfied by whichever class actually proves
 it, and one evidence item MAY prove several criteria at once.
 
+Evidence pipelines and external-system runs additionally follow the normative
+responsibility, representation, diagnosability, and anti-loop rules in
+`docs/evidence-architecture-contract.md`. That companion specializes this
+section without creating a second definition of the evidence classes below.
+
 Evidence is never counted. Neither a test count nor a coverage percentage tells
 anyone whether the contract holds.
 
@@ -960,6 +972,10 @@ which is a worse outcome than the control's absence.
 - Repository baselines reference this contract. They MUST NOT restate its
   semantics in divergent wording, because a restatement is a second source of
   truth.
+- References to this contract consume every contract it normatively
+  incorporates, currently `docs/evidence-architecture-contract.md`. A baseline
+  MAY also link the companion directly for discoverability, but MUST NOT copy or
+  redefine its semantics.
 - A baseline MAY add stricter, non-contradictory rules scoped to its repository,
   and MAY define stack-specific detail such as commands, frameworks, and paths.
 - On conflict, this contract wins for work-graph and governance semantics, and
@@ -973,6 +989,7 @@ which is a worse outcome than the control's absence.
 ## Related Guidance
 
 - [AGENTS.md](../AGENTS.md)
+- [docs/evidence-architecture-contract.md](evidence-architecture-contract.md)
 - [docs/planning.md](planning.md)
 - [docs/EPIC_WORKFLOW.md](EPIC_WORKFLOW.md)
 - [docs/development-principles.md](development-principles.md)
