@@ -29,7 +29,7 @@ error_file="$(mktemp "${TMPDIR:-/tmp}/polyscope-preview-refresh.XXXXXX")"
 caddy_directory="$(dirname -- "$caddyfile")"
 rendered_file="$(mktemp "$caddy_directory/.Caddyfile.refresh.XXXXXX")"
 previous_file="$(mktemp "$caddy_directory/.Caddyfile.previous.XXXXXX")"
-rm -f -- "$previous_file"
+had_previous=false
 trap 'rm -f -- "$error_file" "$rendered_file" "$previous_file"' EXIT
 
 for ((attempt = 1; attempt <= attempts; attempt++)); do
@@ -50,15 +50,16 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
         fi
         if [[ -f "$caddyfile" ]]; then
             cp -p -- "$caddyfile" "$previous_file"
+            had_previous=true
         else
-            rm -f -- "$previous_file"
+            had_previous=false
         fi
         mv -f -- "$rendered_file" "$caddyfile"
         if systemctl --user restart "$preview_service" 2>"$error_file"; then
             rm -f -- "$previous_file"
             exit 0
         fi
-        if [[ -f "$previous_file" ]]; then
+        if [[ "$had_previous" == true ]]; then
             mv -f -- "$previous_file" "$caddyfile"
         else
             rm -f -- "$caddyfile"
