@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import re
@@ -23,6 +24,8 @@ ROUTES = (
 )
 REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$")
 WORKSPACE_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+PHYSICAL_SUFFIX_PATTERN = re.compile(r"^.+-[0-9a-f]{8}$")
+WORKSPACE_ALIAS_REGISTRY = ".polyscope-secpal-workspace-aliases.json"
 
 
 def _resolved(path: pathlib.Path) -> pathlib.Path:
@@ -73,7 +76,7 @@ def active_workspaces(
     repository_id: str,
     clone_root: pathlib.Path,
     document_root: str,
-) -> list[str]:
+) -> list[tuple[str, str]]:
     uri = f"{db_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(uri, uri=True) as connection:
         rows = connection.execute(
@@ -84,16 +87,43 @@ def active_workspaces(
     if not rows:
         return []
     repository_clone_root = _resolved(clone_root / repository_id)
-    workspaces: list[str] = []
+    registry_path = clone_root / repository_id / WORKSPACE_ALIAS_REGISTRY
+    aliases: dict[str, str] = {}
+    if registry_path.is_symlink():
+        raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}")
+    if registry_path.exists():
+        if not registry_path.is_file():
+            raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}")
+        try:
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"invalid Polyscope workspace alias registry: {registry_path}") from error
+        if not isinstance(registry, dict) or registry.get("version") != 1:
+            raise RuntimeError(f"unsupported Polyscope workspace alias registry: {registry_path}")
+        aliases = registry.get("aliases")
+        if not isinstance(aliases, dict):
+            raise RuntimeError(f"invalid Polyscope workspace aliases: {registry_path}")
+    for logical_name, physical_name in aliases.items():
+        if (
+            not isinstance(logical_name, str)
+            or WORKSPACE_PATTERN.fullmatch(logical_name) is None
+            or not isinstance(physical_name, str)
+            or WORKSPACE_PATTERN.fullmatch(physical_name) is None
+        ):
+            raise RuntimeError(f"unsafe Polyscope workspace alias in {registry_path}")
+
+    workspaces: list[tuple[str, str]] = []
     for (raw_path,) in rows:
         registered_path = pathlib.Path(str(raw_path))
         if not registered_path.is_absolute() or registered_path.parent != clone_root / repository_id:
             raise RuntimeError(
                 f"active worktree is outside its registered clone root: {registered_path}"
             )
-        workspace = registered_path.name
-        if WORKSPACE_PATTERN.fullmatch(workspace) is None:
-            raise RuntimeError(f"unsafe active Polyscope workspace name: {workspace!r}")
+        physical_workspace = registered_path.name
+        if WORKSPACE_PATTERN.fullmatch(physical_workspace) is None:
+            raise RuntimeError(
+                f"unsafe active Polyscope workspace name: {physical_workspace!r}"
+            )
         physical_worktree = _resolved(registered_path)
         if physical_worktree.parent != repository_clone_root:
             raise RuntimeError(f"active worktree escapes its clone root: {registered_path}")
@@ -105,11 +135,25 @@ def active_workspaces(
                 raise RuntimeError(
                     f"active preview document root contains a symbolic link: {candidate}"
                 )
-        if workspace in workspaces:
+        logical_aliases = [
+            logical_name
+            for logical_name, physical_name in aliases.items()
+            if physical_name == physical_workspace
+        ]
+        if not logical_aliases and PHYSICAL_SUFFIX_PATTERN.fullmatch(physical_workspace) is None:
+            logical_aliases = [physical_workspace]
+        if len(logical_aliases) != 1:
             raise RuntimeError(
-                f"duplicate active Polyscope workspace for repository {repository_id}: {workspace}"
+                "expected exactly one canonical Polyscope workspace alias for "
+                f"{repository_id}/{physical_workspace}, found {len(logical_aliases)}"
             )
-        workspaces.append(workspace)
+        logical_workspace = logical_aliases[0]
+        if any(existing_logical == logical_workspace for existing_logical, _ in workspaces):
+            raise RuntimeError(
+                "duplicate active Polyscope workspace alias for repository "
+                f"{repository_id}: {logical_workspace}"
+            )
+        workspaces.append((logical_workspace, physical_workspace))
     return workspaces
 
 
@@ -134,12 +178,12 @@ def render(
         repository_id = identifiers.get(repository_name)
         if repository_id is None:
             continue
-        for workspace in active_workspaces(
+        for workspace, physical_workspace in active_workspaces(
             db_path, repository_id, clone_root, document_root
         ):
             route_index += 1
             matcher = f"preview_{route_index}"
-            root = container_root / repository_id / workspace / document_root
+            root = container_root / repository_id / physical_workspace / document_root
             blocks.extend(
                 [
                     f"    @{matcher} host {host_prefix}-{workspace}.preview.secpal.dev",

@@ -4934,6 +4934,17 @@ def reconcile_api_runtime_units(
     changed = False
     prune_failures: list[tuple[str, Exception]] = []
 
+    if stale_names:
+        try:
+            systemctl_runner(
+                ["systemctl", "--user", "reset-failed", *sorted(stale_names)],
+                check=True,
+                env=systemctl_env,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            prune_failures.extend((stale_name, error) for stale_name in stale_names)
+            stale_names = []
+
     for stale_name in stale_names:
         try:
             systemctl_runner(

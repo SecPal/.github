@@ -388,7 +388,9 @@ python3 -m unittest tests/polyscope-work-graph-advisory.py
 
 for preview_test in \
   tests/polyscope-postgresql-socket-proxy.py \
+  tests/cleanup-polyscope-container-preview.py \
   tests/render-polyscope-container-caddy.py \
+  tests/run-polyscope-container-preview.py \
   tests/install-polyscope-container-preview.py; do
   if [ -f "$preview_test" ]; then
     python3 "$preview_test" || {
