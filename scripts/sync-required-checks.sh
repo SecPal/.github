@@ -167,6 +167,69 @@ build_payload() {
     '{strict: false, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
 }
 
+build_live_preserving_payload() {
+  local repo="$1"
+  local live_state_file="$2"
+  local canonical_contexts live_contexts missing_contexts unexpected_contexts
+
+  if ! jq -e '
+    type == "object" and
+    (.strict | type) == "boolean" and
+    (.checks | type) == "array" and
+    all(.checks[];
+      type == "object" and
+      (.context | type) == "string" and
+      (.context | length) > 0 and
+      has("app_id") and
+      (
+        .app_id == null or
+        (
+          (.app_id | type) == "number" and
+          .app_id == (.app_id | floor) and
+          (.app_id == -1 or .app_id > 0)
+        )
+      )
+    )
+  ' "$live_state_file" >/dev/null; then
+    echo "Malformed required-status-check response for SecPal/$repo." >&2
+    exit 1
+  fi
+
+  live_contexts="$(jq -c '[.checks[].context]' "$live_state_file")"
+  if ! jq -e 'length == (unique | length)' >/dev/null <<<"$live_contexts"; then
+    echo "Live required-status-check response for SecPal/$repo contains duplicate contexts." >&2
+    exit 1
+  fi
+
+  canonical_contexts="$(jq -c --arg repo "$repo" '.[$repo]' <<<"$REQUIRED_CONTEXTS_JSON")"
+  if ! jq -e 'length == (unique | length)' >/dev/null <<<"$canonical_contexts"; then
+    echo "Canonical required-status-check inventory for SecPal/$repo contains duplicate contexts." >&2
+    exit 1
+  fi
+
+  missing_contexts="$(jq -cn --argjson canonical "$canonical_contexts" --argjson live "$live_contexts" \
+    '$canonical - $live')"
+  unexpected_contexts="$(jq -cn --argjson canonical "$canonical_contexts" --argjson live "$live_contexts" \
+    '$live - $canonical')"
+  if [[ "$missing_contexts" != "[]" || "$unexpected_contexts" != "[]" ]]; then
+    echo "Live required-status-check inventory for SecPal/$repo differs from the canonical inventory." >&2
+    echo "Missing contexts: $missing_contexts" >&2
+    echo "Unexpected contexts: $unexpected_contexts" >&2
+    exit 1
+  fi
+
+  jq '{
+    strict: false,
+    checks: [
+      .checks[]
+      | {
+          context,
+          app_id: (if .app_id == null then -1 else .app_id end)
+        }
+    ]
+  }' "$live_state_file"
+}
+
 build_review_payload() {
   local repo="$1"
 
@@ -191,13 +254,22 @@ apply_repository() {
 
   ensure_known_repository "$repo"
 
-  # Subshell scopes both the temp file and its EXIT trap so the payload is
-  # always removed, even if build_payload or `gh api` fail under `set -e`.
+  # Subshell scopes the temp files and their EXIT trap so authenticated live
+  # state and the derived payload are always removed on every failure path.
   (
+    live_state_file="$(mktemp "${TMPDIR:-/tmp}/sync-required-checks-live.${repo//[^A-Za-z0-9]/_}.json.XXXXXX")"
+    trap 'rm -f "$live_state_file"' EXIT
     payload_file="$(mktemp "${TMPDIR:-/tmp}/sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX")"
-    trap 'rm -f "$payload_file"' EXIT
+    trap 'rm -f "$live_state_file" "$payload_file"' EXIT
 
-    build_payload "$repo" > "$payload_file"
+    if ! gh api "repos/SecPal/$repo/branches/main/protection/required_status_checks" \
+      >"$live_state_file"; then
+      echo "Failed to read required_status_checks for SecPal/$repo." >&2
+      echo "No branch-protection update was attempted." >&2
+      exit 1
+    fi
+
+    build_live_preserving_payload "$repo" "$live_state_file" >"$payload_file"
 
     if ! gh api "repos/SecPal/$repo/branches/main/protection/required_status_checks" \
       -X PATCH \
