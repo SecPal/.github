@@ -154,6 +154,7 @@ exec podman run --rm \\
   --network '$NETWORK' \\
   -e DB_HOST=polyscope-postgresql-proxy \\
   -e DB_PORT=5432 \\
+  -e KEK_PATH=/app/storage/app/keys/kek.key \\
   -v "\$PWD":/app:rw \\
   -v '$CLONE_ROOT':'$CLONE_ROOT':ro \\
   --workdir /app \\

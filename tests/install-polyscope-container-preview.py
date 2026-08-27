@@ -201,6 +201,9 @@ def main() -> None:
         assert "podman run" not in preview_unit
         assert home.joinpath("custom-libexec/run-polyscope-container-preview.py").is_file()
         assert "DB_HOST=polyscope-postgresql-proxy" in php_wrapper
+        assert "KEK_PATH=/app/storage/app/keys/kek.key" in php_wrapper
+        assert '-v "$PWD":/app:rw' in php_wrapper
+        assert f"-v '{clone_root}':'{clone_root}':ro" in php_wrapper
         assert "api-calm-otter.preview.secpal.dev" in caddyfile
         assert "frontend-calm-otter.preview.secpal.dev" in caddyfile
         assert "calm-otter-a1b2c3d4.preview.secpal.dev" not in caddyfile
