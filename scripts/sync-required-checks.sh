@@ -57,7 +57,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
   ],
   "api": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
+    "Check License Compatibility",
     "Laravel Pint / Check Code Style",
     "PHPStan / Static Analysis",
     "Formatting Check / Check Code Formatting",
@@ -94,7 +94,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
   ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
+    "Check License Compatibility",
     "Formatting Check / Check Code Formatting",
     "ESLint / Run Linter",
     "TypeScript Check / Build Project",
@@ -103,7 +103,9 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "Vitest Tests",
     "check-conflicts / Detect Git Conflict Markers",
-    "AI Instructions / Validate AI Instructions"
+    "AI Instructions / Validate AI Instructions",
+    "Strict CSP",
+    "Container Contract"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",

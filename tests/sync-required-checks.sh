@@ -142,7 +142,7 @@ EXPECTED_CONTEXTS_JSON='{
   ],
   "api": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
+    "Check License Compatibility",
     "Laravel Pint / Check Code Style",
     "PHPStan / Static Analysis",
     "Formatting Check / Check Code Formatting",
@@ -179,7 +179,7 @@ EXPECTED_CONTEXTS_JSON='{
   ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
+    "Check License Compatibility",
     "Formatting Check / Check Code Formatting",
     "ESLint / Run Linter",
     "TypeScript Check / Build Project",
@@ -188,7 +188,9 @@ EXPECTED_CONTEXTS_JSON='{
     "Check PR Size / Check PR Size",
     "Vitest Tests",
     "check-conflicts / Detect Git Conflict Markers",
-    "AI Instructions / Validate AI Instructions"
+    "AI Instructions / Validate AI Instructions",
+    "Strict CSP",
+    "Container Contract"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
