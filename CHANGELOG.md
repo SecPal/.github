@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-26 - Stop Requiring Up-To-Date Pull Request Branches
+
+**Changed:**
+
+- kept every configured required status check mandatory while changing the
+  organization-wide synchronization payload to stop requiring pull request
+  branches to absorb unrelated newer `main` commits before merge
+
+---
+
 ## 2026-08-26 - Restore Rocky Polyscope Container Previews
 
 **Fixed:**

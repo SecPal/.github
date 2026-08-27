@@ -27,7 +27,7 @@ assert_payload_has_context() {
   local payload="$1"
   local expected="$2"
 
-  if ! jq -e --arg expected "$expected" '.strict == true and (.checks | any(.context == $expected))' >/dev/null <<<"$payload"; then
+  if ! jq -e --arg expected "$expected" '.strict == false and (.checks | any(.context == $expected))' >/dev/null <<<"$payload"; then
     echo "Expected payload to require '$expected'" >&2
     echo "$payload" >&2
     exit 1
@@ -39,7 +39,7 @@ assert_payload_contexts_equal() {
   local expected="$2"
 
   if ! jq -e --argjson expected "$expected" '
-    .strict == true and
+    .strict == false and
     (.checks | length) == ($expected | length) and
     ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
     ($expected | length) == ($expected | unique | length) and
@@ -63,7 +63,7 @@ assert_review_payload_exact() {
 }
 
 duplicate_payload='{
-  "strict": true,
+  "strict": false,
   "checks": [
     {"context": "duplicate", "app_id": -1},
     {"context": "duplicate", "app_id": -1}

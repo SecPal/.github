@@ -164,7 +164,7 @@ build_payload() {
   jq -n \
     --arg repo "$repo" \
     --argjson config "$REQUIRED_CONTEXTS_JSON" \
-    '{strict: true, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
+    '{strict: false, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
 }
 
 build_review_payload() {
