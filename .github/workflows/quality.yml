@@ -107,6 +107,9 @@ jobs:
       - name: Run Polyscope advisory contract tests
         run: python3 -m unittest tests/polyscope-work-graph-advisory.py
 
+      - name: Run evidence-architecture governance tests
+        run: python3 tests/evidence-architecture-governance.py
+
   vulnerability-policy:
     name: Vulnerability Policy
     runs-on: ubuntu-latest
