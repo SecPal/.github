@@ -27,8 +27,7 @@ explicit:
 
 1. **Observation** performs side effects needed to read the external system. It
    may execute commands, read files, query APIs, or inspect runtime state. It
-   emits bounded typed observations and MUST NOT decide conformance merely while
-   collecting them.
+   emits bounded typed observations and MUST NOT decide conformance.
 2. **Representation normalization** converts reviewed external representations
    into canonical facts. It MUST be pure with respect to process execution,
    filesystem mutation/observation, clock, network, and other mutable external
@@ -155,14 +154,15 @@ The contract generalizes lessons already documented in `SecPal/deployment`:
 - deployment PRs #63, #66, #73, and #74 contain the associated Debian evidence
   and review history;
 - the Rocky replacement epic #117 retained those lessons but sequenced generic
-  layer/purity reapplication after semantic evidence and scoped #120-#122 to the
-  later #119 workload evidence path, leaving #118 host evidence able to recreate
-  the same structural problem;
-- Rocky PRs #145/#147 added diagnostics after broad real-run failures; #148 fixed
-  real Podman digest representation semantics; #149 then fixed the same semantic
-  invariant independently duplicated in the preparation collector; real run
-  `33021568439` subsequently failed again only at the broad
-  `evidence-collection` boundary.
+  layer/purity reapplication after semantic evidence and scoped #120, #121, and
+  #122 to the later #119 workload evidence path, leaving #118 host evidence able
+  to recreate the same structural problem;
+- Rocky PRs #145 and #146 successively exposed and repaired adjacent unbounded
+  preparation failures; #147 added more granular diagnostics after those broad
+  real-run failures; #148 fixed real Podman digest representation semantics;
+  #149 then fixed the same semantic invariant independently duplicated in the
+  preparation collector; real run `33021568439` subsequently failed again only
+  at the broad `evidence-collection` boundary.
 
 These historical references are evidence for why the organization-wide rule
 exists. They do not import Debian, Podman, Rocky, cloud-provider, or deployment

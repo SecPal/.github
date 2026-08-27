@@ -366,6 +366,15 @@ if [ -f tests/validate-copilot-instructions.sh ]; then
   }
 fi
 
+if [ -f tests/evidence-architecture-governance.py ]; then
+  python3 tests/evidence-architecture-governance.py || {
+    echo "" >&2
+    echo "❌ Evidence architecture governance regression test failed!" >&2
+    echo "Keep the canonical work-graph, evidence companion, and runtime baseline delegation connected." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/sync-required-checks.sh ]; then
   bash tests/sync-required-checks.sh || {
     echo "" >&2
