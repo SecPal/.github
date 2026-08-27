@@ -35,10 +35,13 @@ def validate_binding(work_graph: str, evidence: str, agents: str) -> None:
         "#64",
         "#66",
         "#67",
+        "#68",
         "#72",
         "#73",
         "#74",
         "#117",
+        "#118",
+        "#119",
         "#120",
         "#121",
         "#122",
@@ -47,6 +50,7 @@ def validate_binding(work_graph: str, evidence: str, agents: str) -> None:
         "#147",
         "#148",
         "#149",
+        "#150",
         "33021568439",
     ):
         if re.search(rf"(?<![0-9]){re.escape(reference)}(?![0-9])", evidence) is None:
@@ -78,6 +82,16 @@ class EvidenceArchitectureGovernanceTests(unittest.TestCase):
         mutated = self.evidence.replace("#64", "#640")
         with self.assertRaisesRegex(AssertionError, "retain #64"):
             validate_binding(self.work_graph, mutated, self.agents)
+
+    def test_current_rocky_correction_is_distinguished_from_history(self) -> None:
+        normalized_evidence = " ".join(self.evidence.split())
+        for statement in (
+            "current #117 now requires explicit observation, normalization, admission, and assembly ownership",
+            "current corrective prerequisite #150 blocks further #118 real-provider qualification",
+            "#120, #121, and #122 remain scoped to #119 workload evidence",
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, normalized_evidence)
 
 
 if __name__ == "__main__":

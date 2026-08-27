@@ -149,14 +149,22 @@ The contract generalizes lessons already documented in `SecPal/deployment`:
   tests, and documentation;
 - deployment epic #67 made one authoritative definition per semantic invariant
   a binding invariant;
+- deployment issue #68 owns the pure layer-boundary enforcement derived from
+  that design;
 - deployment issue #72 recorded that repository-authored fixtures cannot replace
   replay of reviewed real-system evidence;
 - deployment PRs #63, #66, #73, and #74 contain the associated Debian evidence
   and review history;
-- the Rocky replacement epic #117 retained those lessons but sequenced generic
-  layer/purity reapplication after semantic evidence and scoped #120, #121, and
-  #122 to the later #119 workload evidence path, leaving #118 host evidence able
-  to recreate the same structural problem;
+- the earlier Rocky rebaseline retained those historical lessons but allowed the
+  #118 host-evidence path to be implemented before equivalent structural
+  protection became binding. #120, #121, and #122 remain scoped to #119 workload
+  evidence, so that omission allowed #118 to recreate the already-known failure
+  class;
+- current #117 now requires explicit observation, normalization, admission, and
+  assembly ownership before further #118 real-provider qualification. The
+  current corrective prerequisite #150 blocks further #118 real-provider
+  qualification until the host evidence pipeline has enforceable layered
+  ownership;
 - Rocky PRs #145 and #146 successively exposed and repaired adjacent unbounded
   preparation failures; #147 added more granular diagnostics after those broad
   real-run failures; #148 fixed real Podman digest representation semantics;
