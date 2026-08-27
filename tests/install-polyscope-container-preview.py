@@ -212,6 +212,8 @@ def main() -> None:
         assert "refresh-polyscope-container-preview.sh" in refresh_unit
         assert "cleanup-polyscope-container-preview.py" in refresh_unit
         assert f"Environment=PATH={fake_bin}:/usr/bin" in refresh_unit
+        assert "StartLimitIntervalSec=0" in refresh_unit
+        assert "ExecStartPre=/usr/bin/sleep 2" in refresh_unit
         assert home.joinpath("custom-libexec/cleanup-polyscope-container-preview.py").is_file()
         assert "Restart=" not in refresh_unit
         backups = list((home / ".local/state/polyscope/backups").iterdir())
@@ -239,6 +241,10 @@ def main() -> None:
         assert "systemctl:--user restart polyscope-postgresql-proxy.service" in commands
         assert "systemctl:--user restart polyscope-preview.service" in commands
         assert "systemctl:--user enable --now polyscope-preview-refresh.path" in commands
+        assert (
+            "systemctl:--user reset-failed polyscope-preview-refresh.path "
+            "polyscope-preview-refresh.service"
+        ) in commands
 
         rejected = subprocess.run(
             ["bash", str(INSTALLER), "--image", "bad'image"],

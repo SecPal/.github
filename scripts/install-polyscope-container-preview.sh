@@ -216,12 +216,14 @@ cat >"$temporary_dir/polyscope-preview-refresh.service" <<EOF
 [Unit]
 Description=Refresh SecPal Polyscope workspace preview routes
 After=polyscope-preview.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 Environment=PATH=$PSQL_DIR:/usr/bin
+ExecStartPre=/usr/bin/sleep 2
 ExecStart=$LIBEXEC_DIR/refresh-polyscope-container-preview.sh $LIBEXEC_DIR/render-polyscope-container-caddy.py $LIBEXEC_DIR/cleanup-polyscope-container-preview.py $POLYSCOPE_DB_PATH $CLONE_ROOT $REPOSITORY_ROOT $CADDYFILE polyscope-preview.service
 TimeoutStartSec=21min
 UMask=0077
@@ -405,6 +407,7 @@ install_managed "$temporary_dir/polyscope-preview-refresh.service" "$refresh_uni
 install_managed "$temporary_dir/polyscope-preview-refresh.path" "$refresh_path_target" 0644
 
 systemctl --user daemon-reload
+systemctl --user reset-failed polyscope-preview-refresh.path polyscope-preview-refresh.service
 systemctl --user enable --now polyscope-postgresql-proxy.service
 systemctl --user enable --now polyscope-preview.service
 systemctl --user enable --now polyscope-preview-refresh.path
