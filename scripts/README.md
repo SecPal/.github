@@ -142,11 +142,18 @@ token independently, and flags tokens that fall outside the approved set
 of public/external hosts (`secpal.app`, `apk.secpal.app`, `secpal.io`),
 development/preview hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, the
 `preview.secpal.dev` base, plus arbitrary `*.preview.secpal.dev` previews), the
-identifier-only `app.secpal` Android ID and `io.secpal.*` reverse-DNS namespace,
+identifier-only `io.secpal.*` reverse-DNS namespace,
 and the exact private internal logical database service identity
 `db.secpal.internal`. It also surfaces
 `api.secpal.app`, the deprecated `.app` web host, so callers cannot reintroduce
 it as an active host.
+
+The `io.secpal.*` allowance applies only in explicit reverse-DNS identifier
+contexts such as an application ID, package, namespace, or bundle identifier.
+It does not approve those values as URLs or public hosts. The Android ID
+`app.secpal` remains a valid architecture value, but it is outside this
+scanner's intentionally `secpal.*`-seeded matcher and is not claimed as an
+enforced value here.
 
 `db.secpal.internal` is an approved logical PostgreSQL connection/TLS service
 identity, not a public web host or DNS-routing commitment. This exact allowance
@@ -333,7 +340,6 @@ and focused instruction overlays across all repositories.
    - Requires non-empty `name` and `applyTo` values
 
 6. **Discovery Size**
-
    - Ensures `AGENTS.md` stays below the 32 KiB runtime discovery ceiling
 
 The validator does not require textual equality, mirror declarations, copied

@@ -25,7 +25,7 @@ echo "their own repository policy guards and are intentionally not inspected her
 echo "Public hosts: secpal.app, apk.secpal.app, secpal.io"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
-echo "Identifier-only values: app.secpal (Android application ID), io.secpal.* (reverse-DNS namespace)"
+echo "Identifier-only values in this scanner's secpal.* scope: io.secpal.* (reverse-DNS namespace)"
 echo "Deprecated web hosts: api.secpal.app"
 echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net,"
 echo "  secpal.example, app.secpal.app, every other secpal.internal name, and any"
@@ -126,7 +126,8 @@ done <<< "$matches"
 # Public/external: secpal.app, apk.secpal.app, and secpal.io.
 # Development/preview: secpal.dev, api.secpal.dev, app.secpal.dev, the
 # preview.secpal.dev base, and arbitrary *.preview.secpal.dev identities.
-# Identifier-only: app.secpal and the io.secpal.* reverse-DNS namespace.
+# Identifier-only: the io.secpal.* reverse-DNS namespace. Because this scanner
+# seeds only secpal.* tokens, the app.secpal Android ID is outside its matcher.
 # Private internal: db.secpal.internal exactly. api.secpal.app is temporarily
 # tolerated here because it is reported separately as a deprecated web host.
 # This catches unknown values that a denylist-only check would miss, and ensures
@@ -140,7 +141,18 @@ while IFS= read -r matched_line; do
 
     while IFS= read -r token; do
         case "$token" in
-            secpal.app | apk.secpal.app | secpal.io | secpal.dev | api.secpal.dev | app.secpal.dev | preview.secpal.dev | db.secpal.internal | *.preview.secpal.dev | io.secpal.* | api.secpal.app)
+            io.secpal.*)
+                # The organization owns secpal.io, so io.secpal.* is valid as
+                # a reverse-DNS identifier namespace. It is not a wildcard
+                # public-host allowance. Require an explicit identifier
+                # context and reject URL syntax even if the surrounding prose
+                # also contains an identifier keyword.
+                if printf '%s\n' "$source_text" | grep -Eq '(^|[^[:alnum:]])(https?|wss?)://[^[:space:]]*io\.secpal\.' \
+                    || ! printf '%s\n' "$source_text" | grep -Eqi '(^|[^[:alnum:]])(application[ _-]?id|applicationId|package([ _-]?(name|id))?|namespace|bundle[ _-]?(id|identifier)|reverse-DNS|identifier-only)([^[:alnum:]]|$)'; then
+                    violations+="${source_path}:${source_line}:${token}"$'\n'
+                fi
+                ;;
+            secpal.app | apk.secpal.app | secpal.io | secpal.dev | api.secpal.dev | app.secpal.dev | preview.secpal.dev | db.secpal.internal | *.preview.secpal.dev | api.secpal.app)
                 ;;
             *)
                 violations+="${source_path}:${source_line}:${token}"$'\n'
@@ -203,7 +215,7 @@ else
     echo "  - Public hosts: secpal.app (homepage/real email), apk.secpal.app (Android downloads), secpal.io"
     echo "  - Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and *.preview.secpal.dev identities"
     echo "  - Private internal service identity: db.secpal.internal (exact only; not a public host)"
-    echo "  - Identifier-only values: app.secpal (Android application ID), io.secpal.* (reverse-DNS namespace)"
+    echo "  - Identifier-only values in this scanner's secpal.* scope: io.secpal.* (reverse-DNS namespace)"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
     echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."

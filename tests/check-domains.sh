@@ -57,6 +57,7 @@ bad_direct_development="foo.${domain_namespace}.dev"
 approved_public_io="${domain_namespace}.io"
 approved_reverse_identifier="io.${domain_namespace}.polyscope.preview"
 bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
+reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -277,6 +278,11 @@ assert_domain_policy_case \
   reject \
   "$bad_reverse_identifier" \
   "Bad identifier: $bad_reverse_identifier"
+assert_domain_policy_case \
+  "a reverse-DNS identifier used as a public URL" \
+  reject \
+  "$reverse_identifier_as_host" \
+  "Bad public host: https://$reverse_identifier_as_host"
 
 rm "$workspace/domain-policy-case.md"
 
