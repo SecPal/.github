@@ -22,12 +22,12 @@ echo -e "${BLUE}=== Domain Policy Check ===${NC}"
 echo "Scope: enforces the secpal.* namespace split only (match regex: secpal\\.[A-Za-z0-9.-]+)."
 echo "Out of scope: non-secpal SecPal-owned hosts such as guardguide.de are governed by"
 echo "their own repository policy guards and are intentionally not inspected here."
-echo "Public hosts: secpal.app, apk.secpal.app"
+echo "Public hosts: secpal.app, apk.secpal.app, secpal.io"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
-echo "Identifier-only values: app.secpal (Android application ID)"
+echo "Identifier-only values: app.secpal (Android application ID), io.secpal.* (reverse-DNS namespace)"
 echo "Deprecated web hosts: api.secpal.app"
-echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net, secpal.io,"
+echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net,"
 echo "  secpal.example, app.secpal.app, every other secpal.internal name, and any"
 echo "  other unapproved secpal.* value."
 echo ""
@@ -123,9 +123,10 @@ while IFS= read -r matched_line; do
 done <<< "$matches"
 
 # Allowlist approach: classify every matched secpal.* token independently.
-# Public/external: secpal.app and apk.secpal.app. Development/preview: secpal.dev,
-# api.secpal.dev, app.secpal.dev, the preview.secpal.dev base, and arbitrary
-# *.preview.secpal.dev identities.
+# Public/external: secpal.app, apk.secpal.app, and secpal.io.
+# Development/preview: secpal.dev, api.secpal.dev, app.secpal.dev, the
+# preview.secpal.dev base, and arbitrary *.preview.secpal.dev identities.
+# Identifier-only: app.secpal and the io.secpal.* reverse-DNS namespace.
 # Private internal: db.secpal.internal exactly. api.secpal.app is temporarily
 # tolerated here because it is reported separately as a deprecated web host.
 # This catches unknown values that a denylist-only check would miss, and ensures
@@ -139,7 +140,7 @@ while IFS= read -r matched_line; do
 
     while IFS= read -r token; do
         case "$token" in
-            secpal.app | apk.secpal.app | secpal.dev | api.secpal.dev | app.secpal.dev | preview.secpal.dev | db.secpal.internal | *.preview.secpal.dev | api.secpal.app)
+            secpal.app | apk.secpal.app | secpal.io | secpal.dev | api.secpal.dev | app.secpal.dev | preview.secpal.dev | db.secpal.internal | *.preview.secpal.dev | io.secpal.* | api.secpal.app)
                 ;;
             *)
                 violations+="${source_path}:${source_line}:${token}"$'\n'
@@ -199,10 +200,10 @@ else
         echo ""
     fi
     echo -e "${YELLOW}Policy (scope: secpal.* namespace split only):${NC}"
-    echo "  - Public hosts: secpal.app (homepage/real email), apk.secpal.app (Android downloads)"
+    echo "  - Public hosts: secpal.app (homepage/real email), apk.secpal.app (Android downloads), secpal.io"
     echo "  - Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and *.preview.secpal.dev identities"
     echo "  - Private internal service identity: db.secpal.internal (exact only; not a public host)"
-    echo "  - Identifier-only value: app.secpal (Android application ID)"
+    echo "  - Identifier-only values: app.secpal (Android application ID), io.secpal.* (reverse-DNS namespace)"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
     echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."

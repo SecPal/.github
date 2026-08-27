@@ -139,10 +139,12 @@ Enforces the SecPal `secpal.*` namespace by classification. The script greps tex
 in the working tree (via `grep -r --include=...`, so untracked files matching
 the include patterns are inspected too), extracts each matching hostname-like
 token independently, and flags tokens that fall outside the approved set
-of public/external hosts (`secpal.app`, `apk.secpal.app`), development/preview
-hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, the
-`preview.secpal.dev` base, plus arbitrary `*.preview.secpal.dev` previews), and the exact private internal logical
-database service identity `db.secpal.internal`. It also surfaces
+of public/external hosts (`secpal.app`, `apk.secpal.app`, `secpal.io`),
+development/preview hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, the
+`preview.secpal.dev` base, plus arbitrary `*.preview.secpal.dev` previews), the
+identifier-only `app.secpal` Android ID and `io.secpal.*` reverse-DNS namespace,
+and the exact private internal logical database service identity
+`db.secpal.internal`. It also surfaces
 `api.secpal.app`, the deprecated `.app` web host, so callers cannot reintroduce
 it as an active host.
 
