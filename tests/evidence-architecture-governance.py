@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -30,9 +31,13 @@ def validate_binding(work_graph: str, evidence: str, agents: str) -> None:
         if path not in agents:
             raise AssertionError(f"the root runtime baseline must reference {path}")
     for reference in (
+        "#63",
         "#64",
+        "#66",
         "#67",
         "#72",
+        "#73",
+        "#74",
         "#117",
         "#120",
         "#121",
@@ -44,7 +49,7 @@ def validate_binding(work_graph: str, evidence: str, agents: str) -> None:
         "#149",
         "33021568439",
     ):
-        if reference not in evidence:
+        if re.search(rf"(?<![0-9]){re.escape(reference)}(?![0-9])", evidence) is None:
             raise AssertionError(
                 f"the historical source record must retain {reference}"
             )
@@ -68,6 +73,11 @@ class EvidenceArchitectureGovernanceTests(unittest.TestCase):
         mutated = self.agents.replace(EVIDENCE_PATH, "")
         with self.assertRaisesRegex(AssertionError, "root runtime baseline"):
             validate_binding(self.work_graph, self.evidence, mutated)
+
+    def test_renumbered_historical_reference_is_rejected(self) -> None:
+        mutated = self.evidence.replace("#64", "#640")
+        with self.assertRaisesRegex(AssertionError, "retain #64"):
+            validate_binding(self.work_graph, mutated, self.agents)
 
 
 if __name__ == "__main__":

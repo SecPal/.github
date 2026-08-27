@@ -143,6 +143,12 @@ DELEGATION_RELATION = re.compile(
     r"|\bauthoritative\b",
     re.IGNORECASE,
 )
+NEGATED_DELEGATION_RELATION = re.compile(
+    r"\b(?:do|does|did|must|should|shall|may|can|will)\s+not"
+    r"(?:\s+\w+){0,3}\s+delegat(?:e|es|ed|ing)\b"
+    r"|\bnever(?:\s+\w+){0,3}\s+delegat(?:e|es|ed|ing)\b",
+    re.IGNORECASE,
+)
 
 
 def units(text):
@@ -172,6 +178,8 @@ def semantic_units(text):
 
 
 def delegates(unit, context):
+    if NEGATED_DELEGATION_RELATION.search(unit):
+        return False
     candidate = (
         f"{context}\n{unit}"
         .replace(WORK_GRAPH, "")
@@ -234,6 +242,12 @@ DELEGATION_RELATION = re.compile(
     r"|\bauthoritative\b",
     re.IGNORECASE,
 )
+NEGATED_DELEGATION_RELATION = re.compile(
+    r"\b(?:do|does|did|must|should|shall|may|can|will)\s+not"
+    r"(?:\s+\w+){0,3}\s+delegat(?:e|es|ed|ing)\b"
+    r"|\bnever(?:\s+\w+){0,3}\s+delegat(?:e|es|ed|ing)\b",
+    re.IGNORECASE,
+)
 text = sys.argv[1]
 require_evidence_architecture = sys.argv[2] == "true"
 
@@ -268,6 +282,8 @@ def semantic_units(blocks):
 
 
 def delegates(unit, context):
+    if NEGATED_DELEGATION_RELATION.search(unit):
+        return False
     candidate = (
         f"{context}\n{unit}"
         .replace(WORK_GRAPH, "")
@@ -344,6 +360,12 @@ assert_agents_work_graph_invariants true <"$REPO_ROOT/AGENTS.md" \
 if sed '/docs\/evidence-architecture-contract\.md/d' "$REPO_ROOT/AGENTS.md" \
   | assert_agents_work_graph_invariants true; then
   fail 'AGENTS.md accepted a missing evidence-architecture delegation'
+fi
+if printf '%s\n' \
+  '- Follow docs/work-graph-contract.md for work-graph semantics.' \
+  '- Do not delegate evidence architecture semantics to docs/evidence-architecture-contract.md.' \
+  | assert_agents_work_graph_invariants true; then
+  fail 'AGENTS.md accepted a negated evidence-architecture delegation'
 fi
 assert_agents_work_graph_invariants <"$POLYSCOPE_TEMPLATE" \
   || fail 'managed Polyscope instructions no longer delegate work-graph semantics to the contract'
