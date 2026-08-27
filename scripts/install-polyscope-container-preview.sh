@@ -83,7 +83,7 @@ if [[ ! -d "$REPOSITORY_ROOT" ]]; then
     exit 1
 fi
 
-for command_name in podman python3 systemctl psql; do
+for command_name in cmp podman python3 systemctl psql; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "Error: required command is unavailable: $command_name" >&2
         exit 1
