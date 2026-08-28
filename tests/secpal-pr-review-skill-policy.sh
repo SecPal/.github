@@ -872,6 +872,20 @@ expected = [
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
 
+governance = next(
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/.github"
+)
+assert [
+    command["argv"] for command in governance["focused_validation"]
+] == [
+    ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["./tests/secpal-pr-review-skill-policy.sh"],
+    ["./tests/secpal-pr-review-skill-integration.sh"],
+], "SecPal/.github must register lifecycle-authority regressions unconditionally"
+
 frontend_entries = [
     item for item in registry["repositories"]
     if item["repository"] == "SecPal/frontend"

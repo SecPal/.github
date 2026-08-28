@@ -68,12 +68,61 @@ The workflow has six narrow parts:
    verifier used only by explicitly selected forensic/audit snapshot mode; and
 6. the workflow-only repository registry, current mutation-plan schema, exact
    legacy mutation-plan v1.0 schema, and fast-path batch schema under the
-   skill's `references/` directory.
+   skill's `references/` directory; and
+7. `scripts/secpal_pr_review/lifecycle_authority.py`, the separately adoptable
+   persistent lifecycle-authority primitive and independent verifier.
 
 The action helper validates persisted mutation plans against their original
 versioned shape. Version 1.0 retains legacy findings without `follow_up` and
 cannot authorize `TRACKED_AS_FOLLOW_UP`; version 1.1 is required for tracked
 follow-up identity. Mixed and unknown versions fail closed.
+
+## Persistent lifecycle authority
+
+Lifecycle-authority schema 1.0 is an append-only chain rooted in exactly one
+authenticated delivery initialization and its canonical `INITIALIZED_DRAFT`
+event. The initialization binds the ordinary validation receipt and final
+attestation to the repository, issue, initial PR, and exact initial head. Its
+maintained anchor digest derives both the persistent lifecycle identity and
+canonical genesis event identity. Each non-genesis snapshot binds the
+exact predecessor authority digest and head, one independently signed typed
+event, the persistent repository/issue/lifecycle/PR identity, and the derived
+next state. The closed state records finite review and remediation counters,
+explicit Cycle-3 absence, Draft/Ready state and transition history, and bounded
+exceptional recovery and continuation history. Head advancement and authorized
+PR rebinding preserve every lifecycle fact.
+
+The installed repository registry is the lifecycle trust-policy source. It
+separately assigns transition and authority signer roles, accepted signature
+formats, SSH public keys, OpenPGP fingerprints, and unique initialization
+anchors, with at most one initialization root per delivery issue. For every
+enrolled issue the policy also selects the exact current terminal authority
+digest, current PR, and current head. The public verifier does not accept
+consumer signer sets, verification callbacks, or current-tip selectors: it
+loads this maintained policy and invokes concrete `ssh-keygen` or GnuPG
+detached-signature verification. Signer assertions inside evidence are never
+sufficient.
+
+The public verifier accepts only a canonical serialized evidence bundle. It
+rejects duplicate and unknown fields, non-finite JSON, noncanonical encodings,
+and caller-preparsed mappings before recomputing every state from genesis. Git
+object identities are exactly 40-hex SHA-1 or 64-hex SHA-256 values. A verified
+binding exposes the authority and initialization digests, persistent lifecycle
+identity, exact head, and normalized history digests for later consumers.
+The empty anchor list is the intentional fail-closed pre-adoption state. Once
+enrolled, same-head transitions advance the maintained terminal digest, stale
+prefixes fail, and replacement PRs retain the original root through
+`PR_REBOUND` rather than creating another genesis.
+
+This primitive does not observe GitHub, mutate Ready/Draft state, process review
+events, replace pull requests, or orchestrate recovery. Existing ordinary
+one-parent delivery evidence remains valid and no consumer is automatically
+migrated. Adoption by #745 and full lifecycle orchestration under #692 are
+separate work.
+
+The complete registered validation graph explicitly runs the lifecycle-
+authority unit suite; its security regressions are not left to a manual focused
+invocation.
 
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default

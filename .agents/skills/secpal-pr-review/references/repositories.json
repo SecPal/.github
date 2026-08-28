@@ -55,6 +55,11 @@
           "purpose": "Run guarded-action unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run persistent lifecycle-authority unit tests"
+        },
+        {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
           "working_directory": ".",
           "purpose": "Run finite skill policy tests"
@@ -101,6 +106,22 @@
         "require_github_verified": true,
         "require_local_verified": true,
         "accepted_formats": ["ssh", "openpgp"]
+      },
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh", "openpgp"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "delivery_initializations": []
       },
       "check_policy": {
         "require_ruleset_evidence": true,

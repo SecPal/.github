@@ -232,6 +232,52 @@ in that pre-existing commit and fails closed before any GitHub read.
 worktree state, PR identity, and resolution results. The workflow never merges;
 merge remains separately authorized by the current user instruction.
 
+## Persistent lifecycle-authority boundary
+
+`scripts/secpal_pr_review/lifecycle_authority.py` owns the independently
+authenticated lifecycle primitive, not this feedback-processing state machine.
+Its version-1 authority is a closed, signed, append-only predecessor chain. The
+maintained repository registry owns distinct transition- and authority-signer
+roles, exact SSH public keys and OpenPGP fingerprints, accepted formats, and
+one delivery-initialization anchor per issue. Each enrolled anchor also records
+the exact current terminal authority digest, PR, and head in the installed
+maintained policy. The public verifier loads that policy itself; consumers
+cannot supply signer sets, signature callbacks, or a current-tip selector.
+
+One typed initialization binds the ordinary validation receipt and final
+attestation to the repository, issue, initial PR, and exact initial head. Its
+maintained anchor digest deterministically derives the persistent lifecycle ID
+and canonical genesis event identity. Genesis establishes Draft state with
+review/remediation at zero, no Ready or exceptional history, and explicit
+Cycle-3 absence. Every later authority preserves the initialization digest,
+verifies its predecessor and separately signed typed event, then derives
+counters and history without accepting a caller-supplied result.
+
+The maintained verifier accepts only one canonical serialized evidence bundle.
+Its mandatory duplicate-aware parser rejects duplicate or unknown fields,
+non-finite JSON, noncanonical encodings, and malformed evidence before internal
+normalization. It authenticates the complete chain, accepted event and authority
+signers, repository, delivery issue, lifecycle, PR, exact 40- or 64-hex Git
+heads, finite counters, Ready/Draft history, and exceptional
+recovery/continuation history.
+Head advancement, exceptional events, and authorized PR rebinding retain the
+persistent lifecycle and cannot reset counters. Its normalized binding is
+available to future consumers, but ordinary delivery evidence does not require
+it until a consumer explicitly adopts it.
+
+An empty initialization set is the valid fail-closed pre-adoption state. Once a
+delivery issue is enrolled, the registry permits exactly one initialization
+root for that issue; replacement PRs continue it through `PR_REBOUND`. The
+maintained current-terminal selector changes as authorized transitions are
+adopted, including same-head transitions. Verification rejects a valid stale
+prefix unless its final authority digest, current PR, and current head all match
+that independently installed selector. Evidence and consumer expectations
+cannot nominate their own current terminal authority.
+
+This boundary performs no review-event loop, late-feedback processing, Ready or
+Draft mutation, replacement orchestration, merge automation, or other lifecycle
+orchestration. Those responsibilities remain outside this primitive.
+
 ## Explicit CI and readiness path
 
 This separate path exists only when the current user instruction explicitly

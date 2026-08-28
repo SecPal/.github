@@ -9,6 +9,32 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-28 - Authenticate Persistent Delivery Lifecycle Authority
+
+**Added:**
+
+- a closed, versioned, signed lifecycle-authority chain that derives finite
+  review, remediation, Ready/Draft, exceptional recovery/continuation, head,
+  and pull-request continuity facts from authenticated predecessor and event
+  evidence
+- an independent verifier and stable downstream binding that reject consumer
+  self-assertion while leaving ordinary delivery evidence unchanged until
+  explicit adoption
+- maintained registry trust anchors, concrete SSH/OpenPGP detached-signature
+  verification, deterministic delivery initialization, mandatory canonical raw
+  evidence parsing, and exact SHA-1/SHA-256 Git object identity validation
+
+**Fixed:**
+
+- require the installed maintained policy to select the exact current terminal
+  lifecycle authority, reject same-head stale prefixes, and permit only one
+  initialization root per delivery issue across replacement PRs
+- reject malformed non-string transition kinds through the lifecycle-domain
+  exception boundary and run lifecycle-authority regressions in every complete
+  registered validation
+
+---
+
 ## 2026-08-28 - Clarify Public Provider And Managed Operations Ownership
 
 **Changed:**
