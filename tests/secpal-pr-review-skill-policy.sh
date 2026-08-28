@@ -876,6 +876,18 @@ governance = next(
     item for item in registry["repositories"]
     if item["repository"] == "SecPal/.github"
 )
+publication_policy = governance["lifecycle_authority_policy"]
+assert publication_policy["publication_branch"] == (
+    "refs/heads/secpal-lifecycle-publications"
+)
+assert publication_policy["publication_ruleset_id"] == 21769814
+assert publication_policy["publication_required_rules"] == [
+    "deletion", "non_fast_forward"
+]
+assert publication_policy["legacy_adoption_signer_identities"]
+assert set(publication_policy["legacy_adoption_signer_identities"]) <= {
+    signer["identity"] for signer in publication_policy["signers"]
+}
 assert [
     command["argv"] for command in governance["focused_validation"]
 ] == [

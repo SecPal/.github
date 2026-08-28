@@ -127,25 +127,28 @@ The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 
-Enrolls an existing, fully verified lifecycle chain and publishes its current
-terminal independently of a delivery tree. Static policy supplies a distinct
-publication-signer role, a deterministic ref namespace, and the maintained
-publication remote. Dynamic state is a signed canonical document in an
-immutable one-file Git commit selected by a dedicated remote ref; successor
-commits bind the prior publication as their sole parent. Writers observe the
-ref once and advance it with exact
-`--force-with-lease` compare-and-swap. Readers fetch the configured ref once,
-then authenticate only immutable object identities.
+Publishes lifecycle authority on one protected, append-only global journal
+branch outside delivery trees. Native enrollment requires the maintained #750
+root and full authenticated history. A genuinely pre-#750 lifecycle instead
+uses exactly one dedicated-role-signed `LEGACY_ADOPTION_CHECKPOINT`, explicitly
+marking its imported baseline as a migration trust decision rather than
+retroactively invented proof. Every successor after either root uses normal
+issue #750 transition derivation.
 
-The public reader accepts repository/issue expectations but no repository
-path, remote, ref, signer set, key, verifier callback, or caller-selected
-terminal digest. Enrollment verifies the complete #750 initialization/event/
-authority chain before publication. Advancement permits only one exact verified
-non-genesis #750 successor, including `HEAD_ADVANCED`, `PR_REBOUND`, and
-`EXCEPTIONAL_CONTINUATION`, so a stale publication or lifecycle prefix cannot
-nominate itself as current. Empty
-publication namespaces remain valid before adoption. The publication suite is
-an unconditional registered validation command.
+Static policy fixes the GitHub remote, exact
+`refs/heads/secpal-lifecycle-publications` branch, live ruleset ID, deletion and
+non-fast-forward prohibitions, publication signer role, and migration signer
+role. The verifier authenticates that protection, resolves the branch once, and
+uses immutable ancestry to select the newest event for each lifecycle. Lease
+CAS prevents concurrent writer races; live branch protection independently
+prevents rollback and deletion.
+
+All transport uses a controlled temporary bare repository and closed Git
+environment. The public reader accepts repository/issue expectations but no
+repository path, remote, branch, signer set, key, verifier callback, migration
+checkpoint, or caller-selected terminal digest. Empty journals remain valid
+before adoption. The publication suite is an unconditional registered
+validation command.
 
 ## Work Graph
 

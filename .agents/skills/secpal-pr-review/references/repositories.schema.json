@@ -163,8 +163,11 @@
         "transition_signer_identities",
         "authority_signer_identities",
         "publication_signer_identities",
-        "publication_ref_namespace",
+        "legacy_adoption_signer_identities",
+        "publication_branch",
         "publication_remote_url",
+        "publication_ruleset_id",
+        "publication_required_rules",
         "delivery_initializations"
       ],
       "properties": {
@@ -215,13 +218,26 @@
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
-        "publication_ref_namespace": {
+        "legacy_adoption_signer_identities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "publication_branch": {
           "type": "string",
-          "pattern": "^refs/[A-Za-z0-9._/-]+$"
+          "const": "refs/heads/secpal-lifecycle-publications"
         },
         "publication_remote_url": {
           "type": "string",
           "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\.git$"
+        },
+        "publication_ruleset_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "publication_required_rules": {
+          "const": ["deletion", "non_fast_forward"]
         },
         "delivery_initializations": {
           "type": "array",

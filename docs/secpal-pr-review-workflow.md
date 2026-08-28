@@ -126,25 +126,29 @@ invocation.
 
 ## Lifecycle enrollment and current publication
 
-Existing lifecycles adopt the authority model through a separate publication
-boundary. The maintained registry contains only static trust: publication
-signers, namespace rules, and the publication remote. It never contains a
-candidate head, terminal digest, or current publication object. Dynamic state
-is a signed canonical document in an immutable one-file Git commit outside the
-delivery tree, selected by one dedicated remote ref and advanced with exact
-compare-and-swap.
+The publication boundary distinguishes native and legacy adoption. A
+`NATIVE_LIFECYCLE` has a maintained #750 root and complete authenticated history
+from inception. A genuinely older delivery may use one explicitly authorized,
+dedicated-role-signed `LEGACY_ADOPTION_CHECKPOINT`. The checkpoint openly makes
+the migration authority the trust root for the imported finite baseline; it
+does not relabel unavailable old evidence as cryptographically reconstructed.
+Every post-checkpoint change is an ordinary #750 successor, and another legacy
+checkpoint or baseline reset is forbidden.
 
-An enrollment publication embeds the complete independently verified #750
-history, including its initialization evidence. A terminal advancement binds
-its predecessor publication and accepts only one exact verified non-genesis
-the #750 successor, including `HEAD_ADVANCED`, `PR_REBOUND`, and
-`EXCEPTIONAL_CONTINUATION`. Its Git
-commit binds the prior publication as its sole parent. The current verifier
-observes the configured remote ref once, binds the resulting OID, and checks
-the immutable parent chain. Consumer expectations are only
-post-verification constraints; callers cannot supply the remote, ref, trust,
-or terminal selector. This prevents candidate-tree self-reference, stale-tip
-replay, cross-delivery substitution, and ambiguous concurrent publication.
+The maintained registry contains only static trust: publication and migration
+signer roles, the exact GitHub endpoint, publication branch, and live ruleset
+identity and required protections. It never contains a candidate head,
+terminal digest, or current publication object. Dynamic events form one signed
+linear journal on `refs/heads/secpal-lifecycle-publications` outside delivery
+trees. The live ruleset prohibits deletion and non-fast-forward updates without
+bypass; lease-based CAS separately rejects stale cooperative writers.
+
+The verifier authenticates that protection, observes the branch tip once, and
+checks immutable ancestry. The newest valid event for each lifecycle is
+CURRENT. Consumer expectations are post-verification constraints; callers
+cannot supply the remote, branch, trust, migration checkpoint, or terminal
+selector. Publication Git operations use a controlled bare repository and
+closed environment, preventing ambient URL rewrites and transport overrides.
 
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
