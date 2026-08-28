@@ -278,6 +278,35 @@ This boundary performs no review-event loop, late-feedback processing, Ready or
 Draft mutation, replacement orchestration, merge automation, or other lifecycle
 orchestration. Those responsibilities remain outside this primitive.
 
+## Lifecycle-publication boundary
+
+`scripts/secpal_pr_review/lifecycle_publication.py` installs existing lifecycle
+history into the authority model without minting a new genesis or accepting a
+caller snapshot. It first verifies the complete #750 initialization, transition,
+and authority chains, then publishes the verified terminal in a signed,
+domain-separated immutable one-file Git commit outside the delivery source tree.
+
+The installed repository policy—not a consumer—selects the publication remote,
+ref namespace, signer role, and credentials. The current ref is fetched exactly
+once at the observation boundary. All subsequent checks use its immutable OID;
+each successor document and Git parent bind the canonical predecessor. Exact
+compare-and-swap advancement makes one concurrent successor current and leaves
+failed successors unreferenced. Current verification accepts no caller path,
+remote, ref, key, verifier, or terminal digest as authority.
+
+The closed mutation vocabulary is `ENROLL_EXISTING_LIFECYCLE` and
+`ADVANCE_CURRENT_TERMINAL`. Advancement requires one exact verified non-genesis
+the #750 successor, including `HEAD_ADVANCED`, `PR_REBOUND`, and
+`EXCEPTIONAL_CONTINUATION`. Identity, root, counters, Ready history, recovery
+history, and continuation history come
+from #750 derivation and cannot reset. Missing enrollment, stale publications,
+unknown documents, duplicate fields, wrong signers, cross-identity replay, and
+predecessor/CAS drift fail closed. Zero enrollment remains the valid
+pre-adoption state.
+
+This boundary publishes authority; it does not derive lifecycle semantics,
+implement two-parent integration, or orchestrate the full finite workflow.
+
 ## Explicit CI and readiness path
 
 This separate path exists only when the current user instruction explicitly

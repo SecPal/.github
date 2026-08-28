@@ -60,6 +60,11 @@
           "purpose": "Run persistent lifecycle-authority unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run lifecycle enrollment and current-terminal publication tests"
+        },
+        {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
           "working_directory": ".",
           "purpose": "Run finite skill policy tests"
@@ -121,6 +126,9 @@
         ],
         "transition_signer_identities": ["aroviqen@secpal.app"],
         "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "publication_ref_namespace": "refs/secpal/lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/.github.git",
         "delivery_initializations": []
       },
       "check_policy": {

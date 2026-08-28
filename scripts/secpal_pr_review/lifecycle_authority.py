@@ -143,6 +143,9 @@ class LifecycleTrustPolicy:
     authority_signer_identities: frozenset[str]
     signers: Mapping[str, TrustedSigner]
     initialization_anchors: tuple[InitializationAnchor, ...]
+    publication_signer_identities: frozenset[str] = frozenset()
+    publication_ref_namespace: str = "refs/secpal/lifecycle-publications"
+    publication_remote_url: str = ""
 
 
 EVENT_FIELDS = frozenset(
@@ -425,6 +428,7 @@ def _verify_delivery_initialization(
     *,
     policy: LifecycleTrustPolicy,
     signature_verifier: SignatureVerifier,
+    require_maintained_anchor: bool = True,
 ) -> dict[str, Any]:
     initialization = _require_closed(
         value, INITIALIZATION_FIELDS, "delivery initialization"
@@ -463,19 +467,20 @@ def _verify_delivery_initialization(
         policy.transition_signer_identities,
         signature_verifier,
     )
-    matching = [
-        anchor
-        for anchor in policy.initialization_anchors
-        if (
-            anchor.delivery_issue == issue
-            and anchor.pull_request == pull_request
-            and anchor.initial_head_sha == head
-        )
-    ]
-    if len(matching) != 1 or matching[0].initialization_digest != digest:
-        raise LifecycleAuthorityError(
-            "delivery initialization is not the unique maintained trust anchor"
-        )
+    if require_maintained_anchor:
+        matching = [
+            anchor
+            for anchor in policy.initialization_anchors
+            if (
+                anchor.delivery_issue == issue
+                and anchor.pull_request == pull_request
+                and anchor.initial_head_sha == head
+            )
+        ]
+        if len(matching) != 1 or matching[0].initialization_digest != digest:
+            raise LifecycleAuthorityError(
+                "delivery initialization is not the unique maintained trust anchor"
+            )
     return copy.deepcopy(initialization)
 
 
@@ -506,6 +511,9 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "signers",
             "transition_signer_identities",
             "authority_signer_identities",
+            "publication_signer_identities",
+            "publication_ref_namespace",
+            "publication_remote_url",
             "delivery_initializations",
         }
     )
@@ -609,6 +617,24 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 current_authority,
             )
         )
+    publication_namespace = policy["publication_ref_namespace"]
+    if (
+        not isinstance(publication_namespace, str)
+        or not re.fullmatch(r"refs/[A-Za-z0-9._/-]+", publication_namespace)
+        or publication_namespace.endswith("/")
+        or ".." in publication_namespace
+        or "//" in publication_namespace
+    ):
+        raise LifecycleAuthorityError("lifecycle publication namespace is invalid")
+    publication_remote = policy["publication_remote_url"]
+    if (
+        not isinstance(publication_remote, str)
+        or not re.fullmatch(
+            r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git",
+            publication_remote,
+        )
+    ):
+        raise LifecycleAuthorityError("lifecycle publication remote is invalid")
     return LifecycleTrustPolicy(
         repository=repository,
         accepted_formats=frozenset(formats),
@@ -616,6 +642,11 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "transition_signer_identities"
         ),
         authority_signer_identities=role_identities("authority_signer_identities"),
+        publication_signer_identities=role_identities(
+            "publication_signer_identities"
+        ),
+        publication_ref_namespace=publication_namespace,
+        publication_remote_url=publication_remote,
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
@@ -1357,6 +1388,74 @@ def serialize_lifecycle_evidence(
             "authority_chain": copy.deepcopy(list(authority_chain)),
         }
     )
+
+
+def verify_lifecycle_authority_for_publication(
+    serialized_evidence: bytes | str,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify a complete signed chain before an external publication selects it.
+
+    This boundary loads all signer trust from the maintained registry and
+    requires typed genesis plus the complete predecessor chain.  It deliberately
+    does not consult the source-tree initialization/current-tip selector: the
+    separately authenticated publication journal owns that selection for
+    post-adoption lifecycles.
+    """
+
+    if not isinstance(serialized_evidence, (bytes, str)):
+        raise LifecycleAuthorityError(
+            "publication enrollment requires canonical serialized lifecycle evidence"
+        )
+    bundle = _require_closed(
+        _load_canonical_json(serialized_evidence, "lifecycle evidence"),
+        BUNDLE_FIELDS,
+        "lifecycle evidence",
+    )
+    if bundle["schema_version"] != SCHEMA_VERSION:
+        raise LifecycleAuthorityError("unknown lifecycle-evidence version")
+    if bundle["kind"] != BUNDLE_KIND or bundle["domain"] != BUNDLE_DOMAIN:
+        raise LifecycleAuthorityError("unknown lifecycle-evidence kind or domain")
+    initialization_value = bundle["delivery_initialization"]
+    if not isinstance(initialization_value, dict):
+        raise LifecycleAuthorityError("delivery initialization is malformed")
+    repository = _require_repository(initialization_value.get("repository"))
+    policy = _load_lifecycle_trust_policy(repository)
+    signature_verifier = _policy_signature_verifier(policy)
+    initialization = _verify_delivery_initialization(
+        initialization_value,
+        policy=policy,
+        signature_verifier=signature_verifier,
+        require_maintained_anchor=False,
+    )
+    authorities = bundle["authority_chain"]
+    events = bundle["transition_authorizations"]
+    if not isinstance(authorities, list) or not isinstance(events, list):
+        raise LifecycleAuthorityError("complete lifecycle evidence chains are required")
+    result = _verify_lifecycle_authority_objects(
+        authorities,
+        events,
+        accepted_event_signers=policy.transition_signer_identities,
+        accepted_authority_signers=policy.authority_signer_identities,
+        signature_verifier=signature_verifier,
+        expected=expected,
+    )
+    first_event = events[0]
+    first_authority = authorities[0]
+    digest = initialization["initialization_digest"]
+    if (
+        first_event["initialization_evidence_digest"] != digest
+        or first_authority["initialization_evidence_digest"] != digest
+        or first_event["repository"] != initialization["repository"]
+        or first_event["delivery_issue"] != initialization["delivery_issue"]
+        or first_event["pull_request"] != initialization["pull_request"]
+        or first_event["resulting_head_sha"] != initialization["initial_head_sha"]
+        or result.lifecycle_id != delivery_initialization_lifecycle_id(digest)
+    ):
+        raise LifecycleAuthorityError(
+            "genesis does not bind the authenticated delivery initialization"
+        )
+    return result
 
 
 def verify_lifecycle_authority(

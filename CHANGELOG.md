@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-28 - Authenticate Lifecycle Authority Publication
+
+**Added:**
+
+- independent enrollment of existing finite delivery histories into the
+  persistent lifecycle-authority model without counter or identity reset
+- signed external current-terminal publications with maintained remote/ref
+  selection, immutable predecessor binding, and exact compare-and-swap
+  advancement
+- fail-closed coverage for stale terminal replay, consumer self-selection,
+  concurrent writers, cross-identity substitution, PR rebinding, and
+  exceptional continuation
+
+---
+
 ## 2026-08-28 - Authenticate Persistent Delivery Lifecycle Authority
 
 **Added:**

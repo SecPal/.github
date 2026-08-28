@@ -124,6 +124,33 @@ The complete registered validation graph explicitly runs the lifecycle-
 authority unit suite; its security regressions are not left to a manual focused
 invocation.
 
+## Lifecycle enrollment and current publication
+
+Existing lifecycles adopt the authority model through a separate publication
+boundary. The maintained registry contains only static trust: publication
+signers, namespace rules, and the publication remote. It never contains a
+candidate head, terminal digest, or current publication object. Dynamic state
+is a signed canonical document in an immutable one-file Git commit outside the
+delivery tree, selected by one dedicated remote ref and advanced with exact
+compare-and-swap.
+
+An enrollment publication embeds the complete independently verified #750
+history, including its initialization evidence. A terminal advancement binds
+its predecessor publication and accepts only one exact verified non-genesis
+the #750 successor, including `HEAD_ADVANCED`, `PR_REBOUND`, and
+`EXCEPTIONAL_CONTINUATION`. Its Git
+commit binds the prior publication as its sole parent. The current verifier
+observes the configured remote ref once, binds the resulting OID, and checks
+the immutable parent chain. Consumer expectations are only
+post-verification constraints; callers cannot supply the remote, ref, trust,
+or terminal selector. This prevents candidate-tree self-reference, stale-tip
+replay, cross-delivery substitution, and ambiguous concurrent publication.
+
+Publication does not derive lifecycle state, orchestrate lifecycle events, or
+implement two-parent integration. Those remain owned by #750, #692, and #745
+respectively. Repositories with no enrolled publication remain valid, while a
+consumer explicitly requesting published authority fails closed.
+
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default
 branch, allowed base repositories, reviewer identities, signature policy, check

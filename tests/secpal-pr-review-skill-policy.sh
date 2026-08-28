@@ -882,9 +882,10 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],
-], "SecPal/.github must register lifecycle-authority regressions unconditionally"
+], "SecPal/.github must register lifecycle authority and publication regressions unconditionally"
 
 frontend_entries = [
     item for item in registry["repositories"]
