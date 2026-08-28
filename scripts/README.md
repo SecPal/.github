@@ -111,14 +111,19 @@ lifecycle identity as resulting authority.
 
 `verify_lifecycle_authority` accepts only canonical serialized lifecycle
 evidence. It loads signer roles, SSH keys, OpenPGP fingerprints, formats, and
-unique initialization anchors from the installed maintained repository registry
-and invokes concrete `ssh-keygen`/GnuPG verification. Duplicate fields,
-noncanonical JSON, consumer-preparsed mappings, and Git OIDs other than exactly
-40 or 64 lowercase hexadecimal characters fail closed.
+one initialization root per enrolled delivery issue from the installed
+maintained repository registry. The same policy independently selects the exact
+current terminal authority digest, PR, and head, so same-head stale prefixes
+cannot nominate themselves as current. Empty anchors remain valid before
+explicit adoption; replacement PRs continue the original root through
+`PR_REBOUND`. The verifier invokes concrete `ssh-keygen`/GnuPG verification.
+Duplicate fields, noncanonical JSON, consumer-preparsed mappings, and Git OIDs
+other than exactly 40 or 64 lowercase hexadecimal characters fail closed.
 `lifecycle_authority_binding` derives a stable digest and exact verified facts
 for explicit adoption by later receipts or attestations. Existing delivery
 validation does not call this module and continues to use the ordinary
 one-parent evidence path.
+The lifecycle-authority suite is an unconditional registered validation command.
 
 ## Work Graph
 

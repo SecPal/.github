@@ -95,10 +95,13 @@ PR rebinding preserve every lifecycle fact.
 The installed repository registry is the lifecycle trust-policy source. It
 separately assigns transition and authority signer roles, accepted signature
 formats, SSH public keys, OpenPGP fingerprints, and unique initialization
-anchors. The public verifier does not accept consumer signer sets or verification
-callbacks: it loads this maintained policy and invokes concrete `ssh-keygen` or
-GnuPG detached-signature verification. Signer assertions inside evidence are
-never sufficient.
+anchors, with at most one initialization root per delivery issue. For every
+enrolled issue the policy also selects the exact current terminal authority
+digest, current PR, and current head. The public verifier does not accept
+consumer signer sets, verification callbacks, or current-tip selectors: it
+loads this maintained policy and invokes concrete `ssh-keygen` or GnuPG
+detached-signature verification. Signer assertions inside evidence are never
+sufficient.
 
 The public verifier accepts only a canonical serialized evidence bundle. It
 rejects duplicate and unknown fields, non-finite JSON, noncanonical encodings,
@@ -106,12 +109,20 @@ and caller-preparsed mappings before recomputing every state from genesis. Git
 object identities are exactly 40-hex SHA-1 or 64-hex SHA-256 values. A verified
 binding exposes the authority and initialization digests, persistent lifecycle
 identity, exact head, and normalized history digests for later consumers.
+The empty anchor list is the intentional fail-closed pre-adoption state. Once
+enrolled, same-head transitions advance the maintained terminal digest, stale
+prefixes fail, and replacement PRs retain the original root through
+`PR_REBOUND` rather than creating another genesis.
 
 This primitive does not observe GitHub, mutate Ready/Draft state, process review
 events, replace pull requests, or orchestrate recovery. Existing ordinary
 one-parent delivery evidence remains valid and no consumer is automatically
 migrated. Adoption by #745 and full lifecycle orchestration under #692 are
 separate work.
+
+The complete registered validation graph explicitly runs the lifecycle-
+authority unit suite; its security regressions are not left to a manual focused
+invocation.
 
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default

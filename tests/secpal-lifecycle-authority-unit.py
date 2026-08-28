@@ -182,6 +182,9 @@ class LifecycleAuthorityTests(TestCase):
     def test_public_verifier_does_not_accept_consumer_trust_inputs(self) -> None:
         parameters = inspect.signature(authority.verify_lifecycle_authority).parameters
         self.assertEqual(list(parameters), ["serialized_evidence", "expected"])
+        self.assertNotIn(
+            "authority_digest", authority.ExpectedLifecycle.__dataclass_fields__
+        )
 
     def test_lifecycle_identity_is_derived_from_initialization_anchor(self) -> None:
         digest = "1" * 64
@@ -199,6 +202,64 @@ class LifecycleAuthorityTests(TestCase):
             self.assertEqual(
                 authority._require_oid("a" * length, "test head"), "a" * length
             )
+
+    def test_registry_rejects_second_initialization_for_same_issue(self) -> None:
+        registry = json.loads(
+            (REPO_ROOT / ".agents/skills/secpal-pr-review/references/repositories.json")
+            .read_text(encoding="utf-8")
+        )
+        entry = next(
+            item for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        self.assertEqual(
+            authority._load_lifecycle_trust_policy(REPOSITORY).initialization_anchors,
+            (),
+        )
+        entry["lifecycle_authority_policy"]["delivery_initializations"] = [
+            {
+                "delivery_issue": ISSUE,
+                "pull_request": PR,
+                "initial_head_sha": HEADS[0],
+                "initialization_digest": "1" * 64,
+                "current_pull_request": PR,
+                "current_head_sha": HEADS[0],
+                "current_authority_digest": "3" * 64,
+            },
+            {
+                "delivery_issue": ISSUE,
+                "pull_request": PR + 1,
+                "initial_head_sha": HEADS[1],
+                "initialization_digest": "2" * 64,
+                "current_pull_request": PR + 1,
+                "current_head_sha": HEADS[1],
+                "current_authority_digest": "4" * 64,
+            },
+        ]
+        with tempfile.TemporaryDirectory(prefix="lifecycle-policy-test-") as directory:
+            policy_path = Path(directory) / "repositories.json"
+            policy_path.write_text(json.dumps(registry), encoding="utf-8")
+            with patch.object(authority, "_TRUST_REGISTRY", policy_path):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "ambiguous"
+                ):
+                    authority._load_lifecycle_trust_policy(REPOSITORY)
+                entry["lifecycle_authority_policy"]["delivery_initializations"][1][
+                    "delivery_issue"
+                ] = ISSUE + 1
+                policy_path.write_text(json.dumps(registry), encoding="utf-8")
+                self.assertEqual(
+                    len(authority._load_lifecycle_trust_policy(REPOSITORY).initialization_anchors),
+                    2,
+                )
+                entry["lifecycle_authority_policy"]["delivery_initializations"][1][
+                    "initialization_digest"
+                ] = "1" * 64
+                policy_path.write_text(json.dumps(registry), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "ambiguous"
+                ):
+                    authority._load_lifecycle_trust_policy(REPOSITORY)
 
     def test_public_serialized_boundary_and_anchored_real_ssh_chain(self) -> None:
         with tempfile.TemporaryDirectory(prefix="lifecycle-ssh-test-") as directory:
@@ -246,7 +307,17 @@ class LifecycleAuthorityTests(TestCase):
                 frozenset({SIGNER}),
                 frozenset({SIGNER}),
                 {SIGNER: trusted},
-                (authority.InitializationAnchor(ISSUE, PR, HEADS[0], digest),),
+                (
+                    authority.InitializationAnchor(
+                        ISSUE,
+                        PR,
+                        HEADS[0],
+                        digest,
+                        PR,
+                        HEADS[0],
+                        "0" * 64,
+                    ),
+                ),
             )
             event = authority.create_transition_authorization(
                 event_id=f"genesis:{digest}",
@@ -274,21 +345,271 @@ class LifecycleAuthorityTests(TestCase):
                 accepted_authority_signers=policy.authority_signer_identities,
                 signature_verifier=verifier,
             )
+            review_event = authority.create_transition_authorization(
+                event_id="same-head-review",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=lifecycle,
+                pull_request=PR,
+                predecessor_authority_digest=snapshot["authority_digest"],
+                predecessor_head_sha=HEADS[0],
+                resulting_head_sha=HEADS[0],
+                transition_kind="UNRESTRICTED_REVIEW_CONSUMED",
+                replacement_pull_request=None,
+                initialization_evidence_digest=digest,
+                signer_identity=SIGNER,
+                signer=real_signer,
+            )
+            review_snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=[snapshot],
+                transition_authorizations=[event],
+                authorization=review_event,
+                signer_identity=SIGNER,
+                authority_signer=real_signer,
+                accepted_event_signers=policy.transition_signer_identities,
+                accepted_authority_signers=policy.authority_signer_identities,
+                signature_verifier=verifier,
+            )
+            ready_event = authority.create_transition_authorization(
+                event_id="same-head-ready",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=lifecycle,
+                pull_request=PR,
+                predecessor_authority_digest=review_snapshot["authority_digest"],
+                predecessor_head_sha=HEADS[0],
+                resulting_head_sha=HEADS[0],
+                transition_kind="DRAFT_TO_READY",
+                replacement_pull_request=None,
+                initialization_evidence_digest=digest,
+                signer_identity=SIGNER,
+                signer=real_signer,
+            )
+            ready_snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=[snapshot, review_snapshot],
+                transition_authorizations=[event, review_event],
+                authorization=ready_event,
+                signer_identity=SIGNER,
+                authority_signer=real_signer,
+                accepted_event_signers=policy.transition_signer_identities,
+                accepted_authority_signers=policy.authority_signer_identities,
+                signature_verifier=verifier,
+            )
+            rebound_event = authority.create_transition_authorization(
+                event_id="same-head-rebound",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=lifecycle,
+                pull_request=PR,
+                predecessor_authority_digest=ready_snapshot["authority_digest"],
+                predecessor_head_sha=HEADS[0],
+                resulting_head_sha=HEADS[0],
+                transition_kind="PR_REBOUND",
+                replacement_pull_request=PR + 1,
+                initialization_evidence_digest=digest,
+                signer_identity=SIGNER,
+                signer=real_signer,
+            )
+            rebound_snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=[snapshot, review_snapshot, ready_snapshot],
+                transition_authorizations=[event, review_event, ready_event],
+                authorization=rebound_event,
+                signer_identity=SIGNER,
+                authority_signer=real_signer,
+                accepted_event_signers=policy.transition_signer_identities,
+                accepted_authority_signers=policy.authority_signer_identities,
+                signature_verifier=verifier,
+            )
             raw = authority.serialize_lifecycle_evidence(
                 delivery_initialization=initialization,
                 transition_authorizations=[event],
                 authority_chain=[snapshot],
             )
+            review_raw = authority.serialize_lifecycle_evidence(
+                delivery_initialization=initialization,
+                transition_authorizations=[event, review_event],
+                authority_chain=[snapshot, review_snapshot],
+            )
+            current_raw = authority.serialize_lifecycle_evidence(
+                delivery_initialization=initialization,
+                transition_authorizations=[
+                    event,
+                    review_event,
+                    ready_event,
+                    rebound_event,
+                ],
+                authority_chain=[
+                    snapshot,
+                    review_snapshot,
+                    ready_snapshot,
+                    rebound_snapshot,
+                ],
+            )
+            current_policy = authority.LifecycleTrustPolicy(
+                REPOSITORY,
+                policy.accepted_formats,
+                policy.transition_signer_identities,
+                policy.authority_signer_identities,
+                policy.signers,
+                (
+                    authority.InitializationAnchor(
+                        ISSUE,
+                        PR,
+                        HEADS[0],
+                        digest,
+                        PR + 1,
+                        HEADS[0],
+                        rebound_snapshot["authority_digest"],
+                    ),
+                ),
+            )
             with patch.object(
-                authority, "_load_lifecycle_trust_policy", return_value=policy
+                authority, "_load_lifecycle_trust_policy", return_value=current_policy
             ):
                 result = authority.verify_lifecycle_authority(
-                    raw,
+                    current_raw,
                     authority.ExpectedLifecycle(
-                        REPOSITORY, ISSUE, lifecycle, PR, HEADS[0]
+                        REPOSITORY, ISSUE, lifecycle, PR + 1, HEADS[0]
                     ),
                 )
                 self.assertEqual(result.lifecycle_id, lifecycle)
+                self.assertTrue(result.state["ready"])
+                self.assertEqual(result.pull_request, PR + 1)
+                for malformed_transition in ([], {}, True, 1, None, "UNKNOWN"):
+                    malformed = json.loads(current_raw)
+                    malformed["transition_authorizations"][-1][
+                        "transition_kind"
+                    ] = malformed_transition
+                    with self.subTest(transition_kind=malformed_transition):
+                        with self.assertRaises(authority.LifecycleAuthorityError):
+                            authority.verify_lifecycle_authority(
+                                authority.canonical_json_bytes(malformed)
+                            )
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "current terminal"
+                ):
+                    authority.verify_lifecycle_authority(
+                        raw,
+                        authority.ExpectedLifecycle(
+                            REPOSITORY, ISSUE, lifecycle, PR, HEADS[0]
+                        ),
+                    )
+                selector_variants = (
+                    authority.InitializationAnchor(
+                        ISSUE,
+                        PR,
+                        HEADS[0],
+                        digest,
+                        PR + 1,
+                        HEADS[0],
+                        ready_snapshot["authority_digest"],
+                    ),
+                    authority.InitializationAnchor(
+                        ISSUE,
+                        PR,
+                        HEADS[0],
+                        digest,
+                        PR,
+                        HEADS[0],
+                        rebound_snapshot["authority_digest"],
+                    ),
+                    authority.InitializationAnchor(
+                        ISSUE,
+                        PR,
+                        HEADS[0],
+                        digest,
+                        PR + 1,
+                        HEADS[1],
+                        rebound_snapshot["authority_digest"],
+                    ),
+                    authority.InitializationAnchor(
+                        ISSUE,
+                        PR,
+                        HEADS[0],
+                        digest,
+                        PR + 1,
+                        HEADS[0],
+                        "9" * 64,
+                    ),
+                )
+                for selector in selector_variants:
+                    mismatched_policy = authority.LifecycleTrustPolicy(
+                        REPOSITORY,
+                        policy.accepted_formats,
+                        policy.transition_signer_identities,
+                        policy.authority_signer_identities,
+                        policy.signers,
+                        (selector,),
+                    )
+                    with self.subTest(selector=selector):
+                        with patch.object(
+                            authority,
+                            "_load_lifecycle_trust_policy",
+                            return_value=mismatched_policy,
+                        ):
+                            with self.assertRaises(authority.LifecycleAuthorityError):
+                                authority.verify_lifecycle_authority(current_raw)
+                missing_policy = authority.LifecycleTrustPolicy(
+                    REPOSITORY,
+                    policy.accepted_formats,
+                    policy.transition_signer_identities,
+                    policy.authority_signer_identities,
+                    policy.signers,
+                    (),
+                )
+                with patch.object(
+                    authority,
+                    "_load_lifecycle_trust_policy",
+                    return_value=missing_policy,
+                ):
+                    with self.assertRaises(authority.LifecycleAuthorityError):
+                        authority.verify_lifecycle_authority(current_raw)
+                cross_issue_policy = authority.LifecycleTrustPolicy(
+                    REPOSITORY,
+                    policy.accepted_formats,
+                    policy.transition_signer_identities,
+                    policy.authority_signer_identities,
+                    policy.signers,
+                    (
+                        authority.InitializationAnchor(
+                            ISSUE + 1,
+                            PR,
+                            HEADS[0],
+                            digest,
+                            PR + 1,
+                            HEADS[0],
+                            rebound_snapshot["authority_digest"],
+                        ),
+                    ),
+                )
+                cross_repository_policy = authority.LifecycleTrustPolicy(
+                    "Other/repository",
+                    policy.accepted_formats,
+                    policy.transition_signer_identities,
+                    policy.authority_signer_identities,
+                    policy.signers,
+                    current_policy.initialization_anchors,
+                )
+                for mismatched_policy in (
+                    cross_issue_policy,
+                    cross_repository_policy,
+                ):
+                    with patch.object(
+                        authority,
+                        "_load_lifecycle_trust_policy",
+                        return_value=mismatched_policy,
+                    ):
+                        with self.assertRaises(authority.LifecycleAuthorityError):
+                            authority.verify_lifecycle_authority(current_raw)
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "current terminal"
+                ):
+                    authority.verify_lifecycle_authority(
+                        review_raw,
+                        authority.ExpectedLifecycle(
+                            REPOSITORY, ISSUE, lifecycle, PR, HEADS[0]
+                        ),
+                    )
                 with self.assertRaises(authority.LifecycleAuthorityError):
                     authority.verify_lifecycle_authority(json.loads(raw))
                 for field in (
@@ -325,7 +646,13 @@ class LifecycleAuthorityTests(TestCase):
                     policy.signers,
                     (
                         authority.InitializationAnchor(
-                            ISSUE, PR, HEADS[0], "9" * 64
+                            ISSUE,
+                            PR,
+                            HEADS[0],
+                            "9" * 64,
+                            PR,
+                            HEADS[0],
+                            rebound_snapshot["authority_digest"],
                         ),
                     ),
                 )
@@ -726,7 +1053,10 @@ class LifecycleAuthorityTests(TestCase):
         variants: list[list[dict[str, Any]]] = []
         for field, value in (
             ("schema_version", "2.0"), ("kind", "OTHER"),
-            ("domain", "other.domain/v1"), ("transition_kind", "CYCLE_3"),
+            ("domain", "other.domain/v1"),
+            ("transition_kind", "CYCLE_3"),
+            ("transition_kind", []),
+            ("transition_kind", {}),
         ):
             changed = copy.deepcopy(chain.authorities)
             changed[-1][field] = value

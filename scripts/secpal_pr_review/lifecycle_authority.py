@@ -122,12 +122,15 @@ class TrustedSigner:
 
 @dataclass(frozen=True)
 class InitializationAnchor:
-    """One registry-authenticated delivery initialization root."""
+    """One registry-authenticated initialization and its current trusted tip."""
 
     delivery_issue: int
     pull_request: int
     initial_head_sha: str
     initialization_digest: str
+    current_pull_request: int
+    current_head_sha: str
+    current_authority_digest: str
 
 
 @dataclass(frozen=True)
@@ -297,6 +300,13 @@ def _require_oid(value: Any, label: str) -> str:
 def _require_digest(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _DIGEST.fullmatch(value):
         raise LifecycleAuthorityError(f"{label} is not a canonical SHA-256 digest")
+    return value
+
+
+def _require_transition_kind(value: Any, *, allow_genesis: bool = True) -> str:
+    permitted = TRANSITIONS if allow_genesis else TRANSITIONS - {"INITIALIZED_DRAFT"}
+    if not isinstance(value, str) or value not in permitted:
+        raise LifecycleAuthorityError("unknown lifecycle transition")
     return value
 
 
@@ -557,11 +567,19 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
 
     anchors: list[InitializationAnchor] = []
     anchor_fields = frozenset(
-        {"delivery_issue", "pull_request", "initial_head_sha", "initialization_digest"}
+        {
+            "delivery_issue",
+            "pull_request",
+            "initial_head_sha",
+            "initialization_digest",
+            "current_pull_request",
+            "current_head_sha",
+            "current_authority_digest",
+        }
     )
     if not isinstance(policy["delivery_initializations"], list):
         raise LifecycleAuthorityError("delivery initialization policy is invalid")
-    seen_deliveries: set[tuple[int, int]] = set()
+    seen_delivery_issues: set[int] = set()
     seen_digests: set[str] = set()
     for value in policy["delivery_initializations"]:
         item = _require_closed(value, anchor_fields, "delivery initialization anchor")
@@ -569,11 +587,28 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         pull_request = _require_positive_int(item["pull_request"], "anchored pull request")
         head = _require_oid(item["initial_head_sha"], "anchored initial head")
         digest = _require_digest(item["initialization_digest"], "anchored initialization")
-        if (issue, pull_request) in seen_deliveries or digest in seen_digests:
+        current_pull_request = _require_positive_int(
+            item["current_pull_request"], "current anchored pull request"
+        )
+        current_head = _require_oid(item["current_head_sha"], "current anchored head")
+        current_authority = _require_digest(
+            item["current_authority_digest"], "current terminal authority"
+        )
+        if issue in seen_delivery_issues or digest in seen_digests:
             raise LifecycleAuthorityError("delivery initialization anchors are ambiguous")
-        seen_deliveries.add((issue, pull_request))
+        seen_delivery_issues.add(issue)
         seen_digests.add(digest)
-        anchors.append(InitializationAnchor(issue, pull_request, head, digest))
+        anchors.append(
+            InitializationAnchor(
+                issue,
+                pull_request,
+                head,
+                digest,
+                current_pull_request,
+                current_head,
+                current_authority,
+            )
+        )
     return LifecycleTrustPolicy(
         repository=repository,
         accepted_formats=frozenset(formats),
@@ -876,8 +911,7 @@ def derive_state(
 
     if caller_assertions:
         raise LifecycleAuthorityError("caller-supplied resulting lifecycle state is forbidden")
-    if transition_kind not in TRANSITIONS - {"INITIALIZED_DRAFT"}:
-        raise LifecycleAuthorityError("unknown or non-predecessor lifecycle transition")
+    transition_kind = _require_transition_kind(transition_kind, allow_genesis=False)
     state = copy.deepcopy(_validate_state(dict(predecessor_state)))
     digest = _require_digest(
         event_authorization_digest, "transition authorization digest"
@@ -950,8 +984,7 @@ def create_transition_authorization(
 ) -> dict[str, Any]:
     """Create independently signed authorization for one exact transition."""
 
-    if transition_kind not in TRANSITIONS:
-        raise LifecycleAuthorityError("unknown lifecycle transition")
+    transition_kind = _require_transition_kind(transition_kind)
     fields: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": EVENT_KIND,
@@ -1034,8 +1067,7 @@ def _verify_transition_authorization(
         raise LifecycleAuthorityError("unknown transition-authorization version")
     if event["kind"] != EVENT_KIND or event["domain"] != EVENT_DOMAIN:
         raise LifecycleAuthorityError("unknown transition-authorization kind or domain")
-    if event["transition_kind"] not in TRANSITIONS:
-        raise LifecycleAuthorityError("unknown lifecycle transition")
+    _require_transition_kind(event["transition_kind"])
     _require_identity(event["event_id"], "event identity")
     _require_repository(event["repository"])
     _require_positive_int(event["delivery_issue"], "delivery issue")
@@ -1163,8 +1195,7 @@ def _verify_authority_shape(
     _require_identity(authority["lifecycle_id"], "lifecycle identity")
     _require_positive_int(authority["pull_request"], "pull request")
     _require_oid(authority["head_sha"], "authority head")
-    if authority["transition_kind"] not in TRANSITIONS:
-        raise LifecycleAuthorityError("unknown lifecycle transition")
+    _require_transition_kind(authority["transition_kind"])
     _require_digest(authority["event_authorization_digest"], "event authorization digest")
     _require_digest(
         authority["initialization_evidence_digest"], "initialization evidence"
@@ -1362,6 +1393,29 @@ def verify_lifecycle_authority(
     events = bundle["transition_authorizations"]
     if not isinstance(authorities, list) or not isinstance(events, list):
         raise LifecycleAuthorityError("complete lifecycle evidence chains are required")
+    matching_anchors = [
+        anchor
+        for anchor in policy.initialization_anchors
+        if anchor.delivery_issue == initialization["delivery_issue"]
+    ]
+    if len(matching_anchors) != 1:
+        raise LifecycleAuthorityError(
+            "delivery initialization has no unique maintained current terminal"
+        )
+    current = matching_anchors[0]
+    terminal = authorities[-1] if authorities else None
+    if (
+        not isinstance(terminal, dict)
+        or current.initialization_digest != initialization["initialization_digest"]
+        or terminal.get("initialization_evidence_digest")
+        != current.initialization_digest
+        or terminal.get("pull_request") != current.current_pull_request
+        or terminal.get("head_sha") != current.current_head_sha
+        or terminal.get("authority_digest") != current.current_authority_digest
+    ):
+        raise LifecycleAuthorityError(
+            "lifecycle evidence does not name the maintained current terminal authority"
+        )
     result = _verify_lifecycle_authority_objects(
         authorities,
         events,
@@ -1384,6 +1438,17 @@ def verify_lifecycle_authority(
     ):
         raise LifecycleAuthorityError(
             "genesis does not bind the maintained delivery initialization"
+        )
+    if (
+        current.initialization_digest != result.initialization_evidence_digest
+        or result.lifecycle_id
+        != delivery_initialization_lifecycle_id(current.initialization_digest)
+        or current.current_pull_request != result.pull_request
+        or current.current_head_sha != result.head_sha
+        or current.current_authority_digest != result.authority_digest
+    ):
+        raise LifecycleAuthorityError(
+            "lifecycle evidence does not match the maintained current terminal authority"
         )
     return result
 

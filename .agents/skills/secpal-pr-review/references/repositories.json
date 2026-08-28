@@ -55,6 +55,11 @@
           "purpose": "Run guarded-action unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run persistent lifecycle-authority unit tests"
+        },
+        {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
           "working_directory": ".",
           "purpose": "Run finite skill policy tests"

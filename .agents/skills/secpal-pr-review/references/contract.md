@@ -239,8 +239,10 @@ authenticated lifecycle primitive, not this feedback-processing state machine.
 Its version-1 authority is a closed, signed, append-only predecessor chain. The
 maintained repository registry owns distinct transition- and authority-signer
 roles, exact SSH public keys and OpenPGP fingerprints, accepted formats, and
-unique delivery-initialization anchors. The public verifier loads that installed
-policy itself; consumers cannot supply signer sets or signature callbacks.
+one delivery-initialization anchor per issue. Each enrolled anchor also records
+the exact current terminal authority digest, PR, and head in the installed
+maintained policy. The public verifier loads that policy itself; consumers
+cannot supply signer sets, signature callbacks, or a current-tip selector.
 
 One typed initialization binds the ordinary validation receipt and final
 attestation to the repository, issue, initial PR, and exact initial head. Its
@@ -262,6 +264,15 @@ Head advancement, exceptional events, and authorized PR rebinding retain the
 persistent lifecycle and cannot reset counters. Its normalized binding is
 available to future consumers, but ordinary delivery evidence does not require
 it until a consumer explicitly adopts it.
+
+An empty initialization set is the valid fail-closed pre-adoption state. Once a
+delivery issue is enrolled, the registry permits exactly one initialization
+root for that issue; replacement PRs continue it through `PR_REBOUND`. The
+maintained current-terminal selector changes as authorized transitions are
+adopted, including same-head transitions. Verification rejects a valid stale
+prefix unless its final authority digest, current PR, and current head all match
+that independently installed selector. Evidence and consumer expectations
+cannot nominate their own current terminal authority.
 
 This boundary performs no review-event loop, late-feedback processing, Ready or
 Draft mutation, replacement orchestration, merge automation, or other lifecycle

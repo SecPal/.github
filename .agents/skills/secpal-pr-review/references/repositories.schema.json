@@ -215,13 +215,19 @@
               "delivery_issue",
               "pull_request",
               "initial_head_sha",
-              "initialization_digest"
+              "initialization_digest",
+              "current_pull_request",
+              "current_head_sha",
+              "current_authority_digest"
             ],
             "properties": {
               "delivery_issue": { "type": "integer", "minimum": 1 },
               "pull_request": { "type": "integer", "minimum": 1 },
               "initial_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
-              "initialization_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              "initialization_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "current_pull_request": { "type": "integer", "minimum": 1 },
+              "current_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "current_authority_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
             }
           }
         }
