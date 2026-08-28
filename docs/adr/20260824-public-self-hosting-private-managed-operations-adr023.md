@@ -46,8 +46,8 @@ Public capability may therefore include:
   seams;
 - generic health and degradation evidence; runtime, security, update, version,
   and end-of-life detection; configurable notification interfaces; host
-  hardening prerequisites; and socketless or otherwise least-authority runtime
-  detection capabilities;
+  hardening prerequisites; and generic runtime-detection capabilities consistent
+  with ADR-018;
 - provider-neutral compute, capacity, and resource-quality definitions.
 
 Public capability is not a commitment to support every provider or product. A
