@@ -20,6 +20,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - an independent verifier and stable downstream binding that reject consumer
   self-assertion while leaving ordinary delivery evidence unchanged until
   explicit adoption
+- maintained registry trust anchors, concrete SSH/OpenPGP detached-signature
+  verification, deterministic delivery initialization, mandatory canonical raw
+  evidence parsing, and exact SHA-1/SHA-256 Git object identity validation
 
 ---
 

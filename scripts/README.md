@@ -100,19 +100,25 @@ registry decisions, recovery, and post-merge rollout prerequisites.
 ### `secpal_pr_review/lifecycle_authority.py`
 
 Defines the reusable, orchestration-independent delivery-lifecycle authority.
-Version 1.0 uses the maintained canonical JSON/digest functions and a closed,
-domain-separated signed transition authorization plus a closed signed authority
-snapshot. Genesis starts only the canonical Draft state. Every later snapshot
-is derived by independently verifying the complete predecessor and event chains;
+Version 1.0 uses the maintained canonical JSON/digest functions and closed,
+domain-separated initialization, transition authorization, authority snapshot,
+and evidence-bundle schemas. A registry-anchored initialization binds ordinary
+delivery receipt/attestation identity and deterministically derives the
+persistent lifecycle and canonical Draft genesis. Every later snapshot is
+derived by independently verifying the complete predecessor and event chains;
 callers cannot provide counters, Ready history, exceptional history, or a new
 lifecycle identity as resulting authority.
 
-`verify_lifecycle_authority` accepts independently configured event and authority
-signer sets plus a trusted SSH/OpenPGP verification adapter, then returns only a
-normalized `VerifiedLifecycleAuthority`. `lifecycle_authority_binding` derives a
-stable digest and exact verified facts for explicit adoption by later receipts
-or attestations. Existing delivery validation does not call this module and
-continues to use the ordinary one-parent evidence path.
+`verify_lifecycle_authority` accepts only canonical serialized lifecycle
+evidence. It loads signer roles, SSH keys, OpenPGP fingerprints, formats, and
+unique initialization anchors from the installed maintained repository registry
+and invokes concrete `ssh-keygen`/GnuPG verification. Duplicate fields,
+noncanonical JSON, consumer-preparsed mappings, and Git OIDs other than exactly
+40 or 64 lowercase hexadecimal characters fail closed.
+`lifecycle_authority_binding` derives a stable digest and exact verified facts
+for explicit adoption by later receipts or attestations. Existing delivery
+validation does not call this module and continues to use the ordinary
+one-parent evidence path.
 
 ## Work Graph
 

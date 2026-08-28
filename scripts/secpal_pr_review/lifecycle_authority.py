@@ -3,16 +3,24 @@
 """Closed, append-only authority for the finite delivery lifecycle.
 
 This module owns lifecycle state derivation, not lifecycle orchestration.  Its
-signature callbacks are trust-boundary adapters: callers must back them with a
-maintained SSH/OpenPGP verifier and an independently configured signer set.
+public verifier loads signer roles and credentials from the installed maintained
+registry, consumes canonical serialized evidence, and performs SSH/OpenPGP
+verification without accepting consumer-selected trust inputs.
 """
 
 from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from functools import cache
+import importlib.util
 import json
+import os
+from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
 from .fast_path import canonical_json_bytes, digest_json
@@ -23,6 +31,10 @@ AUTHORITY_KIND = "SECPAL_DELIVERY_LIFECYCLE_AUTHORITY"
 AUTHORITY_DOMAIN = "secpal.delivery-lifecycle-authority/v1"
 EVENT_KIND = "SECPAL_DELIVERY_LIFECYCLE_TRANSITION_AUTHORIZATION"
 EVENT_DOMAIN = "secpal.delivery-lifecycle-transition-authorization/v1"
+INITIALIZATION_KIND = "SECPAL_DELIVERY_LIFECYCLE_INITIALIZATION"
+INITIALIZATION_DOMAIN = "secpal.delivery-lifecycle-initialization/v1"
+BUNDLE_KIND = "SECPAL_DELIVERY_LIFECYCLE_EVIDENCE"
+BUNDLE_DOMAIN = "secpal.delivery-lifecycle-evidence/v1"
 
 MAX_UNRESTRICTED_REVIEWS = 1
 MAX_REMEDIATION_CYCLES = 2
@@ -43,7 +55,7 @@ TRANSITIONS = frozenset(
     }
 )
 
-_OID = re.compile(r"[0-9a-f]{40,64}")
+_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-=]{0,254}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -92,10 +104,42 @@ class VerifiedLifecycleAuthority:
     repository: str
     delivery_issue: int
     lifecycle_id: str
+    initialization_evidence_digest: str
     pull_request: int
     head_sha: str
     state: dict[str, Any]
     authority_signer_identity: str
+
+
+@dataclass(frozen=True)
+class TrustedSigner:
+    """One signer credential loaded from the maintained repository registry."""
+
+    identity: str
+    ssh_public_keys: tuple[str, ...]
+    openpgp_fingerprints: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class InitializationAnchor:
+    """One registry-authenticated delivery initialization root."""
+
+    delivery_issue: int
+    pull_request: int
+    initial_head_sha: str
+    initialization_digest: str
+
+
+@dataclass(frozen=True)
+class LifecycleTrustPolicy:
+    """Installed trust policy; never accepted as lifecycle evidence input."""
+
+    repository: str
+    accepted_formats: frozenset[str]
+    transition_signer_identities: frozenset[str]
+    authority_signer_identities: frozenset[str]
+    signers: Mapping[str, TrustedSigner]
+    initialization_anchors: tuple[InitializationAnchor, ...]
 
 
 EVENT_FIELDS = frozenset(
@@ -113,6 +157,7 @@ EVENT_FIELDS = frozenset(
         "resulting_head_sha",
         "transition_kind",
         "replacement_pull_request",
+        "initialization_evidence_digest",
         "signer_identity",
         "signature",
         "event_digest",
@@ -132,6 +177,7 @@ AUTHORITY_FIELDS = frozenset(
         "predecessor_authority_digest",
         "transition_kind",
         "event_authorization_digest",
+        "initialization_evidence_digest",
         "state_before",
         "state_after",
         "signer_identity",
@@ -158,6 +204,38 @@ STATE_FIELDS = frozenset(
 HISTORY_FIELDS = frozenset(
     {"sequence", "transition_kind", "event_authorization_digest"}
 )
+INITIALIZATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "domain",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "initial_head_sha",
+        "validation_receipt_digest",
+        "final_attestation_digest",
+        "signer_identity",
+        "signature",
+        "initialization_digest",
+    }
+)
+BUNDLE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "domain",
+        "delivery_initialization",
+        "transition_authorizations",
+        "authority_chain",
+    }
+)
+
+_TRUST_REGISTRY = (
+    Path(__file__).resolve().parents[2]
+    / ".agents/skills/secpal-pr-review/references/repositories.json"
+)
+_EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 
 
 def loads_closed_json(raw: bytes | str) -> Any:
@@ -171,10 +249,25 @@ def loads_closed_json(raw: bytes | str) -> Any:
             result[key] = value
         return result
 
+    def reject_constant(value: str) -> None:
+        raise LifecycleAuthorityError(f"non-finite JSON value is forbidden: {value}")
+
     try:
-        return json.loads(raw, object_pairs_hook=closed_object)
+        return json.loads(
+            raw,
+            object_pairs_hook=closed_object,
+            parse_constant=reject_constant,
+        )
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise LifecycleAuthorityError("lifecycle authority JSON is malformed") from exc
+
+
+def _load_canonical_json(raw: bytes | str, label: str) -> Any:
+    parsed = loads_closed_json(raw)
+    encoded = raw.encode("utf-8") if isinstance(raw, str) else raw
+    if encoded != canonical_json_bytes(parsed):
+        raise LifecycleAuthorityError(f"{label} is not canonical JSON")
+    return parsed
 
 
 def _require_closed(value: Any, fields: frozenset[str], label: str) -> dict[str, Any]:
@@ -273,6 +366,389 @@ def _verify_signature(
     ):
         raise LifecycleAuthorityError("verified signer or signature format is wrong")
     return normalized
+
+
+def delivery_initialization_lifecycle_id(initialization_digest: str) -> str:
+    """Derive the sole persistent lifecycle identity for one initialization."""
+
+    return f"lifecycle:{_require_digest(initialization_digest, 'initialization digest')}"
+
+
+def create_delivery_initialization(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    initial_head_sha: str,
+    validation_receipt_digest: str,
+    final_attestation_digest: str,
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Create signed ordinary-delivery initialization evidence."""
+
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": INITIALIZATION_KIND,
+        "domain": INITIALIZATION_DOMAIN,
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(delivery_issue, "delivery issue"),
+        "pull_request": _require_positive_int(pull_request, "pull request"),
+        "initial_head_sha": _require_oid(initial_head_sha, "initial head"),
+        "validation_receipt_digest": _require_digest(
+            validation_receipt_digest, "validation receipt"
+        ),
+        "final_attestation_digest": _require_digest(
+            final_attestation_digest, "final attestation"
+        ),
+        "signer_identity": _require_identity(signer_identity, "initialization signer"),
+    }
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), INITIALIZATION_DOMAIN), signer_identity
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "initialization_digest": digest_json(signed)}
+
+
+def _verify_delivery_initialization(
+    value: Any,
+    *,
+    policy: LifecycleTrustPolicy,
+    signature_verifier: SignatureVerifier,
+) -> dict[str, Any]:
+    initialization = _require_closed(
+        value, INITIALIZATION_FIELDS, "delivery initialization"
+    )
+    if initialization["schema_version"] != SCHEMA_VERSION:
+        raise LifecycleAuthorityError("unknown delivery-initialization version")
+    if (
+        initialization["kind"] != INITIALIZATION_KIND
+        or initialization["domain"] != INITIALIZATION_DOMAIN
+    ):
+        raise LifecycleAuthorityError("unknown delivery-initialization kind or domain")
+    repository = _require_repository(initialization["repository"])
+    if repository != policy.repository:
+        raise LifecycleAuthorityError("initialization repository is not trusted")
+    issue = _require_positive_int(initialization["delivery_issue"], "delivery issue")
+    pull_request = _require_positive_int(initialization["pull_request"], "pull request")
+    head = _require_oid(initialization["initial_head_sha"], "initial head")
+    _require_digest(initialization["validation_receipt_digest"], "validation receipt")
+    _require_digest(initialization["final_attestation_digest"], "final attestation")
+    signer = _require_identity(initialization["signer_identity"], "initialization signer")
+    signed = {
+        key: copy.deepcopy(item)
+        for key, item in initialization.items()
+        if key != "initialization_digest"
+    }
+    digest = _require_digest(initialization["initialization_digest"], "initialization digest")
+    if digest != digest_json(signed):
+        raise LifecycleAuthorityError("delivery-initialization digest mismatch")
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(initialization, "initialization_digest", "signature")
+        ),
+        initialization["signature"],
+        signer,
+        INITIALIZATION_DOMAIN,
+        policy.transition_signer_identities,
+        signature_verifier,
+    )
+    matching = [
+        anchor
+        for anchor in policy.initialization_anchors
+        if (
+            anchor.delivery_issue == issue
+            and anchor.pull_request == pull_request
+            and anchor.initial_head_sha == head
+        )
+    ]
+    if len(matching) != 1 or matching[0].initialization_digest != digest:
+        raise LifecycleAuthorityError(
+            "delivery initialization is not the unique maintained trust anchor"
+        )
+    return copy.deepcopy(initialization)
+
+
+def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
+    """Load lifecycle trust only from the installed maintained registry."""
+
+    try:
+        registry = loads_closed_json(_TRUST_REGISTRY.read_bytes())
+    except OSError as exc:
+        raise LifecycleAuthorityError("maintained lifecycle trust registry is unavailable") from exc
+    if not isinstance(registry, dict) or registry.get("schema_version") != "1.0":
+        raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid")
+    entries = registry.get("repositories")
+    if not isinstance(entries, list):
+        raise LifecycleAuthorityError("maintained repository registry is malformed")
+    matches = [
+        item
+        for item in entries
+        if isinstance(item, dict) and item.get("repository") == repository
+    ]
+    if len(matches) != 1:
+        raise LifecycleAuthorityError("repository has no unique maintained trust policy")
+    raw = matches[0].get("lifecycle_authority_policy")
+    fields = frozenset(
+        {
+            "schema_version",
+            "accepted_formats",
+            "signers",
+            "transition_signer_identities",
+            "authority_signer_identities",
+            "delivery_initializations",
+        }
+    )
+    policy = _require_closed(raw, fields, "lifecycle trust policy")
+    if policy["schema_version"] != SCHEMA_VERSION:
+        raise LifecycleAuthorityError("unknown lifecycle trust-policy version")
+    formats = policy["accepted_formats"]
+    if (
+        not isinstance(formats, list)
+        or not formats
+        or len(formats) != len(set(formats))
+        or any(item not in {"ssh", "openpgp"} for item in formats)
+    ):
+        raise LifecycleAuthorityError("lifecycle signature-format policy is invalid")
+    signers: dict[str, TrustedSigner] = {}
+    signer_fields = frozenset(
+        {"identity", "ssh_public_keys", "openpgp_fingerprints"}
+    )
+    if not isinstance(policy["signers"], list):
+        raise LifecycleAuthorityError("lifecycle signer policy is invalid")
+    for value in policy["signers"]:
+        item = _require_closed(value, signer_fields, "trusted lifecycle signer")
+        identity = _require_identity(item["identity"], "trusted signer")
+        ssh_keys = item["ssh_public_keys"]
+        fingerprints = item["openpgp_fingerprints"]
+        if (
+            identity in signers
+            or not isinstance(ssh_keys, list)
+            or not isinstance(fingerprints, list)
+            or len(ssh_keys) != len(set(ssh_keys))
+            or len(fingerprints) != len(set(fingerprints))
+            or any(
+                not isinstance(key, str)
+                or not re.fullmatch(r"ssh-(?:ed25519|rsa) [A-Za-z0-9+/=]+", key)
+                for key in ssh_keys
+            )
+            or any(
+                not isinstance(fingerprint, str)
+                or not re.fullmatch(r"[0-9A-F]{40,64}", fingerprint)
+                for fingerprint in fingerprints
+            )
+            or (not ssh_keys and not fingerprints)
+        ):
+            raise LifecycleAuthorityError("trusted lifecycle signer credentials are invalid")
+        signers[identity] = TrustedSigner(
+            identity, tuple(ssh_keys), tuple(fingerprints)
+        )
+
+    def role_identities(key: str) -> frozenset[str]:
+        values = policy[key]
+        if (
+            not isinstance(values, list)
+            or not values
+            or len(values) != len(set(values))
+            or any(value not in signers for value in values)
+        ):
+            raise LifecycleAuthorityError(f"{key} is not a closed trusted signer role")
+        return frozenset(values)
+
+    anchors: list[InitializationAnchor] = []
+    anchor_fields = frozenset(
+        {"delivery_issue", "pull_request", "initial_head_sha", "initialization_digest"}
+    )
+    if not isinstance(policy["delivery_initializations"], list):
+        raise LifecycleAuthorityError("delivery initialization policy is invalid")
+    seen_deliveries: set[tuple[int, int]] = set()
+    seen_digests: set[str] = set()
+    for value in policy["delivery_initializations"]:
+        item = _require_closed(value, anchor_fields, "delivery initialization anchor")
+        issue = _require_positive_int(item["delivery_issue"], "anchored delivery issue")
+        pull_request = _require_positive_int(item["pull_request"], "anchored pull request")
+        head = _require_oid(item["initial_head_sha"], "anchored initial head")
+        digest = _require_digest(item["initialization_digest"], "anchored initialization")
+        if (issue, pull_request) in seen_deliveries or digest in seen_digests:
+            raise LifecycleAuthorityError("delivery initialization anchors are ambiguous")
+        seen_deliveries.add((issue, pull_request))
+        seen_digests.add(digest)
+        anchors.append(InitializationAnchor(issue, pull_request, head, digest))
+    return LifecycleTrustPolicy(
+        repository=repository,
+        accepted_formats=frozenset(formats),
+        transition_signer_identities=role_identities(
+            "transition_signer_identities"
+        ),
+        authority_signer_identities=role_identities("authority_signer_identities"),
+        signers=signers,
+        initialization_anchors=tuple(anchors),
+    )
+
+
+@cache
+def _load_trusted_command_helper() -> Any:
+    """Load the maintained external-command trust boundary by exact path."""
+
+    module_name = "secpal_lifecycle_trusted_commands"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != _EVIDENCE_HELPER.resolve()
+        ):
+            raise LifecycleAuthorityError(
+                "maintained command trust helper has an unexpected path"
+            )
+        return loaded
+    spec = importlib.util.spec_from_file_location(module_name, _EVIDENCE_HELPER)
+    if spec is None or spec.loader is None:
+        raise LifecycleAuthorityError("maintained command trust helper is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException as exc:
+        sys.modules.pop(module_name, None)
+        raise LifecycleAuthorityError(
+            "maintained command trust helper could not be loaded"
+        ) from exc
+    return module
+
+
+def _trusted_signature_command(name: str) -> tuple[str, dict[str, str]]:
+    helper = _load_trusted_command_helper()
+    if name not in {"gpg", "ssh-keygen"}:
+        raise LifecycleAuthorityError("signature verifier executable is not allowlisted")
+    for directory in helper.TRUSTED_COMMAND_DIRECTORIES:
+        candidate = directory / name
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved), helper.command_environment(name)
+    raise LifecycleAuthorityError(f"maintained {name} signature verifier is unavailable")
+
+
+def _verify_ssh_signature(
+    payload: bytes,
+    signature_value: str,
+    signer: TrustedSigner,
+    domain: str,
+) -> None:
+    if not signer.ssh_public_keys:
+        raise LifecycleAuthorityError("trusted signer has no SSH credential")
+    executable, environment = _trusted_signature_command("ssh-keygen")
+    with tempfile.TemporaryDirectory(prefix="secpal-lifecycle-ssh-") as directory:
+        root = Path(directory)
+        allowed = root / "allowed_signers"
+        signature = root / "signature"
+        allowed.write_text(
+            "".join(
+                f"{signer.identity} {public_key}\n"
+                for public_key in signer.ssh_public_keys
+            ),
+            encoding="utf-8",
+        )
+        signature.write_text(signature_value, encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [
+                    executable,
+                    "-Y",
+                    "verify",
+                    "-f",
+                    str(allowed),
+                    "-I",
+                    signer.identity,
+                    "-n",
+                    domain,
+                    "-s",
+                    str(signature),
+                ],
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=15,
+                env=environment,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise LifecycleAuthorityError("SSH signature verifier is unavailable") from exc
+        if result.returncode != 0:
+            raise LifecycleAuthorityError("SSH lifecycle signature is invalid")
+
+
+def _verify_openpgp_signature(
+    payload: bytes,
+    signature_value: str,
+    signer: TrustedSigner,
+) -> None:
+    if not signer.openpgp_fingerprints:
+        raise LifecycleAuthorityError("trusted signer has no OpenPGP credential")
+    executable, environment = _trusted_signature_command("gpg")
+    with tempfile.TemporaryDirectory(prefix="secpal-lifecycle-openpgp-") as directory:
+        root = Path(directory)
+        payload_file = root / "payload"
+        signature_file = root / "signature.asc"
+        payload_file.write_bytes(payload)
+        signature_file.write_text(signature_value, encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [
+                    executable,
+                    "--batch",
+                    "--status-fd",
+                    "1",
+                    "--verify",
+                    str(signature_file),
+                    str(payload_file),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=15,
+                env=environment,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise LifecycleAuthorityError("OpenPGP signature verifier is unavailable") from exc
+        valid_fingerprints: set[str] = set()
+        for line in result.stdout.splitlines():
+            if line.startswith("[GNUPG:] VALIDSIG "):
+                fields = line.split()
+                if len(fields) >= 3:
+                    valid_fingerprints.add(fields[2])
+                if len(fields) >= 12:
+                    valid_fingerprints.add(fields[-1])
+        if result.returncode != 0 or not valid_fingerprints.intersection(
+            signer.openpgp_fingerprints
+        ):
+            raise LifecycleAuthorityError("OpenPGP lifecycle signature is invalid")
+
+
+def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifier:
+    def verify(
+        payload: bytes,
+        signature: Mapping[str, Any],
+        expected_signer: str,
+        domain: str,
+    ) -> VerifiedSignature:
+        credential = policy.signers.get(expected_signer)
+        signature_format = signature["format"]
+        if credential is None or signature_format not in policy.accepted_formats:
+            raise LifecycleAuthorityError("lifecycle signer or format is not trusted")
+        if signature_format == "ssh":
+            _verify_ssh_signature(payload, signature["value"], credential, domain)
+        elif signature_format == "openpgp":
+            _verify_openpgp_signature(payload, signature["value"], credential)
+        else:
+            raise LifecycleAuthorityError("lifecycle signature format is unknown")
+        return VerifiedSignature(expected_signer, signature_format)
+
+    return verify
 
 
 def initial_state() -> dict[str, Any]:
@@ -468,6 +944,7 @@ def create_transition_authorization(
     resulting_head_sha: str,
     transition_kind: str,
     replacement_pull_request: int | None,
+    initialization_evidence_digest: str,
     signer_identity: str,
     signer: Signer,
 ) -> dict[str, Any]:
@@ -489,6 +966,9 @@ def create_transition_authorization(
         "resulting_head_sha": _require_oid(resulting_head_sha, "resulting head"),
         "transition_kind": transition_kind,
         "replacement_pull_request": replacement_pull_request,
+        "initialization_evidence_digest": _require_digest(
+            initialization_evidence_digest, "initialization evidence"
+        ),
         "signer_identity": _require_identity(signer_identity, "event signer"),
     }
     _validate_event_semantics(fields)
@@ -504,9 +984,22 @@ def _validate_event_semantics(event: Mapping[str, Any]) -> None:
     predecessor_digest = event["predecessor_authority_digest"]
     predecessor_head = event["predecessor_head_sha"]
     replacement = event["replacement_pull_request"]
+    initialization_digest = _require_digest(
+        event["initialization_evidence_digest"], "initialization evidence"
+    )
     if transition == "INITIALIZED_DRAFT":
         if predecessor_digest is not None or predecessor_head is not None or replacement is not None:
             raise LifecycleAuthorityError("genesis cannot claim a predecessor or replacement")
+        if event["lifecycle_id"] != delivery_initialization_lifecycle_id(
+            initialization_digest
+        ):
+            raise LifecycleAuthorityError(
+                "genesis lifecycle identity is not derived from initialization"
+            )
+        if event["event_id"] != f"genesis:{initialization_digest}":
+            raise LifecycleAuthorityError(
+                "genesis event identity is not canonical for initialization"
+            )
     else:
         _require_digest(predecessor_digest, "predecessor authority digest")
         _require_oid(predecessor_head, "predecessor head")
@@ -530,7 +1023,7 @@ def _validate_event_semantics(event: Mapping[str, Any]) -> None:
         raise LifecycleAuthorityError("selected transition requires a new delivery head")
 
 
-def verify_transition_authorization(
+def _verify_transition_authorization(
     value: Any,
     *,
     accepted_signers: frozenset[str],
@@ -549,6 +1042,7 @@ def verify_transition_authorization(
     _require_identity(event["lifecycle_id"], "lifecycle identity")
     _require_positive_int(event["pull_request"], "pull request")
     _require_oid(event["resulting_head_sha"], "resulting head")
+    _require_digest(event["initialization_evidence_digest"], "initialization evidence")
     signer_identity = _require_identity(event["signer_identity"], "event signer")
     _validate_event_semantics(event)
     signed = {key: copy.deepcopy(item) for key, item in event.items() if key != "event_digest"}
@@ -587,6 +1081,7 @@ def _authority_unsigned_fields(
         "predecessor_authority_digest": event["predecessor_authority_digest"],
         "transition_kind": transition,
         "event_authorization_digest": event["event_digest"],
+        "initialization_evidence_digest": event["initialization_evidence_digest"],
         "state_before": None if predecessor is None else copy.deepcopy(predecessor["state_after"]),
         "state_after": copy.deepcopy(state),
     }
@@ -605,7 +1100,7 @@ def issue_lifecycle_authority(
 ) -> dict[str, Any]:
     """Verify predecessor/event authority, derive state, and sign one snapshot."""
 
-    event = verify_transition_authorization(
+    event = _verify_transition_authorization(
         authorization,
         accepted_signers=accepted_event_signers,
         signature_verifier=signature_verifier,
@@ -618,7 +1113,7 @@ def issue_lifecycle_authority(
     else:
         if not predecessor_chain:
             raise LifecycleAuthorityError("non-genesis authority requires its predecessor chain")
-        verified = verify_lifecycle_authority(
+        verified = _verify_lifecycle_authority_objects(
             predecessor_chain,
             transition_authorizations,
             accepted_event_signers=accepted_event_signers,
@@ -633,6 +1128,8 @@ def issue_lifecycle_authority(
             or event["pull_request"] != verified.pull_request
             or event["predecessor_head_sha"] != verified.head_sha
             or event["predecessor_authority_digest"] != verified.authority_digest
+            or event["initialization_evidence_digest"]
+            != predecessor_chain[-1]["initialization_evidence_digest"]
         ):
             raise LifecycleAuthorityError("transition authorization does not continue exact predecessor")
         state = derive_state(
@@ -669,6 +1166,9 @@ def _verify_authority_shape(
     if authority["transition_kind"] not in TRANSITIONS:
         raise LifecycleAuthorityError("unknown lifecycle transition")
     _require_digest(authority["event_authorization_digest"], "event authorization digest")
+    _require_digest(
+        authority["initialization_evidence_digest"], "initialization evidence"
+    )
     if authority["predecessor_authority_digest"] is not None:
         _require_digest(authority["predecessor_authority_digest"], "predecessor digest")
     if authority["predecessor_head_sha"] is not None:
@@ -694,7 +1194,7 @@ def _verify_authority_shape(
     return copy.deepcopy(authority)
 
 
-def verify_lifecycle_authority(
+def _verify_lifecycle_authority_objects(
     authority_chain: Sequence[Mapping[str, Any]],
     transition_authorizations: Sequence[Mapping[str, Any]],
     *,
@@ -703,7 +1203,7 @@ def verify_lifecycle_authority(
     signature_verifier: SignatureVerifier,
     expected: ExpectedLifecycle | None = None,
 ) -> VerifiedLifecycleAuthority:
-    """Independently verify an authority chain from typed genesis to current state."""
+    """Verify parsed objects with an already authenticated internal trust context."""
 
     if not authority_chain or len(authority_chain) != len(transition_authorizations):
         raise LifecycleAuthorityError("complete authority and event chains are required")
@@ -711,7 +1211,7 @@ def verify_lifecycle_authority(
     event_digests: set[str] = set()
     event_ids: set[str] = set()
     for value in transition_authorizations:
-        event = verify_transition_authorization(
+        event = _verify_transition_authorization(
             value,
             accepted_signers=accepted_event_signers,
             signature_verifier=signature_verifier,
@@ -739,6 +1239,10 @@ def verify_lifecycle_authority(
                 raise LifecycleAuthorityError("authority chain is truncated before typed genesis")
             if item["predecessor_authority_digest"] is not None or item["state_before"] is not None:
                 raise LifecycleAuthorityError("genesis authority claims a predecessor")
+            if item["lifecycle_id"] != delivery_initialization_lifecycle_id(
+                item["initialization_evidence_digest"]
+            ):
+                raise LifecycleAuthorityError("genesis lifecycle identity is not anchored")
             derived = initial_state()
         else:
             if previous is None or current_state is None:
@@ -749,6 +1253,8 @@ def verify_lifecycle_authority(
                 or item["repository"] != previous["repository"]
                 or item["delivery_issue"] != previous["delivery_issue"]
                 or item["lifecycle_id"] != previous["lifecycle_id"]
+                or item["initialization_evidence_digest"]
+                != previous["initialization_evidence_digest"]
                 or item["state_before"] != current_state
             ):
                 raise LifecycleAuthorityError("authority predecessor continuity is invalid")
@@ -766,6 +1272,8 @@ def verify_lifecycle_authority(
             or event["predecessor_authority_digest"] != item["predecessor_authority_digest"]
             or event["predecessor_head_sha"] != item["predecessor_head_sha"]
             or event["transition_kind"] != item["transition_kind"]
+            or event["initialization_evidence_digest"]
+            != item["initialization_evidence_digest"]
             or item["state_after"] != derived
         ):
             raise LifecycleAuthorityError("authority state or event binding was not derived")
@@ -787,6 +1295,9 @@ def verify_lifecycle_authority(
         repository=verified_authority["repository"],
         delivery_issue=verified_authority["delivery_issue"],
         lifecycle_id=verified_authority["lifecycle_id"],
+        initialization_evidence_digest=verified_authority[
+            "initialization_evidence_digest"
+        ],
         pull_request=verified_authority["pull_request"],
         head_sha=verified_authority["head_sha"],
         state=copy.deepcopy(current_state),
@@ -794,6 +1305,86 @@ def verify_lifecycle_authority(
     )
     if expected is not None:
         _compare_expected(result, expected)
+    return result
+
+
+def serialize_lifecycle_evidence(
+    *,
+    delivery_initialization: Mapping[str, Any],
+    transition_authorizations: Sequence[Mapping[str, Any]],
+    authority_chain: Sequence[Mapping[str, Any]],
+) -> bytes:
+    """Serialize one complete lifecycle chain for the maintained public verifier."""
+
+    return canonical_json_bytes(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": BUNDLE_KIND,
+            "domain": BUNDLE_DOMAIN,
+            "delivery_initialization": copy.deepcopy(delivery_initialization),
+            "transition_authorizations": copy.deepcopy(list(transition_authorizations)),
+            "authority_chain": copy.deepcopy(list(authority_chain)),
+        }
+    )
+
+
+def verify_lifecycle_authority(
+    serialized_evidence: bytes | str,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify canonical serialized evidence using only maintained installed trust."""
+
+    if not isinstance(serialized_evidence, (bytes, str)):
+        raise LifecycleAuthorityError(
+            "public lifecycle verification requires canonical serialized evidence"
+        )
+    bundle = _require_closed(
+        _load_canonical_json(serialized_evidence, "lifecycle evidence"),
+        BUNDLE_FIELDS,
+        "lifecycle evidence",
+    )
+    if bundle["schema_version"] != SCHEMA_VERSION:
+        raise LifecycleAuthorityError("unknown lifecycle-evidence version")
+    if bundle["kind"] != BUNDLE_KIND or bundle["domain"] != BUNDLE_DOMAIN:
+        raise LifecycleAuthorityError("unknown lifecycle-evidence kind or domain")
+    initialization_value = bundle["delivery_initialization"]
+    if not isinstance(initialization_value, dict):
+        raise LifecycleAuthorityError("delivery initialization is malformed")
+    repository = _require_repository(initialization_value.get("repository"))
+    policy = _load_lifecycle_trust_policy(repository)
+    signature_verifier = _policy_signature_verifier(policy)
+    initialization = _verify_delivery_initialization(
+        initialization_value,
+        policy=policy,
+        signature_verifier=signature_verifier,
+    )
+    authorities = bundle["authority_chain"]
+    events = bundle["transition_authorizations"]
+    if not isinstance(authorities, list) or not isinstance(events, list):
+        raise LifecycleAuthorityError("complete lifecycle evidence chains are required")
+    result = _verify_lifecycle_authority_objects(
+        authorities,
+        events,
+        accepted_event_signers=policy.transition_signer_identities,
+        accepted_authority_signers=policy.authority_signer_identities,
+        signature_verifier=signature_verifier,
+        expected=expected,
+    )
+    first_event = events[0]
+    first_authority = authorities[0]
+    digest = initialization["initialization_digest"]
+    if (
+        first_event["initialization_evidence_digest"] != digest
+        or first_authority["initialization_evidence_digest"] != digest
+        or first_event["repository"] != initialization["repository"]
+        or first_event["delivery_issue"] != initialization["delivery_issue"]
+        or first_event["pull_request"] != initialization["pull_request"]
+        or first_event["resulting_head_sha"] != initialization["initial_head_sha"]
+        or result.lifecycle_id != delivery_initialization_lifecycle_id(digest)
+    ):
+        raise LifecycleAuthorityError(
+            "genesis does not bind the maintained delivery initialization"
+        )
     return result
 
 
@@ -890,6 +1481,7 @@ def lifecycle_authority_binding(result: VerifiedLifecycleAuthority) -> dict[str,
         "repository": result.repository,
         "delivery_issue": result.delivery_issue,
         "lifecycle_id": result.lifecycle_id,
+        "initialization_evidence_digest": result.initialization_evidence_digest,
         "pull_request": result.pull_request,
         "head_sha": result.head_sha,
         "verified_facts": facts,

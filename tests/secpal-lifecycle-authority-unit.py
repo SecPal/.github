@@ -7,10 +7,16 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
+import json
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest import TestCase, main
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -20,7 +26,8 @@ from scripts.secpal_pr_review import lifecycle_authority as authority
 REPOSITORY = "SecPal/.github"
 ISSUE = 750
 PR = 751
-LIFECYCLE = "issue-750-delivery"
+INITIALIZATION_DIGEST = "0" * 64
+LIFECYCLE = authority.delivery_initialization_lifecycle_id(INITIALIZATION_DIGEST)
 SIGNER = "aroviqen@secpal.app"
 OTHER_SIGNER = "other@secpal.app"
 HEADS = [character * 40 for character in "abcdef1234567890"]
@@ -70,7 +77,11 @@ class Chain:
         genesis = not self.authorities
         resulting_head = head or self.head
         event = authority.create_transition_authorization(
-            event_id=f"event-{self.event_number}",
+            event_id=(
+                f"genesis:{INITIALIZATION_DIGEST}"
+                if genesis
+                else f"event-{self.event_number}"
+            ),
             repository=REPOSITORY,
             delivery_issue=ISSUE,
             lifecycle_id=LIFECYCLE,
@@ -80,6 +91,7 @@ class Chain:
             resulting_head_sha=resulting_head,
             transition_kind=transition,
             replacement_pull_request=replacement_pull_request,
+            initialization_evidence_digest=INITIALIZATION_DIGEST,
             signer_identity=event_signer,
             signer=signer_for(event_signer),
         )
@@ -103,7 +115,7 @@ class Chain:
     def verify(
         self, expected: authority.ExpectedLifecycle | None = None
     ) -> authority.VerifiedLifecycleAuthority:
-        return authority.verify_lifecycle_authority(
+        return authority._verify_lifecycle_authority_objects(
             self.authorities,
             self.events,
             accepted_event_signers=frozenset({SIGNER}),
@@ -157,7 +169,7 @@ def resign_event(value: dict[str, Any], identity: str = SIGNER) -> dict[str, Any
 
 
 def verify_raw(authorities: list[dict[str, Any]], events: list[dict[str, Any]]) -> Any:
-    return authority.verify_lifecycle_authority(
+    return authority._verify_lifecycle_authority_objects(
         authorities,
         events,
         accepted_event_signers=frozenset({SIGNER}),
@@ -167,6 +179,330 @@ def verify_raw(authorities: list[dict[str, Any]], events: list[dict[str, Any]]) 
 
 
 class LifecycleAuthorityTests(TestCase):
+    def test_public_verifier_does_not_accept_consumer_trust_inputs(self) -> None:
+        parameters = inspect.signature(authority.verify_lifecycle_authority).parameters
+        self.assertEqual(list(parameters), ["serialized_evidence", "expected"])
+
+    def test_lifecycle_identity_is_derived_from_initialization_anchor(self) -> None:
+        digest = "1" * 64
+        self.assertEqual(
+            authority.delivery_initialization_lifecycle_id(digest),
+            f"lifecycle:{digest}",
+        )
+
+    def test_noncanonical_git_oid_lengths_are_rejected(self) -> None:
+        for length in (39, 41, 42, 63, 65):
+            with self.subTest(length=length):
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    authority._require_oid("a" * length, "test head")
+        for length in (40, 64):
+            self.assertEqual(
+                authority._require_oid("a" * length, "test head"), "a" * length
+            )
+
+    def test_public_serialized_boundary_and_anchored_real_ssh_chain(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lifecycle-ssh-test-") as directory:
+            key = Path(directory) / "key"
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                check=True,
+            )
+            public_key = key.with_suffix(".pub").read_text(encoding="utf-8").split()
+            trusted = authority.TrustedSigner(
+                SIGNER,
+                (f"{public_key[0]} {public_key[1]}",),
+                (),
+            )
+
+            def real_signer(payload: bytes, domain: str) -> dict[str, str]:
+                result = subprocess.run(
+                    ["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", domain],
+                    input=payload,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                return {
+                    "format": "ssh",
+                    "signer_identity": SIGNER,
+                    "value": result.stdout.decode(),
+                }
+
+            initialization = authority.create_delivery_initialization(
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                initial_head_sha=HEADS[0],
+                validation_receipt_digest="1" * 64,
+                final_attestation_digest="2" * 64,
+                signer_identity=SIGNER,
+                signer=real_signer,
+            )
+            digest = initialization["initialization_digest"]
+            lifecycle = authority.delivery_initialization_lifecycle_id(digest)
+            policy = authority.LifecycleTrustPolicy(
+                REPOSITORY,
+                frozenset({"ssh"}),
+                frozenset({SIGNER}),
+                frozenset({SIGNER}),
+                {SIGNER: trusted},
+                (authority.InitializationAnchor(ISSUE, PR, HEADS[0], digest),),
+            )
+            event = authority.create_transition_authorization(
+                event_id=f"genesis:{digest}",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=lifecycle,
+                pull_request=PR,
+                predecessor_authority_digest=None,
+                predecessor_head_sha=None,
+                resulting_head_sha=HEADS[0],
+                transition_kind="INITIALIZED_DRAFT",
+                replacement_pull_request=None,
+                initialization_evidence_digest=digest,
+                signer_identity=SIGNER,
+                signer=real_signer,
+            )
+            verifier = authority._policy_signature_verifier(policy)
+            snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=[],
+                transition_authorizations=[],
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=real_signer,
+                accepted_event_signers=policy.transition_signer_identities,
+                accepted_authority_signers=policy.authority_signer_identities,
+                signature_verifier=verifier,
+            )
+            raw = authority.serialize_lifecycle_evidence(
+                delivery_initialization=initialization,
+                transition_authorizations=[event],
+                authority_chain=[snapshot],
+            )
+            with patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ):
+                result = authority.verify_lifecycle_authority(
+                    raw,
+                    authority.ExpectedLifecycle(
+                        REPOSITORY, ISSUE, lifecycle, PR, HEADS[0]
+                    ),
+                )
+                self.assertEqual(result.lifecycle_id, lifecycle)
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    authority.verify_lifecycle_authority(json.loads(raw))
+                for field in (
+                    '"delivery_issue":750',
+                    '"event_id":"genesis:',
+                    '"initial_head_sha":"',
+                ):
+                    ambiguous = raw.decode().replace(field, field, 1)
+                    if field == '"delivery_issue":750':
+                        ambiguous = ambiguous.replace(
+                            field, '"delivery_issue":999,"delivery_issue":750', 1
+                        )
+                    elif field == '"event_id":"genesis:':
+                        ambiguous = ambiguous.replace(
+                            field,
+                            '"event_id":"other","event_id":"genesis:',
+                            1,
+                        )
+                    else:
+                        ambiguous = ambiguous.replace(
+                            field,
+                            '"initial_head_sha":"' + HEADS[1] + '","initial_head_sha":"',
+                            1,
+                        )
+                    with self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "duplicate"
+                    ):
+                        authority.verify_lifecycle_authority(ambiguous)
+                unanchored_policy = authority.LifecycleTrustPolicy(
+                    REPOSITORY,
+                    policy.accepted_formats,
+                    policy.transition_signer_identities,
+                    policy.authority_signer_identities,
+                    policy.signers,
+                    (
+                        authority.InitializationAnchor(
+                            ISSUE, PR, HEADS[0], "9" * 64
+                        ),
+                    ),
+                )
+                with patch.object(
+                    authority,
+                    "_load_lifecycle_trust_policy",
+                    return_value=unanchored_policy,
+                ):
+                    with self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "unique maintained"
+                    ):
+                        authority.verify_lifecycle_authority(raw)
+                later_initialization = authority.create_delivery_initialization(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    initial_head_sha=HEADS[1],
+                    validation_receipt_digest="3" * 64,
+                    final_attestation_digest="4" * 64,
+                    signer_identity=SIGNER,
+                    signer=real_signer,
+                )
+                later_raw = authority.serialize_lifecycle_evidence(
+                    delivery_initialization=later_initialization,
+                    transition_authorizations=[event],
+                    authority_chain=[snapshot],
+                )
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "unique maintained"
+                ):
+                    authority.verify_lifecycle_authority(later_raw)
+
+            authority_signature = real_signer(
+                payload=b"payload", domain=authority.AUTHORITY_DOMAIN
+            )
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                verifier(
+                    b"payload",
+                    authority_signature,
+                    SIGNER,
+                    authority.EVENT_DOMAIN,
+                )
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority._verify_signature(
+                    b"payload",
+                    {
+                        "format": "ssh",
+                        "signer_identity": OTHER_SIGNER,
+                        "value": authority_signature["value"],
+                    },
+                    OTHER_SIGNER,
+                    authority.EVENT_DOMAIN,
+                    policy.transition_signer_identities,
+                    verifier,
+                )
+
+    def test_genesis_requires_canonical_anchor_identity(self) -> None:
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "derived"):
+            authority.create_transition_authorization(
+                event_id=f"genesis:{INITIALIZATION_DIGEST}",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id="caller-selected-lifecycle",
+                pull_request=PR,
+                predecessor_authority_digest=None,
+                predecessor_head_sha=None,
+                resulting_head_sha=HEADS[0],
+                transition_kind="INITIALIZED_DRAFT",
+                replacement_pull_request=None,
+                initialization_evidence_digest=INITIALIZATION_DIGEST,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+        other_initialization = "3" * 64
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "derived"):
+            authority.create_transition_authorization(
+                event_id=f"genesis:{other_initialization}",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=LIFECYCLE,
+                pull_request=PR,
+                predecessor_authority_digest=None,
+                predecessor_head_sha=None,
+                resulting_head_sha=HEADS[1],
+                transition_kind="INITIALIZED_DRAFT",
+                replacement_pull_request=None,
+                initialization_evidence_digest=other_initialization,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "canonical"):
+            authority.create_transition_authorization(
+                event_id="alternate-root",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=LIFECYCLE,
+                pull_request=PR,
+                predecessor_authority_digest=None,
+                predecessor_head_sha=None,
+                resulting_head_sha=HEADS[0],
+                transition_kind="INITIALIZED_DRAFT",
+                replacement_pull_request=None,
+                initialization_evidence_digest=INITIALIZATION_DIGEST,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
+    def test_nonfinite_and_noncanonical_raw_json_rejected(self) -> None:
+        for raw in ('{"value":NaN}', '{"value":Infinity}'):
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority.loads_closed_json(raw)
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "canonical"):
+            authority.verify_lifecycle_authority("{}")
+
+    def test_real_openpgp_policy_adapter(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lifecycle-gpg-test-") as directory:
+            environment = {**os.environ, "GNUPGHOME": directory}
+            subprocess.run(
+                [
+                    "gpg",
+                    "--batch",
+                    "--passphrase",
+                    "",
+                    "--quick-gen-key",
+                    SIGNER,
+                    "ed25519",
+                    "sign",
+                    "0",
+                ],
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            listing = subprocess.run(
+                ["gpg", "--batch", "--with-colons", "--list-secret-keys", SIGNER],
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            ).stdout
+            fingerprint = next(
+                line.split(":")[9]
+                for line in listing.splitlines()
+                if line.startswith("fpr:")
+            )
+            payload = authority.canonical_json_bytes({"domain": authority.EVENT_DOMAIN})
+            signature = subprocess.run(
+                ["gpg", "--batch", "--armor", "--detach-sign", "--output", "-"],
+                env=environment,
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            ).stdout.decode()
+            policy = authority.LifecycleTrustPolicy(
+                REPOSITORY,
+                frozenset({"openpgp"}),
+                frozenset({SIGNER}),
+                frozenset({SIGNER}),
+                {SIGNER: authority.TrustedSigner(SIGNER, (), (fingerprint,))},
+                (),
+            )
+            with patch.dict(os.environ, {"GNUPGHOME": directory}):
+                verified = authority._policy_signature_verifier(policy)(
+                    payload,
+                    {
+                        "format": "openpgp",
+                        "signer_identity": SIGNER,
+                        "value": signature,
+                    },
+                    SIGNER,
+                    authority.EVENT_DOMAIN,
+                )
+            self.assertEqual(verified.signature_format, "openpgp")
+
     def test_authenticated_draft_genesis(self) -> None:
         chain = genesis_chain()
         result = chain.verify(
@@ -236,6 +572,10 @@ class LifecycleAuthorityTests(TestCase):
         chain.append("PR_REBOUND", replacement_pull_request=752)
         result = chain.verify()
         self.assertEqual(result.lifecycle_id, initial.lifecycle_id)
+        self.assertEqual(
+            result.initialization_evidence_digest,
+            initial.initialization_evidence_digest,
+        )
         self.assertEqual(result.state, before_replacement.state)
         self.assertEqual(result.pull_request, 752)
 
@@ -355,6 +695,7 @@ class LifecycleAuthorityTests(TestCase):
             predecessor_authority_digest=chain.authorities[-1]["authority_digest"],
             predecessor_head_sha=chain.head, resulting_head_sha=chain.head,
             transition_kind="PR_REBOUND", replacement_pull_request=752,
+            initialization_evidence_digest=INITIALIZATION_DIGEST,
             signer_identity=SIGNER, signer=signer_for(),
         )
         with self.assertRaises(authority.LifecycleAuthorityError):

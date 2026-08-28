@@ -236,15 +236,28 @@ merge remains separately authorized by the current user instruction.
 
 `scripts/secpal_pr_review/lifecycle_authority.py` owns the independently
 authenticated lifecycle primitive, not this feedback-processing state machine.
-Its version-1 authority is a closed, signed, append-only predecessor chain. One
-typed authenticated genesis establishes Draft state with review/remediation at
-zero, no Ready or exceptional history, and explicit Cycle-3 absence. Every
-later authority verifies its predecessor and separately signed typed event,
-then derives counters and history without accepting a caller-supplied result.
+Its version-1 authority is a closed, signed, append-only predecessor chain. The
+maintained repository registry owns distinct transition- and authority-signer
+roles, exact SSH public keys and OpenPGP fingerprints, accepted formats, and
+unique delivery-initialization anchors. The public verifier loads that installed
+policy itself; consumers cannot supply signer sets or signature callbacks.
 
-The maintained verifier authenticates the complete chain, accepted event and
-authority signers, repository, delivery issue, lifecycle, PR, heads, finite
-counters, Ready/Draft history, and exceptional recovery/continuation history.
+One typed initialization binds the ordinary validation receipt and final
+attestation to the repository, issue, initial PR, and exact initial head. Its
+maintained anchor digest deterministically derives the persistent lifecycle ID
+and canonical genesis event identity. Genesis establishes Draft state with
+review/remediation at zero, no Ready or exceptional history, and explicit
+Cycle-3 absence. Every later authority preserves the initialization digest,
+verifies its predecessor and separately signed typed event, then derives
+counters and history without accepting a caller-supplied result.
+
+The maintained verifier accepts only one canonical serialized evidence bundle.
+Its mandatory duplicate-aware parser rejects duplicate or unknown fields,
+non-finite JSON, noncanonical encodings, and malformed evidence before internal
+normalization. It authenticates the complete chain, accepted event and authority
+signers, repository, delivery issue, lifecycle, PR, exact 40- or 64-hex Git
+heads, finite counters, Ready/Draft history, and exceptional
+recovery/continuation history.
 Head advancement, exceptional events, and authorized PR rebinding retain the
 persistent lifecycle and cannot reset counters. Its normalized binding is
 available to future consumers, but ordinary delivery evidence does not require

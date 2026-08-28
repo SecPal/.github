@@ -80,7 +80,11 @@ follow-up identity. Mixed and unknown versions fail closed.
 ## Persistent lifecycle authority
 
 Lifecycle-authority schema 1.0 is an append-only chain rooted in exactly one
-authenticated `INITIALIZED_DRAFT` event. Each non-genesis snapshot binds the
+authenticated delivery initialization and its canonical `INITIALIZED_DRAFT`
+event. The initialization binds the ordinary validation receipt and final
+attestation to the repository, issue, initial PR, and exact initial head. Its
+maintained anchor digest derives both the persistent lifecycle identity and
+canonical genesis event identity. Each non-genesis snapshot binds the
 exact predecessor authority digest and head, one independently signed typed
 event, the persistent repository/issue/lifecycle/PR identity, and the derived
 next state. The closed state records finite review and remediation counters,
@@ -88,14 +92,20 @@ explicit Cycle-3 absence, Draft/Ready state and transition history, and bounded
 exceptional recovery and continuation history. Head advancement and authorized
 PR rebinding preserve every lifecycle fact.
 
-The verifier recomputes every state from genesis and checks canonical digests,
-event and authority signatures against caller-independent accepted-signer sets,
-chain continuity, event replay, and optional exact consumer constraints. The
-signature adapter is a trust-boundary dependency backed by the maintained
-SSH/OpenPGP verification configuration; signer assertions inside an artifact
-are never sufficient. A verified binding exposes the authority digest,
-persistent lifecycle identity, exact head, and normalized history digests for
-later consumers.
+The installed repository registry is the lifecycle trust-policy source. It
+separately assigns transition and authority signer roles, accepted signature
+formats, SSH public keys, OpenPGP fingerprints, and unique initialization
+anchors. The public verifier does not accept consumer signer sets or verification
+callbacks: it loads this maintained policy and invokes concrete `ssh-keygen` or
+GnuPG detached-signature verification. Signer assertions inside evidence are
+never sufficient.
+
+The public verifier accepts only a canonical serialized evidence bundle. It
+rejects duplicate and unknown fields, non-finite JSON, noncanonical encodings,
+and caller-preparsed mappings before recomputing every state from genesis. Git
+object identities are exactly 40-hex SHA-1 or 64-hex SHA-256 values. A verified
+binding exposes the authority and initialization digests, persistent lifecycle
+identity, exact head, and normalized history digests for later consumers.
 
 This primitive does not observe GitHub, mutate Ready/Draft state, process review
 events, replace pull requests, or orchestrate recovery. Existing ordinary

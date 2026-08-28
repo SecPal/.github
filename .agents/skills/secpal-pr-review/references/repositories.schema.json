@@ -107,6 +107,9 @@
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "signature_policy": { "type": "object" },
+        "lifecycle_authority_policy": {
+          "$ref": "#/$defs/lifecycle_authority_policy"
+        },
         "check_policy": { "type": "object" },
         "manual_gates": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "unsupported_operations": {
@@ -148,6 +151,80 @@
         "working_directory": { "type": "string", "minLength": 1 },
         "purpose": { "type": "string", "minLength": 1 },
         "execution_policy": { "enum": ["always", "focused-only"] }
+      }
+    },
+    "lifecycle_authority_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "accepted_formats",
+        "signers",
+        "transition_signer_identities",
+        "authority_signer_identities",
+        "delivery_initializations"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "accepted_formats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["ssh", "openpgp"] }
+        },
+        "signers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["identity", "ssh_public_keys", "openpgp_fingerprints"],
+            "properties": {
+              "identity": { "type": "string", "minLength": 1 },
+              "ssh_public_keys": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+$" }
+              },
+              "openpgp_fingerprints": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[0-9A-F]{40,64}$" }
+              }
+            }
+          }
+        },
+        "transition_signer_identities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "authority_signer_identities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "delivery_initializations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "delivery_issue",
+              "pull_request",
+              "initial_head_sha",
+              "initialization_digest"
+            ],
+            "properties": {
+              "delivery_issue": { "type": "integer", "minimum": 1 },
+              "pull_request": { "type": "integer", "minimum": 1 },
+              "initial_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "initialization_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        }
       }
     }
   }
