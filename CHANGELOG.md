@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-28 - Clarify Public Provider And Managed Operations Ownership
+
+**Changed:**
+
+- refined ADR-023 so portable provider adapters, qualification, monitoring,
+  notification, recovery, and capacity capabilities remain public while private
+  operations owns customer/fleet policy, placement, commercial decisions, and
+  managed orchestration
+- made detector mutation authority, provider-product evidence, and the
+  overriding Never-in-Git boundary explicit
+
 ## 2026-08-26 - Stop Requiring Up-To-Date Pull Request Branches
 
 **Changed:**
