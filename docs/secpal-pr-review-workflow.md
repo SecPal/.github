@@ -280,6 +280,18 @@ delivery issue, authorization ID, and expected signer. Its evidence fixes parent
 authenticated current registered `main` snapshot, in that order, and requires
 exactly two parents.
 
+The prior Ready state is supplied as a separate closed
+`READY_INTEGRATION_PRIOR_AUTHORITY` manifest. Its digest is authenticated by a
+signed annotated tag on the prior delivery head, and the binder independently
+verifies that head's ordinary receipt, final attestation, tree, signature, and
+accepted signer. The manifest binds the lifecycle identity and unchanged
+review/remediation counters, so inline integration booleans cannot establish
+Ready or lifecycle authority. Receipt creation performs one trusted GitHub
+observation of the open Ready PR and its registered target-base ref; the live PR
+head must equal parent 1 and the live base SHA must equal both the explicitly
+authorized SHA and parent 2. The read is not caller-provided evidence and any
+missing, malformed, or drifted result fails closed without retry.
+
 Before the candidate is bound, the same complete registered validation produces
 a fresh receipt for the combined staged tree. The signed integration candidate
 carries one `SecPal-Validation-Receipt` trailer and one

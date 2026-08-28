@@ -393,6 +393,17 @@ receipt trailer. The final integration attestation binds both trailers, the new
 head, ordered parents, validated and mechanical tree identities, and the exact
 raw tree delta allowed for manual conflict resolution.
 
+Parent 1 and its Ready/lifecycle claims are not caller assertions. A distinct
+closed `READY_INTEGRATION_PRIOR_AUTHORITY` manifest binds the prior delivery
+tree, receipt, final attestation, accepted signer, lifecycle identity, counters,
+and Ready-without-transition state. The helper independently verifies that
+ordinary delivery chain and a signed annotated authority tag whose trailer
+binds the manifest digest. Integration evidence and its fresh receipt bind the
+same authority digest. During receipt creation, one trusted GitHub read must
+also prove that the open Ready PR still has parent 1 as its head and that its
+registered target-base ref currently resolves to parent 2. Missing authority,
+live-ref drift, or an unavailable observation fails closed without retry.
+
 This integration topology consumes no unrestricted review or remediation cycle,
 does not create Cycle 3, requests no review, and preserves `Draft=false` and
 `Ready=true` without a transition. Unknown versions, ambiguous fields, generic

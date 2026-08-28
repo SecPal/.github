@@ -425,8 +425,10 @@ LOADED_MODULE_ATTRIBUTES = {
             "execute_resolution_batch",
             "follow_up",
             "normalize_ready_integration_evidence",
+            "normalize_ready_integration_prior_authority",
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
+            "verify_validation_attestation",
         },
         "follow_up": {
             "FollowUpError",
@@ -564,6 +566,54 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'expected_integration_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_authority', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_authority_tag_ref', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_reviewed_state', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_receipt', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'expected_prior_authority_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_authority', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_reviewed_state', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_receipt', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_authority_tag_ref', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'expected_prior_authority_signer', None)",
         ),
         DynamicImportCall(
             ("_verify_integration_selection",),

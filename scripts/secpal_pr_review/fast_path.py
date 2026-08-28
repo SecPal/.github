@@ -97,6 +97,7 @@ RESOLUTION_MERGE_STATE_POLICY = {
     "BLOCKED": "required_checks",
 }
 READY_INTEGRATION_KIND = "TWO_PARENT_READY_INTEGRATION"
+READY_INTEGRATION_PRIOR_AUTHORITY_KIND = "READY_INTEGRATION_PRIOR_AUTHORITY"
 READY_INTEGRATION_KEYS = frozenset(
     {
         "schema_version",
@@ -106,6 +107,7 @@ READY_INTEGRATION_KEYS = frozenset(
         "delivery_issue_number",
         "pull_request_number",
         "prior_delivery_head_sha",
+        "prior_authority_digest",
         "target_base",
         "ordered_parent_shas",
         "validated_tree_sha",
@@ -116,6 +118,22 @@ READY_INTEGRATION_KEYS = frozenset(
         "validation_execution",
         "expected_signer",
         "eligibility",
+    }
+)
+
+READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_delivery_head_sha",
+        "prior_delivery_tree_sha",
+        "prior_validation_receipt_digest",
+        "prior_final_attestation_digest",
+        "expected_signer",
+        "lifecycle",
     }
 )
 
@@ -236,6 +254,72 @@ def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
+    """Normalize the separately signed authority for the prior Ready head."""
+
+    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_PRIOR_AUTHORITY_KEYS:
+        raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
+    if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
+        raise SecurityBlocker("Ready integration prior authority contains secret-like text")
+    if (
+        value.get("schema_version") != "1.0"
+        or value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
+    ):
+        raise SecurityBlocker("Ready integration prior authority kind or version is unsupported")
+    signer = value.get("expected_signer")
+    if not isinstance(signer, dict) or set(signer) != {"kind", "identity"}:
+        raise SecurityBlocker("Ready integration prior signer is malformed")
+    signer_kind = signer.get("kind")
+    signer_identity = _require_string(signer.get("identity"), "Ready integration prior signer")
+    if signer_kind == "SSH_PRINCIPAL":
+        pass
+    elif signer_kind == "OPENPGP_FINGERPRINT":
+        if not re.fullmatch(r"[0-9A-F]{40,64}", signer_identity):
+            raise SecurityBlocker("Ready integration prior OpenPGP signer is malformed")
+    else:
+        raise SecurityBlocker("Ready integration prior signer kind is unsupported")
+    lifecycle = value.get("lifecycle")
+    lifecycle_keys = {
+        "identity",
+        "draft",
+        "ready",
+        "ready_transition",
+        "unrestricted_reviews",
+        "remediation_cycles",
+        "cycle_3",
+    }
+    if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_keys:
+        raise SecurityBlocker("Ready integration prior lifecycle authority is malformed")
+    reviews = lifecycle.get("unrestricted_reviews")
+    cycles = lifecycle.get("remediation_cycles")
+    if (
+        not _require_string(lifecycle.get("identity"), "Ready integration lifecycle identity")
+        or lifecycle.get("draft") is not False
+        or lifecycle.get("ready") is not True
+        or lifecycle.get("ready_transition") is not False
+        or lifecycle.get("cycle_3") is not False
+        or isinstance(reviews, bool)
+        or reviews != 1
+        or isinstance(cycles, bool)
+        or not isinstance(cycles, int)
+        or not 0 <= cycles <= 2
+    ):
+        raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
+    return {
+        "schema_version": "1.0",
+        "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
+        "repository": _require_string(value.get("repository"), "prior authority repository"),
+        "delivery_issue_number": _require_positive_integer(value.get("delivery_issue_number"), "prior authority delivery issue"),
+        "pull_request_number": _require_positive_integer(value.get("pull_request_number"), "prior authority pull request"),
+        "prior_delivery_head_sha": _require_oid(value.get("prior_delivery_head_sha"), "prior authority head"),
+        "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
+        "prior_validation_receipt_digest": _require_digest(value.get("prior_validation_receipt_digest"), "prior validation receipt"),
+        "prior_final_attestation_digest": _require_digest(value.get("prior_final_attestation_digest"), "prior final attestation"),
+        "expected_signer": {"kind": signer_kind, "identity": signer_identity},
+        "lifecycle": copy.deepcopy(lifecycle),
+    }
+
+
 def normalize_ready_integration_evidence(
     value: Any,
     *,
@@ -268,6 +352,9 @@ def normalize_ready_integration_evidence(
     )
     prior_head = _require_oid(
         value.get("prior_delivery_head_sha"), "prior delivery head"
+    )
+    prior_authority_digest = _require_digest(
+        value.get("prior_authority_digest"), "prior Ready authority digest"
     )
     if prior_head != reviewed_state.head_sha:
         raise SecurityBlocker("integration first parent is stale or substituted")
@@ -357,6 +444,7 @@ def normalize_ready_integration_evidence(
     eligibility = value.get("eligibility")
     eligibility_keys = {
         "eligible",
+        "lifecycle_identity",
         "draft_before",
         "draft_after",
         "ready_before",
@@ -377,6 +465,10 @@ def normalize_ready_integration_evidence(
     after_cycles = eligibility.get("remediation_cycles_after")
     if (
         eligibility.get("eligible") is not True
+        or not _require_string(
+            eligibility.get("lifecycle_identity"),
+            "integration lifecycle identity",
+        )
         or eligibility.get("draft_before") is not False
         or eligibility.get("draft_after") is not False
         or eligibility.get("ready_before") is not True
@@ -402,6 +494,7 @@ def normalize_ready_integration_evidence(
         "delivery_issue_number": delivery_issue_number,
         "pull_request_number": pull_request_number,
         "prior_delivery_head_sha": prior_head,
+        "prior_authority_digest": prior_authority_digest,
         "target_base": {
             "ref": target_ref,
             "authorized_sha": authorized_base,
@@ -1098,6 +1191,7 @@ def create_validation_receipt(
     reviewed_state: StableFeedbackState,
     manual_gate_evidence: Any,
     eligibility_evidence_digest: str | None = None,
+    integration_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     gates = registry.get("manual_gates") if isinstance(registry, dict) else None
     normalized_gates = validate_manual_gate_evidence(manual_gate_evidence, gates)
@@ -1123,6 +1217,10 @@ def create_validation_receipt(
         ):
             raise SecurityBlocker("eligibility evidence digest is malformed")
         fields["eligibility_evidence_digest"] = eligibility_evidence_digest
+    if integration_evidence_digest is not None:
+        fields["integration_evidence_digest"] = _require_digest(
+            integration_evidence_digest, "integration evidence digest"
+        )
     return {**fields, "receipt_digest": digest_json(fields)}
 
 
@@ -1150,6 +1248,9 @@ def create_validation_attestation(
         eligibility_evidence_digest=validation_receipt.get(
             "eligibility_evidence_digest"
         ),
+        integration_evidence_digest=validation_receipt.get(
+            "integration_evidence_digest"
+        ),
     )
     if validation_receipt != expected_receipt:
         raise SecurityBlocker("validation receipt is invalid or stale")
@@ -1172,6 +1273,10 @@ def create_validation_attestation(
     if "eligibility_evidence_digest" in validation_receipt:
         fields["eligibility_evidence_digest"] = validation_receipt[
             "eligibility_evidence_digest"
+        ]
+    if "integration_evidence_digest" in validation_receipt:
+        fields["integration_evidence_digest"] = validation_receipt[
+            "integration_evidence_digest"
         ]
     return {**fields, "attestation_digest": digest_json(fields)}
 
@@ -1204,6 +1309,8 @@ def create_ready_integration_attestation(
         registry=registry,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
     )
+    if validation_receipt.get("integration_evidence_digest") != digest_json(normalized):
+        raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
     fields = {
         "schema_version": "1.0",
         "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",

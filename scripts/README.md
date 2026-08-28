@@ -62,6 +62,14 @@ fail closed together. This does not relax the ordinary sole-parent path, create
 or push an integration, change Ready state, read post-push checks, or authorize
 merge automation.
 
+Parent 1 additionally requires a closed prior-authority manifest authenticated
+by a signed annotated tag and independently verified ordinary receipt, final
+attestation, tree, and signer. Its lifecycle identity, Ready state, and counters
+must match the integration evidence. When creating the integration receipt, the
+command performs one trusted GitHub read and requires the live open Ready PR
+head and registered target-base SHA to equal the two authorized parents; caller-
+supplied `observed_sha` cannot substitute for that read.
+
 ### `secpal-resolve-fixed-threads.py`
 
 Resolves only explicitly named review threads after their findings have already

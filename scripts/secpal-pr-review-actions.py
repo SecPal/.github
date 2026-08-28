@@ -1345,6 +1345,18 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
 }
 """
 
+READY_INTEGRATION_AUTHORITY_QUERY = r"""
+query ReadyIntegrationAuthority($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    nameWithOwner
+    pullRequest(number:$number) {
+      number state isDraft headRefOid baseRefName baseRefOid
+      baseRepository { nameWithOwner }
+    }
+  }
+}
+"""
+
 
 CURRENT_MUTATION_TARGET_QUERY = r"""
 query CurrentMutationTarget($owner:String!, $name:String!, $number:Int!, $targetNodeId:ID!, $threadNodeId:ID!) {
@@ -1572,6 +1584,7 @@ def _validate_action_command(arguments: list[str]) -> None:
             VIEWER_IDENTITY_QUERY,
             CURRENT_REQUIRED_CHECKS_QUERY,
             FAST_PATH_PREFLIGHT_QUERY,
+            READY_INTEGRATION_AUTHORITY_QUERY,
         }:
             raise MutationBlocked("GraphQL document is not exactly allowlisted")
         variable_arguments = arguments[7:]
@@ -1592,7 +1605,11 @@ def _validate_action_command(arguments: list[str]) -> None:
             expected_variables = {"threadId": "-f"}
         elif query == ADD_REACTION_MUTATION:
             expected_variables = {"subjectId": "-f", "content": "-f"}
-        elif query in {CURRENT_REVIEW_FEEDBACK_QUERY, FAST_PATH_PREFLIGHT_QUERY}:
+        elif query in {
+            CURRENT_REVIEW_FEEDBACK_QUERY,
+            FAST_PATH_PREFLIGHT_QUERY,
+            READY_INTEGRATION_AUTHORITY_QUERY,
+        }:
             expected_variables = {
                 "owner": "-f",
                 "name": "-f",
@@ -1855,6 +1872,37 @@ class LiveGitHub:
         if any(actor.get(key) is None for key in ("login", "node_id", "database_id")):
             raise MutationBlocked("authenticated actor identity is incomplete")
         return actor
+
+    def observe_ready_integration_authority(
+        self, repository: str, pull_request_number: int
+    ) -> dict[str, Any]:
+        """Read the live PR head and target-base ref once for integration authority."""
+
+        owner, name = repository.split("/", 1)
+        try:
+            payload = self.runner.run(
+                _graphql_arguments(
+                    READY_INTEGRATION_AUTHORITY_QUERY,
+                    {"owner": owner, "name": name, "number": pull_request_number},
+                )
+            )
+            observed_repository = payload["data"]["repository"]
+            pull_request = observed_repository["pullRequest"]
+            base_repository = pull_request["baseRepository"]
+        except (ActionCommandFailure, KeyError, TypeError) as exc:
+            raise MutationFailure(
+                "trusted Ready integration authority observation is unavailable"
+            ) from exc
+        return {
+            "repository": observed_repository.get("nameWithOwner"),
+            "pull_request_number": pull_request.get("number"),
+            "state": pull_request.get("state"),
+            "draft": pull_request.get("isDraft"),
+            "head_sha": pull_request.get("headRefOid"),
+            "base_repository": base_repository.get("nameWithOwner"),
+            "base_ref": pull_request.get("baseRefName"),
+            "base_sha": pull_request.get("baseRefOid"),
+        }
 
     def read_current_feedback(self, plan: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -4033,6 +4081,12 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--delivery-issue", type=_positive_integer)
     attestation_parser.add_argument("--integration-authorization-id")
     attestation_parser.add_argument("--expected-integration-signer")
+    attestation_parser.add_argument("--prior-authority")
+    attestation_parser.add_argument("--prior-authority-tag-ref")
+    attestation_parser.add_argument("--prior-reviewed-state")
+    attestation_parser.add_argument("--prior-receipt")
+    attestation_parser.add_argument("--prior-attestation")
+    attestation_parser.add_argument("--expected-prior-authority-signer")
     batch_parser = subparsers.add_parser("resolve-batch")
     batch_parser.add_argument("--repo", required=True)
     batch_parser.add_argument("--pr", required=True, type=_positive_integer)
@@ -4473,6 +4527,194 @@ def _verify_integration_selection(
         )
 
 
+def _observe_ready_integration_authority_once(
+    repository: str,
+    pull_request_number: int,
+) -> dict[str, Any]:
+    try:
+        observation = LiveGitHub().observe_ready_integration_authority(
+            repository, pull_request_number
+        )
+    except (MutationFailure, MutationBlocked) as exc:
+        raise fast_path.SecurityBlocker(
+            "trusted Ready integration authority observation is unavailable"
+        ) from exc
+    if (
+        observation["repository"] != repository
+        or observation["base_repository"] != repository
+        or observation["pull_request_number"] != pull_request_number
+        or observation["state"] != "OPEN"
+        or observation["draft"] is not False
+        or not OID_PATTERN.fullmatch(str(observation["head_sha"] or ""))
+        or not isinstance(observation["base_ref"], str)
+        or not OID_PATTERN.fullmatch(str(observation["base_sha"] or ""))
+    ):
+        raise fast_path.SecurityBlocker(
+            "trusted Ready integration authority observation is malformed or ineligible"
+        )
+    return observation
+
+
+def _verify_ready_integration_live_observation(
+    observation: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    binding: dict[str, Any],
+) -> None:
+    if (
+        observation["repository"] != integration_evidence["repository"]
+        or observation["pull_request_number"] != integration_evidence["pull_request_number"]
+        or observation["state"] != "OPEN"
+        or observation["draft"] is not False
+        or observation["head_sha"] != integration_evidence["prior_delivery_head_sha"]
+        or observation["base_ref"] != integration_evidence["target_base"]["ref"]
+        or observation["base_ref"] != binding["default_branch"]
+        or observation["base_sha"] != integration_evidence["target_base"]["authorized_sha"]
+        or observation["base_sha"] != integration_evidence["ordered_parent_shas"][1]
+    ):
+        raise fast_path.SecurityBlocker("current target-base authority drifted")
+
+
+def _verify_ready_integration_lifecycle_authority(
+    authority: dict[str, Any], integration_evidence: dict[str, Any]
+) -> None:
+    lifecycle = authority["lifecycle"]
+    eligibility = integration_evidence["eligibility"]
+    if (
+        eligibility["lifecycle_identity"] != lifecycle["identity"]
+        or eligibility["unrestricted_reviews_before"] != lifecycle["unrestricted_reviews"]
+        or eligibility["unrestricted_reviews_after"] != lifecycle["unrestricted_reviews"]
+        or eligibility["remediation_cycles_before"] != lifecycle["remediation_cycles"]
+        or eligibility["remediation_cycles_after"] != lifecycle["remediation_cycles"]
+        or eligibility["draft_before"] != lifecycle["draft"]
+        or eligibility["ready_before"] != lifecycle["ready"]
+        or eligibility["ready_transition"] is not False
+        or eligibility["cycle_3"] is not False
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration lifecycle differs from prior authority"
+        )
+
+
+def _verify_ready_integration_prior_authority(
+    *,
+    arguments: argparse.Namespace,
+    repository_root: Path,
+    binding: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    live_observation: dict[str, Any] | None,
+) -> dict[str, Any]:
+    required_paths = (
+        getattr(arguments, "prior_authority", None),
+        getattr(arguments, "prior_reviewed_state", None),
+        getattr(arguments, "prior_receipt", None),
+        getattr(arguments, "prior_attestation", None),
+        getattr(arguments, "prior_authority_tag_ref", None),
+        getattr(arguments, "expected_prior_authority_signer", None),
+    )
+    if not all(required_paths):
+        raise fast_path.SecurityBlocker(
+            "Ready integration requires independently authenticated prior authority"
+        )
+    authority = fast_path.normalize_ready_integration_prior_authority(
+        _read_json(required_paths[0], "Ready integration prior authority")
+    )
+    if fast_path.digest_json(authority) != integration_evidence["prior_authority_digest"]:
+        raise fast_path.SecurityBlocker("Ready integration prior authority digest changed")
+    if (
+        authority["repository"] != arguments.repo
+        or authority["delivery_issue_number"] != arguments.delivery_issue
+        or authority["pull_request_number"] != integration_evidence["pull_request_number"]
+        or authority["prior_delivery_head_sha"] != integration_evidence["prior_delivery_head_sha"]
+        or authority["expected_signer"]["identity"] != required_paths[5]
+    ):
+        raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
+    reviewed = _load_fast_state(required_paths[1])
+    receipt = _read_json(required_paths[2], "prior validation receipt")
+    attestation = _read_json(required_paths[3], "prior validation attestation")
+    head = authority["prior_delivery_head_sha"]
+    parent = _validated_commit_parent(repository_root, head)
+    tree = _run_attestation_git(repository_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
+    trailer = _commit_validation_receipt_digest(repository_root, head)
+    if (
+        reviewed.repository != arguments.repo
+        or receipt.get("receipt_digest") != authority["prior_validation_receipt_digest"]
+        or attestation.get("attestation_digest") != authority["prior_final_attestation_digest"]
+        or tree != authority["prior_delivery_tree_sha"]
+    ):
+        raise fast_path.SecurityBlocker("prior delivery evidence identity changed")
+    fast_path.verify_validation_attestation(
+        attestation,
+        repository=arguments.repo,
+        head_sha=head,
+        registry=binding,
+        command_set=binding["validation"],
+        reviewed_state=reviewed,
+        commit_parent_sha=parent,
+        commit_tree_sha=tree,
+        commit_validation_receipt_digest=trailer,
+    )
+    commit_object = _run_attestation_git(repository_root, ["cat-file", "commit", head], allow_failure=True)
+    verified_commit = _run_attestation_git(repository_root, ["verify-commit", "--raw", head], allow_failure=True)
+    local_signature = evidence.interpret_local_signature(
+        verified_commit.returncode,
+        f"{verified_commit.stdout}\n{verified_commit.stderr}",
+        signature_format_hint=(
+            evidence._commit_signature_format(commit_object.stdout)
+            if commit_object.returncode == 0
+            else "unknown"
+        ),
+    )
+    fast_path.verify_commit_signatures(
+        [{
+            "oid": head,
+            "source": "USER",
+            "local_signature": local_signature,
+            "github_verification": {"verified": False, "reason": "not_required"},
+        }],
+        {**binding["signature_policy"], "require_github_verified": False},
+    )
+    _verify_integration_signer(
+        f"{verified_commit.stdout}\n{verified_commit.stderr}",
+        authority["expected_signer"],
+    )
+    tag_ref = required_paths[4]
+    if not re.fullmatch(r"refs/tags/[A-Za-z0-9._/-]+", tag_ref) or ".." in tag_ref:
+        raise fast_path.SecurityBlocker("prior authority tag ref is unsafe")
+    tagged_head = _run_attestation_git(repository_root, ["rev-parse", f"{tag_ref}^{{}}"], allow_failure=True)
+    verified_tag = _run_attestation_git(repository_root, ["verify-tag", "--raw", tag_ref], allow_failure=True)
+    tag_digest = _run_attestation_git(
+        repository_root,
+        ["for-each-ref", "--format=%(trailers:key=SecPal-Prior-Authority,valueonly)", tag_ref],
+        allow_failure=True,
+    ).stdout.strip()
+    if tagged_head.returncode != 0 or tagged_head.stdout.strip() != head or tag_digest != fast_path.digest_json(authority):
+        raise fast_path.SecurityBlocker("prior authority tag binding is invalid")
+    tag_signature = evidence.interpret_local_signature(
+        verified_tag.returncode,
+        f"{verified_tag.stdout}\n{verified_tag.stderr}",
+        signature_format_hint=authority["expected_signer"]["kind"].replace("_PRINCIPAL", "").replace("_FINGERPRINT", "").lower(),
+    )
+    fast_path.verify_commit_signatures(
+        [{
+            "oid": head,
+            "source": "USER",
+            "local_signature": tag_signature,
+            "github_verification": {"verified": False, "reason": "not_required"},
+        }],
+        {**binding["signature_policy"], "require_github_verified": False},
+    )
+    _verify_integration_signer(
+        f"{verified_tag.stdout}\n{verified_tag.stderr}",
+        authority["expected_signer"],
+    )
+    _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
+    if live_observation is not None:
+        _verify_ready_integration_live_observation(
+            live_observation, integration_evidence, binding
+        )
+    return authority
+
+
 def _attestation_local_state(repository_root: Path, repository: str) -> tuple[str, str]:
     head = _run_attestation_git(repository_root, ["rev-parse", "HEAD"]).stdout.strip()
     status = _run_attestation_git(
@@ -4514,6 +4756,7 @@ def _validation_receipt(
     reviewed: Any,
     manual_gate_evidence: Any,
     eligibility_evidence_digest: str | None = None,
+    integration_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     return fast_path.create_validation_receipt(
         repository=repository,
@@ -4525,6 +4768,7 @@ def _validation_receipt(
         reviewed_state=reviewed,
         manual_gate_evidence=manual_gate_evidence,
         eligibility_evidence_digest=eligibility_evidence_digest,
+        integration_evidence_digest=integration_evidence_digest,
     )
 
 
@@ -4649,6 +4893,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         getattr(arguments, "delivery_issue", None),
         getattr(arguments, "integration_authorization_id", None),
         getattr(arguments, "expected_integration_signer", None),
+        getattr(arguments, "prior_authority", None),
+        getattr(arguments, "prior_authority_tag_ref", None),
+        getattr(arguments, "prior_reviewed_state", None),
+        getattr(arguments, "prior_receipt", None),
+        getattr(arguments, "prior_attestation", None),
+        getattr(arguments, "expected_prior_authority_signer", None),
     )
     if not integration_evidence_path and any(integration_selectors):
         raise fast_path.RecoverableLocalError(
@@ -4683,6 +4933,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             eligibility_evidence_digest=receipt.get(
                 "eligibility_evidence_digest"
             ),
+            integration_evidence_digest=receipt.get(
+                "integration_evidence_digest"
+            ),
         )
         if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
@@ -4697,6 +4950,19 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 validated_tree_sha=tree,
             )
             _verify_integration_selection(integration_evidence, arguments)
+            if receipt.get("integration_evidence_digest") != fast_path.digest_json(
+                integration_evidence
+            ):
+                raise fast_path.SecurityBlocker(
+                    "validation receipt does not bind the Ready integration evidence"
+                )
+            _verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=repository_root,
+                binding=binding,
+                integration_evidence=integration_evidence,
+                live_observation=None,
+            )
             parents = _validated_integration_commit_parents(
                 repository_root,
                 head,
@@ -4712,6 +4978,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 repository_root, integration_evidence, tree
             )
         else:
+            if "integration_evidence_digest" in receipt:
+                raise fast_path.SecurityBlocker(
+                    "Ready integration receipt cannot select ordinary remediation"
+                )
             parent = _validated_commit_parent(repository_root, head)
             if parent != receipt["head_sha"]:
                 raise fast_path.SecurityBlocker(
@@ -4840,6 +5110,13 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             validated_tree_sha=tree,
         )
         _verify_integration_selection(integration_evidence, arguments)
+        _verify_ready_integration_prior_authority(
+            arguments=arguments,
+            repository_root=repository_root,
+            binding=binding,
+            integration_evidence=integration_evidence,
+            live_observation=None,
+        )
         _verify_integration_tree_delta(repository_root, integration_evidence, tree)
     if arguments.output:
         _write_fast_report(
@@ -4886,6 +5163,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "Ready integration evidence changed during complete validation"
             )
+        live_observation = _observe_ready_integration_authority_once(
+            arguments.repo, integration_evidence["pull_request_number"]
+        )
+        _verify_ready_integration_live_observation(
+            live_observation, integration_evidence, binding
+        )
     receipt = _validation_receipt(
         repository=arguments.repo,
         head_sha=head,
@@ -4894,6 +5177,11 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         reviewed=reviewed,
         manual_gate_evidence=manual_gate_evidence,
         eligibility_evidence_digest=eligibility_evidence_digest,
+        integration_evidence_digest=(
+            fast_path.digest_json(integration_evidence)
+            if integration_evidence is not None
+            else None
+        ),
     )
     _write_fast_report(arguments.output, receipt)
     return 0

@@ -18,6 +18,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   authenticated current `main` snapshot, stable feedback, eligibility,
   validation execution, signer, and unchanged Ready lifecycle fail closed as
   one final attestation while ordinary remediation remains single-parent
+- required independently signed prior Ready/lifecycle authority and one trusted
+  live target-base observation before that topology can create new evidence
 
 ---
 
