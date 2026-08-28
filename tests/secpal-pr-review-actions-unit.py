@@ -6650,7 +6650,7 @@ class FastPathTests(TestCase):
                 ),
             )
             git("checkout", "-q", "--detach", candidate)
-            self.assertTrue(git("verify-commit", candidate) == "")
+            self.assertEqual(git("verify-commit", candidate), "")
             reviewed_path = root / "reviewed.json"
             receipt_path = root / "receipt.json"
             output_path = root / "attestation.json"
