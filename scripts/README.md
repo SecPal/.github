@@ -97,6 +97,23 @@ See [Finite SecPal PR review workflow](../docs/secpal-pr-review-workflow.md) for
 explicit invocation, state limits, classification, guarded action ordering,
 registry decisions, recovery, and post-merge rollout prerequisites.
 
+### `secpal_pr_review/lifecycle_authority.py`
+
+Defines the reusable, orchestration-independent delivery-lifecycle authority.
+Version 1.0 uses the maintained canonical JSON/digest functions and a closed,
+domain-separated signed transition authorization plus a closed signed authority
+snapshot. Genesis starts only the canonical Draft state. Every later snapshot
+is derived by independently verifying the complete predecessor and event chains;
+callers cannot provide counters, Ready history, exceptional history, or a new
+lifecycle identity as resulting authority.
+
+`verify_lifecycle_authority` accepts independently configured event and authority
+signer sets plus a trusted SSH/OpenPGP verification adapter, then returns only a
+normalized `VerifiedLifecycleAuthority`. `lifecycle_authority_binding` derives a
+stable digest and exact verified facts for explicit adoption by later receipts
+or attestations. Existing delivery validation does not call this module and
+continues to use the ordinary one-parent evidence path.
+
 ## Work Graph
 
 ### `secpal-work-graph.py`

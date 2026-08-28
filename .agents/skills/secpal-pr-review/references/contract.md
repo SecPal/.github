@@ -232,6 +232,28 @@ in that pre-existing commit and fails closed before any GitHub read.
 worktree state, PR identity, and resolution results. The workflow never merges;
 merge remains separately authorized by the current user instruction.
 
+## Persistent lifecycle-authority boundary
+
+`scripts/secpal_pr_review/lifecycle_authority.py` owns the independently
+authenticated lifecycle primitive, not this feedback-processing state machine.
+Its version-1 authority is a closed, signed, append-only predecessor chain. One
+typed authenticated genesis establishes Draft state with review/remediation at
+zero, no Ready or exceptional history, and explicit Cycle-3 absence. Every
+later authority verifies its predecessor and separately signed typed event,
+then derives counters and history without accepting a caller-supplied result.
+
+The maintained verifier authenticates the complete chain, accepted event and
+authority signers, repository, delivery issue, lifecycle, PR, heads, finite
+counters, Ready/Draft history, and exceptional recovery/continuation history.
+Head advancement, exceptional events, and authorized PR rebinding retain the
+persistent lifecycle and cannot reset counters. Its normalized binding is
+available to future consumers, but ordinary delivery evidence does not require
+it until a consumer explicitly adopts it.
+
+This boundary performs no review-event loop, late-feedback processing, Ready or
+Draft mutation, replacement orchestration, merge automation, or other lifecycle
+orchestration. Those responsibilities remain outside this primitive.
+
 ## Explicit CI and readiness path
 
 This separate path exists only when the current user instruction explicitly

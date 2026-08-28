@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-28 - Authenticate Persistent Delivery Lifecycle Authority
+
+**Added:**
+
+- a closed, versioned, signed lifecycle-authority chain that derives finite
+  review, remediation, Ready/Draft, exceptional recovery/continuation, head,
+  and pull-request continuity facts from authenticated predecessor and event
+  evidence
+- an independent verifier and stable downstream binding that reject consumer
+  self-assertion while leaving ordinary delivery evidence unchanged until
+  explicit adoption
+
+---
+
 ## 2026-08-28 - Clarify Public Provider And Managed Operations Ownership
 
 **Changed:**
