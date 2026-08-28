@@ -9,6 +9,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-28 - Harden Ready Integration Recovery Evidence
+
+**Changed:**
+
+- require conflict-bearing merge-tree results to authenticate and completely
+  resolve their exact conflict paths without extra file changes or retained
+  text conflict markers
+- bind the prior Ready receipt identity across its commit, receipt,
+  attestation, and authority artifact; pin annotated authority-tag verification
+  to one immutable object; and correctly authenticate OpenPGP primary identities
+  when a signing subkey is used
+- add a closed, explicitly user-authorized exceptional-recovery artifact for a
+  Ready PR after the finite remediation limit, preserving review 1/1,
+  remediation 2/2, no Cycle 3, and monotonic Ready state
+
+---
+
 ## 2026-08-27 - Authenticate Ready Pull Request Integration Heads
 
 **Added:**

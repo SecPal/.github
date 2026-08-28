@@ -98,6 +98,26 @@ RESOLUTION_MERGE_STATE_POLICY = {
 }
 READY_INTEGRATION_KIND = "TWO_PARENT_READY_INTEGRATION"
 READY_INTEGRATION_PRIOR_AUTHORITY_KIND = "READY_INTEGRATION_PRIOR_AUTHORITY"
+EXCEPTIONAL_RECOVERY_KIND = "READY_EXCEPTIONAL_RECOVERY"
+EXCEPTIONAL_RECOVERY_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_ready_head_sha",
+        "prior_ready_tree_sha",
+        "recovery_tree_sha",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "eligibility_evidence_digest",
+        "finding_ids",
+        "thread_ids",
+        "lifecycle",
+    }
+)
 READY_INTEGRATION_KEYS = frozenset(
     {
         "schema_version",
@@ -108,10 +128,12 @@ READY_INTEGRATION_KEYS = frozenset(
         "pull_request_number",
         "prior_delivery_head_sha",
         "prior_authority_digest",
+        "prior_authority_tag_object_sha",
         "target_base",
         "ordered_parent_shas",
         "validated_tree_sha",
         "mechanical_merge_tree_sha",
+        "mechanical_conflict_paths",
         "manual_conflict_resolution_delta",
         "reviewed_state_digest",
         "reviewed_feedback_digest",
@@ -254,6 +276,28 @@ def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def _ready_integration_conflict_paths(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise SecurityBlocker("integration mechanical conflict paths are malformed")
+    normalized: list[str] = []
+    for path in value:
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or not EVIDENCE_TEXT.fullmatch(path)
+        ):
+            raise SecurityBlocker("integration mechanical conflict path is unsafe")
+        normalized.append(path)
+    if normalized != sorted(normalized) or len(normalized) != len(set(normalized)):
+        raise SecurityBlocker(
+            "integration mechanical conflict paths are not canonical"
+        )
+    return normalized
+
+
 def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     """Normalize the separately signed authority for the prior Ready head."""
 
@@ -262,7 +306,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration prior authority contains secret-like text")
     if (
-        value.get("schema_version") != "1.0"
+        value.get("schema_version") != "1.1"
         or value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
     ):
         raise SecurityBlocker("Ready integration prior authority kind or version is unsupported")
@@ -306,7 +350,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
         "repository": _require_string(value.get("repository"), "prior authority repository"),
         "delivery_issue_number": _require_positive_integer(value.get("delivery_issue_number"), "prior authority delivery issue"),
@@ -334,7 +378,7 @@ def normalize_ready_integration_evidence(
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
-    if value.get("schema_version") != "1.0" or value.get("kind") != READY_INTEGRATION_KIND:
+    if value.get("schema_version") != "1.1" or value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -487,7 +531,7 @@ def normalize_ready_integration_evidence(
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "kind": READY_INTEGRATION_KIND,
         "authorization_id": authorization_id,
         "repository": normalized_repository,
@@ -495,6 +539,10 @@ def normalize_ready_integration_evidence(
         "pull_request_number": pull_request_number,
         "prior_delivery_head_sha": prior_head,
         "prior_authority_digest": prior_authority_digest,
+        "prior_authority_tag_object_sha": _require_oid(
+            value.get("prior_authority_tag_object_sha"),
+            "prior authority tag object",
+        ),
         "target_base": {
             "ref": target_ref,
             "authorized_sha": authorized_base,
@@ -503,6 +551,9 @@ def normalize_ready_integration_evidence(
         "ordered_parent_shas": normalized_parents,
         "validated_tree_sha": validated_tree,
         "mechanical_merge_tree_sha": mechanical_tree,
+        "mechanical_conflict_paths": _ready_integration_conflict_paths(
+            value.get("mechanical_conflict_paths")
+        ),
         "manual_conflict_resolution_delta": _ready_integration_delta(
             value.get("manual_conflict_resolution_delta")
         ),
@@ -516,6 +567,117 @@ def normalize_ready_integration_evidence(
         "eligibility": copy.deepcopy(eligibility),
     }
     return normalized
+
+
+def normalize_exceptional_recovery_evidence(
+    value: Any,
+    *,
+    repository: str,
+    reviewed_state: "StableFeedbackState",
+    validated_tree_sha: str,
+    eligibility_evidence_digest: str,
+) -> dict[str, Any]:
+    """Normalize one explicitly user-authorized Ready-head recovery."""
+
+    if not isinstance(value, dict) or set(value) != EXCEPTIONAL_RECOVERY_KEYS:
+        raise SecurityBlocker("exceptional recovery evidence is malformed or ambiguous")
+    if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
+        raise SecurityBlocker("exceptional recovery evidence contains secret-like text")
+    if (
+        value.get("schema_version") != "1.0"
+        or value.get("kind") != EXCEPTIONAL_RECOVERY_KIND
+        or value.get("repository") != repository
+        or reviewed_state.repository != repository
+        or value.get("pull_request_number") != reviewed_state.pull_request_number
+        or reviewed_state.pr_state != "OPEN"
+        or value.get("prior_ready_head_sha") != reviewed_state.head_sha
+        or value.get("reviewed_state_digest") != reviewed_state.state_digest
+        or value.get("reviewed_feedback_digest") != reviewed_state.feedback_digest
+        or value.get("recovery_tree_sha") != validated_tree_sha
+        or value.get("eligibility_evidence_digest") != eligibility_evidence_digest
+    ):
+        raise SecurityBlocker("exceptional recovery identity or evidence is stale")
+    lifecycle = value.get("lifecycle")
+    if not isinstance(lifecycle, dict) or set(lifecycle) != {
+        "unrestricted_reviews",
+        "remediation_cycles",
+        "cycle_3",
+        "draft",
+        "ready",
+        "ready_transition",
+        "exceptional_recovery_count",
+    }:
+        raise SecurityBlocker("exceptional recovery lifecycle is malformed")
+    if lifecycle != {
+        "unrestricted_reviews": 1,
+        "remediation_cycles": 2,
+        "cycle_3": False,
+        "draft": False,
+        "ready": True,
+        "ready_transition": False,
+        "exceptional_recovery_count": 1,
+    }:
+        raise SecurityBlocker("exceptional recovery would alter the finite lifecycle")
+    finding_ids = value.get("finding_ids")
+    thread_ids = value.get("thread_ids")
+    if (
+        not isinstance(finding_ids, list)
+        or not finding_ids
+        or any(not isinstance(item, str) or not IDENTITY.fullmatch(item) for item in finding_ids)
+        or finding_ids != sorted(finding_ids)
+        or len(finding_ids) != len(set(finding_ids))
+        or not isinstance(thread_ids, list)
+        or not thread_ids
+        or any(
+            not isinstance(item, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", item)
+            for item in thread_ids
+        )
+        or thread_ids != sorted(thread_ids)
+        or len(thread_ids) != len(set(thread_ids))
+    ):
+        raise SecurityBlocker("exceptional recovery finding identities are malformed")
+    reviewed_threads = {
+        item.get("node_id"): item
+        for item in reviewed_state.feedback.get("threads", [])
+        if isinstance(item, dict)
+    }
+    if (
+        len(finding_ids) != len(thread_ids)
+        or any(
+            thread_id not in reviewed_threads
+            or reviewed_threads[thread_id].get("is_resolved") is not False
+            for thread_id in thread_ids
+        )
+    ):
+        raise SecurityBlocker(
+            "exceptional recovery threads are absent or not unresolved"
+        )
+    return {
+        "schema_version": "1.0",
+        "kind": EXCEPTIONAL_RECOVERY_KIND,
+        "authorization_id": _require_string(
+            value.get("authorization_id"), "exceptional recovery authorization"
+        ),
+        "repository": repository,
+        "delivery_issue_number": _require_positive_integer(
+            value.get("delivery_issue_number"), "exceptional recovery delivery issue"
+        ),
+        "pull_request_number": reviewed_state.pull_request_number,
+        "prior_ready_head_sha": reviewed_state.head_sha,
+        "prior_ready_tree_sha": _require_oid(
+            value.get("prior_ready_tree_sha"), "prior Ready tree"
+        ),
+        "recovery_tree_sha": _require_oid(validated_tree_sha, "recovery tree"),
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "eligibility_evidence_digest": _require_digest(
+            eligibility_evidence_digest, "exceptional recovery eligibility"
+        ),
+        "finding_ids": copy.deepcopy(finding_ids),
+        "thread_ids": copy.deepcopy(thread_ids),
+        "lifecycle": copy.deepcopy(lifecycle),
+    }
 
 
 def _actor(value: Any, label: str, *, allow_deleted: bool = False) -> dict[str, Any]:
@@ -1192,6 +1354,7 @@ def create_validation_receipt(
     manual_gate_evidence: Any,
     eligibility_evidence_digest: str | None = None,
     integration_evidence_digest: str | None = None,
+    exceptional_recovery_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     gates = registry.get("manual_gates") if isinstance(registry, dict) else None
     normalized_gates = validate_manual_gate_evidence(manual_gate_evidence, gates)
@@ -1220,6 +1383,11 @@ def create_validation_receipt(
     if integration_evidence_digest is not None:
         fields["integration_evidence_digest"] = _require_digest(
             integration_evidence_digest, "integration evidence digest"
+        )
+    if exceptional_recovery_evidence_digest is not None:
+        fields["exceptional_recovery_evidence_digest"] = _require_digest(
+            exceptional_recovery_evidence_digest,
+            "exceptional recovery evidence digest",
         )
     return {**fields, "receipt_digest": digest_json(fields)}
 
@@ -1251,6 +1419,9 @@ def create_validation_attestation(
         integration_evidence_digest=validation_receipt.get(
             "integration_evidence_digest"
         ),
+        exceptional_recovery_evidence_digest=validation_receipt.get(
+            "exceptional_recovery_evidence_digest"
+        ),
     )
     if validation_receipt != expected_receipt:
         raise SecurityBlocker("validation receipt is invalid or stale")
@@ -1278,6 +1449,10 @@ def create_validation_attestation(
         fields["integration_evidence_digest"] = validation_receipt[
             "integration_evidence_digest"
         ]
+    if "exceptional_recovery_evidence_digest" in validation_receipt:
+        fields["exceptional_recovery_evidence_digest"] = validation_receipt[
+            "exceptional_recovery_evidence_digest"
+        ]
     return {**fields, "attestation_digest": digest_json(fields)}
 
 
@@ -1292,6 +1467,11 @@ def create_ready_integration_attestation(
     integration_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     """Assemble final evidence for the one bounded Ready integration topology."""
+
+    if "exceptional_recovery_evidence_digest" in validation_receipt:
+        raise SecurityBlocker(
+            "Ready integration cannot be combined with exceptional recovery"
+        )
 
     ordinary = create_validation_attestation(
         repository=repository,
@@ -1312,7 +1492,7 @@ def create_ready_integration_attestation(
     if validation_receipt.get("integration_evidence_digest") != digest_json(normalized):
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
     fields = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",
         "repository": normalized["repository"],
         "delivery_issue_number": normalized["delivery_issue_number"],
@@ -1320,9 +1500,16 @@ def create_ready_integration_attestation(
         "head_sha": _require_oid(head_sha, "integration attestation head"),
         "topology_kind": normalized["kind"],
         "authorization_id": normalized["authorization_id"],
+        "prior_authority_digest": normalized["prior_authority_digest"],
+        "prior_authority_tag_object_sha": normalized[
+            "prior_authority_tag_object_sha"
+        ],
         "ordered_parent_shas": copy.deepcopy(normalized["ordered_parent_shas"]),
         "validated_tree_sha": normalized["validated_tree_sha"],
         "mechanical_merge_tree_sha": normalized["mechanical_merge_tree_sha"],
+        "mechanical_conflict_paths": copy.deepcopy(
+            normalized["mechanical_conflict_paths"]
+        ),
         "manual_conflict_resolution_delta": copy.deepcopy(
             normalized["manual_conflict_resolution_delta"]
         ),
@@ -1412,6 +1599,9 @@ def verify_validation_attestation(
         manual_gate_evidence=attestation.get("manual_gate_evidence"),
         eligibility_evidence_digest=attestation.get(
             "eligibility_evidence_digest"
+        ),
+        exceptional_recovery_evidence_digest=attestation.get(
+            "exceptional_recovery_evidence_digest"
         ),
     )
     if (

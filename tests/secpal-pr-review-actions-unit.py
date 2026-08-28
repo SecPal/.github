@@ -4656,7 +4656,7 @@ def ready_integration_evidence(
     registry = registry or fast_registry()
     authority = ready_integration_prior_authority(reviewed)
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "kind": "TWO_PARENT_READY_INTEGRATION",
         "authorization_id": "ready-integration-authorization-001",
         "repository": reviewed.repository,
@@ -4664,6 +4664,7 @@ def ready_integration_evidence(
         "pull_request_number": reviewed.pull_request_number,
         "prior_delivery_head_sha": reviewed.head_sha,
         "prior_authority_digest": fast_path.digest_json(authority),
+        "prior_authority_tag_object_sha": "1" * 40,
         "target_base": {
             "ref": reviewed.base_ref,
             "authorized_sha": reviewed.base_sha,
@@ -4672,6 +4673,7 @@ def ready_integration_evidence(
         "ordered_parent_shas": [reviewed.head_sha, reviewed.base_sha],
         "validated_tree_sha": validated_tree,
         "mechanical_merge_tree_sha": validated_tree,
+        "mechanical_conflict_paths": [],
         "manual_conflict_resolution_delta": [],
         "reviewed_state_digest": reviewed.state_digest,
         "reviewed_feedback_digest": reviewed.feedback_digest,
@@ -4703,7 +4705,7 @@ def ready_integration_evidence(
 
 def ready_integration_prior_authority(reviewed: Any) -> dict[str, Any]:
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
         "repository": reviewed.repository,
         "delivery_issue_number": 9,
@@ -6768,8 +6770,12 @@ class FastPathTests(TestCase):
             authority = fast_path.normalize_ready_integration_prior_authority(authority)
             authority_digest = fast_path.digest_json(authority)
             git("tag", "-s", "prior-authority", prior_head, "-m", "Prior Ready authority", "-m", f"SecPal-Prior-Authority: {authority_digest}")
+            prior_authority_tag_object = git(
+                "rev-parse", "prior-authority^{tag}"
+            )
             integration = ready_integration_evidence(reviewed, validated_tree=tree, registry=binding)
             integration["prior_authority_digest"] = authority_digest
+            integration["prior_authority_tag_object_sha"] = prior_authority_tag_object
             integration["expected_signer"] = {"kind": "SSH_PRINCIPAL", "identity": principal}
             integration["mechanical_merge_tree_sha"] = tree
             integration_digest = fast_path.digest_json(integration)
@@ -6914,7 +6920,7 @@ class FastPathTests(TestCase):
                     "SHA256:test\n"
                 )
             elif command[:2] == ["merge-tree", "--write-tree"]:
-                stdout = f"{tree}\n"
+                stdout = f"{tree}\x00"
                 stderr = ""
             elif command[:2] == ["diff-tree", "--raw"]:
                 stdout = ""
@@ -6963,7 +6969,9 @@ class FastPathTests(TestCase):
             "pull_request_substitution",
             "topology_substitution",
             "version_substitution",
+            "legacy_version",
             "ambiguous_topology",
+            "conflict_path_substitution",
             "stale_reviewed_state",
             "stale_stable_feedback",
             "stale_registry",
@@ -7008,8 +7016,12 @@ class FastPathTests(TestCase):
                 candidate["kind"] = "GENERIC_MERGE"
             elif case == "version_substitution":
                 candidate["schema_version"] = "2.0"
+            elif case == "legacy_version":
+                candidate["schema_version"] = "1.0"
             elif case == "ambiguous_topology":
                 candidate["allow_merge_commit"] = True
+            elif case == "conflict_path_substitution":
+                candidate["mechanical_conflict_paths"] = ["z.txt", "a.txt"]
             elif case == "stale_reviewed_state":
                 candidate["reviewed_state_digest"] = "0" * 64
             elif case == "stale_stable_feedback":
@@ -7113,8 +7125,8 @@ class FastPathTests(TestCase):
         with (
             mock.patch.object(
                 actions,
-                "_mechanical_integration_tree",
-                return_value="a" * 40,
+                "_mechanical_integration_result",
+                return_value=("a" * 40, []),
             ),
             mock.patch.object(
                 actions,
@@ -7141,8 +7153,8 @@ class FastPathTests(TestCase):
         with (
             mock.patch.object(
                 actions,
-                "_mechanical_integration_tree",
-                return_value="a" * 40,
+                "_mechanical_integration_result",
+                return_value=("a" * 40, []),
             ),
             mock.patch.object(
                 actions,
@@ -7150,19 +7162,671 @@ class FastPathTests(TestCase):
                 return_value=SimpleNamespace(returncode=0, stdout=raw_delta, stderr=""),
             ),
         ):
-            actions._verify_integration_tree_delta(
-                REPO_ROOT, integration, "a" * 40
-            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "clean mechanical integration"
+            ):
+                actions._verify_integration_tree_delta(
+                    REPO_ROOT, integration, "a" * 40
+                )
         with mock.patch.object(
             actions,
-            "_mechanical_integration_tree",
-            return_value="b" * 40,
+            "_mechanical_integration_result",
+            return_value=("b" * 40, []),
         ):
             with self.assertRaisesRegex(
                 fast_path.SecurityBlocker, "authorized parents"
             ):
                 actions._verify_integration_tree_delta(
                     REPO_ROOT, integration, "a" * 40
+                )
+
+    def test_ready_integration_rejects_unchanged_synthetic_conflict_tree(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="secpal-integration-conflict-") as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Conflict Fixture")
+            git("config", "user.email", "conflict@example.test")
+            (repository / "conflict.txt").write_text("base\n", encoding="utf-8")
+            git("add", "conflict.txt")
+            git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "left")
+            (repository / "conflict.txt").write_text("left\n", encoding="utf-8")
+            git("commit", "-qam", "left")
+            left = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "right", base)
+            (repository / "conflict.txt").write_text("right\n", encoding="utf-8")
+            git("commit", "-qam", "right")
+            right = git("rev-parse", "HEAD")
+            result = subprocess.run(
+                [
+                    "git",
+                    "merge-tree",
+                    "--write-tree",
+                    "--no-messages",
+                    "--name-only",
+                    "-z",
+                    left,
+                    right,
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 1)
+            synthetic_tree = result.stdout.split("\x00")[0]
+            self.assertIn("<<<<<<<", git("show", f"{synthetic_tree}:conflict.txt"))
+            reviewed = fast_feedback(head_sha=left)
+            reviewed = fast_path.StableFeedbackState(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                head_sha=left,
+                base_ref=reviewed.base_ref,
+                base_sha=right,
+                pr_state=reviewed.pr_state,
+                feedback=reviewed.feedback,
+            )
+            integration = fast_path.normalize_ready_integration_evidence(
+                ready_integration_evidence(
+                    reviewed, validated_tree=synthetic_tree
+                ),
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha=synthetic_tree,
+            )
+            integration["mechanical_conflict_paths"] = ["conflict.txt"]
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "unresolved mechanical conflict"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, integration, synthetic_tree
+                )
+
+    def test_ready_integration_authenticates_complete_bounded_conflict_resolution(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="secpal-integration-resolution-") as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments], cwd=repository, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Resolution Fixture")
+            git("config", "user.email", "resolution@example.test")
+            for path in ("a.txt", "b.txt"):
+                (repository / path).write_text("base\n", encoding="utf-8")
+            (repository / "bounded.txt").write_text("unchanged\n", encoding="utf-8")
+            git("add", "."); git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "left")
+            for path in ("a.txt", "b.txt"):
+                (repository / path).write_text("left\n", encoding="utf-8")
+            git("commit", "-qam", "left")
+            left = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "right", base)
+            for path in ("a.txt", "b.txt"):
+                (repository / path).write_text("right\n", encoding="utf-8")
+            git("commit", "-qam", "right")
+            right = git("rev-parse", "HEAD")
+            mechanical_tree, conflict_paths = actions._mechanical_integration_result(
+                repository, [left, right]
+            )
+            self.assertEqual(conflict_paths, ["a.txt", "b.txt"])
+            reviewed = fast_path.StableFeedbackState(
+                repository="SecPal/.github", pull_request_number=746,
+                head_sha=left, base_ref="main", base_sha=right, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": [], "conversation_comments": [], "threads": []},
+            )
+
+            def candidate(
+                updates: dict[str, str | None],
+            ) -> tuple[str, dict[str, Any]]:
+                git("read-tree", mechanical_tree)
+                for path, content in updates.items():
+                    target = repository / path
+                    if content is None:
+                        git("rm", "-q", "-f", "--cached", "--ignore-unmatch", path)
+                    else:
+                        target.write_text(content, encoding="utf-8")
+                        git("add", path)
+                tree = git("write-tree")
+                value = ready_integration_evidence(
+                    reviewed, validated_tree=tree
+                )
+                value["mechanical_merge_tree_sha"] = mechanical_tree
+                value["mechanical_conflict_paths"] = conflict_paths
+                value["manual_conflict_resolution_delta"] = (
+                    actions._integration_tree_delta(
+                        repository, mechanical_tree, tree
+                    )
+                )
+                return tree, fast_path.normalize_ready_integration_evidence(
+                    value, repository="SecPal/.github", reviewed_state=reviewed,
+                    registry=fast_registry(), validated_tree_sha=tree,
+                )
+
+            resolved_tree, resolved = candidate(
+                {"a.txt": "resolved a\n", "b.txt": "resolved b\n"}
+            )
+            actions._verify_integration_tree_delta(
+                repository, resolved, resolved_tree
+            )
+            deleted_tree, deleted = candidate({"a.txt": None, "b.txt": None})
+            actions._verify_integration_tree_delta(
+                repository, deleted, deleted_tree
+            )
+            partial_tree, partial = candidate({"a.txt": "resolved a\n"})
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "every unresolved mechanical conflict"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, partial, partial_tree
+                )
+            extra_tree, extra = candidate(
+                {
+                    "a.txt": "resolved a\n",
+                    "b.txt": "resolved b\n",
+                    "bounded.txt": "unauthorized\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "every unresolved mechanical conflict"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, extra, extra_tree
+                )
+            marker_tree, marker = candidate(
+                {
+                    "a.txt": "<<<<<<< retained\nleft\n=======\nright\n>>>>>>> retained\n",
+                    "b.txt": "resolved b\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "retains Git conflict markers"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, marker, marker_tree
+                )
+            bare_marker_tree, bare_marker = candidate(
+                {
+                    "a.txt": "<<<<<<<\nleft\n=======\nright\n>>>>>>>\n",
+                    "b.txt": "resolved b\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "retains Git conflict markers"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, bare_marker, bare_marker_tree
+                )
+
+    def test_ready_integration_rejects_unexpected_merge_tree_status(self) -> None:
+        with (
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(returncode=2, stdout="", stderr="failed"),
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "cannot be derived"
+            ),
+        ):
+            actions._mechanical_integration_result(
+                REPO_ROOT, ["a" * 40, "b" * 40]
+            )
+
+    def test_ready_integration_prior_authority_rejects_receipt_chain_substitution(
+        self,
+    ) -> None:
+        prior_reviewed = fast_feedback(head_sha="e" * 40)
+        reviewed = fast_feedback(head_sha="d" * 40)
+        registry = fast_registry()
+        tree = "a" * 40
+        receipt_a = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=prior_reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=prior_reviewed,
+            manual_gate_evidence=[],
+        )
+        attestation_a = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=prior_reviewed,
+            validation_receipt=receipt_a,
+        )
+        authority = ready_integration_prior_authority(reviewed)
+        authority.update(
+            prior_delivery_tree_sha=tree,
+            prior_validation_receipt_digest="f" * 64,
+            prior_final_attestation_digest=attestation_a["attestation_digest"],
+        )
+        authority = fast_path.normalize_ready_integration_prior_authority(authority)
+        integration = ready_integration_evidence(reviewed, validated_tree=tree)
+        integration["prior_authority_digest"] = fast_path.digest_json(authority)
+        integration = fast_path.normalize_ready_integration_evidence(
+            integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=registry,
+            validated_tree_sha=tree,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+
+        def read_json(path: str, _label: str) -> Any:
+            return {
+                "authority.json": authority,
+                "prior-receipt.json": {"receipt_digest": "f" * 64},
+                "prior-attestation.json": attestation_a,
+            }[path]
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            if command[:2] == ["rev-parse", f"{reviewed.head_sha}^{{tree}}"]:
+                stdout = tree
+            elif command[:2] == ["cat-file", "commit"]:
+                stdout = "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+            elif command[:2] in (["verify-commit", "--raw"], ["verify-tag", "--raw"]):
+                stdout = 'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
+            elif command[:2] == ["rev-parse", "refs/tags/prior-authority^{}"]:
+                stdout = reviewed.head_sha
+            elif command[0] == "for-each-ref":
+                stdout = fast_path.digest_json(authority)
+            else:
+                raise AssertionError(command)
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        with (
+            mock.patch.object(actions, "_read_json", side_effect=read_json),
+            mock.patch.object(actions, "_load_fast_state", return_value=prior_reviewed),
+            mock.patch.object(actions, "_validated_commit_parent", return_value=prior_reviewed.head_sha),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(
+                actions,
+                "_commit_validation_receipt_digest",
+                return_value=receipt_a["receipt_digest"],
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "prior delivery receipt identity changed"
+            ),
+        ):
+            actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=registry,
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
+    def test_ready_integration_openpgp_accepts_authorized_primary_fingerprint(
+        self,
+    ) -> None:
+        signing_subkey = "1" * 40
+        primary_key = "2" * 40
+        output = (
+            "[GNUPG:] VALIDSIG "
+            f"{signing_subkey} 2026-08-28 1787890000 0 4 0 1 10 00 {primary_key}\n"
+        )
+        actions._verify_integration_signer(
+            output,
+            {"kind": "OPENPGP_FINGERPRINT", "identity": primary_key},
+        )
+        for label, changed_output, expected in (
+            ("wrong_primary", output, "3" * 40),
+            (
+                "unrelated_subkey",
+                output.replace(signing_subkey, "4" * 40).replace(
+                    primary_key, "5" * 40
+                ),
+                primary_key,
+            ),
+            ("missing_primary", output.rsplit(" ", 1)[0] + "\n", primary_key),
+            ("ambiguous", output + output, primary_key),
+        ):
+            with (
+                self.subTest(case=label),
+                self.assertRaises(fast_path.SecurityBlocker),
+            ):
+                actions._verify_integration_signer(
+                    changed_output,
+                    {"kind": "OPENPGP_FINGERPRINT", "identity": expected},
+                )
+
+    def test_ready_integration_pins_one_real_authority_tag_object(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="secpal-authority-tag-race-") as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+
+            def git(*arguments: str, input_text: str | None = None) -> str:
+                return subprocess.run(
+                    ["git", *arguments], cwd=repository, check=True,
+                    capture_output=True, text=True, input=input_text,
+                ).stdout.strip()
+
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(root / "key")],
+                check=True, capture_output=True,
+            )
+            principal = "authority@example.test"
+            (root / "allowed").write_text(
+                f"{principal} {(root / 'key.pub').read_text()}", encoding="utf-8"
+            )
+            git("init", "-q")
+            for key, value in (
+                ("user.name", "Authority Fixture"), ("user.email", principal),
+                ("gpg.format", "ssh"), ("user.signingkey", str(root / "key")),
+                ("gpg.ssh.allowedSignersFile", str(root / "allowed")),
+            ):
+                git("config", key, value)
+            (repository / "base.txt").write_text("base\n", encoding="utf-8")
+            git("add", "base.txt"); git("commit", "-q", "-S", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            (repository / "delivery.txt").write_text("delivery\n", encoding="utf-8")
+            git("add", "delivery.txt")
+            receipt_digest = "b" * 64
+            git("commit", "-q", "-S", "-m", "delivery", "-m", f"SecPal-Validation-Receipt: {receipt_digest}")
+            head = git("rev-parse", "HEAD")
+            tree = git("rev-parse", "HEAD^{tree}")
+            reviewed = fast_feedback(head_sha=head)
+            authority = ready_integration_prior_authority(reviewed)
+            authority.update(
+                prior_delivery_tree_sha=tree,
+                prior_validation_receipt_digest=receipt_digest,
+                expected_signer={"kind": "SSH_PRINCIPAL", "identity": principal},
+            )
+            authority = fast_path.normalize_ready_integration_prior_authority(authority)
+            authority_digest = fast_path.digest_json(authority)
+            wrong_digest = "f" * 64
+            git("tag", "-s", "tag-a", head, "-m", "Tag A", "-m", f"SecPal-Prior-Authority: {wrong_digest}")
+            git("tag", "-s", "tag-b", base, "-m", "Tag B", "-m", f"SecPal-Prior-Authority: {authority_digest}")
+            tag_a = git("rev-parse", "tag-a^{tag}")
+            tag_b = git("rev-parse", "tag-b^{tag}")
+            git("update-ref", "refs/tags/prior-authority", tag_a)
+            integration = ready_integration_evidence(reviewed, validated_tree=tree)
+            integration["prior_authority_digest"] = authority_digest
+            integration["prior_authority_tag_object_sha"] = tag_a
+            integration = fast_path.normalize_ready_integration_evidence(
+                integration, repository="SecPal/.github", reviewed_state=reviewed,
+                registry=fast_registry(), validated_tree_sha=tree,
+            )
+            arguments = SimpleNamespace(
+                repo="SecPal/.github", delivery_issue=9,
+                prior_authority="authority.json", prior_reviewed_state="reviewed.json",
+                prior_receipt="receipt.json", prior_attestation="attestation.json",
+                prior_authority_tag_ref="refs/tags/prior-authority",
+                expected_prior_authority_signer=principal,
+            )
+            original_run = actions._run_attestation_git
+            moved = False
+
+            def moving_run(
+                repository_root: Path,
+                command: list[str],
+                *,
+                allow_failure: bool = False,
+            ) -> Any:
+                nonlocal moved
+                if command[:2] == ["verify-tag", "--raw"] and not moved:
+                    git("update-ref", "refs/tags/prior-authority", tag_b)
+                    moved = True
+                return original_run(
+                    repository_root, command, allow_failure=allow_failure
+                )
+
+            def read_json(path: str, _label: str) -> Any:
+                return {
+                    "authority.json": authority,
+                    "receipt.json": {"receipt_digest": receipt_digest},
+                    "attestation.json": {
+                        "attestation_digest": authority["prior_final_attestation_digest"],
+                        "validation_receipt_digest": receipt_digest,
+                    },
+                }[path]
+
+            with (
+                mock.patch.object(actions, "_read_json", side_effect=read_json),
+                mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+                mock.patch.object(
+                    fast_path,
+                    "create_validation_receipt",
+                    return_value={"receipt_digest": receipt_digest},
+                ),
+                mock.patch.object(fast_path, "verify_validation_attestation"),
+                mock.patch.object(actions, "_run_attestation_git", side_effect=moving_run),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker, "prior authority tag binding is invalid"
+                ),
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments, repository_root=repository,
+                    binding=fast_registry(), integration_evidence=integration,
+                    live_observation=None,
+                )
+            self.assertTrue(moved)
+
+            git("tag", "-s", "tag-c", head, "-m", "Tag C", "-m", f"SecPal-Prior-Authority: {authority_digest}")
+            tag_c = git("rev-parse", "tag-c^{tag}")
+            git("update-ref", "refs/tags/prior-authority", tag_c)
+            valid_integration = copy.deepcopy(integration)
+            valid_integration["prior_authority_tag_object_sha"] = tag_c
+            with (
+                mock.patch.object(actions, "_read_json", side_effect=read_json),
+                mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+                mock.patch.object(
+                    fast_path,
+                    "create_validation_receipt",
+                    return_value={"receipt_digest": receipt_digest},
+                ),
+                mock.patch.object(fast_path, "verify_validation_attestation"),
+                mock.patch.object(
+                    actions,
+                    "_verify_signature_policy_identity",
+                    wraps=actions._verify_signature_policy_identity,
+                ) as signature_policy,
+            ):
+                self.assertEqual(
+                    actions._verify_ready_integration_prior_authority(
+                        arguments=arguments, repository_root=repository,
+                        binding=fast_registry(),
+                        integration_evidence=valid_integration,
+                        live_observation=None,
+                    ),
+                    authority,
+                )
+            self.assertEqual(
+                [call.args[0] for call in signature_policy.call_args_list],
+                [head, tag_c],
+            )
+
+            git("update-ref", "refs/tags/prior-authority", head)
+            lightweight = copy.deepcopy(integration)
+            lightweight["prior_authority_tag_object_sha"] = head
+            with (
+                mock.patch.object(actions, "_read_json", side_effect=read_json),
+                mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+                mock.patch.object(
+                    fast_path,
+                    "create_validation_receipt",
+                    return_value={"receipt_digest": receipt_digest},
+                ),
+                mock.patch.object(fast_path, "verify_validation_attestation"),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker, "tag object is invalid"
+                ),
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments, repository_root=repository,
+                    binding=fast_registry(), integration_evidence=lightweight,
+                    live_observation=None,
+                )
+
+            git("update-ref", "refs/tags/prior-authority", tag_b)
+            wrong_target = copy.deepcopy(integration)
+            wrong_target["prior_authority_tag_object_sha"] = tag_b
+            with (
+                mock.patch.object(actions, "_read_json", side_effect=read_json),
+                mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+                mock.patch.object(
+                    fast_path,
+                    "create_validation_receipt",
+                    return_value={"receipt_digest": receipt_digest},
+                ),
+                mock.patch.object(fast_path, "verify_validation_attestation"),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker, "tag binding is invalid"
+                ),
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments, repository_root=repository,
+                    binding=fast_registry(), integration_evidence=wrong_target,
+                    live_observation=None,
+                )
+
+    def test_ready_integration_tag_signature_policy_uses_tag_object_oid(self) -> None:
+        tag_oid = "1" * 40
+        head = "2" * 40
+        local_signature = {
+            "state": "valid", "verified": True, "format": "ssh"
+        }
+        with mock.patch.object(
+            fast_path, "verify_commit_signatures", return_value=[]
+        ) as verify:
+            actions._verify_signature_policy_identity(
+                tag_oid, local_signature, fast_registry()["signature_policy"]
+            )
+        self.assertEqual(verify.call_args.args[0][0]["oid"], tag_oid)
+        self.assertNotEqual(verify.call_args.args[0][0]["oid"], head)
+
+    def test_exceptional_recovery_evidence_preserves_exhausted_ready_lifecycle(
+        self,
+    ) -> None:
+        original = fast_feedback(thread_count=5)
+        feedback = copy.deepcopy(original.feedback)
+        thread_ids = [f"PRRT_RECOVERY_{index}" for index in range(1, 6)]
+        for thread, thread_id in zip(feedback["threads"], thread_ids, strict=True):
+            thread["node_id"] = thread_id
+        reviewed = fast_path.StableFeedbackState(
+            repository=original.repository,
+            pull_request_number=746,
+            head_sha=original.head_sha,
+            base_ref=original.base_ref,
+            base_sha=original.base_sha,
+            pr_state="OPEN",
+            feedback=feedback,
+        )
+        eligibility_digest = "3" * 64
+        value = {
+            "schema_version": "1.0",
+            "kind": "READY_EXCEPTIONAL_RECOVERY",
+            "authorization_id": "user-authorized-recovery-746-1",
+            "repository": "SecPal/.github",
+            "delivery_issue_number": 745,
+            "pull_request_number": 746,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "prior_ready_tree_sha": "1" * 40,
+            "recovery_tree_sha": "2" * 40,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "eligibility_evidence_digest": eligibility_digest,
+            "finding_ids": [f"ER746-{index}" for index in range(1, 6)],
+            "thread_ids": thread_ids,
+            "lifecycle": {
+                "unrestricted_reviews": 1,
+                "remediation_cycles": 2,
+                "cycle_3": False,
+                "draft": False,
+                "ready": True,
+                "ready_transition": False,
+                "exceptional_recovery_count": 1,
+            },
+        }
+        normalized = fast_path.normalize_exceptional_recovery_evidence(
+            value,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            validated_tree_sha="2" * 40,
+            eligibility_evidence_digest=eligibility_digest,
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="2" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            eligibility_evidence_digest=eligibility_digest,
+            exceptional_recovery_evidence_digest=fast_path.digest_json(normalized),
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="4" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        self.assertEqual(
+            attestation["exceptional_recovery_evidence_digest"],
+            fast_path.digest_json(normalized),
+        )
+        for case, mutate in (
+            ("cycle_3", lambda item: item["lifecycle"].update(cycle_3=True)),
+            ("draft", lambda item: item["lifecycle"].update(draft=True, ready=False)),
+            ("counter", lambda item: item["lifecycle"].update(remediation_cycles=3)),
+            ("thread", lambda item: item["thread_ids"].__setitem__(0, "PRRT_OTHER")),
+            ("unknown", lambda item: item.update(allow_cycle_3=True)),
+        ):
+            changed = copy.deepcopy(value)
+            mutate(changed)
+            with self.subTest(case=case), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_exceptional_recovery_evidence(
+                    changed,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    validated_tree_sha="2" * 40,
+                    eligibility_evidence_digest=eligibility_digest,
                 )
 
     def test_ready_integration_signature_requires_the_explicit_signer(self) -> None:

@@ -426,6 +426,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "follow_up",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
+            "normalize_exceptional_recovery_evidence",
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
             "verify_validation_attestation",
@@ -557,6 +558,18 @@ SAFE_GETATTR_CALLS = {
         ),
         DynamicImportCall(
             ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_recovery_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
             "getattr(arguments, 'delivery_issue', None)",
         ),
         DynamicImportCall(
@@ -626,6 +639,14 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_verify_integration_selection",),
             "getattr(arguments, 'expected_integration_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_exceptional_recovery_selection",),
+            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_exceptional_recovery_selection",),
+            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
         ),
     },
     "secpal-resolve-fixed-threads.py": {

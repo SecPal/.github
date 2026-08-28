@@ -273,7 +273,7 @@ is bound to a new signed fix commit.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
-`attest-validation --integration-evidence` and the closed
+`attest-validation --integration-evidence` and the closed version-1.1
 `TWO_PARENT_READY_INTEGRATION` topology. The invocation also supplies the exact
 delivery issue, authorization ID, and expected signer. Its evidence fixes parent
 1 to the previously authenticated Ready head and parent 2 to the explicitly
@@ -284,7 +284,12 @@ The prior Ready state is supplied as a separate closed
 `READY_INTEGRATION_PRIOR_AUTHORITY` manifest. Its digest is authenticated by a
 signed annotated tag on the prior delivery head, and the binder independently
 verifies that head's ordinary receipt, final attestation, tree, signature, and
-accepted signer. The manifest binds the lifecycle identity and unchanged
+accepted signer. Its claimed receipt must equal the prior commit trailer,
+reconstructed ordinary receipt, and final-attestation receipt. The mutable tag
+ref is resolved once; target, signature, signer, trailer, and diagnostics all
+use the resulting immutable annotated-tag OID. OpenPGP signing-subkey output is
+accepted only when its authenticated primary fingerprint is the configured
+authority. The manifest binds the lifecycle identity and unchanged
 review/remediation counters, so inline integration booleans cannot establish
 Ready or lifecycle authority. Receipt creation performs one trusted GitHub
 observation of the open Ready PR and its registered target-base ref; the live PR
@@ -301,7 +306,11 @@ expected signer identity, stable-feedback and validation-execution digests,
 explicit eligibility, and the exact raw delta between the authenticated
 mechanical merge tree and the validated tree. Every permitted manual conflict-
 resolution path, mode, status, old object, and new object must appear exactly in
-that canonical delta; unlisted file drift fails closed.
+that canonical delta; unlisted file drift fails closed. Exit-zero merge-tree
+output must have no conflict paths or manual delta. Exit-one output must name a
+canonical non-empty conflict set; every path must be changed or deleted, no
+other path may change, and retained text conflict markers are rejected. The
+synthetic conflict tree itself is never accepted as a resolved candidate.
 
 The integration evidence proves unchanged unrestricted-review and remediation
 counters, no Cycle 3, no review request, no Ready transition, and preserved
@@ -312,6 +321,17 @@ branch, observe post-push checks, transition the PR, or authorize merging. After
 push, fresh head-bound checks, stable feedback, eligibility, and readiness must
 be assessed in a separately authorized evidence phase; platform-triggered
 reviews are evidence only.
+
+An exceptional recovery after `BLOCKED_CYCLE_LIMIT_REACHED` is available only
+when a new, explicit user instruction selects
+`attest-validation --exceptional-recovery-evidence`. The closed
+`READY_EXCEPTIONAL_RECOVERY` artifact and eligibility manifest bind the exact
+reviewed findings/threads, prior Ready head/tree, recovery tree, issue/PR,
+stable feedback, `review=1/1`, `remediation=2/2`, `Cycle 3=false`, preserved
+Ready state, and exceptional-recovery count one. The ordinary single-parent
+receipt and final attestation carry its digest. This path cannot reset the
+finite lifecycle, manufacture Cycle 3, transition Ready state, or authorize a
+recursive recovery.
 
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
