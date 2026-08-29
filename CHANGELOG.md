@@ -15,8 +15,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - one organization-wide public claim vocabulary that separates product
   direction, work state, source implementation, non-production deployment,
-  scoped real-system verification, production operation, architecture status,
-  qualification, and historical evidence without creating a maturity ladder
+  production deployment, scoped real-system verification, production operation,
+  architecture status, qualification, and historical evidence without creating
+  a maturity ladder
 - evidence-scope, semantic-currentness, fail-toward-truth downgrade, conflict,
   and no-claim-by-absence rules for public factual statements
 - public consequences of canonical work-graph and evidence-architecture

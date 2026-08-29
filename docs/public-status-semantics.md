@@ -48,9 +48,10 @@ A public status statement combines five concerns:
 The claim classes below are independent dimensions, not stages of one lifecycle.
 Several may truthfully coexist or change independently. For example, an
 Accepted Architecture claim can coexist with an older source implementation, a
-development deployment, and scoped real-system verification, without any of
-those facts establishing Production Operation. Planned and Active
-Implementation describe work; they are not product-maturity levels.
+development deployment, a production deployment, and scoped real-system
+verification, without any of those facts establishing Production Operation.
+Planned and Active Implementation describe work; they are not product-maturity
+levels.
 
 There is therefore no global ordering such as `planned -> implemented ->
 deployed -> production`. “Strongest supportable claim” means the most specific
@@ -66,7 +67,8 @@ Public wording need not mechanically print that five-part scope. It MUST expose
 the parts needed to avoid a materially broader inference. One route test cannot
 become API completeness; one provider run cannot become universal provider
 support; one development deployment cannot become production operation; and one
-historical success cannot become current support.
+production deployment cannot become production operation merely because the
+artifact is present. One historical success cannot become current support.
 
 ## 2. Public claim vocabulary
 
@@ -80,6 +82,7 @@ normative.
 | Active Implementation               | Is the delivery actually being executed now?                                | Current execution evidence; canonical `ACTIVE` for work-graph-governed work           |
 | Implemented in Source               | Does the supported source contain the delivered implementation?             | Authoritative supported branch/ref plus contract-appropriate evidence                 |
 | Deployed to Development / Test      | Is an identified artifact actually running in a non-production environment? | Current environment, deployment, release, and artifact evidence                       |
+| Production Deployment               | Is an identified supported artifact currently deployed in production?       | Current production environment, deployment, release, and artifact evidence            |
 | Operationally / Externally Verified | Was a named real seam, collaborator, or operational path exercised?         | Admissible scoped real evidence under the canonical evidence contracts                |
 | Production Operation                | Is the actual supported production path deployed and operating in scope?    | Current production deployment and operating evidence                                  |
 | Accepted Architecture               | Which architecture decision is currently binding?                           | ADR index and individual ADR status and relationships                                 |
@@ -188,7 +191,36 @@ qualification of unrelated seams, broad readiness, or Production Operation.
 or no longer matches the claimed artifact or environment, remove or
 historicalize this claim. Implemented in Source can remain independently true.
 
-### 2.6 Operationally / Externally Verified
+### 2.6 Production Deployment
+
+**Meaning and authority.** An identified supported implementation or artifact
+is deployed or installed in an identified production environment. This answers
+whether the artifact is present in production, not whether it is currently
+operating correctly.
+
+**Minimum evidence.** Current authoritative deployment and environment evidence
+MUST establish the production environment identity, the deployed artifact,
+release, or ref identity where material, and that the deployment is currently
+present. The evidence must distinguish the deployment from development, test,
+staging, qualification, or a merely production-like configuration. Public
+wording MAY say “deployed to production”, “the production environment currently
+has [artifact or release] deployed”, or equivalent scoped factual wording.
+
+**Does not imply.** Production Deployment does not establish Production
+Operation, service health, successful request handling, complete runtime
+functionality, Operationally / Externally Verified status, production
+readiness, broad supportability, security assurance, or legal or compliance
+status.
+
+**Change and downgrade.** Remove or narrow the current claim when the artifact
+is removed, replaced, no longer identifiable, no longer in the claimed
+production environment, no longer supported for the claimed scope, or
+contradicted by newer authoritative deployment evidence. A stopped, unhealthy,
+failing, or temporarily unobservable service does not by itself erase a
+still-provable Production Deployment claim. If deployment evidence also loses
+currentness, the attributable former deployment may remain Historical.
+
+### 2.7 Operationally / Externally Verified
 
 **Meaning and authority.** A specifically identified behavior, seam,
 integration, provider representation, runtime or deployment path, recovery
@@ -213,7 +245,7 @@ version, or environment is no longer current, qualify the evidence as
 Historical or make a narrower still-current claim. If source evidence remains,
 Implemented in Source may remain independently supportable.
 
-### 2.7 Production Operation
+### 2.8 Production Operation
 
 **Meaning and authority.** The actual supported production path is deployed and
 operating in the expressly stated scope.
@@ -238,11 +270,13 @@ owned, explicit readiness contract could support a correspondingly bounded
 phrase in the future; no weaker claim may do so.
 
 **Change and downgrade.** A stopped, replaced, unsupported, contradictory, or
-unobservable production path loses the current claim. Another independent claim
-such as Deployed to Development / Test, Implemented in Source, or Historical
-Production Operation may still be supportable.
+unobservable production path loses the current claim. If current production
+deployment evidence remains valid, Production Deployment remains independently
+supportable even though Production Operation ceases. Deployed to Development /
+Test, Implemented in Source, or Historical Production Operation may also remain
+supportable in their own scopes.
 
-### 2.8 Accepted Architecture
+### 2.9 Accepted Architecture
 
 **Meaning and authority.** The authoritative ADR status says an architecture
 decision is currently Accepted, interpreted together with current refinement
@@ -265,7 +299,7 @@ status. An old implementation can temporarily remain in source after its ADR is
 superseded; the architecture claim changes even though the source claim has not
 yet changed.
 
-### 2.9 Qualification / PoC / Exploration
+### 2.10 Qualification / PoC / Exploration
 
 **Meaning and authority.** A candidate, prototype, proof of concept,
 qualification exercise, provider test, architecture experiment, or exploratory
@@ -285,7 +319,7 @@ bounded result as Historical where useful. Adoption requires an explicit
 transition in the later owning product, architecture, planning, or
 implementation authority; public prose cannot perform that transition.
 
-### 2.10 Historical / Superseded
+### 2.11 Historical / Superseded
 
 **Meaning and authority.** Evidence, a decision, implementation, deployment, or
 work result remains valid history but no longer establishes the corresponding
@@ -334,7 +368,8 @@ Old evidence may remain historically valid after it stops being current.
 
 There is no universal fallback. Operationally / Externally Verified may become
 Implemented in Source; a development deployment may disappear while the source
-claim remains; Accepted Architecture may become Superseded while its old
+claim remains; Production Operation may cease while a still-current Production
+Deployment remains; Accepted Architecture may become Superseded while its old
 implementation temporarily remains; Active Implementation may become Planned /
 Tracked Work; and a current verified path may become Historical.
 
@@ -387,8 +422,16 @@ appropriate class:
   wording MUST say which fact matters;
 - **implemented capability** requires Implemented in Source evidence and must
   preserve its delivered scope;
-- **active product development** requires current Active Implementation
-  evidence;
+- **project active-development / pre-1.0 context**, including the stable
+  statement that SecPal is under active development and remains pre-1.0, is
+  governed by the product-positioning contract. It describes overall project
+  maturity and continuing evolution and does not require a continuously present
+  Work-Graph `ACTIVE` leaf. It does not imply that every product domain or any
+  named feature or issue is active, continuous commit activity, proximity to a
+  release, or production readiness;
+- **active implementation of a named capability or delivery** requires current
+  Active Implementation evidence. For work governed by the SecPal work graph,
+  canonical `ACTIVE` remains exclusively defined there;
 - **product direction** requires Product Direction authority and is not a
   feature promise; and
 - **exploration** remains Qualification / PoC / Exploration unless its owning
@@ -445,11 +488,11 @@ completion.
 [SecPal/secpal.app#61](https://github.com/SecPal/secpal.app/issues/61) records
 that the roadmap is curated public copy rather than a direct rendering of issue
 state. Its current “Now / Next / Later” presentation can be translated only
-through current evidence: a “Now” item needs Active Implementation evidence,
-“Next” may express Planned / Tracked Work but not guaranteed order, and “Later”
-may be Product Direction or Qualification / PoC / Exploration. Display order
-cannot establish a guaranteed sequence such as scheduling, then OWKS, then
-contracts.
+through current evidence: a named “Now” item described as actively in
+development needs Active Implementation evidence, “Next” may express Planned /
+Tracked Work but not guaranteed order, and “Later” may be Product Direction or
+Qualification / PoC / Exploration. Display order cannot establish a guaranteed
+sequence such as scheduling, then OWKS, then contracts.
 
 ## Scope boundary
 
