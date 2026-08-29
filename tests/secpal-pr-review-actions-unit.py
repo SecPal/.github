@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -4937,6 +4938,83 @@ class FakeFastGateway:
 
 
 class FastPathTests(TestCase):
+    def test_integration_tree_delta_recurses_to_exact_nested_leaf_paths(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="secpal-integration-delta-") as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Integration Delta Fixture")
+            git("config", "user.email", "integration-delta@example.test")
+            docs = repository / "docs"
+            docs.mkdir()
+            workflow = docs / "secpal-pr-review-workflow.md"
+            sibling = docs / "sibling.md"
+            workflow.write_text("base workflow\n", encoding="utf-8")
+            sibling.write_text("base sibling\n", encoding="utf-8")
+            (repository / "CHANGELOG.md").write_text("base changelog\n", encoding="utf-8")
+            git("add", ".")
+            mechanical_tree = git("write-tree")
+
+            self.assertEqual(
+                actions._integration_tree_delta(
+                    repository, mechanical_tree, mechanical_tree
+                ),
+                [],
+            )
+
+            workflow.write_text("resolved workflow\n", encoding="utf-8")
+            git("add", "docs/secpal-pr-review-workflow.md")
+            nested_tree = git("write-tree")
+            nested_delta = actions._integration_tree_delta(
+                repository, mechanical_tree, nested_tree
+            )
+            self.assertEqual(
+                [entry["path"] for entry in nested_delta],
+                ["docs/secpal-pr-review-workflow.md"],
+            )
+            self.assertEqual(
+                {entry["path"] for entry in nested_delta},
+                {"docs/secpal-pr-review-workflow.md"},
+            )
+
+            sibling.write_text("unauthorized sibling\n", encoding="utf-8")
+            git("add", "docs/sibling.md")
+            sibling_tree = git("write-tree")
+            sibling_delta = actions._integration_tree_delta(
+                repository, mechanical_tree, sibling_tree
+            )
+            authenticated_conflicts = {"docs/secpal-pr-review-workflow.md"}
+            self.assertEqual(
+                {entry["path"] for entry in sibling_delta} - authenticated_conflicts,
+                {"docs/sibling.md"},
+            )
+
+            git("reset", "-q", "--hard")
+            git("read-tree", mechanical_tree)
+            (repository / "CHANGELOG.md").write_text(
+                "resolved changelog\n", encoding="utf-8"
+            )
+            git("add", "CHANGELOG.md")
+            top_level_tree = git("write-tree")
+            self.assertEqual(
+                [
+                    entry["path"]
+                    for entry in actions._integration_tree_delta(
+                        repository, mechanical_tree, top_level_tree
+                    )
+                ],
+                ["CHANGELOG.md"],
+            )
+
     def execute(self, reviewed: Any, gateway: FakeFastGateway, count: int = 2) -> dict[str, Any]:
         return fast_path.execute_resolution_batch(
             fast_request(reviewed, count),

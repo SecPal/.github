@@ -4288,6 +4288,59 @@ def _commit_validation_receipt_digest(
     return values[0]
 
 
+def _integration_tree_delta(
+    repository_root: Path,
+    mechanical_tree: str,
+    validated_tree: str,
+) -> list[dict[str, str]]:
+    result = _run_attestation_git(
+        repository_root,
+        [
+            "diff-tree",
+            "-r",
+            "--raw",
+            "--no-abbrev",
+            "-z",
+            "--no-renames",
+            mechanical_tree,
+            validated_tree,
+        ],
+        allow_failure=True,
+    )
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker(
+            "mechanical integration tree is unavailable or invalid"
+        )
+    fields = result.stdout.split("\x00")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) % 2:
+        raise fast_path.SecurityBlocker(
+            "mechanical integration tree delta is malformed"
+        )
+    delta: list[dict[str, str]] = []
+    for index in range(0, len(fields), 2):
+        header = fields[index]
+        path = fields[index + 1]
+        parts = header[1:].split() if header.startswith(":") else []
+        if len(parts) != 5:
+            raise fast_path.SecurityBlocker(
+                "mechanical integration tree delta is malformed"
+            )
+        old_mode, new_mode, old_oid, new_oid, status = parts
+        delta.append(
+            {
+                "path": path,
+                "status": status,
+                "old_mode": old_mode,
+                "new_mode": new_mode,
+                "old_oid": old_oid.lower(),
+                "new_oid": new_oid.lower(),
+            }
+        )
+    return sorted(delta, key=lambda item: item["path"])
+
+
 def _attestation_local_state(repository_root: Path, repository: str) -> tuple[str, str]:
     head = _run_attestation_git(repository_root, ["rev-parse", "HEAD"]).stdout.strip()
     status = _run_attestation_git(
