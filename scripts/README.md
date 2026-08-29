@@ -394,9 +394,14 @@ Diagnostic identities are bounded identifiers; the schema has no field for raw
 provider output, response bodies, environment dumps, or secret material.
 Independent enforcement declarations name their authoritative owner, derivation,
 and agreement-proof identity. When those declarations exist, callers supply a
-closed `secpal-evidence-agreement-results/v1` result document; only a named
-`executable` result with status `passed` satisfies the mechanical proof input.
-Repository-specific validation owns producing that executable evidence.
+closed `secpal-evidence-agreement-attestation/v1` envelope. The envelope is
+verified with the maintained lifecycle authority signer policy and binds the
+existing successful validation receipt, exact Git revision and tree, trusted
+producer, proof identity, result, and reviewed-input digest. Repository-authored
+status or provenance fields have no authority by themselves; only a verified
+named `executable` result with status `passed` satisfies the mechanical proof
+input. Repository-specific validation owns producing that executable evidence.
+The gate retains no command output, provider response, or secret material.
 Polyscope validates all managed declarations as one bounded workspace bundle so
 duplicate owner declarations across repository boundaries cannot pass separate
 repository checks.

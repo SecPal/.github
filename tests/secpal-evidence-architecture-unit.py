@@ -63,17 +63,10 @@ def declaration() -> dict:
     }
 
 
-def proof_results(status: str = "passed") -> dict:
-    return {
-        "schema": "secpal-evidence-agreement-results/v1",
-        "results": [
-            {
-                "id": "host-digest-agreement",
-                "kind": "executable",
-                "status": status,
-            }
-        ],
-    }
+def proof_results(status: str = "passed") -> list[governance.VerifiedAgreementResult]:
+    return [
+        governance.VerifiedAgreementResult("host-digest-agreement", status)
+    ]
 
 
 def finding_codes(report: dict) -> set[str]:
@@ -277,8 +270,10 @@ class InvariantOwnershipTests(unittest.TestCase):
         self.assertIn("INDEPENDENT_ENFORCEMENT_UNPROVEN", finding_codes(report))
 
     def test_malformed_agreement_result_fails_closed(self):
-        malformed = proof_results()
-        malformed["results"][0]["status"] = ["passed"]
+        malformed = {
+            "schema": "secpal-evidence-agreement-results/v1",
+            "results": [{"id": "host-digest-agreement", "status": "passed"}],
+        }
         report = governance.assess_declarations(
             [declaration()], proof_results=malformed
         )

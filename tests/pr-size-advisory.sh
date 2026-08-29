@@ -155,6 +155,24 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
+  for evidence_suite in \
+    secpal-evidence-architecture-unit.py \
+    secpal-evidence-architecture-cli.py \
+    polyscope-evidence-architecture.py; do
+    cat >"$repository/tests/$evidence_suite" <<'EOF'
+import unittest
+
+
+class PreflightFixtureEvidenceTest(unittest.TestCase):
+    def test_unrelated_evidence_suite_is_stubbed(self):
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+  done
+
   cat >"$repository/tests/polyscope-work-graph-replanning.py" <<'EOF'
 """Fixture stand-in for preflight's managed replanning contract tests."""
 

@@ -25,6 +25,9 @@ REFERENCE_PARSER = (
     / "markdown_references.mjs"
 )
 _MANAGED_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+_OID = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+AGREEMENT_DOMAIN = "secpal.evidence-agreement-proof/v1"
 
 
 class EvidenceUnavailable(RuntimeError):
@@ -82,6 +85,147 @@ def _json_document(path: Path, label: str, *, required: bool) -> Any:
         return json.loads(text)
     except json.JSONDecodeError as error:
         raise EvidenceUnavailable(f"{label} is unavailable or malformed") from error
+
+
+def _git_identity(root: Path) -> tuple[str, str]:
+    identities = []
+    for arguments in (("rev-parse", "HEAD"), ("rev-parse", "HEAD^{tree}")):
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(root), *arguments],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise EvidenceUnavailable("agreement proof subject is unavailable") from error
+        value = result.stdout.strip()
+        if result.returncode != 0 or not _OID.fullmatch(value):
+            raise EvidenceUnavailable("agreement proof subject is unavailable")
+        identities.append(value)
+    return identities[0], identities[1]
+
+
+def _verified_agreement_results(
+    root: Path,
+    repository: str,
+    document: Any,
+) -> list[governance.VerifiedAgreementResult]:
+    try:
+        from secpal_pr_review import fast_path, lifecycle_authority
+    except ImportError as error:
+        raise EvidenceUnavailable(
+            "maintained agreement-proof authority is unavailable"
+        ) from error
+    if not isinstance(document, dict) or set(document) != {"payload", "signature"}:
+        raise EvidenceUnavailable("agreement proof is not an authenticated envelope")
+    payload = document["payload"]
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema",
+        "repository",
+        "revision",
+        "tree",
+        "producer",
+        "validation_receipt",
+        "results",
+    }:
+        raise EvidenceUnavailable("agreement proof payload is malformed")
+    revision, tree = _git_identity(root)
+    if (
+        payload["schema"] != governance.PROOF_SCHEMA
+        or payload["repository"] != repository
+        or payload["revision"] != revision
+        or payload["tree"] != tree
+        or not isinstance(payload["producer"], str)
+    ):
+        raise EvidenceUnavailable("agreement proof producer or subject is stale")
+    receipt = payload["validation_receipt"]
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "schema_version",
+        "kind",
+        "repository",
+        "head_sha",
+        "validated_tree_sha",
+        "registry_digest",
+        "command_set_digest",
+        "successful_result",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "manual_gate_evidence",
+        "eligibility_evidence_digest",
+        "receipt_digest",
+    }:
+        raise EvidenceUnavailable("agreement validation receipt is malformed")
+    receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
+    if (
+        receipt["schema_version"] != "1.0"
+        or receipt["kind"] != "VALIDATION_RECEIPT"
+        or receipt["repository"] != repository
+        or not isinstance(receipt["head_sha"], str)
+        or not _OID.fullmatch(receipt["head_sha"])
+        or receipt["validated_tree_sha"] != tree
+        or receipt["successful_result"] is not True
+        or any(
+            not isinstance(receipt[field], str) or not _DIGEST.fullmatch(receipt[field])
+            for field in (
+                "registry_digest",
+                "command_set_digest",
+                "reviewed_state_digest",
+                "reviewed_feedback_digest",
+                "eligibility_evidence_digest",
+            )
+        )
+        or not isinstance(receipt["manual_gate_evidence"], list)
+        or receipt["receipt_digest"] != fast_path.digest_json(receipt_fields)
+    ):
+        raise EvidenceUnavailable("agreement validation receipt is invalid or stale")
+    results = payload["results"]
+    if not isinstance(results, list) or len(results) > governance.MAX_ITEMS:
+        raise EvidenceUnavailable("agreement proof results are unavailable or unbounded")
+    verified: list[governance.VerifiedAgreementResult] = []
+    seen: set[str] = set()
+    for result in results:
+        if not isinstance(result, dict) or set(result) != {
+            "id",
+            "kind",
+            "status",
+            "reviewed_input_id",
+            "reviewed_input_digest",
+        }:
+            raise EvidenceUnavailable("agreement proof result is malformed")
+        proof_id = result["id"]
+        if (
+            not isinstance(proof_id, str)
+            or proof_id in seen
+            or result["kind"] != "executable"
+            or result["status"] not in {"passed", "failed", "unavailable"}
+            or not isinstance(result["reviewed_input_id"], str)
+            or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,95}",
+                result["reviewed_input_id"],
+            )
+            or not isinstance(result["reviewed_input_digest"], str)
+            or not _DIGEST.fullmatch(result["reviewed_input_digest"])
+        ):
+            raise EvidenceUnavailable("agreement proof result is malformed")
+        seen.add(proof_id)
+        verified.append(governance.VerifiedAgreementResult(proof_id, result["status"]))
+    canonical = fast_path.canonical_json_bytes(payload)
+    if len(canonical) > MAX_INPUT_BYTES:
+        raise EvidenceUnavailable("agreement proof payload exceeds the bounded input limit")
+    try:
+        lifecycle_authority.verify_authority_signed_payload(
+            repository=repository,
+            producer=payload["producer"],
+            domain=AGREEMENT_DOMAIN,
+            payload=canonical,
+            signature=document["signature"],
+        )
+    except lifecycle_authority.LifecycleAuthorityError as error:
+        raise EvidenceUnavailable("agreement proof signature is invalid") from error
+    return verified
 
 
 def _references(markdown: str) -> tuple[str, ...]:
@@ -182,7 +326,8 @@ def _single_assessment(arguments: argparse.Namespace) -> dict[str, Any]:
     proofs = None
     if arguments.proof_results:
         proof_path = _inside(root, arguments.proof_results, "agreement results")
-        proofs = _json_document(proof_path, "agreement results", required=True)
+        proof_document = _json_document(proof_path, "agreement results", required=True)
+        proofs = _verified_agreement_results(root, arguments.repository, proof_document)
     assessment = governance.assess_declarations(
         [] if declaration is None else [declaration],
         proof_results=proofs,
@@ -217,10 +362,7 @@ def _managed_assessment(arguments: argparse.Namespace) -> dict[str, Any]:
 
     workspace = _root(arguments.managed_workspace_root)
     declarations: list[Any] = []
-    combined_results: dict[str, Any] = {
-        "schema": governance.PROOF_SCHEMA,
-        "results": [],
-    }
+    combined_results: list[governance.VerifiedAgreementResult] = []
     runtime_baselines: dict[str, Any] = {}
     for name in names:
         root = _inside(workspace, name, "managed repository")
@@ -261,11 +403,7 @@ def _managed_assessment(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         results = _json_document(result_path, "agreement results", required=False)
         if results is not None:
-            if not isinstance(results, dict) or not isinstance(results.get("results"), list):
-                raise EvidenceUnavailable("agreement results are unavailable or malformed")
-            if results.get("schema") != governance.PROOF_SCHEMA:
-                raise EvidenceUnavailable("agreement result schema is unsupported")
-            combined_results["results"].extend(results["results"])
+            combined_results.extend(_verified_agreement_results(root, repository, results))
 
     assessment = governance.assess_declarations(
         declarations,

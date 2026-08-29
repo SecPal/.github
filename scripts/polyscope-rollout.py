@@ -3832,6 +3832,7 @@ def is_provisionable_worktree(
             return skip("missing committed native Android Gradle project")
 
     validate_instruction_root(worktree_path, validated_instruction_roots, repo_name)
+    validate_evidence_architecture_root(worktree_path, repo_name)
 
     package_scripts = load_package_scripts(worktree_path)
     composer_scripts = load_composer_scripts(worktree_path)
@@ -6305,11 +6306,13 @@ def validate_direct_api_worktree_roots(
         validated_instruction_roots,
         "api",
     )
+    validate_evidence_architecture_root(resolved_source_repo, "api")
     resolved_worktree = validate_instruction_root(
         worktree_path,
         validated_instruction_roots,
         "api",
     )
+    validate_evidence_architecture_root(resolved_worktree, "api")
     return resolved_source_repo, resolved_worktree
 
 
@@ -6391,6 +6394,7 @@ def dispatch_validation_only_direct_mode(args: argparse.Namespace) -> int | None
         set(),
         repository_name,
     )
+    validate_evidence_architecture_root(resolved_root, repository_name)
     print(f"Canonical AI-instruction validation passed for {resolved_root}")
     return 0
 

@@ -215,12 +215,22 @@ if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
     exit 1
 fi
 EVIDENCE_VALIDATOR_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal-evidence-architecture.py"
+EVIDENCE_PACKAGE_MARKER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/__init__.py"
 EVIDENCE_GOVERNANCE_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/governance.py"
 EVIDENCE_MARKDOWN_PARSER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/markdown_references.mjs"
+EVIDENCE_RECEIPT_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_pr_review/fast_path.py"
+EVIDENCE_AUTHORITY_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_pr_review/lifecycle_authority.py"
+EVIDENCE_COMMAND_HELPER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal-pr-review.py"
+EVIDENCE_TRUST_REGISTRY="$(cd -- "$(dirname -- "$SOURCE_SCRIPT")/.." && pwd)/.agents/skills/secpal-pr-review/references/repositories.json"
 for _evidence_source in \
     "$EVIDENCE_VALIDATOR_SOURCE" \
+    "$EVIDENCE_PACKAGE_MARKER_SOURCE" \
     "$EVIDENCE_GOVERNANCE_SOURCE" \
-    "$EVIDENCE_MARKDOWN_PARSER_SOURCE"; do
+    "$EVIDENCE_MARKDOWN_PARSER_SOURCE" \
+    "$EVIDENCE_RECEIPT_SOURCE" \
+    "$EVIDENCE_AUTHORITY_SOURCE" \
+    "$EVIDENCE_COMMAND_HELPER_SOURCE" \
+    "$EVIDENCE_TRUST_REGISTRY"; do
     if [[ ! -f "$_evidence_source" ]]; then
         echo "Error: canonical evidence-architecture source bundle is incomplete: $_evidence_source" >&2
         exit 1
@@ -256,10 +266,18 @@ validator_yaml_usable() {
         "$VALIDATOR_YAML_CHECK" "$VALIDATOR_YAML_PACKAGE" >/dev/null 2>&1
 }
 
+evidence_markdown_parser_usable() {
+    PATH="$SERVICE_PATH" node "$EVIDENCE_MARKDOWN_PARSER_SOURCE" \
+        >/dev/null 2>&1 <<'EOF'
+{"markdown":""}
+EOF
+}
+
 if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     || ! -f "$VALIDATOR_INSTALLED_PACKAGE_LOCK" \
     || ! -x "$VALIDATOR_MARKDOWNLINT" ]] \
-    || ! validator_yaml_usable; then
+    || ! validator_yaml_usable \
+    || ! evidence_markdown_parser_usable; then
     echo "Error: rollout validator toolchain is incomplete; install the source bundle's committed npm dependencies before installing the rollout." >&2
     exit 1
 fi
@@ -472,34 +490,59 @@ Description=Watch SecPal instruction files for Polyscope sync
 PathChanged=$WORKSPACE_ROOT/api/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/api/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/api/.github/instructions
+PathChanged=$WORKSPACE_ROOT/api/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/api/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/frontend/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/frontend/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/frontend/.github/instructions
+PathChanged=$WORKSPACE_ROOT/frontend/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/frontend/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/contracts/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/contracts/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/contracts/.github/instructions
+PathChanged=$WORKSPACE_ROOT/contracts/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/contracts/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/android/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/android/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/android/.github/instructions
+PathChanged=$WORKSPACE_ROOT/android/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/android/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/secpal.app/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/secpal.app/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/secpal.app/.github/instructions
+PathChanged=$WORKSPACE_ROOT/secpal.app/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/secpal.app/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/guardguide.de/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/guardguide.de/.github/instructions
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/GuardGuide/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/instructions
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/deployment/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/deployment/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/.github/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/instructions
+PathChanged=$WORKSPACE_ROOT/.github/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/.github/.secpal/evidence-agreement-results.json
 PathChanged=$WORKSPACE_ROOT/operations/AGENTS.md
+PathChanged=$WORKSPACE_ROOT/operations/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/operations/.secpal/evidence-agreement-results.json
 PathChanged=$CODEX_AGENTS_SOURCE
 PathChanged=$SOURCE_SCRIPT
 PathChanged=$VALIDATOR_SOURCE
 PathChanged=$EVIDENCE_VALIDATOR_SOURCE
+PathChanged=$EVIDENCE_PACKAGE_MARKER_SOURCE
 PathChanged=$EVIDENCE_GOVERNANCE_SOURCE
 PathChanged=$EVIDENCE_MARKDOWN_PARSER_SOURCE
+PathChanged=$EVIDENCE_RECEIPT_SOURCE
+PathChanged=$EVIDENCE_AUTHORITY_SOURCE
+PathChanged=$EVIDENCE_COMMAND_HELPER_SOURCE
+PathChanged=$EVIDENCE_TRUST_REGISTRY
 PathChanged=$VALIDATOR_PACKAGE_LOCK
 PathChanged=$VALIDATOR_INSTALLED_PACKAGE_LOCK
 PathChanged=$NGINX_LIBRARY_SOURCE

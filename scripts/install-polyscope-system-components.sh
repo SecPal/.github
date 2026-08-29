@@ -115,8 +115,13 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         "$RUNTIME_ROLLOUT_SOURCE" \
         "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
         "$RUNTIME_SCRIPT_DIR/secpal-evidence-architecture.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/__init__.py" \
         "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/governance.py" \
         "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/markdown_references.mjs" \
+        "$RUNTIME_SCRIPT_DIR/secpal_pr_review/fast_path.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_pr_review/lifecycle_authority.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal-pr-review.py" \
+        "$RUNTIME_SCRIPT_DIR/../.agents/skills/secpal-pr-review/references/repositories.json" \
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
         "$RUNTIME_YAML_CHECK" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
@@ -136,6 +141,15 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     if ! /usr/bin/sudo -u secpal -- \
         "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$RUNTIME_YAML_PACKAGE"; then
         echo "Error: canonical Polyscope runtime js-yaml package is unusable; reinstall the committed dependencies before activation." >&2
+        exit 1
+    fi
+    if ! /usr/bin/sudo -u secpal -- \
+        "$NODE_BIN" "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/markdown_references.mjs" \
+        >/dev/null <<'EOF'
+{"markdown":""}
+EOF
+    then
+        echo "Error: canonical evidence Markdown parser is unusable; reinstall the committed dependencies before activation." >&2
         exit 1
     fi
 fi

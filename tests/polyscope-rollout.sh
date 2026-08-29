@@ -336,6 +336,8 @@ write_valid_worktree_instructions() {
         '## Scope and Safety' \
         '' \
         '- Preserve existing work.' \
+        '' \
+        "\`docs/work-graph-contract.md\` is canonical." \
         >"$worktree_dir/AGENTS.md"
     printf '%s\n' \
         '<!--' \
@@ -1078,7 +1080,8 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/evidence-architecture-contract.md` is canonical.\n"
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
@@ -1201,6 +1204,33 @@ for mode in modes:
         assert not run_marker.exists()
         assert not db_path.exists()
         assert not (target / ".polyscope-secpal-provisioned.json").exists()
+
+# A valid managed source cannot authorize an active worktree whose own runtime
+# baseline silently drops canonical evidence delegation.
+for mode in modes:
+    case_root = fixture_root / f"{mode}-invalid-worktree-evidence"
+    source = case_root / "source repository"
+    target = case_root / "target worktree"
+    run_marker = case_root / "runtime-command-ran"
+    db_path = case_root / "polyscope.db"
+    write_valid_instruction_root(source)
+    write_valid_instruction_root(target)
+    (target / "AGENTS.md").write_text(
+        (target / "AGENTS.md").read_text().replace(
+            "`docs/evidence-architecture-contract.md` is canonical.",
+            "Architecture review remains a human obligation.",
+        )
+    )
+    result = subprocess.run(
+        cli_arguments(mode, target, source, run_marker, db_path),
+        env=cli_environment(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "MISSING_RUNTIME_BASELINE_DELEGATION" in result.stderr, result.stderr
+    assert not run_marker.exists()
+    assert not db_path.exists()
 
 # Fully valid source and target roots must retain successful CLI behavior for
 # every classified mode.
@@ -1341,7 +1371,8 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/evidence-architecture-contract.md` is canonical.\n"
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
@@ -1860,7 +1891,8 @@ fixture = workspace / "instruction-contract-worktree"
     "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
-    "# Runtime Instructions\n"
+    "# Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
@@ -2171,7 +2203,8 @@ for instruction_root in (source_api, api_worktree):
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/evidence-architecture-contract.md` is canonical.\n"
     )
     instruction_root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"
@@ -7030,6 +7063,62 @@ grep -qF 'canonical instruction validator is missing or not executable' \
 test ! -e "$standalone_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$standalone_unit_dir/polyscope-rollout-sync.path"
 
+# A namespace-package directory is not the committed regular governance
+# package. Reject a source bundle missing its package marker before installation.
+missing_marker_source_dir="$workspace/missing-package-marker/scripts"
+missing_marker_source_script="$missing_marker_source_dir/polyscope-rollout.py"
+missing_marker_home_dir="$workspace/missing-package-marker/home"
+missing_marker_bin_dir="$workspace/missing-package-marker/bin"
+missing_marker_unit_dir="$workspace/missing-package-marker/units"
+missing_marker_error="$workspace/missing-package-marker/error"
+mkdir -p "$missing_marker_source_dir/secpal_evidence_architecture" \
+    "$missing_marker_home_dir/.polyscope/bin"
+cp "$PYTHON_SCRIPT" "$missing_marker_source_script"
+cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
+    "$missing_marker_source_dir/validate-ai-instructions.sh"
+cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" \
+    "$missing_marker_source_dir/secpal-evidence-architecture.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/governance.py" \
+    "$missing_marker_source_dir/secpal_evidence_architecture/governance.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs" \
+    "$missing_marker_source_dir/secpal_evidence_architecture/markdown_references.mjs"
+cp "$REPO_ROOT/scripts/verify-js-yaml-package.cjs" \
+    "$missing_marker_source_dir/verify-js-yaml-package.cjs"
+cp "$REPO_ROOT/scripts/polyscope_nginx.py" "$missing_marker_source_dir/polyscope_nginx.py"
+cp "$REPO_ROOT/scripts/secpal-polyscope-nginx-apply.py" \
+    "$missing_marker_source_dir/secpal-polyscope-nginx-apply.py"
+chmod +x "$missing_marker_source_script" \
+    "$missing_marker_source_dir/validate-ai-instructions.sh" \
+    "$missing_marker_source_dir/secpal-evidence-architecture.py" \
+    "$missing_marker_source_dir/secpal-polyscope-nginx-apply.py"
+printf '#!/usr/bin/env bash\nexit 0\n' \
+    >"$missing_marker_home_dir/.polyscope/bin/expose-linux-x64"
+chmod +x "$missing_marker_home_dir/.polyscope/bin/expose-linux-x64"
+missing_marker_exit=0
+env HOME="$missing_marker_home_dir" \
+    CODEX_HOME="$missing_marker_home_dir/.codex" \
+    WORKSPACE_ROOT="$workspace_root" \
+    SYSTEMCTL_BIN="$fake_systemctl_dir/systemctl" \
+    SYSTEMCTL_LOG="$fake_systemctl_log" \
+    SUDO_BIN="$fake_sudo_dir/sudo" \
+    SUDO_LOG="$workspace/missing-package-marker/sudo.log" \
+    PATH="$fake_systemctl_dir:$PATH" \
+    bash "$INSTALL_SCRIPT" \
+    --source-script "$missing_marker_source_script" \
+    --bin-dir "$missing_marker_bin_dir" \
+    --unit-dir "$missing_marker_unit_dir" \
+    --polyscope-server-bin "$fake_server_bin" \
+    2>"$missing_marker_error" \
+    || missing_marker_exit=$?
+if [[ "$missing_marker_exit" -eq 0 ]]; then
+    echo "installer must reject an evidence package missing __init__.py" >&2
+    exit 1
+fi
+grep -qF 'canonical evidence-architecture source bundle is incomplete' \
+    "$missing_marker_error"
+test ! -e "$missing_marker_bin_dir/polyscope-secpal-rollout.py"
+test ! -e "$missing_marker_unit_dir/polyscope-rollout-sync.path"
+
 # The sibling validator is not a complete source bundle without its pinned
 # runtime dependencies. Reject that state before reporting an installation.
 missing_toolchain_source_dir="$workspace/missing-toolchain-source/scripts"
@@ -7058,6 +7147,13 @@ cp "$REPO_ROOT/scripts/secpal_evidence_architecture/governance.py" \
     "$missing_toolchain_source_dir/secpal_evidence_architecture/governance.py"
 cp "$REPO_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs" \
     "$missing_toolchain_source_dir/secpal_evidence_architecture/markdown_references.mjs"
+cp -R "$REPO_ROOT/scripts/secpal_pr_review" \
+    "$missing_toolchain_source_dir/secpal_pr_review"
+cp "$REPO_ROOT/scripts/secpal-pr-review.py" \
+    "$missing_toolchain_source_dir/secpal-pr-review.py"
+mkdir -p "$missing_toolchain_source_dir/../.agents/skills/secpal-pr-review/references"
+cp "$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositories.json" \
+    "$missing_toolchain_source_dir/../.agents/skills/secpal-pr-review/references/repositories.json"
 chmod +x "$missing_toolchain_source_script" \
     "$missing_toolchain_source_dir/validate-ai-instructions.sh" \
     "$missing_toolchain_source_dir/secpal-evidence-architecture.py" \
@@ -7554,12 +7650,50 @@ grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/secpal-evidence-architecture\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/__init__\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/governance\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/markdown_references\.mjs$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal_pr_review/fast_path\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal_pr_review/lifecycle_authority\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/\.agents/skills/secpal-pr-review/references/repositories\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/node_modules/\.package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope_nginx\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/secpal-polyscope-nginx-apply\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+for managed_repository in api frontend contracts android secpal.app guardguide.de GuardGuide deployment .github operations; do
+    grep -qF "PathChanged=$workspace_root/$managed_repository/.secpal/evidence-architecture.json" \
+        "$fake_unit_dir/polyscope-rollout-sync.path"
+    grep -qF "PathChanged=$workspace_root/$managed_repository/.secpal/evidence-agreement-results.json" \
+        "$fake_unit_dir/polyscope-rollout-sync.path"
+done
+grep -q '^--user enable --now polyscope-rollout-sync.path$' "$fake_systemctl_log"
+
+# The armed existing sync rejects an evidence-only mutation selected by its
+# PathChanged input before publishing derived rollout state.
+evidence_mutation_error="$workspace/evidence-only-mutation.error"
+evidence_mutation_nginx="$workspace/evidence-only-mutation.nginx"
+evidence_mutation_summary="$workspace/evidence-only-mutation.json"
+mkdir -p "$workspace_root/api/.secpal"
+printf '%s\n' \
+    '{"schema":"invalid","repository":"SecPal/api","runtime_baseline":{"delegation":"transitive_work_graph","generic_authorities":["docs/work-graph-contract.md"]},"external_operations":[],"pure_surfaces":[],"invariant_declarations":[]}' \
+    >"$workspace_root/api/.secpal/evidence-architecture.json"
+evidence_mutation_exit=0
+python3 "$PYTHON_SCRIPT" \
+    --workspace-root "$workspace_root" \
+    --db-path "$db_path" \
+    --repo-state-file "$repos_json" \
+    --nginx-output "$evidence_mutation_nginx" \
+    --summary-output "$evidence_mutation_summary" \
+    2>"$evidence_mutation_error" \
+    || evidence_mutation_exit=$?
+if [[ "$evidence_mutation_exit" -eq 0 ]]; then
+    echo "existing rollout sync must reject an invalid evidence-only mutation" >&2
+    exit 1
+fi
+grep -qF 'MALFORMED_DECLARATION' "$evidence_mutation_error"
+test ! -e "$evidence_mutation_nginx"
+test ! -e "$evidence_mutation_summary"
+rm -f "$workspace_root/api/.secpal/evidence-architecture.json"
 if grep -qF '/../' "$fake_unit_dir/polyscope-rollout-sync.path"; then
     echo "rollout sync watcher paths must be normalized" >&2
     exit 1

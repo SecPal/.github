@@ -13,6 +13,25 @@ trap 'rm -rf "$WORKSPACE"' EXIT
 
 grep -qF 'if [[ ! -x /usr/bin/setfacl ]]; then' "$INSTALLER"
 grep -qF "Error: /usr/bin/setfacl is required; install the 'acl' package before activation." "$INSTALLER"
+grep -qF "\"\$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/__init__.py\"" "$INSTALLER"
+grep -qF "\"\$NODE_BIN\" \"\$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/markdown_references.mjs\"" "$INSTALLER"
+
+missing_markdown_root="$WORKSPACE/missing-markdown-it"
+mkdir -p "$missing_markdown_root/secpal_evidence_architecture"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs" \
+    "$missing_markdown_root/secpal_evidence_architecture/markdown_references.mjs"
+if printf '%s\n' '{"markdown":""}' | node \
+    "$missing_markdown_root/secpal_evidence_architecture/markdown_references.mjs" \
+    >/dev/null 2>&1; then
+    echo "evidence parser smoke fixture must reject a missing markdown-it dependency" >&2
+    exit 1
+fi
+smoke_line="$(grep -nF "\"\$NODE_BIN\" \"\$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/markdown_references.mjs\"" "$INSTALLER" | cut -d: -f1)"
+write_line="$(grep -nF 'prefix_path() {' "$INSTALLER" | cut -d: -f1)"
+if [[ "$smoke_line" -ge "$write_line" ]]; then
+    echo "evidence parser smoke test must run before system-component writes" >&2
+    exit 1
+fi
 
 node "$YAML_CHECK" "$REPO_ROOT/node_modules/js-yaml"
 

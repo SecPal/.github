@@ -62,7 +62,8 @@ def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/evidence-architecture-contract.md` is canonical.\n"
     )
     root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"

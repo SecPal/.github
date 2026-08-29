@@ -13,11 +13,12 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "secpal-evidence-architecture/v1"
-PROOF_SCHEMA = "secpal-evidence-agreement-results/v1"
+PROOF_SCHEMA = "secpal-evidence-agreement-attestation/v1"
 CONTRACT = "docs/evidence-architecture-contract.md"
 WORK_GRAPH_REFERENCE = "docs/work-graph-contract.md"
 EVIDENCE_CONTRACT_REFERENCE = CONTRACT
@@ -44,6 +45,14 @@ _RESPONSIBILITIES = frozenset({"normalization", "admission"})
 
 class DeclarationError(ValueError):
     """A declaration is unavailable, open-ended, or malformed."""
+
+
+@dataclass(frozen=True)
+class VerifiedAgreementResult:
+    """Agreement result admitted only after external authority verification."""
+
+    proof_id: str
+    status: str
 
 
 def _bounded_fact(value: str) -> str:
@@ -129,26 +138,18 @@ def runtime_declaration(document: Any) -> dict[str, Any]:
 def _parse_proof_results(document: Any) -> dict[str, str]:
     if document is None:
         return {}
-    item = _closed_mapping(document, {"schema", "results"}, "agreement results")
-    if item["schema"] != PROOF_SCHEMA:
-        raise DeclarationError("agreement result schema is unsupported")
+    if not isinstance(document, Sequence) or isinstance(document, (str, bytes, Mapping)):
+        raise DeclarationError("agreement results are not authenticated")
     results: dict[str, str] = {}
-    for index, raw in enumerate(_bounded_sequence(item["results"], "agreement results")):
-        result = _closed_mapping(raw, {"id", "kind", "status"}, f"agreement result {index}")
-        proof_id = _identity(result["id"], f"agreement result {index} id")
+    for index, result in enumerate(_bounded_sequence(list(document), "agreement results")):
+        if not isinstance(result, VerifiedAgreementResult):
+            raise DeclarationError("agreement result lacks verified authority")
+        proof_id = _identity(result.proof_id, f"agreement result {index} id")
         if proof_id in results:
             raise DeclarationError("agreement result identities are duplicated")
-        if (
-            result["kind"] != "executable"
-            or not isinstance(result["status"], str)
-            or result["status"] not in {
-                "passed",
-                "failed",
-                "unavailable",
-            }
-        ):
+        if result.status not in {"passed", "failed", "unavailable"}:
             raise DeclarationError(f"agreement result {proof_id} uses an unsupported state")
-        results[proof_id] = result["status"]
+        results[proof_id] = result.status
     return results
 
 

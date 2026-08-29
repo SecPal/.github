@@ -188,6 +188,11 @@ class PolyscopeRolloutFollowupTests(TestCase):
                     "validate_instruction_root",
                     return_value=worktree,
                 ) as validate,
+                mock.patch.object(
+                    rollout,
+                    "validate_evidence_architecture_root",
+                    return_value=worktree,
+                ) as evidence_validate,
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(
@@ -195,6 +200,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                     0,
                 )
             validate.assert_called_once_with(worktree, set(), "api")
+            evidence_validate.assert_called_once_with(worktree, "api")
 
     def test_registered_instruction_identity_rejects_relative_worktree_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

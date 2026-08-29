@@ -924,6 +924,31 @@ def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifie
     return verify
 
 
+def verify_authority_signed_payload(
+    *,
+    repository: str,
+    producer: str,
+    domain: str,
+    payload: bytes,
+    signature: Any,
+) -> dict[str, str]:
+    """Verify bounded consumer evidence with the maintained authority trust policy."""
+
+    if not isinstance(domain, str) or not _IDENTITY.fullmatch(domain):
+        raise LifecycleAuthorityError("signed-evidence domain is malformed")
+    if not isinstance(payload, bytes) or not payload or len(payload) > 65_536:
+        raise LifecycleAuthorityError("signed-evidence payload is unavailable or unbounded")
+    policy = _load_lifecycle_trust_policy(_require_repository(repository))
+    return _verify_signature(
+        payload,
+        signature,
+        _require_identity(producer, "signed-evidence producer"),
+        domain,
+        policy.authority_signer_identities,
+        _policy_signature_verifier(policy),
+    )
+
+
 def initial_state() -> dict[str, Any]:
     return {
         "unrestricted_review_count": 0,

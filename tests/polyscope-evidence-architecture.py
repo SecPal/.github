@@ -84,6 +84,47 @@ class PolyscopeEvidenceArchitectureTests(unittest.TestCase):
         self.assertEqual(command.count("--managed-repository"), 2)
         self.assertEqual(command[-4:], ["--managed-repository", "one", "--managed-repository", "two"])
 
+    def test_provisionability_validates_active_worktree_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.joinpath(".git").mkdir()
+            with unittest.mock.patch.object(
+                rollout, "resolve_git_dir", return_value=root / ".git"
+            ), unittest.mock.patch.object(
+                rollout, "validate_instruction_root", return_value=root
+            ), unittest.mock.patch.object(
+                rollout, "validate_evidence_architecture_root", return_value=root
+            ) as evidence, unittest.mock.patch.object(
+                rollout, "load_package_scripts", return_value={}
+            ), unittest.mock.patch.object(
+                rollout, "load_composer_scripts", return_value={}
+            ):
+                self.assertTrue(
+                    rollout.is_provisionable_worktree(
+                        "api", root, [], validated_instruction_roots=set()
+                    )
+                )
+
+        evidence.assert_called_once_with(root, "api")
+
+    def test_direct_api_modes_validate_source_and_active_worktree_evidence(self):
+        source = Path("/managed/api")
+        worktree = Path("/managed/worktree")
+        with unittest.mock.patch.object(
+            rollout, "validate_instruction_root", side_effect=[source, worktree]
+        ), unittest.mock.patch.object(
+            rollout, "validate_evidence_architecture_root"
+        ) as evidence:
+            self.assertEqual(
+                rollout.validate_direct_api_worktree_roots(source, worktree),
+                (source, worktree),
+            )
+
+        self.assertEqual(
+            evidence.call_args_list,
+            [unittest.mock.call(source, "api"), unittest.mock.call(worktree, "api")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
