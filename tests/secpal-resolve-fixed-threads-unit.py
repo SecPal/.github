@@ -1019,6 +1019,95 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_integration_evidence_is_normalized_before_receipt_reconstruction(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_NORMALIZATION"
+        reviewed = reviewed_state_payload(
+            thread_id,
+            [("PRRC_INTEGRATION_NORMALIZATION", "Normalize evidence.", None)],
+        )
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        raw_integration = copy.deepcopy(integration)
+        raw_integration["prior_delivery_head_sha"] = reviewed["head_sha"].upper()
+        raw_integration["ordered_parent_shas"][0] = reviewed["head_sha"].upper()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            integration_path = root / "integration.json"
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            integration_path.write_text(
+                json.dumps(raw_integration), encoding="utf-8"
+            )
+            state = MODULE.load_reviewed_state(
+                reviewed_path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                (thread_id,),
+            )
+            validation = MODULE.load_validation_evidence(
+                attestation_path,
+                "SecPal/api",
+                "c" * 40,
+                state,
+                integration_path,
+            )
+
+        self.assertEqual(validation.integration_evidence, integration)
+        self.assertEqual(validation.validation_receipt, receipt)
+
+    def test_malformed_integration_parent_list_fails_during_evidence_loading(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_PARENT_SHAPE"
+        reviewed = reviewed_state_payload(
+            thread_id,
+            [("PRRC_INTEGRATION_PARENT_SHAPE", "Validate parents.", None)],
+        )
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, _receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        integration["ordered_parent_shas"] = None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            integration_path = root / "integration.json"
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            integration_path.write_text(json.dumps(integration), encoding="utf-8")
+            state = MODULE.load_reviewed_state(
+                reviewed_path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                (thread_id,),
+            )
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "integration validation evidence is invalid or stale",
+            ):
+                MODULE.load_validation_evidence(
+                    attestation_path,
+                    "SecPal/api",
+                    "c" * 40,
+                    state,
+                    integration_path,
+                )
+
     def test_historical_ready_integration_attestation_cannot_authorize_resolution(
         self,
     ) -> None:

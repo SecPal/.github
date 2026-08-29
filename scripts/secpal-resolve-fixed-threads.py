@@ -950,12 +950,21 @@ def load_validation_evidence(
                 "integration resolution requires canonical integration evidence"
             )
         try:
-            integration_evidence = json.loads(
+            integration_payload = json.loads(
                 integration_evidence_path.read_text(encoding="utf-8"),
                 parse_constant=_reject_nonfinite_json_constant,
             )
             stable_reviewed = fast_path.StableFeedbackState.from_payload(
                 reviewed.payload
+            )
+            integration_evidence = (
+                fast_path.normalize_ready_integration_evidence(
+                    integration_payload,
+                    repository=repository,
+                    reviewed_state=stable_reviewed,
+                    registry=registry_binding,
+                    validated_tree_sha=payload.get("validated_tree_sha"),
+                )
             )
             receipt = fast_path.create_validation_receipt(
                 repository=repository,
