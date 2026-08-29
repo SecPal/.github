@@ -215,9 +215,9 @@ class LifecycleAuthorityTests(TestCase):
         anchors = authority._load_lifecycle_trust_policy(
             REPOSITORY
         ).initialization_anchors
-        self.assertEqual(len(anchors), 3)
+        self.assertEqual(len(anchors), 4)
         delivered = {anchor.delivery_issue: anchor for anchor in anchors}
-        self.assertEqual(set(delivered), {674, 692, 735})
+        self.assertEqual(set(delivered), {674, 692, 735, 736})
         self.assertEqual(delivered[692].pull_request, 757)
         self.assertEqual(
             delivered[692].initialization_digest,
@@ -232,6 +232,11 @@ class LifecycleAuthorityTests(TestCase):
         self.assertEqual(
             delivered[735].initialization_digest,
             "6b630e40702ae69145226f8b40c8e6540914cd6e12815720551330faa2ca9d3d",
+        )
+        self.assertEqual(delivered[736].pull_request, 760)
+        self.assertEqual(
+            delivered[736].initialization_digest,
+            "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
         )
         entry["lifecycle_authority_policy"]["delivery_initializations"] = [
             {

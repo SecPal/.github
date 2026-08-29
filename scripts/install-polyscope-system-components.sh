@@ -114,6 +114,9 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     for runtime_file in \
         "$RUNTIME_ROLLOUT_SOURCE" \
         "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
+        "$RUNTIME_SCRIPT_DIR/secpal-evidence-architecture.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/governance.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/markdown_references.mjs" \
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
         "$RUNTIME_YAML_CHECK" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \

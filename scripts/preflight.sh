@@ -386,6 +386,11 @@ python3 tests/evidence-architecture-governance.py || {
   exit 1
 }
 
+python3 -m unittest \
+  tests/secpal-evidence-architecture-unit.py \
+  tests/secpal-evidence-architecture-cli.py \
+  tests/polyscope-evidence-architecture.py
+
 run_postgresql_18_baseline_governance
 
 if [ -f tests/sync-required-checks.sh ]; then

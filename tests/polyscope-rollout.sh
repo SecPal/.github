@@ -195,6 +195,7 @@ for repo_dir in workspace_root.iterdir():
         "-->\n\n"
         f"# {repo_dir.name} Agent Instructions\n\n"
         "This file is the authoritative, provider-neutral runtime baseline for this repository.\n"
+        "Generic governance delegates to `docs/work-graph-contract.md`.\n"
         "Edit this file first. Keep the focused overlay files below aligned when a rule also needs path-specific or stack-specific enforcement.\n\n"
         "## Focused Overlays\n\n"
         f"{overlays}\n\n"
@@ -372,6 +373,15 @@ assert_rollout_rejects_invalid_local_config() {
     cp "$source_script" "$script_copy"
     cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
         "$script_root/scripts/validate-ai-instructions.sh"
+    mkdir -p "$script_root/scripts/secpal_evidence_architecture"
+    cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" \
+        "$script_root/scripts/secpal-evidence-architecture.py"
+    cp "$REPO_ROOT/scripts/secpal_evidence_architecture/__init__.py" \
+        "$script_root/scripts/secpal_evidence_architecture/__init__.py"
+    cp "$REPO_ROOT/scripts/secpal_evidence_architecture/governance.py" \
+        "$script_root/scripts/secpal_evidence_architecture/governance.py"
+    cp "$REPO_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs" \
+        "$script_root/scripts/secpal_evidence_architecture/markdown_references.mjs"
     if [ ! -e "$script_root/node_modules" ]; then
         ln -s "$REPO_ROOT/node_modules" "$script_root/node_modules"
     fi
@@ -831,6 +841,13 @@ applyTo: 'infra/**'
 # Operations is intentionally registration-only until that repository owns a
 # versioned workspace policy. Its physical clone must still exist in fixtures.
 mkdir -p "$workspace_root/operations"
+# Backticks are literal Markdown in this fixture.
+# shellcheck disable=SC2016
+printf '%s\n' \
+    '# Operations Runtime Instructions' \
+    '' \
+    'Generic governance delegates to `docs/work-graph-contract.md`.' \
+    >"$workspace_root/operations/AGENTS.md"
 
 create_repo ".github" "$common_header
 
@@ -7032,8 +7049,18 @@ cp "$REPO_ROOT/scripts/polyscope_nginx.py" \
     "$missing_toolchain_source_dir/polyscope_nginx.py"
 cp "$REPO_ROOT/scripts/secpal-polyscope-nginx-apply.py" \
     "$missing_toolchain_source_dir/secpal-polyscope-nginx-apply.py"
+mkdir -p "$missing_toolchain_source_dir/secpal_evidence_architecture"
+cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" \
+    "$missing_toolchain_source_dir/secpal-evidence-architecture.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/__init__.py" \
+    "$missing_toolchain_source_dir/secpal_evidence_architecture/__init__.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/governance.py" \
+    "$missing_toolchain_source_dir/secpal_evidence_architecture/governance.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs" \
+    "$missing_toolchain_source_dir/secpal_evidence_architecture/markdown_references.mjs"
 chmod +x "$missing_toolchain_source_script" \
     "$missing_toolchain_source_dir/validate-ai-instructions.sh" \
+    "$missing_toolchain_source_dir/secpal-evidence-architecture.py" \
     "$missing_toolchain_source_dir/secpal-polyscope-nginx-apply.py"
 cat >"$missing_toolchain_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
 #!/usr/bin/env bash
@@ -7079,8 +7106,18 @@ mkdir -p "$spaced_source_dir" "$spaced_home_dir/.polyscope/bin"
 cp "$PYTHON_SCRIPT" "$spaced_source_script"
 cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
     "$spaced_source_dir/validate-ai-instructions.sh"
+mkdir -p "$spaced_source_dir/secpal_evidence_architecture"
+cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" \
+    "$spaced_source_dir/secpal-evidence-architecture.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/__init__.py" \
+    "$spaced_source_dir/secpal_evidence_architecture/__init__.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/governance.py" \
+    "$spaced_source_dir/secpal_evidence_architecture/governance.py"
+cp "$REPO_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs" \
+    "$spaced_source_dir/secpal_evidence_architecture/markdown_references.mjs"
 chmod +x "$spaced_source_script" \
-    "$spaced_source_dir/validate-ai-instructions.sh"
+    "$spaced_source_dir/validate-ai-instructions.sh" \
+    "$spaced_source_dir/secpal-evidence-architecture.py"
 ln -s "$spaced_source_script" "$spaced_source_alias"
 cat >"$spaced_home_dir/.polyscope/bin/expose-linux-x64" <<'STUB'
 #!/usr/bin/env bash
@@ -7508,6 +7545,7 @@ grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --clone-root .* --provision-lock-path .* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q '/operations/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
     echo "rollout sync watcher must not retain an unmanaged repository" >&2
     exit 1
@@ -7515,6 +7553,9 @@ fi
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal-evidence-architecture\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/governance\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/markdown_references\.mjs$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/node_modules/\.package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope_nginx\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"

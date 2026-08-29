@@ -339,6 +339,89 @@ consume this same refresh through the maintained graph-replan mutation
 boundary. Candidate overflow, unreadable graph evidence, authentication
 failure, or publication failure stops fail closed; no polling is used.
 
+### `secpal-evidence-architecture.py`
+
+Validates the mechanically decidable declarations governed by
+[`docs/evidence-architecture-contract.md`](../docs/evidence-architecture-contract.md).
+It does not define evidence architecture, inspect arbitrary source shape, infer
+semantic roles, or dispatch an external provider operation.
+
+Every invocation validates the active root `AGENTS.md`. Structured top-level
+Markdown links and inline-code references may delegate directly to
+`docs/evidence-architecture-contract.md`, or transitively through the supported
+normative incorporation in `docs/work-graph-contract.md`. Fenced, quoted, and
+commented examples are non-operative. The semantic result is one of
+`VALID_DIRECT_DELEGATION`, `VALID_TRANSITIVE_SUPPORTED_DELEGATION`,
+`MISSING_DELEGATION`, `CONTRADICTORY_DELEGATION`, or
+`DUPLICATE_GENERIC_AUTHORITY`.
+
+Repositories with applicable declared surfaces use the closed optional file
+`.secpal/evidence-architecture.json`:
+
+```json
+{
+  "schema": "secpal-evidence-architecture/v1",
+  "repository": "SecPal/deployment",
+  "runtime_baseline": {
+    "delegation": "direct",
+    "generic_authorities": ["docs/evidence-architecture-contract.md"]
+  },
+  "external_operations": [
+    {
+      "id": "provider.create-host",
+      "reachable": true,
+      "fallible": true,
+      "trusted": true,
+      "diagnostic_identity": {
+        "id": "provider.create-host.failed",
+        "kind": "semantic"
+      }
+    }
+  ],
+  "pure_surfaces": [
+    {
+      "id": "host.normalize",
+      "responsibility": "normalization",
+      "capabilities": ["deterministic_compute"]
+    }
+  ],
+  "invariant_declarations": []
+}
+```
+
+Unknown fields, capability values, and semantic identity kinds fail closed.
+Diagnostic identities are bounded identifiers; the schema has no field for raw
+provider output, response bodies, environment dumps, or secret material.
+Independent enforcement declarations name their authoritative owner, derivation,
+and agreement-proof identity. When those declarations exist, callers supply a
+closed `secpal-evidence-agreement-results/v1` result document; only a named
+`executable` result with status `passed` satisfies the mechanical proof input.
+Repository-specific validation owns producing that executable evidence.
+Polyscope validates all managed declarations as one bounded workspace bundle so
+duplicate owner declarations across repository boundaries cannot pass separate
+repository checks.
+
+Normal validation permits an absent declaration because source shape cannot
+safely establish that an undeclared evidence surface exists. `--dispatch`
+instead requires at least one complete declared external operation and refuses
+opaque reachable fallible trusted boundaries before any costly or mutating
+operation:
+
+```bash
+python3 scripts/secpal-evidence-architecture.py \
+  --repository-root /path/to/repository \
+  --repository SecPal/deployment \
+  --proof-results .secpal/evidence-agreement-results.json \
+  --dispatch
+```
+
+Every report keeps undeclared semantic roles, conceptual layer decisions, and
+trust-boundary justification as explicit human-review obligations. Findings
+retain a bounded rule and fact identity and never echo declaration bodies. The
+head-bound required result is named `Evidence Architecture PR Gate`; it is
+distinct from both work-graph contexts and cannot be satisfied by their earlier
+success.
+
 ## Validation Scripts
 
 ### `check-domains.sh`

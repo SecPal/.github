@@ -214,6 +214,18 @@ if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
     echo "Error: canonical instruction validator is missing or not executable next to the rollout source: $VALIDATOR_SOURCE" >&2
     exit 1
 fi
+EVIDENCE_VALIDATOR_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal-evidence-architecture.py"
+EVIDENCE_GOVERNANCE_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/governance.py"
+EVIDENCE_MARKDOWN_PARSER_SOURCE="$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/markdown_references.mjs"
+for _evidence_source in \
+    "$EVIDENCE_VALIDATOR_SOURCE" \
+    "$EVIDENCE_GOVERNANCE_SOURCE" \
+    "$EVIDENCE_MARKDOWN_PARSER_SOURCE"; do
+    if [[ ! -f "$_evidence_source" ]]; then
+        echo "Error: canonical evidence-architecture source bundle is incomplete: $_evidence_source" >&2
+        exit 1
+    fi
+done
 VALIDATOR_YAML_CHECK="$(dirname -- "$SOURCE_SCRIPT")/verify-js-yaml-package.cjs"
 if [[ ! -f "$VALIDATOR_YAML_CHECK" ]]; then
     echo "Error: canonical js-yaml verifier is missing next to the rollout source: $VALIDATOR_YAML_CHECK" >&2
@@ -481,9 +493,13 @@ PathChanged=$WORKSPACE_ROOT/GuardGuide/.github/instructions
 PathChanged=$WORKSPACE_ROOT/.github/AGENTS.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/copilot-instructions.md
 PathChanged=$WORKSPACE_ROOT/.github/.github/instructions
+PathChanged=$WORKSPACE_ROOT/operations/AGENTS.md
 PathChanged=$CODEX_AGENTS_SOURCE
 PathChanged=$SOURCE_SCRIPT
 PathChanged=$VALIDATOR_SOURCE
+PathChanged=$EVIDENCE_VALIDATOR_SOURCE
+PathChanged=$EVIDENCE_GOVERNANCE_SOURCE
+PathChanged=$EVIDENCE_MARKDOWN_PARSER_SOURCE
 PathChanged=$VALIDATOR_PACKAGE_LOCK
 PathChanged=$VALIDATOR_INSTALLED_PACKAGE_LOCK
 PathChanged=$NGINX_LIBRARY_SOURCE

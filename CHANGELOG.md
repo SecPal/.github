@@ -9,6 +9,26 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Enforce Evidence Architecture Governance
+
+**Added:**
+
+- refuse declared external dispatch when a reachable fallible trusted operation
+  lacks a bounded semantic diagnostic identity
+- reject forbidden capabilities on explicitly declared pure normalization and
+  admission surfaces, duplicate declared invariant owners, and independent
+  enforcement without named derivation and executable agreement evidence
+- validate every active Polyscope runtime baseline's direct or supported
+  transitive canonical delegation, including registration-only repositories
+- require a distinct head-bound `Evidence Architecture PR Gate` result without
+  weakening or replacing the existing work-graph contexts
+
+**Changed:**
+
+- retain undeclared semantic roles, layer boundaries, and trust-boundary
+  justification as explicit human architecture review instead of inferring
+  them from arbitrary source shape
+
 ## 2026-08-29 - Enforce Work-Graph Delivery Gates
 
 **Changed:**

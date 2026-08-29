@@ -36,6 +36,9 @@ ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
+CANONICAL_EVIDENCE_ARCHITECTURE_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name(
+    "secpal-evidence-architecture.py"
+)
 DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
 CANONICAL_CLONE_ROOT = pathlib.Path("/home/secpal/.polyscope/clones")
@@ -3212,6 +3215,86 @@ def validate_instruction_root(
     return resolved_root
 
 
+def validate_evidence_architecture_root(
+    root: pathlib.Path, repository_name: str
+) -> pathlib.Path:
+    """Require one supported canonical delegation for an active baseline."""
+
+    resolved_root = root.resolve()
+    repository = f"SecPal/{repository_name}"
+    validator = CANONICAL_EVIDENCE_ARCHITECTURE_VALIDATOR
+    if not validator.is_file():
+        raise CanonicalInstructionValidationError(
+            f"canonical evidence-architecture validation failed for {resolved_root}: "
+            f"validator is missing at {validator}"
+        )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(validator),
+                "--repository-root",
+                str(resolved_root),
+                "--repository",
+                repository,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise CanonicalInstructionValidationError(
+            f"canonical evidence-architecture validation failed for {resolved_root}: "
+            "validator could not execute"
+        ) from error
+    if result.returncode != 0:
+        details = "\n".join(
+            output.strip() for output in (result.stdout, result.stderr) if output.strip()
+        )
+        raise CanonicalInstructionValidationError(
+            f"canonical evidence-architecture validation failed for {resolved_root} "
+            f"(exit {result.returncode}):\n{details or 'bounded evidence unavailable'}"
+        )
+    return resolved_root
+
+
+def validate_managed_evidence_architecture(
+    workspace_root: pathlib.Path, repo_specs: dict[str, dict[str, Any]]
+) -> pathlib.Path:
+    """Validate cross-repository declaration ownership as one closed bundle."""
+
+    resolved_workspace = workspace_root.resolve()
+    command = [
+        sys.executable,
+        str(CANONICAL_EVIDENCE_ARCHITECTURE_VALIDATOR),
+        "--managed-workspace-root",
+        str(resolved_workspace),
+    ]
+    for name in sorted(repo_specs):
+        command.extend(("--managed-repository", name))
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise CanonicalInstructionValidationError(
+            "canonical managed evidence-architecture validation could not execute"
+        ) from error
+    if result.returncode != 0:
+        details = "\n".join(
+            output.strip() for output in (result.stdout, result.stderr) if output.strip()
+        )
+        raise CanonicalInstructionValidationError(
+            "canonical managed evidence-architecture validation failed "
+            f"for {resolved_workspace} (exit {result.returncode}):\n"
+            f"{details or 'bounded evidence unavailable'}"
+        )
+    return resolved_workspace
+
+
 def resolve_registered_instruction_repository_name(
     worktree_path: pathlib.Path,
     db_path: pathlib.Path,
@@ -3380,12 +3463,20 @@ def validate_repo_instruction_files(
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
         if not is_workspace_automation_enabled(spec):
+            validate_evidence_architecture_root(repo_path, repo_name)
             continue
         spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
             repo_path,
             validated_instruction_roots,
             repo_name,
         )
+        validate_evidence_architecture_root(repo_path, repo_name)
+    roots = {pathlib.Path(spec["path"]).resolve().parent for spec in repo_specs.values()}
+    if len(roots) != 1:
+        raise CanonicalInstructionValidationError(
+            "managed repository roots do not share one Polyscope workspace root"
+        )
+    validate_managed_evidence_architecture(roots.pop(), repo_specs)
 
 
 def instruction_reference(spec: dict[str, Any]) -> str:
