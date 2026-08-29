@@ -21,7 +21,7 @@ PostgreSQL 18 is the sole active major for development, CI/integration, and new 
 
 SecPal deliberately uses PostgreSQL-specific semantics; it makes no multiple-SQL-engine promise. PostgreSQL initially owns relational data, DB-backed sessions, durable queues, and shared cache. The application relies on transactional integrity, transaction-level advisory locks, row locking, JSONB, UUIDs, and relational constraints where those semantics define the operation. Valkey is not part of the current reference architecture and may return only through a new explicit, benchmark-backed architecture decision.
 
-Production packages come from the qualified Rocky/RHEL 10.2 PostgreSQL 18
+Production packages come from the qualified Rocky/RHEL 10.2+ PostgreSQL 18
 Application Stream unless a later explicit evidence-backed architecture decision
 changes that supply path. Application containers connect by explicit TCP, never
 a mounted PostgreSQL Unix socket or `Network=host`. In single topology,

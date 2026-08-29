@@ -4,12 +4,38 @@
 
 """Guard the organization-wide PostgreSQL 18 baseline contract."""
 
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+LEGACY_MAJOR_PATTERN = re.compile(
+    r"\b(?:postgres(?:ql)?|pg)[\s_/:=-]*v?(?:16|17)\b",
+    re.IGNORECASE,
+)
+ALLOWED_LEGACY_CONTEXT_PATTERN = re.compile(
+    r"\b(?:historical|history|migration(?:-specific)?|negative(?:-test)?|"
+    r"unrelated example|immutable release|changelog)\b",
+    re.IGNORECASE,
+)
+ACTIVE_BASELINE_CONTEXT_PATTERN = re.compile(
+    r"\b(?:active|baseline|compatibility|current|production|development|ci|"
+    r"integration|support(?:ed|ing)?)\b",
+    re.IGNORECASE,
+)
+
+
+def active_legacy_references(content: str) -> list[tuple[int, str]]:
+    return [
+        (line_number, line)
+        for line_number, line in enumerate(content.splitlines(), start=1)
+        if LEGACY_MAJOR_PATTERN.search(line)
+        and (
+            ACTIVE_BASELINE_CONTEXT_PATTERN.search(line)
+            or not ALLOWED_LEGACY_CONTEXT_PATTERN.search(line)
+        )
+    ]
 
 
 class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
@@ -28,7 +54,7 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
             "host-native",
             "disposable PostgreSQL 18 containers",
             "bounded CI/integration",
-            "qualified Rocky/RHEL 10.2 PostgreSQL 18 Application Stream",
+            "qualified Rocky/RHEL 10.2+ PostgreSQL 18 Application Stream",
             "Future major upgrades start from PostgreSQL 18",
         ):
             self.assertIn(requirement, normalized_adr)
@@ -45,11 +71,30 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
         for path in (REPOSITORY_ROOT / ".github").rglob("*"):
             if not path.is_file():
                 continue
-            self.assertNotRegex(
-                path.read_text(),
-                r"(?i)postgresql\s+(?:16|17)\b",
+            self.assertEqual(
+                [],
+                active_legacy_references(path.read_text()),
                 str(path.relative_to(REPOSITORY_ROOT)),
             )
+
+    def test_legacy_major_classifier_rejects_active_guidance(self) -> None:
+        for content in (
+            "Support PostgreSQL 16 in active development.",
+            "Use Postgres 17 for CI.",
+            "The production image is postgres:17.",
+            "Keep PG16 compatibility.",
+            "Historical note: support PostgreSQL 17 in active development.",
+        ):
+            self.assertTrue(active_legacy_references(content), content)
+
+    def test_legacy_major_classifier_allows_documented_evidence(self) -> None:
+        for content in (
+            "PostgreSQL 16 is historical evidence only.",
+            "Postgres 17 is a migration-specific fixture.",
+            "PG16 is an intentionally negative-test example.",
+            "PostgreSQL 17 is an unrelated example, not runtime guidance.",
+        ):
+            self.assertEqual([], active_legacy_references(content), content)
 
 
 if __name__ == "__main__":
