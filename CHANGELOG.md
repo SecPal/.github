@@ -9,6 +9,105 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Bind Ready Integration to Published Lifecycle Authority
+
+**Changed:**
+
+- select the integration's second parent from the live default-branch tip
+  instead of the pull request's creation-time base snapshot
+- require the prior Ready manifest to match the independently verified current
+  #750/#752 publication, including exceptional recovery and continuation state
+- reconstruct historical delivery receipts with the registry committed at the
+  authenticated prior head instead of applying later registry extensions
+
+## 2026-08-28 - Harden Ready Integration Recovery Evidence
+
+**Changed:**
+
+- require conflict-bearing merge-tree results to authenticate and completely
+  resolve their exact conflict paths without extra file changes or retained
+  text conflict markers
+- bind the prior Ready receipt identity across its commit, receipt,
+  attestation, and authority artifact; pin annotated authority-tag verification
+  to one immutable object; and correctly authenticate OpenPGP primary identities
+  when a signing subkey is used
+- add a closed, explicitly user-authorized exceptional-recovery artifact for a
+  Ready PR after the finite remediation limit, preserving review 1/1,
+  remediation 2/2, no Cycle 3, and monotonic Ready state
+
+---
+
+## 2026-08-27 - Authenticate Ready Pull Request Integration Heads
+
+**Added:**
+
+- added an explicitly selected evidence topology for one signed two-parent
+  integration candidate whose ordered parents, validated combined tree,
+  authenticated current `main` snapshot, stable feedback, eligibility,
+  validation execution, signer, and unchanged Ready lifecycle fail closed as
+  one final attestation while ordinary remediation remains single-parent
+- required independently signed prior Ready/lifecycle authority and one trusted
+  live target-base observation before that topology can create new evidence
+
+---
+
+## 2026-08-28 - Authenticate Lifecycle Authority Publication
+
+**Added:**
+
+- distinct native #750 enrollment and one-time, explicitly authorized legacy
+  adoption checkpoints that do not claim nonexistent historical proof
+- a signed global current-terminal journal on a live protected publication
+  branch with immutable predecessor binding and exact compare-and-swap
+  advancement
+- fail-closed coverage for rollback/deletion, hostile Git configuration, stale
+  terminal replay, consumer self-selection, concurrent writers, migration and
+  publication signer separation, cross-identity substitution, PR rebinding,
+  and exceptional continuation
+- exact legacy-checkpoint enrollment terminals, a cryptographically distinct
+  legacy-adoption credential, and native journal successors whose currentness
+  comes from protected ancestry without weakening ordinary #750 current-tip
+  verification
+
+---
+
+## 2026-08-28 - Authenticate Persistent Delivery Lifecycle Authority
+
+**Added:**
+
+- a closed, versioned, signed lifecycle-authority chain that derives finite
+  review, remediation, Ready/Draft, exceptional recovery/continuation, head,
+  and pull-request continuity facts from authenticated predecessor and event
+  evidence
+- an independent verifier and stable downstream binding that reject consumer
+  self-assertion while leaving ordinary delivery evidence unchanged until
+  explicit adoption
+- maintained registry trust anchors, concrete SSH/OpenPGP detached-signature
+  verification, deterministic delivery initialization, mandatory canonical raw
+  evidence parsing, and exact SHA-1/SHA-256 Git object identity validation
+
+**Fixed:**
+
+- require the installed maintained policy to select the exact current terminal
+  lifecycle authority, reject same-head stale prefixes, and permit only one
+  initialization root per delivery issue across replacement PRs
+- reject malformed non-string transition kinds through the lifecycle-domain
+  exception boundary and run lifecycle-authority regressions in every complete
+  registered validation
+
+---
+
+## 2026-08-28 - Clarify Public Provider And Managed Operations Ownership
+
+**Changed:**
+
+- refined ADR-023 so portable provider adapters, qualification, monitoring,
+  notification, recovery, and capacity capabilities remain public while private
+  operations owns customer/fleet policy, placement, commercial decisions, and
+  managed orchestration
+- made detector mutation authority, provider-product evidence, and the
+  overriding Never-in-Git boundary explicit
+
 ## 2026-08-26 - Authenticate Post-Push Late-Feedback Disposition
 
 **Added:**
@@ -35,6 +134,32 @@ Log of notable changes to SecPal organization defaults (newest first).
 - detached verification now uses owned byte snapshots, and evidence output is
   anchored to validated private directory descriptors so concurrent pathname
   substitution cannot change the authenticated input or output destination
+
+## 2026-08-26 - Stop Requiring Up-To-Date Pull Request Branches
+
+**Changed:**
+
+- kept every configured required status check mandatory while changing the
+  organization-wide synchronization payload to stop requiring pull request
+  branches to absorb unrelated newer `main` commits before merge
+
+---
+
+## 2026-08-26 - Restore Rocky Polyscope Container Previews
+
+**Fixed:**
+
+- added a reproducible rootless Podman preview installer that bridges the native
+  PostgreSQL Unix socket through one constrained network proxy, avoiding direct
+  socket mounts that SELinux correctly denies in ordinary workspace containers
+- added deterministic Caddy routing only for active canonical Polyscope
+  worktrees, rejecting escaping document-root symlinks and direct non-index PHP
+  execution, with transactional runtime-file and service-state rollback
+- retained PostgreSQL's reject-only TCP HBA baseline, loopback-only public
+  preview handoff, and normal SELinux confinement for API and frontend
+  workspace containers
+
+---
 
 ## 2026-08-24 - Reconcile Internal Database Service Domain Policy
 

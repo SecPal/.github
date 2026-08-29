@@ -366,6 +366,13 @@ if [ -f tests/validate-copilot-instructions.sh ]; then
   }
 fi
 
+python3 tests/evidence-architecture-governance.py || {
+  echo "" >&2
+  echo "❌ Evidence architecture governance regression test failed!" >&2
+  echo "Keep the canonical work-graph, evidence companion, and runtime baseline delegation connected." >&2
+  exit 1
+}
+
 if [ -f tests/sync-required-checks.sh ]; then
   bash tests/sync-required-checks.sh || {
     echo "" >&2
@@ -385,6 +392,23 @@ if [ -f tests/polyscope-state-audit.sh ]; then
 fi
 
 python3 -m unittest tests/polyscope-work-graph-advisory.py
+
+for preview_test in \
+  tests/polyscope-postgresql-socket-proxy.py \
+  tests/cleanup-polyscope-container-preview.py \
+  tests/render-polyscope-container-caddy.py \
+  tests/refresh-polyscope-container-preview.py \
+  tests/run-polyscope-container-preview.py \
+  tests/install-polyscope-container-preview.py; do
+  if [ -f "$preview_test" ]; then
+    python3 "$preview_test" || {
+      echo "" >&2
+      echo "❌ Polyscope container-preview regression test failed: $preview_test" >&2
+      echo "Keep the preview router, database bridge, and installer fail-closed." >&2
+      exit 1
+    }
+  fi
+done
 
 if [ -f tests/polyscope-clone-reaper.sh ]; then
   bash tests/polyscope-clone-reaper.sh || {

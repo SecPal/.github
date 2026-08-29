@@ -109,6 +109,29 @@ for candidate in marker_paths:
     canonical_host = f"{prefix}-{workspace}.preview.secpal.dev"
     canonical_urls.add(urlunsplit((url.scheme, canonical_host, url.path, url.query, url.fragment)))
 
+# Linked Polyscope repositories receive distinct physical clone names while
+# SecPal exposes one stable workspace name.  The rollout owns a strict alias
+# registry next to each repository's clones; use that registry even before the
+# full provisioning marker has been written.
+if clone_root.is_dir():
+    for registry_path in clone_root.glob("*/.polyscope-secpal-workspace-aliases.json"):
+        try:
+            registry = json.loads(registry_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(registry, dict) or registry.get("version") != 1:
+            continue
+        aliases = registry.get("aliases")
+        if not isinstance(aliases, dict):
+            continue
+        for workspace, target in aliases.items():
+            if target != physical_workspace:
+                continue
+            if not isinstance(workspace, str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", workspace):
+                continue
+            canonical_host = f"{prefix}-{workspace}.preview.secpal.dev"
+            canonical_urls.add(urlunsplit((url.scheme, canonical_host, url.path, url.query, url.fragment)))
+
 if len(canonical_urls) != 1:
     raise SystemExit(1)
 
