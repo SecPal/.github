@@ -64,7 +64,7 @@ class GitHubMutationWriter:
     def prepare(self, plan: replanning.Plan, snapshot: Snapshot) -> None:
         """Resolve every stable ID before the first irreversible write."""
 
-        self.plan_digest = plan.snapshot_digest
+        self.plan_digest = replanning.plan_digest(plan)
         self.expected_actor = plan.actor
         for node in snapshot.nodes.values():
             if node.node_id:

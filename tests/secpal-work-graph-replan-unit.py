@@ -909,6 +909,82 @@ class MutationBoundaryTests(TestCase):
         self.assertNotIn("replaceParent", create_input)
         self.assertEqual(create_input["body"], request["operation"]["issue"]["body"])
 
+    def test_client_mutation_ids_bind_the_exact_finite_plan(self):
+        snapshot = graph(
+            node(1, children=(key(2),)),
+            node(2, parent=key(1)),
+        )
+
+        def build(title):
+            return replanning.build_plan(
+                snapshot,
+                {
+                    "current_issue": key(2),
+                    "finding": finding("NEW_RESPONSIBILITY"),
+                    "operation": {
+                        "kind": "CREATE_OWNED_SIBLING",
+                        "issue": {
+                            "alias": "new-work",
+                            "repository": REPO,
+                            "title": title,
+                            "body": "## Acceptance Criteria\n\n- Complete.\n",
+                        },
+                    },
+                },
+                actor="alice",
+            )
+
+        first_plan = build("First separate work")
+        second_plan = build("Second separate work")
+        self.assertEqual(first_plan.snapshot_digest, second_plan.snapshot_digest)
+        self.assertNotEqual(
+            replanning.plan_digest(first_plan), replanning.plan_digest(second_plan)
+        )
+        self.assertEqual(
+            replanning.plan_digest(first_plan), replanning.plan_digest(first_plan)
+        )
+
+        first_adapter = self.FakeAdapter()
+        repeated_adapter = self.FakeAdapter()
+        second_adapter = self.FakeAdapter()
+        self.apply_with_recovery(first_plan, snapshot, first_adapter)
+        self.apply_with_recovery(first_plan, snapshot, repeated_adapter)
+        self.apply_with_recovery(second_plan, snapshot, second_adapter)
+        first_mutations = [
+            variables["input"]
+            for document, variables in first_adapter.calls
+            if document.lstrip().startswith("mutation")
+        ]
+        second_mutations = [
+            variables["input"]
+            for document, variables in second_adapter.calls
+            if document.lstrip().startswith("mutation")
+        ]
+        repeated_mutations = [
+            variables["input"]
+            for document, variables in repeated_adapter.calls
+            if document.lstrip().startswith("mutation")
+        ]
+        first_prefix = f"secpal-replan-{replanning.plan_digest(first_plan)[:16]}"
+        second_prefix = f"secpal-replan-{replanning.plan_digest(second_plan)[:16]}"
+        self.assertEqual(
+            [item["clientMutationId"] for item in first_mutations],
+            [f"{first_prefix}-1", f"{first_prefix}-2"],
+        )
+        self.assertEqual(
+            second_mutations[0]["clientMutationId"], f"{second_prefix}-1"
+        )
+        self.assertNotEqual(
+            first_mutations[0]["clientMutationId"],
+            second_mutations[0]["clientMutationId"],
+        )
+        self.assertEqual(
+            [item["clientMutationId"] for item in repeated_mutations],
+            [item["clientMutationId"] for item in first_mutations],
+        )
+        self.assertEqual(first_mutations[0]["parentIssueId"], "ISSUE_1")
+        self.assertEqual(first_mutations[1]["issueId"], "ISSUE_1")
+
     def test_root_prerequisite_path_creates_owner_and_native_edges(self):
         snapshot = graph(node(2))
         request = {
