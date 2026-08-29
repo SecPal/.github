@@ -9,8 +9,8 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,11 +53,11 @@ class PolyscopeEvidenceArchitectureTests(unittest.TestCase):
                 rollout.REGISTRATION_ONLY_SPEC_KEY: True,
             }
         }
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             rollout, "validate_evidence_architecture_root", return_value=root
-        ) as evidence_validator, mock.patch.object(
+        ) as evidence_validator, unittest.mock.patch.object(
             rollout, "validate_instruction_root"
-        ) as instruction_validator, mock.patch.object(
+        ) as instruction_validator, unittest.mock.patch.object(
             rollout, "validate_managed_evidence_architecture"
         ) as managed_validator:
             rollout.validate_repo_instruction_files(specs, set())
@@ -71,8 +71,10 @@ class PolyscopeEvidenceArchitectureTests(unittest.TestCase):
             "one": {"path": Path("/managed/one"), "repository_name": "one"},
             "two": {"path": Path("/managed/two"), "repository_name": "two"},
         }
-        with mock.patch.object(rollout.subprocess, "run") as run:
-            run.return_value = mock.Mock(returncode=0, stdout="{}", stderr="")
+        with unittest.mock.patch.object(rollout.subprocess, "run") as run:
+            run.return_value = unittest.mock.Mock(
+                returncode=0, stdout="{}", stderr=""
+            )
             rollout.validate_managed_evidence_architecture(
                 Path("/managed"), specs
             )
