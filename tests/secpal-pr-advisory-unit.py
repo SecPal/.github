@@ -287,6 +287,141 @@ class LifecycleDispositionConsumptionTests(TestCase):
 
 
 class AdvisoryCommandTests(TestCase):
+    def test_enforced_gate_rejects_each_authoritative_delivery_rule(self):
+        cases = {
+            "blocked primary": (
+                resolution(
+                    leaf(674, blocked_by=(key(673),)),
+                    leaf(673, state=model.CLOSED, state_reason="not_planned"),
+                ),
+                (key(674),),
+                "PRIMARY_ISSUE_BLOCKED",
+                "work-graph sections 3.2 and 4.1",
+            ),
+            "non-leaf closure": (
+                resolution(
+                    leaf(674, children=(key(700),)),
+                    leaf(700, parent=key(674)),
+                ),
+                (key(674),),
+                "PR_CLOSES_NON_LEAF",
+                "work-graph section 5.2",
+            ),
+            "structurally incomplete primary": (
+                resolution(leaf(674, has_acceptance_criteria=False)),
+                (key(674),),
+                "PRIMARY_ISSUE_NOT_READY",
+                "work-graph sections 3.5 and 4.1",
+            ),
+            "malformed primary": (
+                resolution(leaf(674, parent=key(667))),
+                (key(674),),
+                "PRIMARY_ISSUE_NOT_READY",
+                "work-graph sections 3.5 and 4.1",
+            ),
+            "multiple primary closures": (
+                resolution(leaf(674)),
+                (key(674), key(700)),
+                "MULTIPLE_DELIVERY_CONTRACTS",
+                "work-graph section 5.2",
+            ),
+        }
+
+        for label, (graph, closing, expected_code, expected_rule) in cases.items():
+            with self.subTest(label=label):
+                pull = {
+                    "url": f"https://github.com/{REPO}/pull/800",
+                    "body": "Fixes #674\n",
+                    "additions": 1,
+                    "deletions": 0,
+                    "closingIssuesReferences": {
+                        "nodes": [
+                            {
+                                "number": int(issue.rpartition("#")[2]),
+                                "repository": {"nameWithOwner": REPO},
+                            }
+                            for issue in closing
+                        ]
+                    },
+                }
+
+                def load_snapshot(_adapter, issue):
+                    if issue == key(700):
+                        return model.build_snapshot([leaf(700)]), issue
+                    return graph.snapshot, issue
+
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with (
+                    patch.object(advisory_cli.github, "GitHubReadAdapter", return_value=object()),
+                    patch.object(advisory_cli, "_pull_request", return_value=pull),
+                    patch.object(advisory_cli.github, "load_snapshot", side_effect=load_snapshot),
+                ):
+                    status = advisory_cli.main(
+                        ["--repo", REPO, "--pr", "800", "--enforce"],
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+
+                self.assertEqual(status, 1)
+                report = __import__("json").loads(stdout.getvalue())
+                finding = next(
+                    item for item in report["findings"] if item["code"] == expected_code
+                )
+                self.assertEqual(finding["rule"], expected_rule)
+                self.assertTrue(finding["evidence"])
+                if label == "blocked primary":
+                    self.assertIn(key(673), finding["evidence"])
+                self.assertIn(expected_code, stderr.getvalue())
+                self.assertIn(expected_rule, stderr.getvalue())
+
+    def test_enforced_gate_accepts_a_standalone_single_leaf(self):
+        pull = {
+            "url": f"https://github.com/{REPO}/pull/800",
+            "body": "Fixes #674\n",
+            "additions": 1,
+            "deletions": 0,
+            "closingIssuesReferences": {
+                "nodes": [{"number": 674, "repository": {"nameWithOwner": REPO}}]
+            },
+        }
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(advisory_cli.github, "GitHubReadAdapter", return_value=object()),
+            patch.object(advisory_cli, "_pull_request", return_value=pull),
+            patch.object(
+                advisory_cli.github,
+                "load_snapshot",
+                return_value=(model.build_snapshot([leaf(674)]), key(674)),
+            ),
+        ):
+            status = advisory_cli.main(
+                ["--repo", REPO, "--pr", "800", "--enforce"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertIn('"gate_status": "pass"', stdout.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_enforced_gate_requires_graph_first_replanning_for_independent_scope(self):
+        report = pr_advisory.assess(
+            pull_request=f"{REPO}#800",
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(674)),
+            observations=(
+                pr_advisory.Observation(
+                    "SECOND_RESPONSIBILITY",
+                    "independent operator contract was added to the delivery diff",
+                ),
+            ),
+        )
+
+        hard = pr_advisory.hard_gate_findings(report)
+        self.assertEqual([item["code"] for item in hard], ["SECOND_RESPONSIBILITY_WITHOUT_REPLANNING"])
+        self.assertEqual(hard[0]["rule"], "work-graph section 7.2")
+
     def test_reported_finding_is_a_successful_warning_not_a_gate_failure(self):
         pull = {
             "url": f"https://github.com/{REPO}/pull/800",

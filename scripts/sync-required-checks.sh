@@ -19,7 +19,8 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "CodeQL",
     "Validate PR Evidence",
     "Validate PR Title And Body Language",
-    "Validate Signed PR Commits"
+    "Validate Signed PR Commits",
+    "Work-Graph PR Advisory"
   ],
   "GuardGuide": [
     "check-conflicts / Detect Git Conflict Markers",
@@ -172,7 +173,7 @@ build_payload() {
 build_live_preserving_payload() {
   local repo="$1"
   local live_state_file="$2"
-  local canonical_contexts live_contexts missing_contexts unexpected_contexts
+  local canonical_contexts live_contexts unexpected_contexts
 
   if ! jq -e '
     type == "object" and
@@ -209,27 +210,28 @@ build_live_preserving_payload() {
     exit 1
   fi
 
-  missing_contexts="$(jq -cn --argjson canonical "$canonical_contexts" --argjson live "$live_contexts" \
-    '$canonical - $live')"
   unexpected_contexts="$(jq -cn --argjson canonical "$canonical_contexts" --argjson live "$live_contexts" \
     '$live - $canonical')"
-  if [[ "$missing_contexts" != "[]" || "$unexpected_contexts" != "[]" ]]; then
-    echo "Live required-status-check inventory for SecPal/$repo differs from the canonical inventory." >&2
-    echo "Missing contexts: $missing_contexts" >&2
+  if [[ "$unexpected_contexts" != "[]" ]]; then
+    echo "Live required-status-check inventory for SecPal/$repo contains contexts outside the canonical inventory." >&2
     echo "Unexpected contexts: $unexpected_contexts" >&2
     exit 1
   fi
 
-  jq '{
-    strict: false,
-    checks: [
-      .checks[]
-      | {
-          context,
-          app_id: (if .app_id == null then -1 else .app_id end)
-        }
-    ]
-  }' "$live_state_file"
+  jq --argjson canonical "$canonical_contexts" '{
+      strict: false,
+      checks: [
+        $canonical[] as $context
+        | ((.checks | map(select(.context == $context)) | first) // {
+            context: $context,
+            app_id: -1
+          })
+        | {
+            context,
+            app_id: (if .app_id == null then -1 else .app_id end)
+          }
+      ]
+    }' "$live_state_file"
 }
 
 build_review_payload() {

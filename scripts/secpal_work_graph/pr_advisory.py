@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Pure advisory delivery-PR assessment layered on maintained authorities.
+"""Pure delivery-PR assessment layered on maintained authorities.
 
 Graph predicates come from :mod:`resolver`; review-disposition validity comes
-from :func:`replanning.classify`.  This module owns only report shape and never
-authorizes, blocks, mutates, or redefines either authority.
+from :func:`replanning.classify`.  This module owns report shape and the finite
+set of findings promoted to the #735 hard gate.  It never mutates or redefines
+either authority.
 """
 
 from __future__ import annotations
@@ -19,6 +20,24 @@ from .model import parse_node_key
 
 SCHEMA = "secpal-pr-advisory/v1"
 CONTRACT = "docs/work-graph-contract.md"
+MAX_EVIDENCE_LENGTH = 500
+
+# This is the hard-boundary selection owned by #735, not another definition of
+# graph truth. Every graph predicate and fact still comes from the canonical
+# resolver, while SECOND_RESPONSIBILITY remains an explicit section-7.2 review
+# observation rather than source-code inference.
+HARD_GATE_CODES = frozenset(
+    {
+        "PRIMARY_ISSUE_NOT_READY",
+        "COMPETING_PRIMARY_DELIVERY_CLAIM",
+        "PARENT_REFERENCE_MISMATCH",
+        "UNEXPECTED_PARENT_REFERENCE",
+        "PR_CLOSES_NON_LEAF",
+        "PRIMARY_ISSUE_BLOCKED",
+        "MULTIPLE_DELIVERY_CONTRACTS",
+        "SECOND_RESPONSIBILITY_WITHOUT_REPLANNING",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +150,8 @@ def _graph_state(graph: resolver.Resolution, issue: str) -> dict[str, Any]:
             "malformed": True,
             "reasons": [node.unresolved_reason or "not_in_resolution"],
             "claims": [],
+            "children": list(node.children),
+            "blocked_by": list(node.blocked_by),
         }
     return {
         "role": "leaf" if state.leaf else "non_leaf",
@@ -140,6 +161,8 @@ def _graph_state(graph: resolver.Resolution, issue: str) -> dict[str, Any]:
         "malformed": state.malformed,
         "reasons": list(state.reasons),
         "claims": [claim.pull_request for claim in state.claims],
+        "children": list(node.children),
+        "blocked_by": list(node.blocked_by),
     }
 
 
@@ -168,6 +191,10 @@ def _finding(
     mechanically_blocking: bool | None = None,
     lifecycle_rule: str | None = None,
 ) -> dict[str, Any]:
+    if not isinstance(evidence, str) or not evidence or len(evidence) > MAX_EVIDENCE_LENGTH:
+        raise ValueError(
+            f"finding evidence must contain 1..{MAX_EVIDENCE_LENGTH} characters"
+        )
     item: dict[str, Any] = {
         "code": code,
         "owning_issue": owning_issue,
@@ -182,6 +209,21 @@ def _finding(
     if lifecycle_rule is not None:
         item["lifecycle_rule"] = lifecycle_rule
     return item
+
+
+def hard_gate_findings(report: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """Select only #735 hard failures from one canonical advisory assessment."""
+
+    findings = report.get("findings")
+    if not isinstance(findings, list):
+        raise ValueError("assessment findings are malformed")
+    selected: list[Mapping[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, Mapping) or not isinstance(finding.get("code"), str):
+            raise ValueError("assessment finding is malformed")
+        if finding["code"] in HARD_GATE_CODES:
+            selected.append(finding)
+    return tuple(selected)
 
 
 def assess(
@@ -307,7 +349,10 @@ def assess(
                 owning_issue=primary_issue,
                 graph_state=primary_state,
                 rule="work-graph sections 3.2 and 4.1",
-                evidence=f"Canonical resolver reports {primary_issue} BLOCKED",
+                evidence=(
+                    f"Canonical resolver reports {primary_issue} BLOCKED by: "
+                    + ", ".join(primary_state["blocked_by"])
+                ),
                 action="Resolve the native dependency or replan it before treating this delivery as graph-ready.",
                 technically_blocking=False,
                 mechanically_blocking=False,

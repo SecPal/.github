@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: PR Governance Advisory
+name: PR Governance Gate
 
 on:
   pull_request_target:
@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   advisory:
+    # Keep this established context identity stable while #735 promotes its
+    # reviewed behavior from advisory output to a required hard result.
     name: Work-Graph PR Advisory
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -36,8 +38,8 @@ jobs:
       - name: Install the reviewed parser dependency
         run: npm ci
 
-      - name: Report advisory work-graph findings
+      - name: Enforce hard work-graph findings
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: python3 scripts/secpal-pr-advisory.py
+        run: python3 scripts/secpal-pr-advisory.py --enforce

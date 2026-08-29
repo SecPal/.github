@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Enforce Work-Graph Delivery Gates
+
+**Changed:**
+
+- refuse non-ready execution and delivery pull requests that violate the
+  canonical leaf, blocker, primary-delivery, parent-reference, or graph-first
+  replanning rules
+- require the established work-graph PR context without weakening any existing
+  managed required-check inventory
+
 ## 2026-08-29 - Add Advisory Delivery-PR Governance Gate
 
 **Added:**
