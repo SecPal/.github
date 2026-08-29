@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Refresh Work-Graph PR Gate
+
+on:
+  # No activity filter: every supported issue mutation, including newly added
+  # GitHub activity types, invalidates the mutable graph projection.
+  issues:
+  repository_dispatch:
+    types: [work_graph_mutated]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: work-graph-gate-refresh-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh mutable work-graph evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted refresh implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+
+      - name: Install the reviewed parser dependency
+        run: npm ci
+
+      - name: Invalidate and recompute bounded open PR heads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/secpal-work-graph-gate-refresh.py --apply

@@ -104,7 +104,9 @@ EXPECTED_CONTEXTS_JSON='{
     "CodeQL",
     "Validate PR Evidence",
     "Validate PR Title And Body Language",
-    "Validate Signed PR Commits"
+    "Validate Signed PR Commits",
+    "Work-Graph PR Advisory",
+    "Work-Graph PR Gate"
   ],
   "GuardGuide": [
     "check-conflicts / Detect Git Conflict Markers",
@@ -238,6 +240,21 @@ github_payload="${payloads[.github]}"
 assert_payload_has_context "$github_payload" "Validate PR Evidence"
 assert_payload_has_context "$github_payload" "Validate PR Title And Body Language"
 assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
+assert_payload_has_context "$github_payload" "Work-Graph PR Advisory"
+assert_payload_has_context "$github_payload" "Work-Graph PR Gate"
+
+for non_github_repo in GuardGuide android api contracts frontend guardguide.de secpal.app; do
+  if jq -e '.checks | any(.context == "Work-Graph PR Advisory")' >/dev/null \
+    <<<"${payloads[$non_github_repo]}"; then
+    echo "The repository-local work-graph gate context must not be invented for unmanaged caller workflows" >&2
+    exit 1
+  fi
+  if jq -e '.checks | any(.context == "Work-Graph PR Gate")' >/dev/null \
+    <<<"${payloads[$non_github_repo]}"; then
+    echo "The repository-local hard-gate context must not be invented for unavailable caller workflows" >&2
+    exit 1
+  fi
+done
 
 for review_repo in .github GuardGuide android; do
   review_payload="$(bash "$SYNC_SCRIPT" --repo "$review_repo" --print-review-payload)"
@@ -567,7 +584,16 @@ assert_sync_rejects_state() {
 
 missing_state="$TMP_DIR/missing-state.json"
 jq '.checks |= map(select(.context != "CodeQL"))' "$state_dir/.github.json" >"$missing_state"
-assert_sync_rejects_state missing-context "$missing_state"
+missing_log="$TMP_DIR/missing-context.log"
+GH_CALL_LOG="$missing_log" GH_REQUIRED_STATE_FILE="$missing_state" PATH="$fake_bin" \
+  "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --apply >/dev/null
+if [[ "$(grep -c '^PATCH' "$missing_log")" -ne 1 ]] \
+  || ! sed -n '/^PATCH/p' "$missing_log" | cut -f3- \
+    | jq -e '.checks | any(.context == "CodeQL")' >/dev/null; then
+  echo "A missing canonical context must be restored in one bounded PATCH" >&2
+  cat "$missing_log" >&2
+  exit 1
+fi
 
 unexpected_state="$TMP_DIR/unexpected-state.json"
 jq '.checks += [{context: "unexpected-check", app_id: null}]' "$state_dir/.github.json" >"$unexpected_state"

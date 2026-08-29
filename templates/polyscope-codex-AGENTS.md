@@ -75,7 +75,7 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Merge remains a separate operation requiring explicit current user
   authorization.
 
-## Canonical Work-Graph Advisory
+## Canonical Work-Graph Execution
 
 - Under `docs/work-graph-contract.md`, canonical work-graph semantics are
   authoritative: before beginning explicitly issue-assigned work within a
@@ -106,13 +106,14 @@ Apply these rules only when the session says it is running inside Polyscope.
   differs from canonical NEXT. A body-only relationship mirror is not authoritative
   under the contract and must never govern hierarchy,
   dependencies, sibling order, or scope selection.
-- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
-  authoritative and advisory, not a hard block: when the user explicitly
-  selects a requested issue different from NEXT, report the requested state and
-  canonical selection. The explicit user selection is an advisory override
-  under the contract; continue with the requested issue. Under the contract, give the
-  same prominent reporting for a blocked, non-leaf, malformed, or incomplete
-  explicit selection; never call it READY unless the resolver does.
+- Under `docs/work-graph-contract.md`, run
+  `validate-issue <owner/repo#requested-number>` before creating or resuming
+  delivery state. Under the contract, continue only when that canonical command
+  exits successfully. Under the contract, refuse execution when the requested
+  issue is blocked, non-leaf, structurally incomplete, or malformed, and report
+  the resolver's exact authoritative rule and graph fact. Under the contract, a
+  user-selected issue different from canonical NEXT is still an explicit
+  selection, but it never overrides the READY execution boundary.
 - Under `docs/work-graph-contract.md`, canonical work-graph semantics are
   authoritative: READY siblings remain parallel and NEXT selects one candidate
   for one executor. Under the contract, do not mutate the graph or create dependencies
@@ -134,18 +135,22 @@ Apply these rules only when the session says it is running inside Polyscope.
   state; stale state or graph drift fails closed. Never edit a plan to bypass
   those checks or use this boundary as a generic GitHub mutation command.
 
-## Advisory Delivery-PR Gate
+## Hard Delivery-PR Gate
 
 - Before presenting a delivery PR as technically complete, run the owning
-  `SecPal/.github` checkout's `scripts/secpal-pr-advisory.py` for that PR.
-  Treat its findings as concise advisory review evidence, not merge blockers.
+  `SecPal/.github` checkout's `scripts/secpal-pr-advisory.py --enforce` for that
+  PR. Treat its #735 findings as a hard boundary and refuse delivery until they
+  are clear under `docs/work-graph-contract.md`.
 - Delegate graph state to the canonical resolver and lifecycle/disposition
   validity to the maintained lifecycle authority. Do not infer either from PR
   prose, reset lifecycle counters, or restart review after the stable-feedback
   stop condition.
 - Supply explicit judgment observations only when review evidence establishes
-  the violated contract rule. Test, line, and mutation counts may guide review
-  but never constitute a finding by themselves.
+  the violated contract rule. An independently deliverable second responsibility
+  requires graph-first replanning before implementation continues; `--enforce`
+  does not claim to infer that architectural judgment from source. Test, line,
+  and mutation counts may guide review but never constitute a finding by
+  themselves.
 
 ## Work-graph semantics
 

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Report-only #674 pull-request advisory gate."""
+"""#674 assessment with the opt-in #735 hard pull-request boundary."""
 
 from __future__ import annotations
 
@@ -126,6 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pr", type=int, default=os.environ.get("PR_NUMBER"))
     parser.add_argument("--primary-issue", help="Repository-qualified primary issue override.")
     parser.add_argument("--assessment", help="Optional explicit judgment evidence JSON.")
+    parser.add_argument(
+        "--enforce",
+        action="store_true",
+        help="Fail when the maintained #735 hard work-graph rules have findings.",
+    )
     parser.add_argument("--gh", default="gh")
     parser.add_argument("--timeout", type=float, default=30)
     return parser
@@ -186,16 +191,50 @@ def main(argv=None, *, stdout=None, stderr=None) -> int:
                 feedback=feedback,
                 lifecycle_claims=lifecycle,
                 smells=smells,
+                enforced_primary_override=(
+                    arguments.primary_issue if arguments.enforce else None
+                ),
             )
     except (OSError, ValueError, github.GitHubError, MarkdownParserUnavailable, json.JSONDecodeError) as error:
         print(f"advisory gate evidence unavailable: {error}", file=stderr)
         return 3
 
+    if arguments.enforce:
+        document = pr_advisory.enforced_projection(document)
+    hard_findings = pr_advisory.hard_gate_findings(document)
+    document["gate_status"] = (
+        "blocked" if arguments.enforce and hard_findings else "pass"
+    )
+    document["enforced"] = arguments.enforce
+    document["hard_finding_count"] = len(hard_findings)
+    document["hard_finding_codes"] = [finding["code"] for finding in hard_findings]
+    document["human_judgment_status"] = (
+        "reviewed_evidence_supplied"
+        if arguments.assessment is not None
+        else "explicit_review_required"
+    )
+    document["human_judgment_rule"] = "work-graph section 7.2"
+    document["human_judgment_finding_codes"] = [
+        finding["code"]
+        for finding in document["findings"]
+        if finding["code"] in pr_advisory.HUMAN_JUDGMENT_CODES
+    ]
     print(json.dumps(document, indent=2, sort_keys=True), file=stdout)
     for finding in document["findings"]:
-        message = f"{finding['code']}: {finding['action']} ({finding['rule']})"
-        print(f"::warning title=SecPal PR advisory::{message}", file=stderr)
-    return 0
+        is_hard = arguments.enforce and finding in hard_findings
+        level = "error" if is_hard else "warning"
+        title = "SecPal work-graph gate" if is_hard else "SecPal PR advisory"
+        message = (
+            f"{finding['code']}: {finding['evidence']}; "
+            f"{finding['action']} ({finding['rule']})"
+        )
+        escaped = (
+            message.replace("%", "%25")
+            .replace("\r", "%0D")
+            .replace("\n", "%0A")
+        )
+        print(f"::{level} title={title}::{escaped}", file=stderr)
+    return 1 if arguments.enforce and hard_findings else 0
 
 
 if __name__ == "__main__":

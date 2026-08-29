@@ -26,14 +26,14 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
     def _advisory_section(instructions: str) -> str:
         matches = tuple(
             re.finditer(
-                r"^## Canonical Work-Graph Advisory\n(?P<body>.*?)(?=^## |\Z)",
+                r"^## Canonical Work-Graph Execution\n(?P<body>.*?)(?=^## |\Z)",
                 instructions,
                 flags=re.MULTILINE | re.DOTALL,
             )
         )
         if len(matches) != 1:
             raise AssertionError(
-                f"expected exactly one Canonical Work-Graph Advisory section, found {len(matches)}"
+                f"expected exactly one Canonical Work-Graph Execution section, found {len(matches)}"
             )
         return matches[0].group("body")
 
@@ -71,7 +71,7 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         self.assertRegex(resolver_unit, r"(?i)machine-readable|JSON")
 
     def test_duplicate_advisory_sections_are_rejected(self) -> None:
-        duplicate = self.instructions + "\n## Canonical Work-Graph Advisory\n\n- conflicting guidance\n"
+        duplicate = self.instructions + "\n## Canonical Work-Graph Execution\n\n- conflicting guidance\n"
         with self.assertRaisesRegex(AssertionError, "exactly one"):
             self._advisory_section(duplicate)
 
@@ -103,31 +103,59 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         for term in ("hierarchy", "dependencies", "sibling order", "scope selection"):
             self.assertIn(term, mirror_unit)
 
-    def test_requested_issue_remains_an_explicit_advisory_override(self) -> None:
+    def test_requested_issue_must_pass_the_hard_execution_boundary(self) -> None:
         state_unit = self.unit_with(
             "requested issue",
             "READY",
             "canonical NEXT",
             "blocked",
             "malformed",
+            "body-only relationship mirror",
         )
         for state in ("blocked", "non-leaf", "structurally incomplete", "malformed"):
             self.assertIn(state, state_unit)
 
-        override_unit = self.unit_with(
-            "requested issue different from NEXT",
-            "explicit user selection",
-            "advisory override",
-            "continue with the requested issue",
-            "never call it READY",
+        gate_unit = self.unit_with(
+            "validate-issue <owner/repo#requested-number>",
+            "exits successfully",
+            "refuse execution",
         )
-        self.assertIn("advisory, not a hard block", override_unit)
+        for state in ("blocked", "non-leaf", "structurally incomplete", "malformed"):
+            self.assertIn(state, gate_unit)
+        self.assertNotIn("advisory override", gate_unit)
+        self.assertNotIn("continue with the requested issue", gate_unit)
 
     def test_parallelism_and_read_only_operation_are_preserved(self) -> None:
         parallel_unit = self.unit_with("READY siblings remain parallel", "NEXT selects one candidate")
         self.assertRegex(parallel_unit, r"do not [^.]*mutate the graph")
         self.assertRegex(parallel_unit, r"(?:do not|or) (?:create|infer) dependencies")
         self.assertRegex(parallel_unit, r"do not [^.]*silently substitute")
+
+    def test_delivery_pr_gate_is_hard_and_uses_the_reviewed_assessment(self) -> None:
+        match = re.search(
+            r"^## Hard Delivery-PR Gate\n(?P<body>.*?)(?=^## |\Z)",
+            self.instructions,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        units = self._semantic_units(match.group("body"))
+        matching = [
+            unit
+            for unit in units
+            if all(
+                term in unit
+                for term in (
+                    "scripts/secpal-pr-advisory.py",
+                    "--enforce",
+                    "hard",
+                    "docs/work-graph-contract.md",
+                )
+            )
+        ]
+        self.assertEqual(len(matching), 1)
+        gate_unit = matching[0]
+        self.assertIn("refuse", gate_unit)
+        self.assertIn("#735", gate_unit)
 
     def test_every_ready_next_unit_delegates_to_the_canonical_contract(self) -> None:
         semantic_units = [unit for unit in self.units if re.search(r"\b(?:READY|NEXT)\b", unit)]
