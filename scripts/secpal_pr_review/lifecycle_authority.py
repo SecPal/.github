@@ -10,9 +10,12 @@ verification without accepting consumer-selected trust inputs.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
+import hashlib
 import importlib.util
 import json
 import os
@@ -35,6 +38,12 @@ INITIALIZATION_KIND = "SECPAL_DELIVERY_LIFECYCLE_INITIALIZATION"
 INITIALIZATION_DOMAIN = "secpal.delivery-lifecycle-initialization/v1"
 BUNDLE_KIND = "SECPAL_DELIVERY_LIFECYCLE_EVIDENCE"
 BUNDLE_DOMAIN = "secpal.delivery-lifecycle-evidence/v1"
+LEGACY_ADOPTION_KIND = "SECPAL_LEGACY_LIFECYCLE_ADOPTION_CHECKPOINT"
+LEGACY_ADOPTION_DOMAIN = "secpal.legacy-lifecycle-adoption-checkpoint/v1"
+LEGACY_PROOF_MODE = "legacy_migration_checkpoint"
+NATIVE_PROOF_MODE = "native_lifecycle"
+PUBLICATION_EVIDENCE_KIND = "SECPAL_PUBLISHED_LIFECYCLE_EVIDENCE"
+PUBLICATION_EVIDENCE_DOMAIN = "secpal.published-lifecycle-evidence/v1"
 
 MAX_UNRESTRICTED_REVIEWS = 1
 MAX_REMEDIATION_CYCLES = 2
@@ -109,6 +118,8 @@ class VerifiedLifecycleAuthority:
     head_sha: str
     state: dict[str, Any]
     authority_signer_identity: str
+    historical_proof_mode: str = NATIVE_PROOF_MODE
+    legacy_adoption_checkpoint_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,12 @@ class LifecycleTrustPolicy:
     authority_signer_identities: frozenset[str]
     signers: Mapping[str, TrustedSigner]
     initialization_anchors: tuple[InitializationAnchor, ...]
+    publication_signer_identities: frozenset[str] = frozenset()
+    legacy_adoption_signer_identities: frozenset[str] = frozenset()
+    publication_branch: str = "refs/heads/secpal-lifecycle-publications"
+    publication_remote_url: str = ""
+    publication_ruleset_id: int = 0
+    publication_required_rules: frozenset[str] = frozenset()
 
 
 EVENT_FIELDS = frozenset(
@@ -231,6 +248,42 @@ BUNDLE_FIELDS = frozenset(
         "delivery_initialization",
         "transition_authorizations",
         "authority_chain",
+    }
+)
+LEGACY_ADOPTION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "domain",
+        "historical_proof_mode",
+        "repository",
+        "delivery_issue",
+        "lifecycle_id",
+        "current_pull_request",
+        "current_head_sha",
+        "initial_delivery_identity",
+        "state",
+        "pr_replacement_history_summary",
+        "migration_reason",
+        "authorization_identity",
+        "checkpoint_event_id",
+        "checkpoint_timestamp",
+        "supporting_evidence_digests",
+        "lifecycle_evidence_digest",
+        "terminal_authority_digest",
+        "signer_identity",
+        "signature",
+        "checkpoint_digest",
+    }
+)
+PUBLICATION_EVIDENCE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "domain",
+        "enrollment_mode",
+        "lifecycle_evidence",
+        "legacy_adoption_checkpoint",
     }
 )
 
@@ -425,6 +478,7 @@ def _verify_delivery_initialization(
     *,
     policy: LifecycleTrustPolicy,
     signature_verifier: SignatureVerifier,
+    require_maintained_anchor: bool = True,
 ) -> dict[str, Any]:
     initialization = _require_closed(
         value, INITIALIZATION_FIELDS, "delivery initialization"
@@ -463,19 +517,20 @@ def _verify_delivery_initialization(
         policy.transition_signer_identities,
         signature_verifier,
     )
-    matching = [
-        anchor
-        for anchor in policy.initialization_anchors
-        if (
-            anchor.delivery_issue == issue
-            and anchor.pull_request == pull_request
-            and anchor.initial_head_sha == head
-        )
-    ]
-    if len(matching) != 1 or matching[0].initialization_digest != digest:
-        raise LifecycleAuthorityError(
-            "delivery initialization is not the unique maintained trust anchor"
-        )
+    if require_maintained_anchor:
+        matching = [
+            anchor
+            for anchor in policy.initialization_anchors
+            if (
+                anchor.delivery_issue == issue
+                and anchor.pull_request == pull_request
+                and anchor.initial_head_sha == head
+            )
+        ]
+        if len(matching) != 1 or matching[0].initialization_digest != digest:
+            raise LifecycleAuthorityError(
+                "delivery initialization is not the unique maintained trust anchor"
+            )
     return copy.deepcopy(initialization)
 
 
@@ -506,6 +561,12 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "signers",
             "transition_signer_identities",
             "authority_signer_identities",
+            "publication_signer_identities",
+            "legacy_adoption_signer_identities",
+            "publication_branch",
+            "publication_remote_url",
+            "publication_ruleset_id",
+            "publication_required_rules",
             "delivery_initializations",
         }
     )
@@ -565,6 +626,52 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             raise LifecycleAuthorityError(f"{key} is not a closed trusted signer role")
         return frozenset(values)
 
+    transition_signers = role_identities("transition_signer_identities")
+    authority_signers = role_identities("authority_signer_identities")
+    publication_signers = role_identities("publication_signer_identities")
+    legacy_adoption_signers = role_identities("legacy_adoption_signer_identities")
+
+    def credential_identities(identity: str) -> frozenset[tuple[str, bytes]]:
+        signer = signers[identity]
+        credentials: set[tuple[str, bytes]] = set()
+        for public_key in signer.ssh_public_keys:
+            algorithm, encoded = public_key.split(" ", 1)
+            try:
+                decoded = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise LifecycleAuthorityError(
+                    "trusted lifecycle signer credentials are invalid"
+                ) from exc
+            if base64.b64encode(decoded).decode("ascii") != encoded:
+                raise LifecycleAuthorityError(
+                    "trusted lifecycle signer credentials are not canonical"
+                )
+            credentials.add((f"ssh:{algorithm}", decoded))
+        credentials.update(
+            ("openpgp", bytes.fromhex(fingerprint))
+            for fingerprint in signer.openpgp_fingerprints
+        )
+        return frozenset(credentials)
+
+    legacy_credentials: dict[tuple[str, bytes], str] = {}
+    for identity in legacy_adoption_signers:
+        for credential in credential_identities(identity):
+            if credential in legacy_credentials:
+                raise LifecycleAuthorityError(
+                    "legacy-adoption signer credentials are ambiguous"
+                )
+            legacy_credentials[credential] = identity
+    routine_signers = transition_signers | authority_signers | publication_signers
+    if legacy_adoption_signers & routine_signers:
+        raise LifecycleAuthorityError(
+            "legacy-adoption authority must use a distinct signer identity"
+        )
+    for identity in set(signers) - legacy_adoption_signers:
+        if set(credential_identities(identity)) & set(legacy_credentials):
+            raise LifecycleAuthorityError(
+                "legacy-adoption authority must use a cryptographically distinct credential"
+            )
+
     anchors: list[InitializationAnchor] = []
     anchor_fields = frozenset(
         {
@@ -609,13 +716,43 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 current_authority,
             )
         )
+    publication_branch = policy["publication_branch"]
+    if (
+        publication_branch != "refs/heads/secpal-lifecycle-publications"
+    ):
+        raise LifecycleAuthorityError("lifecycle publication branch is invalid")
+    publication_remote = policy["publication_remote_url"]
+    if (
+        not isinstance(publication_remote, str)
+        or not re.fullmatch(
+            r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git",
+            publication_remote,
+        )
+    ):
+        raise LifecycleAuthorityError("lifecycle publication remote is invalid")
+    if publication_remote != f"https://github.com/{repository}.git":
+        raise LifecycleAuthorityError("lifecycle publication remote does not match repository")
+    ruleset_id = _require_positive_int(
+        policy["publication_ruleset_id"], "publication ruleset"
+    )
+    required_rules = policy["publication_required_rules"]
+    if (
+        not isinstance(required_rules, list)
+        or set(required_rules) != {"deletion", "non_fast_forward"}
+        or len(required_rules) != 2
+    ):
+        raise LifecycleAuthorityError("lifecycle publication protection policy is invalid")
     return LifecycleTrustPolicy(
         repository=repository,
         accepted_formats=frozenset(formats),
-        transition_signer_identities=role_identities(
-            "transition_signer_identities"
-        ),
-        authority_signer_identities=role_identities("authority_signer_identities"),
+        transition_signer_identities=transition_signers,
+        authority_signer_identities=authority_signers,
+        publication_signer_identities=publication_signers,
+        legacy_adoption_signer_identities=legacy_adoption_signers,
+        publication_branch=publication_branch,
+        publication_remote_url=publication_remote,
+        publication_ruleset_id=ruleset_id,
+        publication_required_rules=frozenset(required_rules),
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
@@ -1356,6 +1493,467 @@ def serialize_lifecycle_evidence(
             "transition_authorizations": copy.deepcopy(list(transition_authorizations)),
             "authority_chain": copy.deepcopy(list(authority_chain)),
         }
+    )
+
+
+def _verify_lifecycle_bundle_from_initialization(
+    bundle: Any,
+    initialization: Mapping[str, Any],
+    policy: LifecycleTrustPolicy,
+    signature_verifier: SignatureVerifier,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify one complete #750 chain after its root boundary is authenticated."""
+
+    bundle = _require_closed(bundle, BUNDLE_FIELDS, "lifecycle evidence")
+    if bundle["schema_version"] != SCHEMA_VERSION:
+        raise LifecycleAuthorityError("unknown lifecycle-evidence version")
+    if bundle["kind"] != BUNDLE_KIND or bundle["domain"] != BUNDLE_DOMAIN:
+        raise LifecycleAuthorityError("unknown lifecycle-evidence kind or domain")
+    authorities = bundle["authority_chain"]
+    events = bundle["transition_authorizations"]
+    if not isinstance(authorities, list) or not isinstance(events, list):
+        raise LifecycleAuthorityError("complete lifecycle evidence chains are required")
+    result = _verify_lifecycle_authority_objects(
+        authorities,
+        events,
+        accepted_event_signers=policy.transition_signer_identities,
+        accepted_authority_signers=policy.authority_signer_identities,
+        signature_verifier=signature_verifier,
+        expected=expected,
+    )
+    first_event = events[0]
+    first_authority = authorities[0]
+    digest = initialization["initialization_digest"]
+    if (
+        first_event["initialization_evidence_digest"] != digest
+        or first_authority["initialization_evidence_digest"] != digest
+        or first_event["repository"] != initialization["repository"]
+        or first_event["delivery_issue"] != initialization["delivery_issue"]
+        or first_event["pull_request"] != initialization["pull_request"]
+        or first_event["resulting_head_sha"] != initialization["initial_head_sha"]
+        or result.lifecycle_id != delivery_initialization_lifecycle_id(digest)
+    ):
+        raise LifecycleAuthorityError(
+            "genesis does not bind the authenticated delivery initialization"
+        )
+    return result
+
+
+def _verify_unanchored_lifecycle_bundle(
+    bundle: Any,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify #750 derivation without treating it as an enrollment trust root."""
+
+    bundle = _require_closed(bundle, BUNDLE_FIELDS, "lifecycle evidence")
+    initialization_value = bundle["delivery_initialization"]
+    if not isinstance(initialization_value, dict):
+        raise LifecycleAuthorityError("delivery initialization is malformed")
+    repository = _require_repository(initialization_value.get("repository"))
+    policy = _load_lifecycle_trust_policy(repository)
+    signature_verifier = _policy_signature_verifier(policy)
+    initialization = _verify_delivery_initialization(
+        initialization_value,
+        policy=policy,
+        signature_verifier=signature_verifier,
+        require_maintained_anchor=False,
+    )
+    return _verify_lifecycle_bundle_from_initialization(
+        bundle, initialization, policy, signature_verifier, expected
+    )
+
+
+def _verify_native_lifecycle_bundle_for_journal(
+    bundle: Any,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify an adopted native chain without selecting CURRENT from static tip state."""
+
+    bundle = _require_closed(bundle, BUNDLE_FIELDS, "lifecycle evidence")
+    initialization_value = bundle["delivery_initialization"]
+    if not isinstance(initialization_value, dict):
+        raise LifecycleAuthorityError("delivery initialization is malformed")
+    repository = _require_repository(initialization_value.get("repository"))
+    policy = _load_lifecycle_trust_policy(repository)
+    signature_verifier = _policy_signature_verifier(policy)
+    initialization = _verify_delivery_initialization(
+        initialization_value,
+        policy=policy,
+        signature_verifier=signature_verifier,
+    )
+    return _verify_lifecycle_bundle_from_initialization(
+        bundle, initialization, policy, signature_verifier, expected
+    )
+
+
+def _legacy_checkpoint_state(value: Any) -> dict[str, Any]:
+    state = copy.deepcopy(_require_closed(value, STATE_FIELDS, "legacy checkpoint state"))
+    _validate_state(state)
+    return state
+
+
+def create_legacy_adoption_checkpoint(
+    serialized_lifecycle_evidence: bytes | str,
+    *,
+    migration_reason: str,
+    authorization_identity: str,
+    checkpoint_event_id: str,
+    checkpoint_timestamp: str,
+    supporting_evidence_digests: Sequence[str],
+    pr_replacement_history_summary: Sequence[Mapping[str, Any]],
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Create the one explicit trust root for a genuinely pre-#750 lifecycle."""
+
+    bundle = _require_closed(
+        _load_canonical_json(serialized_lifecycle_evidence, "lifecycle evidence"),
+        BUNDLE_FIELDS,
+        "lifecycle evidence",
+    )
+    verified = _verify_unanchored_lifecycle_bundle(bundle)
+    initialization = bundle["delivery_initialization"]
+    if not isinstance(migration_reason, str) or not migration_reason.strip() or len(migration_reason) > 512:
+        raise LifecycleAuthorityError("legacy migration reason is invalid")
+    authorization = _require_identity(authorization_identity, "legacy authorization")
+    event_id = _require_identity(checkpoint_event_id, "legacy checkpoint event")
+    if not isinstance(checkpoint_timestamp, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+        checkpoint_timestamp,
+    ):
+        raise LifecycleAuthorityError("legacy checkpoint timestamp is invalid")
+    evidence_digests = list(supporting_evidence_digests)
+    if len(evidence_digests) != len(set(evidence_digests)):
+        raise LifecycleAuthorityError("legacy supporting evidence is ambiguous")
+    for digest in evidence_digests:
+        _require_digest(digest, "legacy supporting evidence")
+    replacement_summary: list[dict[str, Any]] = []
+    for value in pr_replacement_history_summary:
+        item = _require_closed(
+            value,
+            frozenset({"from_pull_request", "to_pull_request", "event_digest"}),
+            "legacy PR replacement summary",
+        )
+        replacement_summary.append(
+            {
+                "from_pull_request": _require_positive_int(
+                    item["from_pull_request"], "legacy predecessor PR"
+                ),
+                "to_pull_request": _require_positive_int(
+                    item["to_pull_request"], "legacy replacement PR"
+                ),
+                "event_digest": _require_digest(
+                    item["event_digest"], "legacy PR replacement event"
+                ),
+            }
+        )
+    if len({item["event_digest"] for item in replacement_summary}) != len(replacement_summary):
+        raise LifecycleAuthorityError("legacy PR replacement history is ambiguous")
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": LEGACY_ADOPTION_KIND,
+        "domain": LEGACY_ADOPTION_DOMAIN,
+        "historical_proof_mode": LEGACY_PROOF_MODE,
+        "repository": verified.repository,
+        "delivery_issue": verified.delivery_issue,
+        "lifecycle_id": verified.lifecycle_id,
+        "current_pull_request": verified.pull_request,
+        "current_head_sha": verified.head_sha,
+        "initial_delivery_identity": {
+            "pull_request": initialization["pull_request"],
+            "head_sha": initialization["initial_head_sha"],
+        },
+        "state": copy.deepcopy(verified.state),
+        "pr_replacement_history_summary": replacement_summary,
+        "migration_reason": migration_reason.strip(),
+        "authorization_identity": authorization,
+        "checkpoint_event_id": event_id,
+        "checkpoint_timestamp": checkpoint_timestamp,
+        "supporting_evidence_digests": evidence_digests,
+        "lifecycle_evidence_digest": hashlib.sha256(
+            canonical_json_bytes(bundle)
+        ).hexdigest(),
+        "terminal_authority_digest": verified.authority_digest,
+        "signer_identity": _require_identity(signer_identity, "legacy adoption signer"),
+    }
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), LEGACY_ADOPTION_DOMAIN), signer_identity
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "checkpoint_digest": digest_json(signed)}
+
+
+def serialize_publication_lifecycle_evidence(
+    *,
+    lifecycle_evidence: bytes | str,
+    legacy_adoption_checkpoint: Mapping[str, Any] | None = None,
+) -> bytes:
+    """Serialize a closed native or one-time legacy publication enrollment."""
+
+    bundle = _require_closed(
+        _load_canonical_json(lifecycle_evidence, "lifecycle evidence"),
+        BUNDLE_FIELDS,
+        "lifecycle evidence",
+    )
+    mode = "LEGACY_ADOPTION_CHECKPOINT" if legacy_adoption_checkpoint is not None else "NATIVE_LIFECYCLE"
+    return canonical_json_bytes(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": PUBLICATION_EVIDENCE_KIND,
+            "domain": PUBLICATION_EVIDENCE_DOMAIN,
+            "enrollment_mode": mode,
+            "lifecycle_evidence": copy.deepcopy(bundle),
+            "legacy_adoption_checkpoint": (
+                None if legacy_adoption_checkpoint is None else copy.deepcopy(dict(legacy_adoption_checkpoint))
+            ),
+        }
+    )
+
+
+def _verify_legacy_adoption_checkpoint(
+    checkpoint_value: Any,
+    bundle: Mapping[str, Any],
+    full_result: VerifiedLifecycleAuthority,
+    policy: LifecycleTrustPolicy,
+) -> VerifiedLifecycleAuthority:
+    checkpoint = _require_closed(
+        checkpoint_value, LEGACY_ADOPTION_FIELDS, "legacy adoption checkpoint"
+    )
+    if (
+        checkpoint["schema_version"] != SCHEMA_VERSION
+        or checkpoint["kind"] != LEGACY_ADOPTION_KIND
+        or checkpoint["domain"] != LEGACY_ADOPTION_DOMAIN
+        or checkpoint["historical_proof_mode"] != LEGACY_PROOF_MODE
+    ):
+        raise LifecycleAuthorityError("legacy adoption checkpoint semantics are invalid")
+    repository = _require_repository(checkpoint["repository"])
+    issue = _require_positive_int(checkpoint["delivery_issue"], "legacy delivery issue")
+    if any(anchor.delivery_issue == issue for anchor in policy.initialization_anchors):
+        raise LifecycleAuthorityError(
+            "a natively anchored lifecycle cannot use legacy adoption"
+        )
+    lifecycle_id = _require_identity(checkpoint["lifecycle_id"], "legacy lifecycle")
+    current_pr = _require_positive_int(checkpoint["current_pull_request"], "legacy current PR")
+    current_head = _require_oid(checkpoint["current_head_sha"], "legacy current head")
+    initial = _require_closed(
+        checkpoint["initial_delivery_identity"],
+        frozenset({"pull_request", "head_sha"}),
+        "legacy initial delivery identity",
+    )
+    initial_pr = _require_positive_int(initial["pull_request"], "legacy initial PR")
+    initial_head = _require_oid(initial["head_sha"], "legacy initial head")
+    state = _legacy_checkpoint_state(checkpoint["state"])
+    if state["cycle_3_absent"] is not True:
+        raise LifecycleAuthorityError("legacy checkpoint cannot represent Cycle 3")
+    reason = checkpoint["migration_reason"]
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+        raise LifecycleAuthorityError("legacy migration reason is invalid")
+    _require_identity(checkpoint["authorization_identity"], "legacy authorization")
+    _require_identity(checkpoint["checkpoint_event_id"], "legacy checkpoint event")
+    if not isinstance(checkpoint["checkpoint_timestamp"], str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+        checkpoint["checkpoint_timestamp"],
+    ):
+        raise LifecycleAuthorityError("legacy checkpoint timestamp is invalid")
+    supporting = checkpoint["supporting_evidence_digests"]
+    if not isinstance(supporting, list) or len(supporting) != len(set(supporting)):
+        raise LifecycleAuthorityError("legacy supporting evidence is ambiguous")
+    for digest in supporting:
+        _require_digest(digest, "legacy supporting evidence")
+    replacements = checkpoint["pr_replacement_history_summary"]
+    if not isinstance(replacements, list):
+        raise LifecycleAuthorityError("legacy PR replacement history is malformed")
+    replacement_digests: set[str] = set()
+    for value in replacements:
+        item = _require_closed(
+            value,
+            frozenset({"from_pull_request", "to_pull_request", "event_digest"}),
+            "legacy PR replacement summary",
+        )
+        _require_positive_int(item["from_pull_request"], "legacy predecessor PR")
+        _require_positive_int(item["to_pull_request"], "legacy replacement PR")
+        digest = _require_digest(item["event_digest"], "legacy PR replacement event")
+        if digest in replacement_digests:
+            raise LifecycleAuthorityError("legacy PR replacement history is ambiguous")
+        replacement_digests.add(digest)
+    checkpoint_terminal = _require_digest(
+        checkpoint["terminal_authority_digest"], "legacy checkpoint terminal"
+    )
+    authorities = bundle["authority_chain"]
+    matches = [index for index, item in enumerate(authorities) if isinstance(item, dict) and item.get("authority_digest") == checkpoint_terminal]
+    if len(matches) != 1:
+        raise LifecycleAuthorityError("legacy checkpoint terminal is not a unique chain prefix")
+    boundary = matches[0] + 1
+    prefix = {
+        **copy.deepcopy(dict(bundle)),
+        "transition_authorizations": copy.deepcopy(bundle["transition_authorizations"][:boundary]),
+        "authority_chain": copy.deepcopy(authorities[:boundary]),
+    }
+    prefix_result = _verify_unanchored_lifecycle_bundle(prefix)
+    initialization = bundle["delivery_initialization"]
+    expected_replacements = [
+        {
+            "from_pull_request": event["pull_request"],
+            "to_pull_request": event["replacement_pull_request"],
+            "event_digest": event["event_digest"],
+        }
+        for event in prefix["transition_authorizations"]
+        if event["transition_kind"] == "PR_REBOUND"
+    ]
+    if (
+        checkpoint["lifecycle_evidence_digest"] != hashlib.sha256(canonical_json_bytes(prefix)).hexdigest()
+        or repository != prefix_result.repository
+        or issue != prefix_result.delivery_issue
+        or lifecycle_id != prefix_result.lifecycle_id
+        or current_pr != prefix_result.pull_request
+        or current_head != prefix_result.head_sha
+        or state != prefix_result.state
+        or initial_pr != initialization["pull_request"]
+        or initial_head != initialization["initial_head_sha"]
+        or replacements != expected_replacements
+        or full_result.repository != repository
+        or full_result.delivery_issue != issue
+        or full_result.lifecycle_id != lifecycle_id
+    ):
+        raise LifecycleAuthorityError("legacy checkpoint does not bind its exact lifecycle boundary")
+    signer_identity = _require_identity(checkpoint["signer_identity"], "legacy adoption signer")
+    signed = {key: copy.deepcopy(item) for key, item in checkpoint.items() if key != "checkpoint_digest"}
+    digest = _require_digest(checkpoint["checkpoint_digest"], "legacy checkpoint")
+    if digest != digest_json(signed):
+        raise LifecycleAuthorityError("legacy adoption checkpoint digest mismatch")
+    _verify_signature(
+        canonical_json_bytes(_unsigned(checkpoint, "checkpoint_digest", "signature")),
+        checkpoint["signature"],
+        signer_identity,
+        LEGACY_ADOPTION_DOMAIN,
+        policy.legacy_adoption_signer_identities,
+        _policy_signature_verifier(policy),
+    )
+    return replace(
+        full_result,
+        historical_proof_mode=LEGACY_PROOF_MODE,
+        legacy_adoption_checkpoint_digest=digest,
+    )
+
+
+def _require_exact_legacy_checkpoint_terminal(
+    checkpoint: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    result: VerifiedLifecycleAuthority,
+) -> None:
+    """Require an enrollment root to stop exactly at its migration checkpoint."""
+
+    authorities = bundle.get("authority_chain")
+    events = bundle.get("transition_authorizations")
+    checkpoint_terminal = checkpoint.get("terminal_authority_digest")
+    if (
+        result.historical_proof_mode != LEGACY_PROOF_MODE
+        or result.legacy_adoption_checkpoint_digest is None
+        or not isinstance(authorities, list)
+        or not isinstance(events, list)
+        or not authorities
+        or len(authorities) != len(events)
+        or checkpoint_terminal != result.authority_digest
+        or not isinstance(authorities[-1], dict)
+        or authorities[-1].get("authority_digest") != checkpoint_terminal
+    ):
+        raise LifecycleAuthorityError(
+            "legacy enrollment must end at the exact migration checkpoint terminal"
+        )
+
+
+def verify_lifecycle_authority_for_publication(
+    serialized_evidence: bytes | str,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify native #750 evidence or one explicit legacy migration checkpoint."""
+
+    if not isinstance(serialized_evidence, (bytes, str)):
+        raise LifecycleAuthorityError(
+            "publication enrollment requires canonical serialized lifecycle evidence"
+        )
+    parsed = _load_canonical_json(serialized_evidence, "published lifecycle evidence")
+    if isinstance(parsed, dict) and set(parsed) == PUBLICATION_EVIDENCE_FIELDS:
+        wrapper = _require_closed(parsed, PUBLICATION_EVIDENCE_FIELDS, "published lifecycle evidence")
+        if (
+            wrapper["schema_version"] != SCHEMA_VERSION
+            or wrapper["kind"] != PUBLICATION_EVIDENCE_KIND
+            or wrapper["domain"] != PUBLICATION_EVIDENCE_DOMAIN
+        ):
+            raise LifecycleAuthorityError("unknown published lifecycle-evidence semantics")
+        bundle = _require_closed(wrapper["lifecycle_evidence"], BUNDLE_FIELDS, "lifecycle evidence")
+        mode = wrapper["enrollment_mode"]
+        if mode == "NATIVE_LIFECYCLE":
+            if wrapper["legacy_adoption_checkpoint"] is not None:
+                raise LifecycleAuthorityError("native lifecycle cannot carry a legacy checkpoint")
+            result = verify_lifecycle_authority(canonical_json_bytes(bundle), expected)
+            return replace(result, historical_proof_mode=NATIVE_PROOF_MODE)
+        if mode != "LEGACY_ADOPTION_CHECKPOINT" or wrapper["legacy_adoption_checkpoint"] is None:
+            raise LifecycleAuthorityError("published lifecycle enrollment mode is invalid")
+        initialization = bundle.get("delivery_initialization")
+        if not isinstance(initialization, dict):
+            raise LifecycleAuthorityError("legacy lifecycle initialization is malformed")
+        policy = _load_lifecycle_trust_policy(_require_repository(initialization.get("repository")))
+        result = _verify_unanchored_lifecycle_bundle(bundle, expected)
+        verified = _verify_legacy_adoption_checkpoint(
+            wrapper["legacy_adoption_checkpoint"], bundle, result, policy
+        )
+        _require_exact_legacy_checkpoint_terminal(
+            wrapper["legacy_adoption_checkpoint"], bundle, verified
+        )
+        return verified
+    # Raw bundles are native only and retain the strict maintained-anchor path.
+    return verify_lifecycle_authority(serialized_evidence, expected)
+
+
+def _verify_lifecycle_authority_for_journal(
+    serialized_evidence: bytes | str,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Authenticate one journal-carried chain; journal ancestry selects CURRENT."""
+
+    if not isinstance(serialized_evidence, (bytes, str)):
+        raise LifecycleAuthorityError(
+            "publication journal requires canonical serialized lifecycle evidence"
+        )
+    parsed = _load_canonical_json(serialized_evidence, "journal lifecycle evidence")
+    if isinstance(parsed, dict) and set(parsed) == PUBLICATION_EVIDENCE_FIELDS:
+        wrapper = _require_closed(
+            parsed, PUBLICATION_EVIDENCE_FIELDS, "journal lifecycle evidence"
+        )
+        if (
+            wrapper["schema_version"] != SCHEMA_VERSION
+            or wrapper["kind"] != PUBLICATION_EVIDENCE_KIND
+            or wrapper["domain"] != PUBLICATION_EVIDENCE_DOMAIN
+        ):
+            raise LifecycleAuthorityError("unknown journal lifecycle-evidence semantics")
+        bundle = _require_closed(
+            wrapper["lifecycle_evidence"], BUNDLE_FIELDS, "lifecycle evidence"
+        )
+        mode = wrapper["enrollment_mode"]
+        if mode == "NATIVE_LIFECYCLE":
+            if wrapper["legacy_adoption_checkpoint"] is not None:
+                raise LifecycleAuthorityError("native lifecycle cannot carry a legacy checkpoint")
+            return replace(
+                _verify_native_lifecycle_bundle_for_journal(bundle, expected),
+                historical_proof_mode=NATIVE_PROOF_MODE,
+            )
+        if mode != "LEGACY_ADOPTION_CHECKPOINT" or wrapper["legacy_adoption_checkpoint"] is None:
+            raise LifecycleAuthorityError("journal lifecycle enrollment mode is invalid")
+        initialization = bundle.get("delivery_initialization")
+        if not isinstance(initialization, dict):
+            raise LifecycleAuthorityError("legacy lifecycle initialization is malformed")
+        policy = _load_lifecycle_trust_policy(
+            _require_repository(initialization.get("repository"))
+        )
+        result = _verify_unanchored_lifecycle_bundle(bundle, expected)
+        return _verify_legacy_adoption_checkpoint(
+            wrapper["legacy_adoption_checkpoint"], bundle, result, policy
+        )
+    return replace(
+        _verify_native_lifecycle_bundle_for_journal(parsed, expected),
+        historical_proof_mode=NATIVE_PROOF_MODE,
     )
 
 

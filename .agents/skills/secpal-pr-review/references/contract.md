@@ -278,6 +278,61 @@ This boundary performs no review-event loop, late-feedback processing, Ready or
 Draft mutation, replacement orchestration, merge automation, or other lifecycle
 orchestration. Those responsibilities remain outside this primitive.
 
+## Lifecycle-publication boundary
+
+`scripts/secpal_pr_review/lifecycle_publication.py` has exactly two enrollment
+modes. `NATIVE_LIFECYCLE` requires the maintained #750 initialization root and
+complete authenticated transition chain from inception. A genuinely pre-#750
+delivery may instead use exactly one explicitly authorized
+`LEGACY_ADOPTION_CHECKPOINT`. That domain-separated artifact is signed by the
+maintained legacy-adoption role using credential material cryptographically
+distinct from ordinary, lifecycle-transition, and publication signers. It
+states that its finite baseline is trusted at the migration boundary; it does
+not claim that evidence which never existed was reconstructed later. Consumers
+can distinguish native proof from the legacy migration trust root.
+
+After either root, all successors are normal #750 transitions. A legacy
+checkpoint, lifecycle identity, counters, Ready history, recovery history, and
+continuation history cannot be replaced or reset, and no second checkpoint or
+re-enrollment is permitted.
+
+Dynamic publication is one global linear journal on the protected branch
+`refs/heads/secpal-lifecycle-publications`. Installed policy fixes the GitHub
+endpoint, exact branch, ruleset identity, required deletion and
+non-fast-forward prohibitions, publication signer role, and legacy-adoption
+signer role. The verifier authenticates that live ruleset, resolves the branch
+tip once, and thereafter verifies immutable ancestry. The newest valid event
+for one lifecycle is CURRENT; an older signed event remains historical evidence
+but cannot become CURRENT after a successor.
+
+Server protection supplies rollback/deletion resistance. Exact predecessor
+lease advancement supplies cooperative concurrency safety; it is not the
+rollback trust anchor. Publication Git transport uses an isolated bare
+repository and a closed environment that ignores ambient Git configuration,
+URL rewrites, HOME, PATH, askpass/SSH overrides, agents, and loader injection.
+Current verification accepts no caller path, remote, branch, signer set, key,
+verifier callback, checkpoint, or terminal digest.
+
+Native enrollment must match the maintained #750 adoption boundary. After that
+first journal entry, a private publication-only verifier authenticates the
+maintained initialization root and complete signed #750 successor chain without
+requiring each successor to equal the static enrollment-time tip. Protected
+journal ancestry and the exact lifecycle-local predecessor select CURRENT.
+The ordinary public #750 verifier retains its maintained-current-tip check, and
+no caller-accessible skip flag exists. Legacy enrollment likewise must end
+exactly at its checkpoint terminal; every later transition is a separate
+journal advancement.
+
+The closed mutation vocabulary remains `ENROLL_EXISTING_LIFECYCLE` and
+`ADVANCE_CURRENT_TERMINAL`. Missing authorization or protection, native
+evidence without its maintained root, duplicate migration, stale journal
+prefixes, unknown documents, wrong signers, cross-identity replay, and
+predecessor/CAS drift fail closed. Zero enrollment remains the valid
+pre-adoption state.
+
+This boundary publishes authority; it does not derive lifecycle semantics,
+implement two-parent integration, or orchestrate the full finite workflow.
+
 ## Explicit CI and readiness path
 
 This separate path exists only when the current user instruction explicitly
