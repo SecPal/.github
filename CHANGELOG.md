@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Preserve Finite Review Lifecycle Orchestration
+
+**Added:**
+
+- authenticate CURRENT lifecycle publication before bounded replacement,
+  recovery, Ready/Draft, review, CI, and late-feedback decisions
+- preserve lifecycle identity and exhausted counters across PR rebinding while
+  making review and CI events non-recursive evidence observations
+- report authenticated tracked-follow-up resolution as safely dispositioned and
+  tracked, independently from technical and mechanical blocking
+
+**Changed:**
+
+- make Ready monotonic across source recovery unless the user separately
+  authorizes the exact `Ready -> Draft` transition and reason
+
 ## 2026-08-29 - Authenticate Thread Eligibility on Ready Integration
 
 **Changed:**

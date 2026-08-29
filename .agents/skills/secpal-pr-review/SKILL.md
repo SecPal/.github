@@ -161,6 +161,30 @@ Never import or call the action helper from the evidence helper. Never add a
 mutation command to the evidence helper. Execute configured validation commands
 as argument arrays in the target repository, without a shell.
 
+## Finite lifecycle continuity
+
+When a completed-feedback workflow consumes persistent lifecycle state, use
+`scripts/secpal_pr_review/lifecycle_orchestration.py` over independently
+authenticated CURRENT publication. Never create a new lifecycle because a PR
+was replaced, recovered, reopened, pushed, reviewed again, or observed by CI.
+Never reset review/remediation counters or represent Cycle 3.
+
+After the first authorized Ready transition, keep that PR Ready during ordinary
+or exceptional source correction. A changed head requires fresh validation and
+a later bounded readiness assessment, not `Ready -> Draft -> Ready`. Perform a
+`Ready -> Draft` mutation only when the current user instruction explicitly
+authorizes that exact transition and gives its separate reason. Any later
+`Draft -> Ready` requires another explicit authorization and retains the same
+lifecycle and counters.
+
+Treat every review object and configured automated review as feedback evidence,
+not authority for another review, remediation cycle, or Draft/Ready transition.
+One explicitly authorized additional review permits one bounded current-head
+assessment and stops. A material post-Ready blocker requires a user decision
+for any remaining bounded recovery authority. A tracked-follow-up resolution
+must be reported as safely dispositioned/tracked, never fixed, implemented, or
+completed, with technical and mechanical blocking stated separately.
+
 ## Run the finite invocation
 
 The following state machine applies only to the full feedback-remediation path.

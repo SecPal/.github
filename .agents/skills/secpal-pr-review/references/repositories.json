@@ -65,6 +65,11 @@
           "purpose": "Run lifecycle enrollment and current-terminal publication tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run finite lifecycle-orchestration unit tests"
+        },
+        {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
           "working_directory": ".",
           "purpose": "Run finite skill policy tests"

@@ -4235,6 +4235,17 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
         self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(
+            result["tracked_follow_up_dispositions"],
+            [
+                {
+                    "thread_id": thread_id,
+                    "technically_blocking": False,
+                    "mechanically_blocking": False,
+                    "resolution_meaning": "SAFELY_DISPOSITIONED_TRACKED",
+                }
+            ],
+        )
         verifier.assert_called_once_with(identity, mock.ANY)
         self.assertEqual(len(fake.calls), 4)
 

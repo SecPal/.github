@@ -71,6 +71,9 @@ jobs:
       - name: Run simple resolver unit tests
         run: python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py
 
+      - name: Run finite lifecycle-orchestration unit tests
+        run: python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py
+
       - name: Run finite skill policy tests
         run: bash tests/secpal-pr-review-skill-policy.sh
 

@@ -388,6 +388,28 @@ class TargetRead:
     thread: ThreadState
 
 
+def _tracked_follow_up_disposition_report(
+    thread_ids: Sequence[str],
+    tracked: dict[str, FollowUpIdentity],
+    mechanically_cleared: set[str],
+) -> list[dict[str, Any]]:
+    """Report blocker facts without relabeling tracked work as implemented."""
+
+    report: list[dict[str, Any]] = []
+    for thread_id in thread_ids:
+        if thread_id not in tracked:
+            continue
+        report.append(
+            {
+                "thread_id": thread_id,
+                "technically_blocking": False,
+                "mechanically_blocking": thread_id not in mechanically_cleared,
+                "resolution_meaning": "SAFELY_DISPOSITIONED_TRACKED",
+            }
+        )
+    return report
+
+
 @dataclass(frozen=True)
 class RepositoryLimits:
     maximum_api_calls: int
@@ -2717,6 +2739,13 @@ def resolve_threads(
                     "already_resolved": already_resolved,
                     "pending": [],
                     "resolved": applied,
+                    "tracked_follow_up_dispositions": (
+                        _tracked_follow_up_disposition_report(
+                            thread_ids,
+                            tracked,
+                            set(already_resolved) | set(applied)
+                        )
+                    ),
                     "failed": [
                         {
                             "thread_id": thread_id,
@@ -2751,6 +2780,11 @@ def resolve_threads(
         "already_resolved": already_resolved,
         "pending": pending if not apply else [],
         "resolved": applied,
+        "tracked_follow_up_dispositions": _tracked_follow_up_disposition_report(
+            thread_ids,
+            tracked,
+            set(already_resolved) | set(applied)
+        ),
         "failed": [],
         "unattempted": [],
     }

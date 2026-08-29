@@ -814,6 +814,8 @@ grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_
   || fail 'guarded-action unit tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'simple resolver unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'finite lifecycle-orchestration unit tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill policy tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
@@ -822,6 +824,8 @@ grep -Fq './tests/review-governance-suite.sh' "$REGISTRY" \
   || fail 'repository governance suite is not registered'
 grep -Fq 'tests/secpal-resolve-fixed-threads-unit.py' "$REGISTRY" \
   || fail 'simple resolver unit tests are not registered'
+grep -Fq 'tests/secpal-lifecycle-orchestration-unit.py' "$REGISTRY" \
+  || fail 'finite lifecycle-orchestration unit tests are not registered'
 
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
@@ -938,9 +942,10 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],
-], "SecPal/.github must register lifecycle authority and publication regressions unconditionally"
+], "SecPal/.github must register lifecycle authority, publication, and orchestration regressions unconditionally"
 
 frontend_entries = [
     item for item in registry["repositories"]
