@@ -22,6 +22,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   terminal replay, consumer self-selection, concurrent writers, migration and
   publication signer separation, cross-identity substitution, PR rebinding,
   and exceptional continuation
+- exact legacy-checkpoint enrollment terminals, a cryptographically distinct
+  legacy-adoption credential, and native journal successors whose currentness
+  comes from protected ancestry without weakening ordinary #750 current-tip
+  verification
 
 ---
 

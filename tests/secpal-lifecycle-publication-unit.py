@@ -200,6 +200,12 @@ class LifecyclePublicationTests(TestCase):
         writer = inspect.signature(publication.enroll_existing_lifecycle).parameters
         self.assertNotIn("repository_root", writer)
         self.assertNotIn("remote", writer)
+        enrollment = inspect.signature(
+            authority.verify_lifecycle_authority_for_publication
+        ).parameters
+        self.assertEqual(list(enrollment), ["serialized_evidence", "expected"])
+        for forbidden in ("require_current_tip", "skip_current_selector", "journal_context"):
+            self.assertNotIn(forbidden, enrollment)
 
     def test_native_mode_rejects_unanchored_fake_receipt_and_attestation(self) -> None:
         chain = recovered_ready_chain()
@@ -337,12 +343,201 @@ class LifecyclePublicationTests(TestCase):
         chain.append("EXCEPTIONAL_CONTINUATION", head=HEADS[4])
         chain.checkpoint = checkpoint
         with self.assertRaisesRegex(
-            publication.LifecyclePublicationError,
+            authority.LifecycleAuthorityError,
             "exact migration checkpoint terminal",
         ):
             publication.enroll_existing_lifecycle(
                 chain.published(), signer_identity=SIGNER, signer=signer_for()
             )
+
+    def test_public_verifier_rejects_every_post_checkpoint_transition_folded_into_enrollment(
+        self,
+    ) -> None:
+        variants = (
+            ("EXCEPTIONAL_CONTINUATION", {"head": HEADS[4]}),
+            ("PR_REBOUND", {"replacement_pull_request": PR + 1}),
+            ("READY_TO_DRAFT", {}),
+        )
+        for transition, arguments in variants:
+            with self.subTest(transition=transition):
+                chain = recovered_ready_chain()
+                checkpoint = copy.deepcopy(chain.create_checkpoint())
+                checkpoint_terminal = checkpoint["terminal_authority_digest"]
+                chain.append(transition, **arguments)
+                chain.checkpoint = checkpoint
+                bundle, bundle_raw = publication._canonical_bundle(chain.published())
+                successor = authority._verify_lifecycle_authority_for_journal(bundle_raw)
+                self.assertNotEqual(successor.authority_digest, checkpoint_terminal)
+                fields = publication._publication_fields(
+                    operation="ENROLL_EXISTING_LIFECYCLE",
+                    verified=successor,
+                    bundle=bundle,
+                    bundle_raw=bundle_raw,
+                    publication_branch=BRANCH,
+                    journal_predecessor_oid=None,
+                    predecessor=None,
+                    predecessor_oid=None,
+                    signer_identity=SIGNER,
+                )
+                raw = publication._sign_publication(fields, signer_for())
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "exact migration checkpoint terminal",
+                ):
+                    publication._verify_publication_document(
+                        raw, object_oid=HEADS[9], expected_branch=BRANCH
+                    )
+
+    def test_native_journal_advances_without_weakening_static_current_tip_verification(
+        self,
+    ) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        anchor = authority.InitializationAnchor(
+            ISSUE,
+            PR,
+            HEADS[0],
+            chain.initialization["initialization_digest"],
+            PR,
+            chain.head,
+            chain.authorities[-1]["authority_digest"],
+        )
+        policy = replace(self.policy, initialization_anchors=(anchor,))
+        native_h = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+        with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
+            enrolled = publication.enroll_existing_lifecycle(
+                native_h, signer_identity=SIGNER, signer=signer_for()
+            )
+            chain.append("HEAD_ADVANCED", head=HEADS[1])
+            native_h2 = authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=chain.raw()
+            )
+            h2 = publication.advance_current_terminal(
+                native_h2, signer_identity=SIGNER, signer=signer_for()
+            )
+            chain.append("HEAD_ADVANCED", head=HEADS[2])
+            native_h3 = authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=chain.raw()
+            )
+            h3 = publication.advance_current_terminal(
+                native_h3, signer_identity=SIGNER, signer=signer_for()
+            )
+            current = publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            self.assertEqual(current.publication_oid, h3.publication_oid)
+            self.assertNotEqual(current.publication_oid, enrolled.publication_oid)
+            self.assertNotEqual(current.publication_oid, h2.publication_oid)
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                publication.verify_current_lifecycle_authority(
+                    REPOSITORY,
+                    ISSUE,
+                    authority.ExpectedLifecycle(
+                        REPOSITORY, ISSUE, chain.lifecycle_id, PR, HEADS[0]
+                    ),
+                )
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError,
+                "maintained current terminal authority",
+            ):
+                authority.verify_lifecycle_authority(
+                    authority.canonical_json_bytes(
+                        json.loads(native_h2)["lifecycle_evidence"]
+                    )
+                )
+
+    def test_native_journal_rejects_wrong_predecessor_and_identity_substitution(
+        self,
+    ) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        anchor = authority.InitializationAnchor(
+            ISSUE,
+            PR,
+            HEADS[0],
+            chain.initialization["initialization_digest"],
+            PR,
+            chain.head,
+            chain.authorities[-1]["authority_digest"],
+        )
+        policy = replace(self.policy, initialization_anchors=(anchor,))
+        native_h = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+        with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
+            publication.enroll_existing_lifecycle(
+                native_h, signer_identity=SIGNER, signer=signer_for()
+            )
+            chain.append("HEAD_ADVANCED", head=HEADS[1])
+            native_h2 = authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=chain.raw()
+            )
+            h2 = publication.advance_current_terminal(
+                native_h2, signer_identity=SIGNER, signer=signer_for()
+            )
+            publication._observe_remote_current_once(self.probe, str(self.remote), BRANCH)
+            h2_raw = publication._read_publication_object(
+                self.probe, h2.publication_oid
+            )[0]
+            h2_document, h2_lifecycle = publication._verify_publication_document(
+                h2_raw, object_oid=h2.publication_oid, expected_branch=BRANCH
+            )
+            chain.append("HEAD_ADVANCED", head=HEADS[2])
+            native_h3, native_h3_raw = publication._canonical_bundle(
+                authority.serialize_publication_lifecycle_evidence(
+                    lifecycle_evidence=chain.raw()
+                )
+            )
+            h3_lifecycle = authority._verify_lifecycle_authority_for_journal(
+                native_h3_raw
+            )
+            publication._require_exact_successor(
+                h2_lifecycle,
+                h2_document,
+                h3_lifecycle,
+                {"lifecycle_evidence": native_h3},
+            )
+            for changed in (
+                replace(h3_lifecycle, delivery_issue=ISSUE + 1),
+                replace(h3_lifecycle, initialization_evidence_digest="9" * 64),
+            ):
+                with self.assertRaisesRegex(
+                    publication.LifecyclePublicationError,
+                    "exact allowed successor",
+                ):
+                    publication._require_exact_successor(
+                        h2_lifecycle,
+                        h2_document,
+                        changed,
+                        {"lifecycle_evidence": native_h3},
+                    )
+            wrong_fields = publication._publication_fields(
+                operation="ADVANCE_CURRENT_TERMINAL",
+                verified=h3_lifecycle,
+                bundle=native_h3,
+                bundle_raw=native_h3_raw,
+                publication_branch=BRANCH,
+                journal_predecessor_oid=h2.publication_oid,
+                predecessor=h2_document,
+                predecessor_oid=HEADS[9],
+                signer_identity=SIGNER,
+            )
+            wrong_raw = publication._sign_publication(wrong_fields, signer_for())
+            wrong_oid = publication._write_publication_object(
+                self.probe, wrong_raw, h2.publication_oid
+            )
+            publication._cas_remote_ref(
+                self.probe,
+                str(self.remote),
+                BRANCH,
+                wrong_oid,
+                h2.publication_oid,
+            )
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "predecessor binding",
+            ):
+                publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
 
     def test_pr_rebound_preserves_legacy_root_and_history(self) -> None:
         chain, enrolled = self.enroll()

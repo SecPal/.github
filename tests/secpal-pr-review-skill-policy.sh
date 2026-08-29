@@ -885,9 +885,39 @@ assert publication_policy["publication_required_rules"] == [
     "deletion", "non_fast_forward"
 ]
 assert publication_policy["legacy_adoption_signer_identities"]
-assert set(publication_policy["legacy_adoption_signer_identities"]) <= {
+legacy_identities = set(publication_policy["legacy_adoption_signer_identities"])
+assert legacy_identities <= {
     signer["identity"] for signer in publication_policy["signers"]
 }
+routine_identities = set().union(*(
+    set(publication_policy[name])
+    for name in (
+        "transition_signer_identities",
+        "authority_signer_identities",
+        "publication_signer_identities",
+    )
+))
+assert legacy_identities.isdisjoint(routine_identities)
+signers = {
+    signer["identity"]: signer for signer in publication_policy["signers"]
+}
+legacy_credentials = {
+    credential
+    for identity in legacy_identities
+    for credential in (
+        signers[identity]["ssh_public_keys"]
+        + signers[identity]["openpgp_fingerprints"]
+    )
+}
+routine_credentials = {
+    credential
+    for identity in set(signers) - legacy_identities
+    for credential in (
+        signers[identity]["ssh_public_keys"]
+        + signers[identity]["openpgp_fingerprints"]
+    )
+}
+assert legacy_credentials.isdisjoint(routine_credentials)
 assert [
     command["argv"] for command in governance["focused_validation"]
 ] == [

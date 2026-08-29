@@ -261,6 +261,115 @@ class LifecycleAuthorityTests(TestCase):
                 ):
                     authority._load_lifecycle_trust_policy(REPOSITORY)
 
+    def test_registry_requires_cryptographically_distinct_legacy_adoption_credential(
+        self,
+    ) -> None:
+        registry = json.loads(
+            (REPO_ROOT / ".agents/skills/secpal-pr-review/references/repositories.json")
+            .read_text(encoding="utf-8")
+        )
+        entry = next(
+            item for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        policy = entry["lifecycle_authority_policy"]
+        ordinary = next(
+            signer for signer in policy["signers"]
+            if signer["identity"] == SIGNER
+        )
+        legacy = next(
+            signer for signer in policy["signers"]
+            if signer["identity"] == "lifecycle-legacy-adoption@secpal.app"
+        )
+        self.assertTrue(
+            set(ordinary["ssh_public_keys"]).isdisjoint(legacy["ssh_public_keys"])
+        )
+        legacy["ssh_public_keys"] = copy.deepcopy(ordinary["ssh_public_keys"])
+        with tempfile.TemporaryDirectory(prefix="lifecycle-overlap-policy-") as directory:
+            policy_path = Path(directory) / "repositories.json"
+            policy_path.write_text(json.dumps(registry), encoding="utf-8")
+            with patch.object(authority, "_TRUST_REGISTRY", policy_path):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "cryptographically distinct credential",
+                ):
+                    authority._load_lifecycle_trust_policy(REPOSITORY)
+
+    def test_legacy_adoption_domain_accepts_only_its_distinct_private_key(self) -> None:
+        legacy_identity = "lifecycle-legacy-adoption@secpal.app"
+        with tempfile.TemporaryDirectory(prefix="legacy-adoption-keys-") as directory:
+            root = Path(directory)
+            routine_key = root / "routine"
+            legacy_key = root / "legacy"
+            for key in (routine_key, legacy_key):
+                subprocess.run(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                    check=True,
+                )
+
+            def public_key(key: Path) -> str:
+                parts = key.with_suffix(".pub").read_text(encoding="utf-8").split()
+                return f"{parts[0]} {parts[1]}"
+
+            policy = authority.LifecycleTrustPolicy(
+                repository=REPOSITORY,
+                accepted_formats=frozenset({"ssh"}),
+                transition_signer_identities=frozenset({SIGNER}),
+                authority_signer_identities=frozenset({SIGNER}),
+                signers={
+                    SIGNER: authority.TrustedSigner(SIGNER, (public_key(routine_key),), ()),
+                    legacy_identity: authority.TrustedSigner(
+                        legacy_identity, (public_key(legacy_key),), ()
+                    ),
+                },
+                initialization_anchors=(),
+                publication_signer_identities=frozenset({SIGNER}),
+                legacy_adoption_signer_identities=frozenset({legacy_identity}),
+            )
+            payload = b"explicit legacy migration checkpoint"
+
+            def signature(key: Path, domain: str) -> dict[str, str]:
+                result = subprocess.run(
+                    ["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", domain],
+                    input=payload,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                return {
+                    "format": "ssh",
+                    "signer_identity": legacy_identity,
+                    "value": result.stdout.decode("utf-8"),
+                }
+
+            verifier = authority._policy_signature_verifier(policy)
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority._verify_signature(
+                    payload,
+                    signature(routine_key, authority.LEGACY_ADOPTION_DOMAIN),
+                    legacy_identity,
+                    authority.LEGACY_ADOPTION_DOMAIN,
+                    policy.legacy_adoption_signer_identities,
+                    verifier,
+                )
+            authority._verify_signature(
+                payload,
+                signature(legacy_key, authority.LEGACY_ADOPTION_DOMAIN),
+                legacy_identity,
+                authority.LEGACY_ADOPTION_DOMAIN,
+                policy.legacy_adoption_signer_identities,
+                verifier,
+            )
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority._verify_signature(
+                    payload,
+                    signature(legacy_key, authority.EVENT_DOMAIN),
+                    legacy_identity,
+                    authority.LEGACY_ADOPTION_DOMAIN,
+                    policy.legacy_adoption_signer_identities,
+                    verifier,
+                )
+
     def test_public_serialized_boundary_and_anchored_real_ssh_chain(self) -> None:
         with tempfile.TemporaryDirectory(prefix="lifecycle-ssh-test-") as directory:
             key = Path(directory) / "key"

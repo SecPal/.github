@@ -406,7 +406,11 @@ def _verify_publication_document(
     evidence_raw = canonical_json_bytes(evidence)
     if document["lifecycle_evidence_digest"] != hashlib.sha256(evidence_raw).hexdigest():
         raise LifecyclePublicationError("publication lifecycle-evidence digest mismatch")
-    verified = authority.verify_lifecycle_authority_for_publication(evidence_raw)
+    verified = (
+        authority.verify_lifecycle_authority_for_publication(evidence_raw)
+        if document["operation"] == "ENROLL_EXISTING_LIFECYCLE"
+        else authority._verify_lifecycle_authority_for_journal(evidence_raw)
+    )
     if (
         verified.repository != repository
         or verified.delivery_issue != issue
@@ -577,18 +581,6 @@ def enroll_existing_lifecycle(
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
     verified = authority.verify_lifecycle_authority_for_publication(bundle_raw)
-    if (
-        verified.historical_proof_mode == authority.LEGACY_PROOF_MODE
-        and verified.legacy_adoption_checkpoint_digest is not None
-    ):
-        checkpoint = bundle.get("legacy_adoption_checkpoint")
-        if (
-            not isinstance(checkpoint, dict)
-            or checkpoint.get("terminal_authority_digest") != verified.authority_digest
-        ):
-            raise LifecyclePublicationError(
-                "legacy enrollment must publish the exact migration checkpoint terminal"
-            )
     policy = authority._load_lifecycle_trust_policy(verified.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -628,7 +620,7 @@ def advance_current_terminal(
     """Append one exact #750 successor to the protected global journal."""
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
-    successor = authority.verify_lifecycle_authority_for_publication(bundle_raw)
+    successor = authority._verify_lifecycle_authority_for_journal(bundle_raw)
     policy = authority._load_lifecycle_trust_policy(successor.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):

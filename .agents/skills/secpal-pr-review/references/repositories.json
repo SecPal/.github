@@ -126,7 +126,7 @@
           {
             "identity": "lifecycle-legacy-adoption@secpal.app",
             "ssh_public_keys": [
-              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
             ],
             "openpgp_fingerprints": []
           }

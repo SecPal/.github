@@ -135,6 +135,12 @@ does not relabel unavailable old evidence as cryptographically reconstructed.
 Every post-checkpoint change is an ordinary #750 successor, and another legacy
 checkpoint or baseline reset is forbidden.
 
+The maintained migration role uses public credential material distinct from
+ordinary, lifecycle-transition, and publication signers; policy loading rejects
+credential overlap even when the duplicate key is assigned another principal.
+Legacy enrollment ends exactly at the checkpoint terminal, so post-checkpoint
+continuations and PR rebinding cannot be folded into the migration root.
+
 The maintained registry contains only static trust: publication and migration
 signer roles, the exact GitHub endpoint, publication branch, and live ruleset
 identity and required protections. It never contains a candidate head,
@@ -149,6 +155,12 @@ CURRENT. Consumer expectations are post-verification constraints; callers
 cannot supply the remote, branch, trust, migration checkpoint, or terminal
 selector. Publication Git operations use a controlled bare repository and
 closed environment, preventing ambient URL rewrites and transport overrides.
+For native adoption, the first journal entry must satisfy the ordinary
+maintained #750 current-tip boundary. Later journal successors use a private
+publication-only verification path for the same initialization root and full
+signed transition chain; authenticated journal ancestry then selects CURRENT.
+The ordinary #750 verifier keeps its static current-tip requirement, and no
+consumer-controlled bypass is exposed.
 
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745

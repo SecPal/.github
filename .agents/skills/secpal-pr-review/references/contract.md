@@ -285,10 +285,11 @@ modes. `NATIVE_LIFECYCLE` requires the maintained #750 initialization root and
 complete authenticated transition chain from inception. A genuinely pre-#750
 delivery may instead use exactly one explicitly authorized
 `LEGACY_ADOPTION_CHECKPOINT`. That domain-separated artifact is signed by the
-maintained legacy-adoption role and states that its finite baseline is trusted
-at the migration boundary; it does not claim that evidence which never existed
-was reconstructed later. Consumers can distinguish native proof from the
-legacy migration trust root.
+maintained legacy-adoption role using credential material cryptographically
+distinct from ordinary, lifecycle-transition, and publication signers. It
+states that its finite baseline is trusted at the migration boundary; it does
+not claim that evidence which never existed was reconstructed later. Consumers
+can distinguish native proof from the legacy migration trust root.
 
 After either root, all successors are normal #750 transitions. A legacy
 checkpoint, lifecycle identity, counters, Ready history, recovery history, and
@@ -311,6 +312,16 @@ repository and a closed environment that ignores ambient Git configuration,
 URL rewrites, HOME, PATH, askpass/SSH overrides, agents, and loader injection.
 Current verification accepts no caller path, remote, branch, signer set, key,
 verifier callback, checkpoint, or terminal digest.
+
+Native enrollment must match the maintained #750 adoption boundary. After that
+first journal entry, a private publication-only verifier authenticates the
+maintained initialization root and complete signed #750 successor chain without
+requiring each successor to equal the static enrollment-time tip. Protected
+journal ancestry and the exact lifecycle-local predecessor select CURRENT.
+The ordinary public #750 verifier retains its maintained-current-tip check, and
+no caller-accessible skip flag exists. Legacy enrollment likewise must end
+exactly at its checkpoint terminal; every later transition is a separate
+journal advancement.
 
 The closed mutation vocabulary remains `ENROLL_EXISTING_LIFECYCLE` and
 `ADVANCE_CURRENT_TERMINAL`. Missing authorization or protection, native
